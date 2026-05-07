@@ -52,7 +52,7 @@ export type AmagamaInternal = {
   plugins: Plugin[]
   sub: { lex?: LexSub[]; rule?: RuleSub[] }
   mark: number
-  merged: Bag
+  merged: Record<string, any>
 }
 
 
@@ -69,8 +69,8 @@ export type Plugin = ((
   amagama: Amagama,
   plugin_options?: any,
 ) => void | Amagama) & {
-  defaults?: Bag
-  options?: Bag // TODO: InstalledPlugin.options is always defined ?
+  defaults?: Record<string, any>
+  options?: Record<string, any> // TODO: InstalledPlugin.options is always defined ?
 }
 
 // Parsing options. See defaults.ts for commentary on individual fields.
@@ -200,7 +200,7 @@ export type AmagamaOptions = {
     }
   }
   ender?: string | string[]
-  plugin?: Bag
+  plugin?: Record<string, any>
   debug?: {
     get_console?: () => any
     maxlen?: number
@@ -390,7 +390,7 @@ export type Config = {
   string: {
     lex: boolean
     quoteMap: Chars
-    escMap: Bag
+    escMap: Record<string, any>
     escChar?: string
     escCharCode?: number
     multiChars: Chars
@@ -530,8 +530,8 @@ export interface AltSpec {
   n?: Counters // Increment counters by specified amounts.
   a?: AltAction | FuncRef | null // Perform an action if this alternate matches.
   h?: AltModifier | null // Modify current Alt to customize parser.
-  u?: Bag // Key-value custom data.
-  k?: Bag // Key-value custom data (propagated).
+  u?: Record<string, any> // Key-value custom data.
+  k?: Record<string, any> // Key-value custom data (propagated).
 
   g?:
   | string // Named group tags for the alternate (allows filtering).
@@ -555,9 +555,6 @@ export type ListMods = {
 import type { AltMatch } from './rules'
 export type { AltMatch }
 
-// General container of named items.
-export type Bag = { [key: string]: any }
-
 export type FuncRef = `@${string}`
 
 // Named function references.
@@ -566,8 +563,15 @@ export type FuncRefMap<FT> = Record<FuncRef, FT>
 // A set of named counters.
 export type Counters = { [key: string]: number }
 
-// Unique token identification number (aka "tin").
-export type Tin = number
+// Unique token identification number (aka "tin"). Branded `number` so
+// arbitrary integers can't be passed where a real token id is wanted —
+// callers go through `tokenize()` (utility.ts) or assign via the
+// internal `cfg.tI++` counter.
+export type Tin = number & { readonly __brand: 'Tin' }
+
+// Convenience cast for the few code paths that legitimately need to
+// construct a Tin from a raw counter (tokenize, the test scaffold).
+export const asTin = (n: number): Tin => n as Tin
 
 // Map token name ('#' prefix removed) to Token index (Tin).
 export type TokenMap = { [name: string]: Tin }
@@ -711,7 +715,7 @@ export type GrammarSpec = {
 
   // JSON-serializable options. Function-valued fields use FuncRef strings
   // that are resolved against `ref` before being applied.
-  options?: Bag
+  options?: Record<string, any>
 
   rule?: Record<string, {
     open?: GrammarAltSpec[] |

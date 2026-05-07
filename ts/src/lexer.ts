@@ -11,7 +11,6 @@ import type {
   Context,
   LexMatcher,
   MakeLexMatcher,
-  Bag,
   NormAltSpec,
 } from './types'
 
@@ -84,14 +83,14 @@ const makePoint = (...params: ConstructorParameters<typeof Point>) =>
 class Token {
   isToken = true
   name = EMPTY
-  tin = -1
+  tin: Tin = -1 as Tin
   val: any = undefined
   src = EMPTY
   sI = -1
   rI = -1
   cI = -1
   len = -1
-  use?: Bag
+  use?: Record<string, any>
   err?: string
   why?: string
   ignored?: Token
@@ -162,7 +161,7 @@ class Token {
 const makeToken = (...params: ConstructorParameters<typeof Token>) =>
   new Token(...params)
 
-const makeNoToken = () => makeToken('', -1, undefined, EMPTY, makePoint(-1))
+const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-1))
 
 let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')

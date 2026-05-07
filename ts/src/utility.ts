@@ -476,7 +476,9 @@ function tokenize<
   let token: string | Tin = tokenmap[ref]
 
   if (null == token && STRING === typeof ref) {
-    token = cfg.tI++
+    // The internal tI counter is a plain number; brand it to Tin
+    // here, the one place tins legitimately come from the counter.
+    token = cfg.tI++ as Tin
     tokenmap[token] = ref
     tokenmap[ref] = token
     tokenmap[(ref as string).substring(1)] = token

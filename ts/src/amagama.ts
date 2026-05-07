@@ -12,7 +12,6 @@ import type {
   AltMatch,
   AltModifier,
   AltSpec,
-  Bag,
   BnfConvertOptions,
   Config,
   Context,
@@ -100,7 +99,7 @@ import { makeParser, makeRule, makeRuleSpec } from './parser'
 
 
 // Utility bag re-exported on Amagama.util for plugin convenience.
-const util: Bag = {
+const util: Record<string, any> = {
   badlex,
   charset,
   clean,
@@ -136,7 +135,7 @@ type Internal = {
   plugins: Plugin[]
   sub: { lex?: LexSub[]; rule?: RuleSub[] }
   mark: number
-  merged: Bag
+  merged: Record<string, any>
 }
 
 
@@ -156,7 +155,7 @@ class Amagama {
   // `options` is both a callable (set/get) and an indexable map of the
   // merged option tree. Plugins may read individual settings via
   // `am.options.<name>` and apply changes via `am.options({ ... })`.
-  options!: ((change?: Bag | string) => Bag) & Bag
+  options!: ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
   id!: string
   parent?: Amagama
 
@@ -199,7 +198,7 @@ class Amagama {
       plugins: [],
       sub: { lex: undefined, rule: undefined },
       mark: Math.random(),
-      merged: undefined as unknown as Bag,
+      merged: undefined as unknown as Record<string, any>,
     }
     defprop(this, '_internal', { value: internal, writable: true })
 
@@ -237,9 +236,9 @@ class Amagama {
     // Build a callable+indexable `options` member up front so use()
     // and any plugin code below can rely on `this.options` already
     // existing and working.
-    const optionsFn = ((change?: Bag | string): Bag => {
+    const optionsFn = ((change?: Record<string, any> | string): Record<string, any> => {
       return this._setOptions(change)
-    }) as ((change?: Bag | string) => Bag) & Bag
+    }) as ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
     deep(optionsFn, internal.merged)
     defprop(this, 'options', {
       value: optionsFn,
@@ -295,9 +294,9 @@ class Amagama {
   // Internal options setter. Public callers should use `options(change)`.
   // Not flagged `private` because the class is exposed structurally and
   // private members would break Plugin signature compatibility.
-  _setOptions(change?: Bag | string): Bag {
+  _setOptions(change?: Record<string, any> | string): Record<string, any> {
     if (null != change) {
-      let actualChange: Bag | undefined
+      let actualChange: Record<string, any> | undefined
       if ('string' === typeof change) {
         // Lazy-parse via a fresh jsonic instance.
         // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -305,7 +304,7 @@ class Amagama {
         const tmp = new Amagama({ plugins: [jsonic] })
         const parsed = tmp.parse(change)
         if (null != parsed && 'object' === typeof parsed) {
-          actualChange = parsed as Bag
+          actualChange = parsed as Record<string, any>
         }
       } else {
         actualChange = change
@@ -352,7 +351,7 @@ class Amagama {
   // If the plugin returns an Amagama-like value (e.g. a Proxy wrapping
   // the instance), that's what `use()` returns — matches the upstream
   // contract and lets plugins decorate or wrap the instance.
-  use(plugin: Plugin, plugin_options?: Bag): Amagama {
+  use(plugin: Plugin, plugin_options?: Record<string, any>): Amagama {
     if (S.function !== typeof plugin) {
       throw new Error(
         'Amagama.use: the first argument must be a function ' +
@@ -523,7 +522,7 @@ class Amagama {
 
 
   // Convenience: util bag accessible per-instance too.
-  get util(): Bag {
+  get util(): Record<string, any> {
     return util
   }
 }
@@ -537,7 +536,6 @@ export type {
   AltMatch,
   AltModifier,
   AltSpec,
-  Bag,
   BnfConvertOptions,
   Config,
   Context,

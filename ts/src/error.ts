@@ -5,7 +5,6 @@
  */
 
 import type {
-  Bag,
   Config,
   Context,
   Rule,
@@ -32,7 +31,7 @@ const S = {
 class AmagamaError extends SyntaxError {
   constructor(
     code: string,
-    details: Bag,
+    details: Record<string, any>,
     token: Token,
     rule: Rule,
     ctx: Context,
@@ -51,7 +50,7 @@ class AmagamaError extends SyntaxError {
 function errinject<T extends string | string[] | { [key: string]: string }>(
   s: T,
   code: string,
-  details: Bag,
+  details: Record<string, any>,
   token: Token,
   rule: Rule,
   ctx: Context,
@@ -253,11 +252,11 @@ function errmsg(spec: {
 
 function errdesc(
   code: string,
-  details: Bag,
+  details: Record<string, any>,
   token: Token,
   rule: Rule,
   ctx: Context,
-): Bag {
+): Record<string, any> {
   try {
     const src = ctx.src()
     const cfg = ctx.cfg
@@ -376,7 +375,7 @@ function errdesc(
 // Inject value into text by key using "{key}" syntax.
 function strinject<T extends string | string[] | { [key: string]: string }>(
   s: T,
-  m: Bag,
+  m: Record<string, any>,
   f?: { indent?: string },
 ): T {
   let st = typeof s
