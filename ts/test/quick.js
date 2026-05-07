@@ -3,7 +3,7 @@
 let Amagama = require('..')
 let { util } = Amagama
 
-let { Debug } = require('../dist/debug')
+let { Debug } = require('../dist/plugins/debug')
 
 let j = Amagama.make({
   // rule: { finish: false },

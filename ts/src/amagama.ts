@@ -98,8 +98,6 @@ import {
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
 
-import { bnf as bnfConvert } from './bnf'
-
 
 // Utility bag re-exported on Amagama.util for plugin convenience.
 const util: Bag = {
@@ -253,20 +251,6 @@ class Amagama {
       configurable: true,
     })
 
-    // `bnf` is a callable + `.toSpec`. Build it here so plugins
-    // referencing `am.bnf(...)` or `am.bnf.toSpec(...)` work after
-    // construction.
-    const bnfFn = ((src: string, opts?: BnfConvertOptions) => {
-      const spec = bnfConvert(src, opts)
-      this.grammar(spec)
-      return spec
-    }) as ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
-      toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
-    }
-    bnfFn.toSpec = (src: string, opts?: BnfConvertOptions) =>
-      bnfConvert(src, opts)
-    this.bnf = bnfFn
-
     if (parent) {
       // Inherit config + carry parent properties (plugin decorations
       // etc), build a fresh parser, then re-run parent plugins on this
@@ -368,8 +352,10 @@ class Amagama {
 
 
   // Register and apply a plugin. Plugin is `(am, opts) => void | am`.
-  // Plugin defaults are merged into options under `options.plugin[name]`.
-  use(plugin: Plugin, plugin_options?: Bag): this {
+  // If the plugin returns an Amagama-like value (e.g. a Proxy wrapping
+  // the instance), that's what `use()` returns — matches the upstream
+  // contract and lets plugins decorate or wrap the instance.
+  use(plugin: Plugin, plugin_options?: Bag): Amagama {
     if (S.function !== typeof plugin) {
       throw new Error(
         'Amagama.use: the first argument must be a function ' +
@@ -395,8 +381,7 @@ class Amagama {
     this._internal.plugins.push(plugin)
     plugin.options = merged_plugin_options
 
-    plugin(this, merged_plugin_options)
-    return this
+    return (plugin(this, merged_plugin_options) || this) as Amagama
   }
 
 
@@ -544,13 +529,6 @@ class Amagama {
   get util(): Bag {
     return util
   }
-
-
-  // bnf is a callable instance member rather than a method so it can
-  // expose `toSpec` as a property — matches the upstream shape.
-  bnf!: ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
-    toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
-  }
 }
 
 
@@ -619,5 +597,9 @@ export {
 
 // Re-export the json + jsonic plugins for ergonomic usage:
 //   const { Amagama, json, jsonic } = require('amagama')
+// Plugins are loaded from sibling folders so callers can do
+// `const { Amagama, jsonic } = require('amagama')`.
 export { json } from './plugins/json'
 export { jsonic } from './plugins/jsonic'
+export { bnf } from './plugins/bnf'
+export { Debug } from './plugins/debug'

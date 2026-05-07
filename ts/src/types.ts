@@ -79,9 +79,6 @@ export interface Amagama {
   internal(): AmagamaInternal
 
   grammar(gs: GrammarSpec | string, setting?: GrammarSetting): Amagama
-  bnf: ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
-    toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
-  }
 
   // Token / fixed / tokenSet are dual-shape: callable for lookup-or-create
   // and indexable as a map populated by `configure()`.

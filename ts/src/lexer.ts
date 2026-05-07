@@ -752,20 +752,24 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
   let os = opts.string || {}
   cfg.string = cfg.string || ({} as any)
 
-  // TODO: compose with earlier config - do this in other makeFooMatchers?
+  // Replace map-shaped fields outright rather than deep-merging — when
+  // an instance reconfigures with stricter options (e.g. JSON's
+  // `chars: '"'`), the old quote/multi-char/escape entries from the
+  // permissive default would otherwise linger.
+  cfg.string.quoteMap = charset(os.chars)
+  cfg.string.multiChars = charset(os.multiChars)
+  cfg.string.escMap = { ...os.escape }
+  cfg.string.replaceCodeMap = omap(
+    clean({ ...os.replace }),
+    ([c, r]: [string, any]) => [c.charCodeAt(0), r],
+  )
+
   cfg.string = deep(cfg.string, {
     lex: !!os?.lex,
-    quoteMap: charset(os.chars),
-    multiChars: charset(os.multiChars),
-    escMap: { ...os.escape },
     escChar: os.escapeChar,
     escCharCode:
       null == os.escapeChar ? undefined : os.escapeChar.charCodeAt(0),
     allowUnknown: !!os.allowUnknown,
-    replaceCodeMap: omap(clean({ ...os.replace }), ([c, r]) => [
-      c.charCodeAt(0),
-      r,
-    ]),
     hasReplace: false,
     abandon: !!os.abandon,
   })

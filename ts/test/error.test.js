@@ -98,7 +98,7 @@ describe('error', function () {
           '\n' +
           '  \u001b[2mhttps://amagama.senecajs.org\u001b[0m\n' +
           '  \u001b[2m--internal: tag=zed; rule=val~o; token=#BD~foo;' +
-          ' plugins=foo--\u001b[0m',
+          ' plugins=jsonic,foo--\u001b[0m',
       )
     }
 

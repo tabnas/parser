@@ -1,7 +1,7 @@
 /* Copyright (c) 2021-2023 Richard Rodger, MIT License */
 
-/*  debug.ts
- *  Debug tools
+/*  plugins/debug/index.ts
+ *  Debug plugin — adds tracing helpers and a `describe()` method.
  */
 
 import type {
@@ -17,9 +17,9 @@ import type {
   Point,
   LexMatcher,
   Token,
-} from './amagama'
+} from '../../amagama'
 
-import { S, util, EMPTY } from './amagama'
+import { S, util, EMPTY } from '../../amagama'
 
 
 // TODO: custom stringify for nodes

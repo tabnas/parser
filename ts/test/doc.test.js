@@ -197,7 +197,7 @@ describe('doc', function () {
   })
 
   it('property-id', () => {
-    assert.deepEqual(null != Amagama.id.match(/Amagama.*/), true)
+    assert.deepEqual(null != am.id.match(/Amagama.*/), true)
     assert.deepEqual(null != am.make({ tag: 'foo' }).id.match(/Amagama.*foo/), true)
   })
 })

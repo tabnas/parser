@@ -7,7 +7,7 @@ const assert = require('node:assert')
 const { Amagama, jsonic, AmagamaError, makeRule, makeFixedMatcher } = require('..')
 const am = new Amagama({ plugins: [jsonic] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
-const { Debug } = require('../dist/debug')
+const { Debug } = require('../dist/plugins/debug')
 
 let j = am
 let { keys } = j.util

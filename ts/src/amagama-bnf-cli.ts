@@ -6,7 +6,7 @@
 
 import Fs from 'node:fs'
 
-import { bnf } from './bnf'
+import { bnfConvert } from './plugins/bnf'
 import { Amagama, jsonic } from './amagama'
 
 
@@ -66,7 +66,7 @@ export async function run(argv: string[], console: Console) {
     src += await readStdin(console)
   }
 
-  const spec = bnf(src, { start: args.start, tag: args.tag })
+  const spec = bnfConvert(src, { start: args.start, tag: args.tag })
 
   // Parse-mode: validate the grammar against one or more sample
   // inputs and print their parse trees. Exits 1 if any sample fails.

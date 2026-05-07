@@ -15,7 +15,7 @@ import type {
   FuncRef,
   Plugin,
   Rule,
-} from '../types'
+} from '../../types'
 
 const defprop = Object.defineProperty
 

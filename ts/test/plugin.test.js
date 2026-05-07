@@ -203,7 +203,7 @@ describe('plugin', function () {
     let jp = j.use(function foo(amagama) {
       return new Proxy(amagama, {})
     })
-    assert.deepEqual(jp('a:1'), { a: 1 })
+    assert.deepEqual(jp.parse('a:1'), { a: 1 })
   })
 
   it('config-modifiers', () => {

@@ -17,11 +17,11 @@ import type {
   Plugin,
   Rule,
   RuleSpec,
-} from '../types'
+} from '../../types'
 
-import { deep } from '../utility'
+import { deep } from '../../utility'
 
-import { registerJsonGrammar } from './json'
+import { registerJsonGrammar } from '../json'
 
 
 // Apply key=val to the current rule's node, honouring map.merge /

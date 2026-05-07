@@ -1,7 +1,7 @@
 const { Amagama, jsonic, util } = require('..')
 const am = new Amagama({ plugins: [jsonic] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
-const { Debug } = require('../dist/debug')
+const { Debug } = require('../dist/plugins/debug')
 
 let j = am.make()
   .use(function dive(amagama) {

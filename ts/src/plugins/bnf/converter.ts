@@ -25,7 +25,7 @@
  *  doc/bnf-to-amagama-feasibility.md for the full plan.
  */
 
-import type { BnfConvertOptions, GrammarSpec, Rule } from './types'
+import type { BnfConvertOptions, GrammarSpec, Rule } from '../../types'
 
 
 type BnfElement =
@@ -469,7 +469,7 @@ let _bnfParser: ((src: string) => BnfProduction[]) | null = null
 function getBnfParser(): (src: string) => BnfProduction[] {
   if (_bnfParser) return _bnfParser
 
-  const { Amagama } = require('./amagama')
+  const { Amagama } = require('../../amagama')
 
   // BNF defines its own grammar from scratch, so we don't load the
   // jsonic plugin — just use the bare engine with default tokens.

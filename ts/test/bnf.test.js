@@ -6,15 +6,15 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama, jsonic } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama, jsonic, bnf: bnfPlugin } = require('..')
+const am = new Amagama({ plugins: [jsonic, bnfPlugin] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const {
-  bnf,
+  bnfConvert: bnf,
   parseBnf,
   eliminateLeftRecursion,
   BnfParseError,
-} = require('../dist/bnf')
+} = require('../dist/plugins/bnf')
 const BnfCli = require('../dist/amagama-bnf-cli')
 
 
@@ -526,7 +526,7 @@ describe('bnf', () => {
 
 
     it('a grammar that references nothing from the core library has no core rules added', () => {
-      const { parseBnf } = require('../dist/bnf')
+      const { parseBnf } = require('../dist/plugins/bnf')
       const g = parseBnf('g = "a" / "b"')
       assert.deepEqual(g.productions.map((p) => p.name), ['g'])
     })
