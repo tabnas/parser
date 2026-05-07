@@ -7,9 +7,9 @@
 import type {
   AltAction,
   AltCond,
-  AltMatch,
   AltModifier,
   AltSpec,
+  AltSpecish,
   Bag,
   Config,
   Context,
@@ -21,8 +21,6 @@ import type {
   ListMods,
   NormAltCond,
   NormAltSpec,
-  Rule,
-  RuleSpec,
   RuleState,
   RuleStep,
   StateAction,
@@ -44,15 +42,20 @@ import {
 
 import { AmagamaError } from './error'
 
-class RuleImpl implements Rule {
+// Represents the application of a parsing rule. An instance is created
+// for each attempt to match tokens based on the RuleSpec, and pushed
+// onto the main parser rule stack. A Rule can be in two states:
+// "open" when first placed on the stack, and "close" when it needs
+// to be removed from the stack.
+class Rule {
   i = -1
   name = EMPTY
-  node = null
-  state = OPEN
-  n = Object.create(null)
+  node: any = null
+  state: RuleState = OPEN
+  n: Counters = Object.create(null)
   d = -1
-  u = Object.create(null)
-  k = Object.create(null)
+  u: Bag = Object.create(null)
+  k: Bag = Object.create(null)
   bo = false
   ao = false
   bc = false
@@ -72,11 +75,14 @@ class RuleImpl implements Rule {
   c: Token[]
 
   // Per-rule NOTOKEN reference (from ctx), used by legacy accessors.
-  // Optional so the structural type of RuleImpl stays compatible with
-  // the Rule interface (which does not declare this field).
+  // Optional so the structural type stays compatible with consumers
+  // that don't know about it.
   _NOTOKEN?: Token
 
   need = 0
+
+  // Internal tracing field — set by the parser when a rule fails.
+  why?: string
 
   constructor(spec: RuleSpec, ctx: Context, node?: any) {
     this.i = ctx.uI++ // Rule ids are unique only to the parse run.
@@ -151,16 +157,19 @@ class RuleImpl implements Rule {
   }
 }
 
-const makeRule = (...params: ConstructorParameters<typeof RuleImpl>) =>
-  new RuleImpl(...params)
+const makeRule = (...params: ConstructorParameters<typeof Rule>) =>
+  new Rule(...params)
 
 const makeNoRule = (j: Amagama, ctx: Context) => makeRule(makeRuleSpec(j, ctx.cfg, {}), ctx)
 
 // Parse-alternate match (built from current tokens and AltSpec).
-class AltMatchImpl implements AltMatch {
-  p = EMPTY // Push rule (by name).
-  r = EMPTY // Replace rule (by name).
-  b = 0 // Move token position backward.
+// The string/number fields default to falsy sentinels so the parser
+// can normalise them via `(alt.X && alt.X(...)) || out.X`-style
+// expressions without TypeScript flagging the broader union types.
+class AltMatch {
+  p: string | null | false | 0 = EMPTY // Push rule (by name).
+  r: string | null | false | 0 = EMPTY // Replace rule (by name).
+  b: number | null | false = 0 // Move token position backward.
   c?: AltCond // Custom alt match condition.
   n?: Counters // increment named counters.
   a?: AltAction // Match actions.
@@ -171,13 +180,13 @@ class AltMatchImpl implements AltMatch {
   e?: Token // Errored on this token.
 }
 
-const makeAltMatch = (...params: ConstructorParameters<typeof AltMatchImpl>) =>
-  new AltMatchImpl(...params)
+const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
+  new AltMatch(...params)
 
 const PALT: AltMatch = makeAltMatch() // Only one alt object is created.
 const EMPTY_ALT = makeAltMatch()
 
-class RuleSpecImpl implements RuleSpec {
+class RuleSpec {
   name = EMPTY // Set by Parser.rule
   def = {
     open: [] as AltSpec[],
@@ -272,7 +281,7 @@ class RuleSpecImpl implements RuleSpec {
   }
 
 
-  add(rs: RuleState, a: AltSpec | AltSpec[], mods?: ListMods): RuleSpec {
+  add(rs: RuleState, a: AltSpec | AltSpecish[], mods?: ListMods): RuleSpec {
     let inject = mods?.append ? 'push' : 'unshift'
     let aa = ((isarr(a) ? a : [a]) as AltSpec[])
       .filter((alt: AltSpec) => null != alt && 'object' === typeof alt)
@@ -292,11 +301,11 @@ class RuleSpecImpl implements RuleSpec {
   }
 
 
-  open(a: AltSpec | AltSpec[], mods?: ListMods): RuleSpec {
+  open(a: AltSpec | AltSpecish[], mods?: ListMods): RuleSpec {
     return this.add('o', a, mods)
   }
 
-  close(a: AltSpec | AltSpec[], mods?: ListMods): RuleSpec {
+  close(a: AltSpec | AltSpecish[], mods?: ListMods): RuleSpec {
     return this.add('c', a, mods)
   }
 
@@ -633,8 +642,8 @@ class RuleSpecImpl implements RuleSpec {
   }
 }
 
-const makeRuleSpec = (...params: ConstructorParameters<typeof RuleSpecImpl>) =>
-  new RuleSpecImpl(...params)
+const makeRuleSpec = (...params: ConstructorParameters<typeof RuleSpec>) =>
+  new RuleSpec(...params)
 
 // First match wins.
 // NOTE: input AltSpecs are used to build the Alt output.
@@ -1080,4 +1089,4 @@ function makeRuleCond(co: string, prop: string, val: any) {
 
 
 
-export { makeRule, makeNoRule, makeRuleSpec }
+export { Rule, RuleSpec, AltMatch, makeRule, makeNoRule, makeRuleSpec }

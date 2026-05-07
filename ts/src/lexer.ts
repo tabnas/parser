@@ -6,9 +6,6 @@
 
 import type {
   Tin,
-  Token,
-  Point,
-  Lex,
   Rule,
   Config,
   Context,
@@ -37,7 +34,11 @@ import {
   values,
 } from './utility'
 
-class PointImpl implements Point {
+// Position tracking inside the source string. The lexer threads a
+// single Point through the parse — sI advances as characters are
+// consumed; rI/cI track the human-readable row/column for error
+// messages; token is the pending-token queue (rewind feeds it).
+class Point {
   len = -1
   sI = 0
   rI = 1
@@ -72,15 +73,19 @@ class PointImpl implements Point {
   }
 }
 
-const makePoint = (...params: ConstructorParameters<typeof PointImpl>) =>
-  new PointImpl(...params)
+const makePoint = (...params: ConstructorParameters<typeof Point>) =>
+  new Point(...params)
 
 // Tokens from the lexer.
-class TokenImpl implements Token {
+// A single lexed token. `tin` is the numeric token id (a Tin); `val`
+// is the JS-typed value (e.g. a number for #NR); `src` is the raw
+// matching source text. Match positions are kept on `pnt` for error
+// reporting and rewind.
+class Token {
   isToken = true
   name = EMPTY
   tin = -1
-  val = undefined
+  val: any = undefined
   src = EMPTY
   sI = -1
   rI = -1
@@ -89,6 +94,7 @@ class TokenImpl implements Token {
   use?: Bag
   err?: string
   why?: string
+  ignored?: Token
 
   constructor(
     name: string,
@@ -153,8 +159,8 @@ class TokenImpl implements Token {
   }
 }
 
-const makeToken = (...params: ConstructorParameters<typeof TokenImpl>) =>
-  new TokenImpl(...params)
+const makeToken = (...params: ConstructorParameters<typeof Token>) =>
+  new Token(...params)
 
 const makeNoToken = () => makeToken('', -1, undefined, EMPTY, makePoint(-1))
 
@@ -1082,7 +1088,10 @@ function subMatchFixed(
   return out
 }
 
-class LexImpl implements Lex {
+// The lexer driver. Holds a Point for the current scan position and
+// runs the configured matchers in order. `next()` advances; `peek()`
+// looks ahead without consuming.
+class Lex {
   src = EMPTY
   ctx = {} as Context
   cfg = {} as Config
@@ -1217,10 +1226,13 @@ class LexImpl implements Lex {
   }
 }
 
-const makeLex = (...params: ConstructorParameters<typeof LexImpl>) =>
-  new LexImpl(...params)
+const makeLex = (...params: ConstructorParameters<typeof Lex>) =>
+  new Lex(...params)
 
 export {
+  Lex,
+  Point,
+  Token,
   makeNoToken,
   makeLex,
   makePoint,

@@ -60,61 +60,12 @@ export type AmagamaInternal = {
 // implements this interface; we declare it here so the engine modules
 // (parser, lexer, rules, utility) can reference the type without a
 // circular import on the class file.
-export interface Amagama {
-  parse(src: any, meta?: any, parent_ctx?: any): any
-
-  options(change?: Bag | string): Bag
-  config(): Config
-
-  use(plugin: Plugin, plugin_options?: Bag): Amagama
-  rule(
-    name?: string,
-    define?: RuleDefiner | null,
-  ): RuleSpec | RuleSpecMap | Amagama | undefined
-
-  make(options?: Options & { plugins?: Plugin[] }): Amagama
-  empty(options?: Options): Amagama
-
-  sub(spec: { lex?: LexSub; rule?: RuleSub }): Amagama
-  internal(): AmagamaInternal
-
-  grammar(gs: GrammarSpec | string, setting?: GrammarSetting): Amagama
-
-  // Token / fixed / tokenSet are dual-shape: callable for lookup-or-create
-  // and indexable as a map populated by `configure()`.
-  token: TokenMap &
-    TinMap &
-    (<A extends string | Tin>(ref: A) => A extends string ? Tin : string)
-  tokenSet: TokenSetMap &
-    TinSetMap &
-    (<A extends string | Tin>(ref: A) => A extends string ? Tin[] : string)
-  fixed: TokenMap &
-    TinMap &
-    (<A extends string | Tin>(
-      ref: A,
-    ) => undefined | (A extends string ? Tin : string))
-
-  id: string
-  util: Bag
-  parent?: Amagama
-
-  // Internal state. Treat as opaque; access via `internal()`. Declared
-  // here so the class implementation in src/amagama.ts is structurally
-  // compatible with this interface (TS doesn't infer a class with a
-  // required field as assignable to an interface that omits it, even
-  // with an index signature).
-  _internal: AmagamaInternal
-
-  // Internal options setter. Treat as opaque; use `options(change)`
-  // instead. Declared here for structural-typing compatibility with
-  // the class in src/amagama.ts (see _internal note above).
-  _setOptions(change?: Bag | string): Bag
-
-  toString(): string
-
-  // Plugin decoration: plugins may attach extra members.
-  [key: string]: any
-}
+// Amagama is a runtime class defined in src/amagama.ts. The type-only
+// re-export here lets every other type definition in this file (and
+// the rest of the codebase that imports from `./types`) reference
+// `Amagama` as a type without pulling the class file in directly.
+import type { Amagama } from './amagama'
+export type { Amagama }
 
 
 // Define a plugin to extend the provided Amagama instance.
@@ -317,176 +268,25 @@ export type Options = {
 }
 
 // Parsing rule specification. The rule OPEN and CLOSE state token
-// match alternates, and the associated actions, can be defined with a
-// chainable API.
-export interface RuleSpec {
-  name: string
-  def: {
-    open: AltSpec[]
-    close: AltSpec[]
-    bo: StateAction[]
-    bc: StateAction[]
-    ao: StateAction[]
-    ac: StateAction[]
-    tcol: Tin[][][]
-    fnref: FuncRefMap<AltNext | AltBack | AltCond | AltModifier | AltError>
-  }
-  ji: Amagama
-
-  tin<R extends string | Tin, T extends R extends Tin ? string : Tin>(ref: R): T
-
-  fnref(frm: Record<FuncRef, Function>): RuleSpec
-  add(state: RuleState, a: AltSpec | AltSpec[], flags: any): RuleSpec
-  open(a: AltSpec | AltSpecish[], flags?: any): RuleSpec
-  close(a: AltSpec | AltSpecish[], flags?: any): RuleSpec
-  action(
-    prepend: boolean,
-    step: RuleStep,
-    state: RuleState,
-    action: StateAction,
-  ): RuleSpec
-  bo(first: StateAction | boolean | FuncRef, second?: StateAction): RuleSpec
-  ao(first: StateAction | boolean | FuncRef, second?: StateAction): RuleSpec
-  bc(first: StateAction | boolean | FuncRef, second?: StateAction): RuleSpec
-  ac(first: StateAction | boolean | FuncRef, second?: StateAction): RuleSpec
-  clear(): RuleSpec
-  norm(): RuleSpec
-
-  process(rule: Rule, ctx: Context, lex: Lex, state: RuleState): Rule
-
-  bad(tkn: Token, rule: Rule, ctx: Context, parse: { is_open: boolean }): Rule
-}
-
-// Represents the application of a parsing rule. An instance is created
-// for each attempt to match tokens based on the RuleSpec, and pushed
-// onto the main parser rule stack. A Rule can be in two states:
-// "open" when first placed on the stack, and "close" when it needs to be
-// removed from the stack.
-export interface Rule {
-  i: number // Rule index (unique to parse).
-  name: string // Rule name.
-  spec: RuleSpec // RuleSpec for this rule.
-  node: any // The parsed value, if any.
-  state: RuleState // Open (`o`) or Close (`c`).
-  child: Rule // The current child rule, created with the `p` command.
-  parent: Rule // The parent rule, that pushed this rule onto the stack.
-  prev: Rule // The previous sibling rule, that issued an `r` command.
-  next: Rule
-
-  // Open state tokens (matched against alt.s during OPEN).
-  o: Token[] // Array of matched tokens; o[i] is NOTOKEN if not matched.
-  oN: number // Number of open state tokens consumed (# 'opens').
-
-  // Close state tokens (matched against alt.s during CLOSE).
-  c: Token[] // Array of matched tokens; c[i] is NOTOKEN if not matched.
-  cN: number // Number of close state tokens consumed (# 'closes').
-
-  // Legacy aliases for the first two slots of o/c and the counters.
-  // @deprecated Use o[0], o[1], oN (and c[0], c[1], cN) instead.
-  os: number // Alias of oN.
-  o0: Token // Alias of o[0].
-  o1: Token // Alias of o[1].
-  cs: number // Alias of cN.
-  c0: Token // Alias of c[0].
-  c1: Token // Alias of c[1].
-
-  n: Counters // Named counter values.
-  d: number // The current stack depth.
-  u: Bag // Custom key-value store, this rule only.
-  k: Bag // Custom key-value store, propagates via push and replace (keep!).
-  bo: boolean // Flag: call bo (before-open).
-  ao: boolean // Flag: call ao (after-open).
-  bc: boolean // Flag: call bc (before-close).
-  ac: boolean // Flag: call ac (after-close).
-  why?: string // Internal tracing.
-
-  // Lex tokens needed
-  need: number
-
-  // Process the "open" or "close" state of the Rule, returning the
-  // next rule to process.
-  process(ctx: Context, lex: Lex): Rule
-
-  // Always false if counter is null or undefined; default limit is 0.
-  eq(counter: string, limit?: number): boolean
-  lt(counter: string, limit?: number): boolean
-  gt(counter: string, limit?: number): boolean
-  lte(counter: string, limit?: number): boolean
-  gte(counter: string, limit?: number): boolean
-}
+// RuleSpec / Rule are runtime classes defined in src/rules.ts. The
+// type-only re-export here lets other type definitions in this file
+// (and the rest of the codebase that imports from `./types`) reference
+// them as types without pulling the implementation in.
+import type { Rule, RuleSpec } from './rules'
+export type { Rule, RuleSpec }
 
 // The current parse state and associated context.
-export type Context = {
-  uI: number // Rule index.
-  opts: Options // Amagama instance options.
-  cfg: Config // Amagama instance config.
-  meta: Bag // Parse meta parameters.
-  src: () => string // source text to parse.
-  root: () => any // Root node.
-  plgn: () => Plugin[] // Amagama instance plugins.
-  inst: () => Amagama // Current Amagama instance.
-  rule: Rule // Current rule instance.
-  sub: {
-    lex?: LexSub[]
-    rule?: RuleSub[]
-  }
-  xs: Tin // Lex state tin.
-  v: Token[] // Stack of consumed tokens (newest at top), used for rewind.
-  vAbs: number // Absolute count of pushed-not-rewound tokens; mark/rewind key.
-  v2: Token // Previous previous token (alias of v[v.length - 2]).
-  v1: Token // Previous token (alias of v[v.length - 1]).
-  t: Token[] // Lookahead buffer; t[i] is NOTOKEN if unfetched.
+// Per-parse Context. The runtime class is in src/context.ts; this
+// type-only import + re-export lets other type definitions in this
+// file (and the rest of the codebase that imports from `./types`)
+// keep referencing `Context` without pulling in the class itself.
+import type { Context } from './context'
+export type { Context }
 
-  // Save a rewind mark at the current parse position. The returned
-  // value can be passed to `rewind` to replay the tokens consumed
-  // since the mark was taken, re-feeding them through the lexer's
-  // pending-token queue.
-  mark: () => number
-  rewind: (mark: number) => void
-
-  // Legacy aliases for the first two slots of the lookahead buffer.
-  // @deprecated Use t[0] and t[1] instead.
-  t0: Token // Alias of t[0] (current token).
-  t1: Token // Alias of t[1] (next token).
-
-  tC: number // Token count.
-  kI: number // Parser rule iteration count.
-  rs: Rule[] // Rule stack.
-  rsI: number
-  rsm: { [name: string]: RuleSpec } // RuleSpec lookup map (by rule name).
-  // next: (r: Rule) => Token // Move to next token.
-  log?: (...rest: any) => void // Log parse/lex step (if defined).
-  F: (s: any) => string // Format arbitrary data as length-limited string.
-  u: Bag // Custom meta data (for use by plugins)
-  NOTOKEN: Token // Per parse "null" Token
-  NORULE: Rule // Per parse "null" Rule
-}
-
-export interface Lex {
-  src: String
-  ctx: Context
-  cfg: Config
-  pnt: Point
-  fwd: string
-  refwd(): string
-
-  token(
-    ref: Tin | string,
-    val: any,
-    src: string,
-    pnt?: Point,
-    use?: any,
-    why?: string,
-  ): Token
-
-  next(rule: Rule, alt?: NormAltSpec, altI?: number, tI?: number): Token
-
-  tokenize<R extends string | Tin, T extends R extends Tin ? string : Tin>(
-    ref: R,
-  ): T
-
-  bad(why: string, pstart: number, pend: number): Token
-}
+// Lex is a runtime class defined in src/lexer.ts. The type-only re-
+// export here keeps all consumers that import from `./types` working.
+import type { Lex } from './lexer'
+export type { Lex }
 
 export type NextToken = (rule: Rule) => Token
 
@@ -697,45 +497,10 @@ export type Config = {
   }
 }
 
-// Current character position in source - the "point'.
-export interface Point {
-  len: number // Length of source (for convenience).
-  sI: number // Source position (0-based).
-  rI: number // Source row (1-based as editors do that).
-  cI: number // Source column (1-based as editors do that).
-
-  // A LexMatcher might match more than one token in sequence.
-  // This array is first drained before matching is attempted again.
-  token: Token[]
-
-  // Once the end of the source is reached, generate a single "end"
-  // token, and keep returning it as the next Token (see Lex.next).
-  end?: Token
-}
-
-// Parser token (and where it was found).  Tokens are also the bearers
-// of parser errors, as they capture the position of the error in the
-// source.
-export interface Token {
-  isToken: boolean // Marks object as token.
-  name: string // Token name.
-  tin: Tin // Token identification number.
-  val: any // Value of Token if literal (eg. number).
-  src: string // Source text of Token.
-  sI: number // Location of token index in source text (0-based).
-  rI: number // Row location of token in source text (1-based).
-  cI: number // Column location of token in source text (1-based).
-  len: number // Length of Token source text.
-  use?: Bag // Custom meta data from plugins goes here.
-  err?: string // Error code.
-  why?: string // Internal tracing.
-  ignored?: Token
-
-  // Convert into an error Token.
-  bad(err: string, details?: any): Token
-
-  resolveVal(rule: Rule, ctx: Context): any
-}
+// Point and Token are runtime classes defined in src/lexer.ts. Type-
+// only re-export keeps consumers that import from `./types` working.
+import type { Point, Token } from './lexer'
+export type { Point, Token }
 
 // Specification for a parse-alternate within a Rule state.
 // Represent a possible token match (2-token lookahead)
@@ -770,7 +535,7 @@ export interface AltSpec {
 }
 
 // Allow AltSpecs to be "empty" and thus ignored.
-type AltSpecish = AltSpec | undefined | null | false | 0 | typeof NaN
+export type AltSpecish = AltSpec | undefined | null | false | 0 | typeof NaN
 
 // List modifications
 export type ListMods = {
@@ -780,20 +545,9 @@ export type ListMods = {
   custom?: (alts: AltSpec[]) => null | AltSpec[]
 }
 
-// Parse-alternate match (built from current tokens and AltSpec).
-export interface AltMatch {
-  p?: string | null | false | 0 // Push rule (by name).
-  r?: string | null | false | 0 // Replace rule (by name).
-  b?: number | null | false // Move token position backward.
-  c?: AltCond // Custom alt match condition.
-  n?: Counters // increment named counters.
-  a?: AltAction // Match actions.
-  h?: AltModifier // Modify alternate match.
-  u?: Bag // Custom props to add to Rule.use.
-  k?: Bag // Custom props to add to Rule.keep and keep via push and replace.
-  g?: string[] // Named group tags (allows plugins to find alts).
-  e?: Token // Errored on this token.
-}
+// Parse-alternate match. The runtime class lives in src/rules.ts.
+import type { AltMatch } from './rules'
+export type { AltMatch }
 
 // General container of named items.
 export type Bag = { [key: string]: any }
@@ -941,22 +695,9 @@ export type ValModifier = (
 export type LexSub = (tkn: Token, rule: Rule, ctx: Context) => void
 export type RuleSub = (rule: Rule, ctx: Context) => void
 
-export interface Parser {
-  options: Options
-  cfg: Config
-  rsm: RuleSpecMap
-
-  rule(
-    name?: string,
-    define?: RuleDefiner | null,
-  ): RuleSpec | RuleSpecMap | undefined
-
-  start(src: string, amagama: any, meta?: any, parent_ctx?: any): any
-
-  clone(options: Options, config: Config, amagama: Amagama): Parser
-
-  norm(): void
-}
+// Parser is a runtime class defined in src/parser.ts.
+import type { Parser } from './parser'
+export type { Parser }
 
 
 export type GrammarSpec = {
