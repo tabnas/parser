@@ -304,7 +304,6 @@ function errdesc(
       true === cfg.errmsg.suffix ? (color: any) =>
         [
           '',
-          '  ' + color.lo + 'https://amagama.senecajs.org' + color.reset + '',
           '  ' +
           color.lo +
           '--internal: tag=' +
