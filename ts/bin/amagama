@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+require('../dist/amagama-cli').run(process.argv, console).catch((e) => console.error(e.message))

@@ -1,0 +1,55 @@
+{
+  "name": "amagama",
+  "version": "2.28.0",
+  "main": "dist/amagama.js",
+  "type": "commonjs",
+  "types": "dist/amagama.d.ts",
+  "description": "A dynamic JSON parser that isn't strict and can be customized.",
+  "homepage": "https://github.com/rjrodger/amagama",
+  "keywords": [
+    "pattern",
+    "matcher",
+    "object",
+    "property",
+    "json"
+  ],
+  "author": "Richard Rodger (http://richardrodger.com)",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/rjrodger/amagama.git"
+  },
+  "scripts": {
+    "test": "node --enable-source-maps --test test/**/*.test.js",
+    "test-some": "node --enable-source-maps --test-name-pattern=\"$TEST_PATTERN\" --test \"test/**/*.test.js\"",
+    "test-watch": "node --test --watch test/**/*.test.js",
+    "test-view": "open coverage/lcov-report/index.html",
+    "watch": "tsc --build src test -w",
+    "build": "tsc --build src test",
+    "diagrams": "docs-src/.vuepress/diagrams/generate.sh",
+    "docs-dev": "vuepress dev docs-src",
+    "docs-build": "vuepress build docs-src",
+    "clean": "rm -rf node_modules dist yarn.lock package-lock.json",
+    "reset": "npm run clean && npm i && npm run build && npm test",
+    "repo-tag": "REPO_VERSION=`node -e \"console.log(require('./package').version)\"` && echo TAG: v$REPO_VERSION && git commit -a -m v$REPO_VERSION && git push && git tag v$REPO_VERSION && git push --tags;",
+    "repo-publish": "npm run clean && npm i && npm run repo-publish-quick",
+    "repo-publish-quick": "npm run build && npm run test && npm run repo-tag && npm publish --registry https://registry.npmjs.org --access=public"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "bin",
+    "LICENSE"
+  ],
+  "bin": {
+    "amagama": "bin/amagama",
+    "amagama-bnf": "bin/amagama-bnf"
+  },
+  "exports": {
+    ".": "./dist/amagama.js",
+    "./debug": "./dist/debug.js"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

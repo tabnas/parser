@@ -1,0 +1,1104 @@
+package amagama
+
+import (
+	"regexp"
+	"sort"
+	"strconv"
+)
+
+// Options configures a Amagama parser instance.
+// All fields use pointer types so that nil means "use default".
+// This matches the TypeScript pattern where unset options fall back to defaults.
+type Options struct {
+	// Safe controls prototype-pollution-style key safety.
+	Safe *SafeOptions
+
+	// Fixed controls fixed token recognition ({, }, [, ], :, ,).
+	Fixed *FixedOptions
+
+	// Match controls custom regexp-based token and value matching.
+	// Matches TS options.match.
+	Match *MatchOptions
+
+	// TokenSet allows customizing token sets (VAL, KEY, etc.).
+	// Matches TS options.tokenSet.
+	TokenSet map[string][]string
+
+	// Space controls space/tab lexing.
+	Space *SpaceOptions
+
+	// Line controls line-ending lexing.
+	Line *LineOptions
+
+	// Text controls unquoted text lexing.
+	Text *TextOptions
+
+	// Number controls numeric literal lexing.
+	Number *NumberOptions
+
+	// Comment controls comment lexing.
+	Comment *CommentOptions
+
+	// String controls quoted string lexing.
+	String *StringOptions
+
+	// Map controls object/map merging behavior.
+	Map *MapOptions
+
+	// List controls array/list behavior.
+	List *ListOptions
+
+	// Value controls keyword literal matching (true, false, null, etc.).
+	Value *ValueOptions
+
+	// Ender lists additional characters that end text tokens.
+	Ender []string
+
+	// Rule controls parser rule behavior.
+	Rule *RuleOptions
+
+	// Lex controls global lexer behavior (empty source, etc.).
+	Lex *LexOptions
+
+	// Parse provides hooks invoked during parsing (distinct from Parser,
+	// which replaces the parser entrypoint). Mirrors TS `options.parse`.
+	Parse *ParseOptions
+
+	// Parser allows custom parser overrides.
+	Parser *ParserOptions
+
+	// Result controls parse result validation.
+	Result *ResultOptions
+
+	// Error provides custom error message templates keyed by error code.
+	// e.g. {"unexpected": "unexpected character(s): {src}"}
+	Error map[string]string
+
+	// Hint provides additional explanatory text per error code.
+	Hint map[string]string
+
+	// ErrMsg controls error message formatting.
+	ErrMsg *ErrMsgOptions
+
+	// Info controls metadata attachment to parsed output nodes.
+	// Matches TS options.info.
+	Info *InfoOptions
+
+	// Property holds Go-specific options not present in the TypeScript version.
+	Property *PropertyOptions
+
+	// Color controls ANSI colour codes in formatted error messages.
+	// Mirrors TS `options.color`.
+	Color *ColorOptions
+
+	// Tag is an instance identifier tag.
+	Tag string
+}
+
+// ColorOptions configures the ANSI escape codes used when formatting a
+// AmagamaError. When Active is nil or *Active is true, the non-empty
+// codes are wrapped around the appropriate parts of the error output.
+// Setting *Active to false disables colour output entirely regardless
+// of the other fields. Mirrors TS `options.color`.
+type ColorOptions struct {
+	// Active toggles colour output. Default: true (matches TS).
+	Active *bool
+
+	// Reset clears all colour/style attributes. Default: ESC[0m.
+	Reset string
+
+	// Hi highlights the error header (`[tag/code]:`). Default: ESC[91m.
+	Hi string
+
+	// Lo dims trailing suffix material (internal diagnostics, links).
+	// Default: ESC[2m.
+	Lo string
+
+	// Line colours the source-location arrow and line-number gutter.
+	// Default: ESC[34m.
+	Line string
+}
+
+// ErrMsgOptions controls error message formatting.
+// Matches the TypeScript errmsg option.
+type ErrMsgOptions struct {
+	// Name sets the error tag in formatted messages.
+	// Default: "amagama". E.g. Name="bar" → "[bar/unexpected]: ..."
+	Name string
+
+	// Suffix controls the optional trailing text after an error message.
+	// Mirrors TS `options.errmsg.suffix` which accepts bool | string |
+	// function. In Go the permitted concrete types are:
+	//   bool   — true (default) enables the standard suffix, false disables.
+	//   string — literal text appended to the error message.
+	//   func(code, src string) string — dynamic suffix computation.
+	// Stored as any because the TS field is also polymorphic.
+	Suffix any
+}
+
+// InfoOptions controls metadata attachment to parsed output nodes.
+// Matches TS options.info.
+type InfoOptions struct {
+	// Map enables returning maps as MapRef structs instead of map[string]any.
+	// When true, map values include an Implicit flag indicating whether
+	// the map was created implicitly (without braces). Default: false.
+	Map *bool
+
+	// List enables returning lists as ListRef structs instead of []any.
+	// When true, list values include an Implicit flag indicating whether
+	// the list was created implicitly (without brackets). Default: false.
+	List *bool
+
+	// Text enables extended text info in output.
+	// When true, string and text values are wrapped in Text structs
+	// that include the quote character used. Default: false.
+	Text *bool
+
+	// Marker is the key under which info metadata is stored on wrapped
+	// values. Mirrors TS `options.info.marker`. Default: "__info__".
+	Marker string
+}
+
+// PropertyOptions holds Go-specific options not present in the TypeScript version.
+type PropertyOptions struct {
+	// ConfigModify callbacks, keyed by name.
+	// Called after config construction to allow dynamic customization.
+	ConfigModify map[string]ConfigModifier
+}
+
+// MatchOptions controls custom regexp-based matching.
+// Matches TS options.match.
+type MatchOptions struct {
+	Lex   *bool                     // Enable custom matching. Default: true.
+	Token map[string]*regexp.Regexp // "#NAME" → regexp pattern for custom tokens.
+	Value map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
+
+	// Check is a LexCheck hook invoked before the match matcher runs.
+	// Mirrors TS `options.match.check`.
+	Check LexCheck
+}
+
+// MatchValueSpec defines a regexp-based value matcher.
+// Matches TS options.match.value[name].
+type MatchValueSpec struct {
+	Match *regexp.Regexp       // Regexp pattern to match against.
+	Val   func([]string) any   // Optional value transformer, receives match groups.
+}
+
+// SafeOptions controls key safety.
+type SafeOptions struct {
+	Key *bool // Prevent __proto__ keys. Default: true.
+}
+
+// FixedOptions controls fixed token recognition.
+type FixedOptions struct {
+	Lex *bool // Enable fixed tokens. Default: true.
+
+	// Token overrides the source string for named fixed tokens.
+	// Mirrors TS `options.fixed.token` (a StrMap of name → src).
+	// Keys are token names (e.g. "#CA"). Values:
+	//   - non-nil string pointer: set that name's fixed source, removing any
+	//     previous source for the same name ("#CA" → ";" swaps the comma).
+	//     Unknown names are allocated a new Tin (matches (*Amagama).Token).
+	//   - nil pointer: remove the name's fixed mapping(s) from the lexer.
+	Token map[string]*string
+
+	// Check is a LexCheck hook invoked before the fixed matcher runs.
+	// Return nil to continue normal matching or a LexCheckResult to
+	// override. Mirrors TS `options.fixed.check`.
+	Check LexCheck
+}
+
+// SpaceOptions controls space lexing.
+type SpaceOptions struct {
+	Lex   *bool  // Enable space lexing. Default: true.
+	Chars string // Space characters. Default: " \t".
+
+	// Check is a LexCheck hook invoked before the space matcher runs.
+	// Mirrors TS `options.space.check`.
+	Check LexCheck
+}
+
+// LineOptions controls line-ending lexing.
+type LineOptions struct {
+	Lex      *bool  // Enable line lexing. Default: true.
+	Chars    string // Line characters. Default: "\r\n".
+	RowChars string // Row-counting characters. Default: "\n".
+	Single   *bool  // Generate separate tokens per newline. Default: false.
+
+	// Check is a LexCheck hook invoked before the line matcher runs.
+	// Mirrors TS `options.line.check`.
+	Check LexCheck
+}
+
+// ValModifier transforms a text token value after lexing.
+type ValModifier func(val any) any
+
+// TextOptions controls unquoted text lexing.
+type TextOptions struct {
+	Lex    *bool         // Enable text matching. Default: true.
+	Modify []ValModifier // Pipeline of value modifiers applied after text matching.
+
+	// Check is a LexCheck hook invoked before the text matcher runs.
+	// Mirrors TS `options.text.check`.
+	Check LexCheck
+}
+
+// NumberOptions controls numeric literal lexing.
+type NumberOptions struct {
+	Lex     *bool             // Enable number matching. Default: true.
+	Hex     *bool             // Support 0x hex format. Default: true.
+	Oct     *bool             // Support 0o octal format. Default: true.
+	Bin     *bool             // Support 0b binary format. Default: true.
+	Sep     string            // Number separator character. Default: "_". Empty string disables.
+	Exclude func(string) bool // Exclude certain number-like strings from number matching.
+
+	// Check is a LexCheck hook invoked before the number matcher runs.
+	// Mirrors TS `options.number.check`.
+	Check LexCheck
+}
+
+// CommentDef defines a single comment type.
+type CommentDef struct {
+	Line    bool   // true = line comment, false = block comment.
+	Start   string // Start marker, e.g. "#", "//", "/*".
+	End     string // End marker for block comments, e.g. "*/".
+	Lex     *bool  // Enable this comment type. Default: true.
+	EatLine *bool  // Also consume trailing line chars. Default: false.
+
+	// Suffix terminates a comment body at an additional marker beyond
+	// its natural end (line char for line comments, End for block
+	// comments). When matched, the suffix is CONSUMED as the last part
+	// of the comment body.
+	//
+	// Accepts one of:
+	//   string                — single suffix marker.
+	//   []string              — any of these markers terminates.
+	//   LexMatcher            — custom terminator probe: a non-nil
+	//                           returned token signals termination;
+	//                           len(token.Src) characters are consumed.
+	//
+	// EatLine still only fires for line-char termination; it does not
+	// stack with Suffix consumption.
+	//
+	// Mirrors TS `options.comment.def.<name>.suffix`.
+	Suffix any
+}
+
+// CommentOptions controls comment lexing.
+type CommentOptions struct {
+	Lex *bool                  // Enable all comment lexing. Default: true.
+	Def map[string]*CommentDef // Comment type definitions.
+
+	// Check is a LexCheck hook invoked before the comment matcher runs.
+	// Mirrors TS `options.comment.check`.
+	Check LexCheck
+}
+
+// StringOptions controls quoted string lexing.
+type StringOptions struct {
+	Lex          *bool             // Enable string matching. Default: true.
+	Chars        string            // Quote characters. Default: `'"` + "`".
+	MultiChars   string            // Multiline quote characters. Default: "`".
+	EscapeChar   string            // Escape character. Default: "\\".
+	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}.
+	AllowUnknown *bool             // Allow unknown escapes. Default: true.
+	Abandon      *bool             // On string error, return nil to let next matcher try. Default: false.
+	Replace      map[rune]string   // Character replacements applied during string scanning.
+
+	// Check is a LexCheck hook invoked before the string matcher runs.
+	// Mirrors TS `options.string.check`.
+	Check LexCheck
+}
+
+// MapMergeFunc is a custom merge function for duplicate map keys.
+// Receives the previous value, new value, rule, and context.
+type MapMergeFunc func(prev, val any, r *Rule, ctx *Context) any
+
+// MapOptions controls object/map behavior.
+type MapOptions struct {
+	Extend *bool        // Deep-merge duplicate keys. Default: true.
+	Child  *bool        // Parse bare colon as child$ key: {:1} → {"child$":1}. Default: false.
+	Merge  MapMergeFunc // Custom merge function for duplicate keys. Takes precedence over Extend.
+}
+
+// ListOptions controls array/list behavior.
+type ListOptions struct {
+	Property *bool // Allow named properties in arrays [a:1]. Default: true.
+	Pair     *bool // Push pairs as object elements: [a:1] → [{"a":1}]. Default: false.
+	Child    *bool // Parse bare colon as child value: [:1] → ListRef with Child=1. Default: false.
+}
+
+// ValueDef defines a keyword value.
+type ValueDef struct {
+	Val any // Value to produce for this keyword.
+
+	// Match is a RegExp pattern for regex-based value matching.
+	// When set, the value keyword is matched by regex instead of exact string.
+	// Matches TS options.value.def[name].match.
+	Match *regexp.Regexp
+
+	// ValFunc is a function that produces the value from regex match groups.
+	// Used when Match is set and the value depends on the match result.
+	// Matches TS value.def[name].val when val is a function.
+	ValFunc func(match []string) any
+
+	// Consume, when true, matches against the full forward source (not just
+	// the text token). The regexp should start with ^.
+	Consume bool
+}
+
+// ValueOptions controls keyword value matching.
+type ValueOptions struct {
+	Lex *bool                // Enable value matching. Default: true.
+	Def map[string]*ValueDef // Keyword definitions, e.g. {"true": {Val: true}}.
+}
+
+// RuleOptions controls parser rule behavior.
+type RuleOptions struct {
+	Start  string // Starting rule name. Default: "val".
+	Finish *bool  // Auto-close unclosed structures at EOF. Default: true.
+	MaxMul *int   // Max rule occurrence multiplier. Default: 3.
+
+	// Include is a comma-separated list of group tags. When non-empty,
+	// only grammar alternates whose G field contains at least one of
+	// these tags survive; all other alts (including those with no tags)
+	// are dropped. Applied before Exclude.
+	Include string
+
+	// Exclude is a comma-separated list of group tags. Grammar
+	// alternates whose G field contains any of these tags are removed.
+	// Applied after Include.
+	Exclude string
+}
+
+// LexOptions controls global lex behavior.
+type LexOptions struct {
+	Empty       *bool // Allow empty source. Default: true.
+	EmptyResult any   // Result for empty source. Default: nil.
+
+	// Match defines custom lexer matchers, keyed by name.
+	// Matches the TypeScript pattern: amagama.options({ lex: { match: { name: { order, make } } } })
+	Match map[string]*MatchSpec
+}
+
+// ParserOptions allows custom parser overrides.
+type ParserOptions struct {
+	Start func(src string, j *Amagama, meta map[string]any) (any, error)
+}
+
+// ParseOptions holds parse-time hooks. Mirrors TS `options.parse`.
+type ParseOptions struct {
+	// Prepare is a map of named callbacks invoked once at the start of
+	// every parse, in name order. The map form matches TS (which uses
+	// an object so plugins can replace each others' entries by name).
+	Prepare map[string]func(ctx *Context)
+}
+
+// ResultOptions controls parse result validation.
+// Matches the TypeScript result option.
+type ResultOptions struct {
+	// Fail lists values that are treated as parse failures.
+	// If the parse result matches any of these, an "unexpected" error is returned.
+	// E.g. Fail: []any{nil} would make nil results fail.
+	Fail []any
+}
+
+// ConfigModifier is a function that modifies the LexConfig after construction.
+type ConfigModifier func(cfg *LexConfig, opts *Options)
+
+// idCounter is used to generate unique Amagama instance IDs.
+var idCounter int
+
+// Amagama is a configured parser instance, equivalent to TypeScript's Amagama.make().
+type Amagama struct {
+	id           string             // Unique instance identifier (TS: amagama.id)
+	options      *Options
+	parser       *Parser
+	plugins      []pluginEntry      // Registered plugins
+	tinByName    map[string]Tin     // Custom token name → Tin
+	nameByTin    map[Tin]string     // Custom Tin → token name
+	nextTin      Tin                // Next available Tin for allocation
+	lexSubs      []LexSub           // Lex event subscribers
+	ruleSubs     []RuleSub          // Rule event subscribers
+	hints        map[string]string  // Error hints per error code
+	emptyAllow   bool               // Allow empty source
+	emptyResult  any                // Result for empty source
+	parserStart  func(src string, j *Amagama, meta map[string]any) (any, error)
+	inSetOptions bool               // Re-entrancy guard for SetOptions
+	decorations     map[string]any     // Plugin decorations (TS: amagama.foo = value)
+	pluginOpts      map[string]map[string]any // Plugin options namespace (TS: options.plugin)
+	customTokenSets map[string][]Tin  // Custom token sets (TS: options.tokenSet)
+}
+
+// Decorate sets a named value on this instance. This is the Go equivalent of
+// the TypeScript pattern where plugins add properties to the amagama instance
+// (e.g. amagama.foo = () => 'FOO'). Decorations are inherited by Derive.
+func (j *Amagama) Decorate(name string, value any) *Amagama {
+	if j.decorations == nil {
+		j.decorations = make(map[string]any)
+	}
+	j.decorations[name] = value
+	return j
+}
+
+// Decoration returns a named value previously set by Decorate.
+// Returns nil if the name has not been set.
+func (j *Amagama) Decoration(name string) any {
+	if j.decorations == nil {
+		return nil
+	}
+	return j.decorations[name]
+}
+
+// Id returns the unique instance identifier for this Amagama instance.
+// Matches TS amagama.id.
+func (j *Amagama) Id() string {
+	return j.id
+}
+
+// PluginOptions returns the options stored for a named plugin.
+// Matches TS `amagama.options.plugin[name]`.
+func (j *Amagama) PluginOptions(name string) map[string]any {
+	if j.pluginOpts == nil {
+		return nil
+	}
+	return j.pluginOpts[name]
+}
+
+// SetPluginOptions stores options for a named plugin.
+// Matches TS `amagama.options({ plugin: { name: opts } })`.
+func (j *Amagama) SetPluginOptions(name string, opts map[string]any) {
+	if j.pluginOpts == nil {
+		j.pluginOpts = make(map[string]map[string]any)
+	}
+	existing := j.pluginOpts[name]
+	if existing == nil {
+		j.pluginOpts[name] = opts
+	} else {
+		for k, v := range opts {
+			existing[k] = v
+		}
+	}
+}
+
+// Make creates a new Amagama parser instance with the given options.
+// Unset option fields fall back to defaults, matching TypeScript Amagama.make().
+func Make(opts ...Options) *Amagama {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
+	cfg := buildConfig(&o)
+	rsm := make(map[string]*RuleSpec)
+	buildGrammar(rsm, cfg)
+
+	maxmul := 3
+	if o.Rule != nil && o.Rule.MaxMul != nil {
+		maxmul = *o.Rule.MaxMul
+	}
+
+	// Copy global FixedTokens into the config for per-instance customization.
+	cfg.FixedTokens = make(map[string]Tin, len(FixedTokens))
+	for k, v := range FixedTokens {
+		cfg.FixedTokens[k] = v
+	}
+	cfg.SortFixedTokens()
+
+	// Copy global error messages as defaults.
+	msgs := make(map[string]string, len(errorMessages))
+	for k, v := range errorMessages {
+		msgs[k] = v
+	}
+
+	p := &Parser{Config: cfg, RSM: rsm, MaxMul: maxmul, ErrorMessages: msgs}
+
+	// Initialize built-in token name mappings.
+	tinByName := map[string]Tin{
+		"#BD": TinBD, "#ZZ": TinZZ, "#UK": TinUK, "#AA": TinAA,
+		"#SP": TinSP, "#LN": TinLN, "#CM": TinCM, "#NR": TinNR,
+		"#ST": TinST, "#TX": TinTX, "#VL": TinVL, "#OB": TinOB,
+		"#CB": TinCB, "#OS": TinOS, "#CS": TinCS, "#CL": TinCL,
+		"#CA": TinCA,
+	}
+	nameByTin := make(map[Tin]string, len(tinByName))
+	for name, tin := range tinByName {
+		nameByTin[tin] = name
+	}
+
+	idCounter++
+	tag := ""
+	if o.Tag != "" {
+		tag = "/" + o.Tag
+	}
+	instanceId := "Amagama/" + strconv.Itoa(idCounter) + tag
+
+	j := &Amagama{
+		id:          instanceId,
+		options:     &o,
+		parser:      p,
+		tinByName:   tinByName,
+		nameByTin:   nameByTin,
+		nextTin:     TinMAX,
+		emptyAllow:  true, // default: allow empty source
+	}
+
+	// Apply custom error messages.
+	if o.Error != nil {
+		for k, v := range o.Error {
+			j.parser.ErrorMessages[k] = v
+		}
+	}
+
+	// Apply error hints.
+	if o.Hint != nil {
+		j.hints = make(map[string]string, len(o.Hint))
+		j.parser.Hints = make(map[string]string, len(o.Hint))
+		for k, v := range o.Hint {
+			j.hints[k] = v
+			j.parser.Hints[k] = v
+		}
+	}
+
+	// Apply errmsg options.
+	if o.ErrMsg != nil && o.ErrMsg.Name != "" {
+		j.parser.ErrTag = o.ErrMsg.Name
+	}
+
+	// Apply lex options (empty source handling).
+	if o.Lex != nil {
+		if o.Lex.Empty != nil {
+			j.emptyAllow = *o.Lex.Empty
+		}
+		j.emptyResult = o.Lex.EmptyResult
+	}
+
+	// Apply custom parser start.
+	if o.Parser != nil && o.Parser.Start != nil {
+		j.parserStart = o.Parser.Start
+	}
+
+	// Apply rule include first, then exclude — mirrors SetOptions.
+	if o.Rule != nil && o.Rule.Include != "" {
+		j.include(o.Rule.Include)
+	}
+	if o.Rule != nil && o.Rule.Exclude != "" {
+		j.exclude(o.Rule.Exclude)
+	}
+
+	// Apply lex.match specs passed at construction.
+	j.registerMatchSpecs(&o)
+
+	// Apply fixed.token overrides passed at construction.
+	j.applyFixedTokens(&o)
+
+	return j
+}
+
+// Empty creates a Amagama instance with no built-in grammar rules.
+// Matches TS amagama.empty(). Useful for building a parser from scratch.
+func Empty(opts ...Options) *Amagama {
+	j := Make(opts...)
+	// Clear all grammar rules.
+	for _, rs := range j.parser.RSM {
+		rs.Clear()
+	}
+	return j
+}
+
+// MakeJSON creates a Amagama instance configured to accept strict JSON only.
+// Mirrors TS Amagama.make('json') (src/grammar.ts:980). Rejects amagama
+// relaxations: unquoted keys/values, comments, hex/octal/binary numbers,
+// trailing commas, leading-zero numbers, single-quoted or backtick
+// strings, and empty input.
+func MakeJSON() *Amagama {
+	f := false
+	return Make(Options{
+		Text: &TextOptions{Lex: &f},
+		Number: &NumberOptions{
+			Hex: &f, Oct: &f, Bin: &f,
+			Sep: "",
+			Exclude: func(s string) bool {
+				return len(s) >= 2 && s[0] == '0' && s[1] == '0'
+			},
+		},
+		String: &StringOptions{
+			Chars:        `"`,
+			MultiChars:   "",
+			AllowUnknown: &f,
+		},
+		Comment: &CommentOptions{Lex: &f},
+		Map:     &MapOptions{Extend: &f},
+		Lex:     &LexOptions{Empty: &f},
+		Rule: &RuleOptions{
+			Finish:  &f,
+			Include: "json",
+		},
+	})
+}
+
+// Parse parses a amagama string using this instance's configuration.
+func (j *Amagama) Parse(src string) (any, error) {
+	return j.parseInternal(src, nil)
+}
+
+// parseInternal handles empty source, custom parser.start, and delegation.
+func (j *Amagama) parseInternal(src string, meta map[string]any) (any, error) {
+	// Handle empty source.
+	if src == "" {
+		if !j.emptyAllow {
+			return nil, j.parser.makeError("unexpected", "", src, 0, 1, 1)
+		}
+		return j.emptyResult, nil
+	}
+
+	// Custom parser start.
+	if j.parserStart != nil {
+		result, err := j.parserStart(src, j, meta)
+		return result, j.attachHint(err)
+	}
+
+	result, err := j.parser.startParse(src, meta, j.lexSubs, j.ruleSubs, j)
+	return result, j.attachHint(err)
+}
+
+// attachHint adds hint text to a AmagamaError if hints are configured.
+func (j *Amagama) attachHint(err error) error {
+	if err == nil || j.hints == nil {
+		return err
+	}
+	if je, ok := err.(*AmagamaError); ok && je.Hint == "" {
+		if hint, ok := j.hints[je.Code]; ok {
+			je.Hint = hint
+		}
+	}
+	return err
+}
+
+// Options returns a copy of this instance's options.
+func (j *Amagama) Options() Options {
+	if j.options != nil {
+		return *j.options
+	}
+	return Options{}
+}
+
+// boolPtr is a helper to create a *bool.
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// intPtr is a helper to create a *int.
+func intPtr(i int) *int {
+	return &i
+}
+
+// boolVal returns the value of a *bool, or the default if nil.
+func boolVal(p *bool, def bool) bool {
+	if p != nil {
+		return *p
+	}
+	return def
+}
+
+// buildConfig converts Options into a LexConfig, applying defaults for unset fields.
+func buildConfig(o *Options) *LexConfig {
+	cfg := &LexConfig{}
+
+	// Fixed tokens
+	cfg.FixedLex = boolVal(optBool(o.Fixed, func(f *FixedOptions) *bool { return f.Lex }), true)
+	if o.Fixed != nil {
+		cfg.FixedCheck = o.Fixed.Check
+	}
+
+	// Match (custom regexp matchers - TS: options.match)
+	// Always initialize maps so SetOptions can add entries later.
+	cfg.MatchTokens = make(map[Tin]*regexp.Regexp)
+	if o.Match != nil {
+		cfg.MatchLex = boolVal(o.Match.Lex, true)
+		if o.Match.Value != nil {
+			cfg.MatchValues = make([]*MatchValueEntry, 0, len(o.Match.Value))
+			for name, spec := range o.Match.Value {
+				if spec == nil {
+					continue
+				}
+				cfg.MatchValues = append(cfg.MatchValues, &MatchValueEntry{
+					Name:  name,
+					Match: spec.Match,
+					Val:   spec.Val,
+				})
+			}
+			// Sort by name for deterministic iteration at lex time.
+			sort.Slice(cfg.MatchValues, func(i, j int) bool {
+				return cfg.MatchValues[i].Name < cfg.MatchValues[j].Name
+			})
+		}
+		cfg.MatchCheck = o.Match.Check
+	}
+
+	// Space
+	cfg.SpaceLex = boolVal(optBool(o.Space, func(s *SpaceOptions) *bool { return s.Lex }), true)
+	if o.Space != nil && o.Space.Chars != "" {
+		cfg.SpaceChars = runeSet(o.Space.Chars)
+	} else {
+		cfg.SpaceChars = map[rune]bool{' ': true, '\t': true}
+	}
+	if o.Space != nil {
+		cfg.SpaceCheck = o.Space.Check
+	}
+
+	// Line
+	cfg.LineLex = boolVal(optBool(o.Line, func(l *LineOptions) *bool { return l.Lex }), true)
+	cfg.LineSingle = boolVal(optBool(o.Line, func(l *LineOptions) *bool { return l.Single }), false)
+	if o.Line != nil {
+		cfg.LineCheck = o.Line.Check
+	}
+	if o.Line != nil && o.Line.Chars != "" {
+		cfg.LineChars = runeSet(o.Line.Chars)
+	} else {
+		cfg.LineChars = map[rune]bool{'\r': true, '\n': true}
+	}
+	if o.Line != nil && o.Line.RowChars != "" {
+		cfg.RowChars = runeSet(o.Line.RowChars)
+	} else {
+		cfg.RowChars = map[rune]bool{'\n': true}
+	}
+
+	// Text
+	cfg.TextLex = boolVal(optBool(o.Text, func(t *TextOptions) *bool { return t.Lex }), true)
+	if o.Text != nil && len(o.Text.Modify) > 0 {
+		cfg.TextModify = o.Text.Modify
+	}
+	if o.Text != nil {
+		cfg.TextCheck = o.Text.Check
+	}
+
+	// Number
+	cfg.NumberLex = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Lex }), true)
+	if o.Number != nil && o.Number.Exclude != nil {
+		cfg.NumberExclude = o.Number.Exclude
+	}
+	if o.Number != nil {
+		cfg.NumberCheck = o.Number.Check
+	}
+	cfg.NumberHex = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Hex }), true)
+	cfg.NumberOct = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Oct }), true)
+	cfg.NumberBin = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Bin }), true)
+	if o.Number != nil && o.Number.Sep != "" {
+		cfg.NumberSep = rune(o.Number.Sep[0])
+	} else if o.Number != nil && o.Number.Sep == "" && o.Number.Lex != nil {
+		// Explicitly set to empty: disable separator
+		cfg.NumberSep = 0
+	} else {
+		cfg.NumberSep = '_'
+	}
+
+	// Comment
+	cfg.CommentLex = boolVal(optBool(o.Comment, func(c *CommentOptions) *bool { return c.Lex }), true)
+	if o.Comment != nil {
+		cfg.CommentCheck = o.Comment.Check
+	}
+	if o.Comment != nil && o.Comment.Def != nil {
+		cfg.CommentLine = nil
+		cfg.CommentBlock = nil
+		cfg.CommentLineEatLine = make(map[string]bool)
+		cfg.CommentBlockEatLine = make(map[string]bool)
+		cfg.CommentLineSuffixes = nil
+		cfg.CommentBlockSuffixes = nil
+		cfg.CommentLineSuffixFuncs = nil
+		cfg.CommentBlockSuffixFuncs = nil
+		for _, def := range o.Comment.Def {
+			if def == nil || !boolVal(def.Lex, true) {
+				continue
+			}
+			eatLine := boolVal(def.EatLine, false)
+			suffixStrs, suffixFn := normalizeCommentSuffix(def.Suffix)
+			if def.Line {
+				cfg.CommentLine = append(cfg.CommentLine, def.Start)
+				if eatLine {
+					cfg.CommentLineEatLine[def.Start] = true
+				}
+				if len(suffixStrs) > 0 {
+					if cfg.CommentLineSuffixes == nil {
+						cfg.CommentLineSuffixes = make(map[string][]string)
+					}
+					cfg.CommentLineSuffixes[def.Start] = suffixStrs
+				}
+				if suffixFn != nil {
+					if cfg.CommentLineSuffixFuncs == nil {
+						cfg.CommentLineSuffixFuncs = make(map[string]LexMatcher)
+					}
+					cfg.CommentLineSuffixFuncs[def.Start] = suffixFn
+				}
+			} else {
+				cfg.CommentBlock = append(cfg.CommentBlock, [2]string{def.Start, def.End})
+				if eatLine {
+					cfg.CommentBlockEatLine[def.Start] = true
+				}
+				if len(suffixStrs) > 0 {
+					if cfg.CommentBlockSuffixes == nil {
+						cfg.CommentBlockSuffixes = make(map[string][]string)
+					}
+					cfg.CommentBlockSuffixes[def.Start] = suffixStrs
+				}
+				if suffixFn != nil {
+					if cfg.CommentBlockSuffixFuncs == nil {
+						cfg.CommentBlockSuffixFuncs = make(map[string]LexMatcher)
+					}
+					cfg.CommentBlockSuffixFuncs[def.Start] = suffixFn
+				}
+			}
+		}
+		// Sort by marker length descending (ties by start ascending) so
+		// longer markers shadow shorter ones regardless of how the caller's
+		// Comment.Def map iterated. Mirrors TS makeCommentMatcher.
+		sort.Slice(cfg.CommentLine, func(i, j int) bool {
+			if len(cfg.CommentLine[i]) != len(cfg.CommentLine[j]) {
+				return len(cfg.CommentLine[i]) > len(cfg.CommentLine[j])
+			}
+			return cfg.CommentLine[i] < cfg.CommentLine[j]
+		})
+		sort.Slice(cfg.CommentBlock, func(i, j int) bool {
+			if len(cfg.CommentBlock[i][0]) != len(cfg.CommentBlock[j][0]) {
+				return len(cfg.CommentBlock[i][0]) > len(cfg.CommentBlock[j][0])
+			}
+			return cfg.CommentBlock[i][0] < cfg.CommentBlock[j][0]
+		})
+	} else {
+		cfg.CommentLine = []string{"#", "//"}
+		cfg.CommentBlock = [][2]string{{"/*", "*/"}}
+	}
+
+	// String
+	cfg.StringLex = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.Lex }), true)
+	if o.String != nil {
+		cfg.StringCheck = o.String.Check
+	}
+	if o.String != nil && o.String.Chars != "" {
+		cfg.StringChars = runeSet(o.String.Chars)
+	} else {
+		cfg.StringChars = map[rune]bool{'\'': true, '"': true, '`': true}
+	}
+	if o.String != nil && o.String.MultiChars != "" {
+		cfg.MultiChars = runeSet(o.String.MultiChars)
+	} else {
+		cfg.MultiChars = map[rune]bool{'`': true}
+	}
+	if o.String != nil && o.String.EscapeChar != "" {
+		cfg.EscapeChar = rune(o.String.EscapeChar[0])
+	} else {
+		cfg.EscapeChar = '\\'
+	}
+	cfg.AllowUnknownEscape = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.AllowUnknown }), true)
+	cfg.StringAbandon = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.Abandon }), false)
+	if o.String != nil && o.String.Replace != nil {
+		cfg.StringReplace = o.String.Replace
+	}
+	if o.String != nil && o.String.Escape != nil {
+		cfg.EscapeMap = make(map[string]string, len(o.String.Escape))
+		for k, v := range o.String.Escape {
+			cfg.EscapeMap[k] = v
+		}
+	}
+
+	// Ender
+	if len(o.Ender) > 0 {
+		cfg.EnderChars = make(map[rune]bool)
+		for _, e := range o.Ender {
+			for _, r := range e {
+				cfg.EnderChars[r] = true
+			}
+		}
+	}
+
+	// Value
+	cfg.ValueLex = boolVal(optBool(o.Value, func(v *ValueOptions) *bool { return v.Lex }), true)
+	if o.Value != nil && o.Value.Def != nil {
+		cfg.ValueDef = make(map[string]any)
+		cfg.ValueDefRe = cfg.ValueDefRe[:0]
+		for k, v := range o.Value.Def {
+			if v == nil {
+				continue
+			}
+			if v.Match != nil {
+				// Regex-based value def goes into ValueDefRe (TS: cfg.value.defre)
+				cfg.ValueDefRe = append(cfg.ValueDefRe, &ValueDefEntry{Name: k, Def: v})
+			} else {
+				cfg.ValueDef[k] = v.Val
+			}
+		}
+		// Sort by name for deterministic iteration at lex time.
+		sort.Slice(cfg.ValueDefRe, func(i, j int) bool {
+			return cfg.ValueDefRe[i].Name < cfg.ValueDefRe[j].Name
+		})
+	}
+
+	// Map
+	cfg.MapExtend = boolVal(optBool(o.Map, func(m *MapOptions) *bool { return m.Extend }), true)
+	cfg.MapChild = boolVal(optBool(o.Map, func(m *MapOptions) *bool { return m.Child }), false)
+	if o.Map != nil && o.Map.Merge != nil {
+		cfg.MapMerge = o.Map.Merge
+	}
+
+	// List
+	cfg.ListProperty = boolVal(optBool(o.List, func(l *ListOptions) *bool { return l.Property }), true)
+	cfg.ListPair = boolVal(optBool(o.List, func(l *ListOptions) *bool { return l.Pair }), false)
+	cfg.ListChild = boolVal(optBool(o.List, func(l *ListOptions) *bool { return l.Child }), false)
+
+	// Rule
+	cfg.FinishRule = boolVal(optBool(o.Rule, func(r *RuleOptions) *bool { return r.Finish }), true)
+	if o.Rule != nil && o.Rule.Start != "" {
+		cfg.RuleStart = o.Rule.Start
+	} else {
+		cfg.RuleStart = "val"
+	}
+
+	// Safe
+	cfg.SafeKey = boolVal(optBool(o.Safe, func(s *SafeOptions) *bool { return s.Key }), true)
+
+	// Initialize per-instance token sets from defaults (matching TS cfg.tokenSetTins).
+	cfg.IgnoreSet = map[Tin]bool{TinSP: true, TinLN: true, TinCM: true}
+	cfg.ValSet = make([]Tin, len(TinSetVAL))
+	copy(cfg.ValSet, TinSetVAL)
+	cfg.KeySet = make([]Tin, len(TinSetKEY))
+	copy(cfg.KeySet, TinSetKEY)
+
+	// Info options (metadata on parsed output)
+	if o.Info != nil {
+		cfg.TextInfo = boolVal(o.Info.Text, false)
+		cfg.ListRef = boolVal(o.Info.List, false)
+		cfg.MapRef = boolVal(o.Info.Map, false)
+		if cfg.MapRef || cfg.ListRef || cfg.TextInfo {
+			cfg.InfoMarker = "__info__"
+			if o.Info.Marker != "" {
+				cfg.InfoMarker = o.Info.Marker
+			}
+		}
+	}
+	// list.child requires ListRef to store the child value on ListRef.Child.
+	if cfg.ListChild {
+		cfg.ListRef = true
+	}
+
+	// Parse-time hooks. The TS map is keyed by name so plugins can replace
+	// each others' entries; we preserve insertion-order-free semantics by
+	// sorting the callbacks by key before storing them.
+	if o.Parse != nil && len(o.Parse.Prepare) > 0 {
+		names := make([]string, 0, len(o.Parse.Prepare))
+		for name := range o.Parse.Prepare {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		cfg.ParsePrepare = cfg.ParsePrepare[:0]
+		for _, name := range names {
+			if fn := o.Parse.Prepare[name]; fn != nil {
+				cfg.ParsePrepare = append(cfg.ParsePrepare, fn)
+			}
+		}
+	}
+
+	// Result fail values.
+	if o.Result != nil && len(o.Result.Fail) > 0 {
+		cfg.ResultFail = append(cfg.ResultFail, o.Result.Fail...)
+	}
+
+	// Colour palette for error formatting. Defaults mirror TS: active,
+	// bright red header, dim suffix, blue line gutter.
+	cfg.Color = ColorConfig{
+		Active: boolVal(optBool(o.Color, func(c *ColorOptions) *bool { return c.Active }), true),
+		Reset:  "\x1b[0m",
+		Hi:     "\x1b[91m",
+		Lo:     "\x1b[2m",
+		Line:   "\x1b[34m",
+	}
+	if o.Color != nil {
+		if o.Color.Reset != "" {
+			cfg.Color.Reset = o.Color.Reset
+		}
+		if o.Color.Hi != "" {
+			cfg.Color.Hi = o.Color.Hi
+		}
+		if o.Color.Lo != "" {
+			cfg.Color.Lo = o.Color.Lo
+		}
+		if o.Color.Line != "" {
+			cfg.Color.Line = o.Color.Line
+		}
+	}
+
+	// Apply config modifiers.
+	if o.Property != nil && o.Property.ConfigModify != nil {
+		for _, mod := range o.Property.ConfigModify {
+			mod(cfg, o)
+		}
+	}
+
+	return cfg
+}
+
+// optBool extracts a *bool from an optional sub-options struct.
+func optBool[T any](outer *T, getter func(*T) *bool) *bool {
+	if outer == nil {
+		return nil
+	}
+	return getter(outer)
+}
+
+// runeSet converts a string into a rune presence map.
+func runeSet(s string) map[rune]bool {
+	m := make(map[rune]bool, len(s))
+	for _, r := range s {
+		m[r] = true
+	}
+	return m
+}
+
+// normalizeCommentSuffix splits the polymorphic CommentDef.Suffix value
+// into two internal forms: a list of suffix strings (sorted longest-first
+// so a longer marker shadows a shorter one) and an optional LexMatcher
+// probe. The matcher may also produce strings via non-nil returns; those
+// are handled at match time, not here.  Returns zero-length slice and
+// nil when no suffix is configured.
+func normalizeCommentSuffix(raw any) ([]string, LexMatcher) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	var strs []string
+	var fn LexMatcher
+
+	switch v := raw.(type) {
+	case string:
+		if v != "" {
+			strs = []string{v}
+		}
+	case []string:
+		for _, s := range v {
+			if s != "" {
+				strs = append(strs, s)
+			}
+		}
+	case []any:
+		// MapToOptions parses JSON arrays into []any.
+		for _, el := range v {
+			if s, ok := el.(string); ok && s != "" {
+				strs = append(strs, s)
+			}
+		}
+	case LexMatcher:
+		fn = v
+	case func(lex *Lex, rule *Rule) *Token:
+		fn = LexMatcher(v)
+	}
+
+	if len(strs) > 1 {
+		sort.Slice(strs, func(i, j int) bool {
+			if len(strs[i]) != len(strs[j]) {
+				return len(strs[i]) > len(strs[j])
+			}
+			return strs[i] < strs[j]
+		})
+	}
+	return strs, fn
+}
