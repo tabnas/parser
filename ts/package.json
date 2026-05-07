@@ -41,7 +41,6 @@
     "LICENSE"
   ],
   "bin": {
-    "amagama": "bin/amagama",
     "amagama-bnf": "bin/amagama-bnf"
   },
   "exports": {

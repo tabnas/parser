@@ -5,10 +5,10 @@ to derive a child) to configure a parser instance. All fields are
 optional — unset fields use defaults.
 
 ```js
-const { Amagama, json } = require('amagama')
+const { Amagama, bnf } = require('amagama')
 
 const am = new Amagama({
-  plugins: [json],
+  plugins: [bnf],
   comment: { lex: false },
   number: { hex: false },
 })
@@ -24,7 +24,7 @@ instance (`am.make({ … })`) re-run every plugin in this list against
 their own merged options.
 
 ```js
-new Amagama({ plugins: [json, bnf, Debug] })
+new Amagama({ plugins: [bnf, Debug, myGrammarPlugin] })
 ```
 
 `plugins` is consumed by the constructor — it's not stored back into
@@ -232,7 +232,6 @@ Custom error message templates, keyed by error code.
 
 ```js
 new Amagama({
-  plugins: [json],
   error: { unexpected: 'bad character: ' },
 })
 ```

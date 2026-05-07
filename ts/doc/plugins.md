@@ -1,9 +1,10 @@
 # Writing Plugins
 
-Plugins extend amagama by modifying the grammar, adding new token
-types, registering custom matchers, or subscribing to parse events.
-Most of the package itself is plugins — `json`, `bnf`, and `Debug`
-all ship as plugins under `src/plugins/<name>/`.
+Plugins extend amagama by adding a grammar, registering custom
+matchers, modifying rules, or subscribing to parse events. The bundled
+plugins are `bnf` and `Debug`, both under `src/plugins/<name>/`. The
+test fixture at `test/json-plugin.ts` is a worked example of a
+non-trivial grammar plugin (strict JSON).
 
 ## Plugin Structure
 
@@ -16,15 +17,15 @@ function myPlugin(amagama, options) {
   // Modify the parser here
 }
 
-const { Amagama, json } = require('amagama')
-const am = new Amagama({ plugins: [json] })
+const { Amagama } = require('amagama')
+const am = new Amagama()
 am.use(myPlugin, { key: 'value' })
 ```
 
 You can pass plugins at construction time too, in order:
 
 ```js
-const am = new Amagama({ plugins: [json, myPlugin] })
+const am = new Amagama({ plugins: [myPlugin, anotherPlugin] })
 ```
 
 Plugins should be idempotent (or guard against re-application) because
@@ -176,7 +177,7 @@ matcher via the `match` option:
 
 ```js
 const am = new Amagama({
-  plugins: [json],
+  plugins: [myGrammarPlugin],
   match: {
     lex: true,
     value: {

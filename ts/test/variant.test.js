@@ -4,12 +4,14 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, json } = require('..')
+const { Amagama } = require('..')
+const { json } = require('../dist-test/json-plugin')
 
 describe('variant', function () {
   it('json-strict', () => {
-    // The `json` plugin gives JSON.parse-equivalent semantics: only
-    // standard JSON tokens, no jsonic relaxations.
+    // The `json` plugin (test fixture; lives under test/json-plugin.ts)
+    // gives JSON.parse-equivalent semantics: only standard JSON
+    // tokens, no relaxations.
     const j = new Amagama({ plugins: [json] })
 
     assert.deepEqual(j.parse('{"a":1}'), { a: 1 })

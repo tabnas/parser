@@ -8,7 +8,7 @@ This monorepo contains:
 
 | Path | Description |
 |---|---|
-| [`ts/`](ts/) | TypeScript / JavaScript implementation. The reference engine. Ships the strict-JSON, BNF, and Debug plugins. |
+| [`ts/`](ts/) | TypeScript / JavaScript implementation. The reference engine — ships the BNF and Debug plugins; bring your own grammar. A strict-JSON grammar lives as a test fixture under `ts/test/json-plugin.ts`. |
 | [`go/`](go/) | Go port. Ships the engine plus a relaxed-JSON grammar (unquoted keys, implicit objects/arrays, comments, trailing commas, multiline strings, path diving). |
 | [`test/spec/`](test/spec/) | Shared `.tsv` parser-spec fixtures, exercised by both runtimes. |
 

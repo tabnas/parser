@@ -1,10 +1,9 @@
 /* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  amagama.ts
- *  The Amagama class — core parsing engine. Grammar is provided by
- *  plugins; the bundled `json` plugin (src/plugins/json/) gives a
- *  strict-JSON grammar. Other grammars ship as separate plugin
- *  modules.
+ *  The Amagama class — core parsing engine. The package ships no
+ *  grammar of its own: every grammar arrives via a plugin (the BNF
+ *  plugin in this repo, plus whatever a consumer brings).
  */
 
 import type {
@@ -559,7 +558,6 @@ export {
 }
 
 // Re-export the bundled plugins so callers can do
-// `const { Amagama, json, bnf, Debug } = require('amagama')`.
-export { json } from './plugins/json'
+// `const { Amagama, bnf, Debug } = require('amagama')`.
 export { bnf } from './plugins/bnf'
 export { Debug } from './plugins/debug'

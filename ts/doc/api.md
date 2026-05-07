@@ -1,7 +1,8 @@
 # API Reference
 
-amagama exposes a single class — `Amagama` — plus a handful of plugins
-that add grammars and tooling.
+amagama exposes a single class — `Amagama` — plus the bundled `bnf`
+and `Debug` plugins. The package ships **no grammar** of its own;
+every grammar arrives via a plugin.
 
 ## Construction
 
@@ -11,11 +12,11 @@ Create a parser instance. The class has no grammar by default; pass a
 `plugins` array to load one (or more) at construction time:
 
 ```js
-const { Amagama, json } = require('amagama')
+const { Amagama, bnf } = require('amagama')
 
-const am = new Amagama({ plugins: [json] })
-am.parse('{"a":1}')                   // {"a": 1}
-am.parse('{a:1}')                     // throws — JSON-strict
+const am = new Amagama({ plugins: [bnf] })
+am.bnf('greet = "hi" / "hello"')
+am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
 ```
 
 `options` is an [`AmagamaOptions`](options.md) object — every field is
@@ -38,7 +39,7 @@ const blank = am.empty({ rule: { start: 'mything' } })
 Parse a string and return the result.
 
 ```js
-am.parse('a:1')                       // {"a": 1}
+am.parse('hi')                        // depends on the active grammar
 ```
 
 Non-string inputs are returned unchanged — handy when threading values
@@ -55,12 +56,12 @@ code.
 
 Derive a child instance with overridden options. The child inherits the
 parent's plugin list and re-runs each plugin against the merged options
-— so option-conditional grammar alternatives (e.g. `list.child`) get
-re-evaluated against the child's settings.
+— so option-conditional grammar alternatives get re-evaluated against
+the child's settings.
 
 ```js
-const json_only = am.make({
-  rule: { include: 'json' }           // strip amagama-tagged alts
+const restricted = am.make({
+  rule: { exclude: 'experimental' }   // strip alts tagged 'experimental'
 })
 ```
 
@@ -233,10 +234,14 @@ and state actions.
 
 | Module path | Purpose |
 |---|---|
-| `amagama` | re-exports `json`, `bnf`, `Debug` for ergonomic destructuring. |
-| `amagama/dist/plugins/json` | Strict JSON grammar (`json` plugin). |
+| `amagama` | re-exports `bnf`, `Debug` for ergonomic destructuring. |
 | `amagama/dist/plugins/bnf` | BNF → grammar plugin + `bnfConvert` / `parseBnf` / `BnfParseError` exports. |
 | `amagama/dist/plugins/debug` | Debug plugin (`Debug`) + tracing hooks. |
+
+A strict-JSON grammar plugin lives as a test fixture under
+[`test/json-plugin.ts`](../test/json-plugin.ts) — useful as a worked
+example of a real grammar plugin. It compiles to
+`dist-test/json-plugin.js` and is exercised by `variant.test.js`.
 
 For plugin authors writing plugins of their own, see
 [plugins.md](plugins.md).
@@ -278,10 +283,7 @@ const {
   Amagama,            // the engine class
   AmagamaError,       // error class
 
-  // Grammar plugin
-  json,
-
-  // Other plugins
+  // Plugins
   bnf,
   Debug,
 

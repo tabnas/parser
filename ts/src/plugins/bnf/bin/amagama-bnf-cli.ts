@@ -7,7 +7,7 @@
 import Fs from 'node:fs'
 
 import { bnfConvert } from '..'
-import { Amagama, json } from '../../../amagama'
+import { Amagama } from '../../../amagama'
 
 
 export async function run(argv: string[], console: Console) {
@@ -82,7 +82,9 @@ export async function run(argv: string[], console: Console) {
       samples.push({ label: inp, input: inp })
     }
 
-    const j = new Amagama({ plugins: [json] })
+    // Bare engine: the BNF spec we're about to install supplies the
+    // grammar, so we don't need any other plugin.
+    const j = new Amagama()
     j.grammar(spec)
 
     let failed = 0

@@ -1,21 +1,23 @@
 # amagama
 
 A pluggable parsing engine. The runtime is a class — `Amagama` — that
-runs a rule-based parser over a configurable lexer. Grammar comes from
-plugins.
+runs a rule-based parser over a configurable matcher-based lexer.
+The package itself ships **no grammar**; every grammar is a plugin
+that you (or another package) supply.
 
 This package ships:
 
-- A strict-JSON plugin (`json`). Equivalent to `JSON.parse`, but
-  routed through the engine so plugins can hook in.
-- A BNF plugin (`bnf`) that compiles ABNF / BNF source into the engine's
+- The `Amagama` class — engine, lexer, parser, rule machinery.
+- A `bnf` plugin that compiles ABNF / BNF source into the engine's
   rule format and installs it on the instance.
 - A `Debug` plugin for tracing.
 
+A strict-JSON grammar lives as a test fixture under `test/json-plugin.ts`
+— useful as a worked example, and the engine's own conformance tests
+exercise it.
+
 For lenient-JSON parsing (unquoted keys, implicit objects, comments,
-trailing commas, etc.) see the [Go port](../go/) — the TypeScript engine
-intentionally ships only the strict JSON grammar; relaxed grammars live
-in their own plugin packages.
+trailing commas, etc.), see the [Go port](../go/).
 
 ## Install
 
@@ -23,54 +25,27 @@ in their own plugin packages.
 npm install amagama
 ```
 
-## Quick example
+## Quick example — define your own grammar
 
 ```js
-const { Amagama, json } = require('amagama')
+const { Amagama } = require('amagama')
 
-const am = new Amagama({ plugins: [json] })
-
-am.parse('{"a":1,"b":[true,null]}')   // { a: 1, b: [true, null] }
-am.parse('{a:1}')                     // throws — JSON-strict
-```
-
-```ts
-import { Amagama, json } from 'amagama'
-
-const am = new Amagama({ plugins: [json] })
-am.parse('{"a":1}')                   // { a: 1 }
-```
-
-## Plugins
-
-A plugin is a function `(amagama, options?) => void | Amagama`. Plugins
-add tokens, register matchers, modify rules, hook events, or expose
-new methods on the instance:
-
-```js
-function myPlugin(am, options) {
-  am.options({ fixed: { token: { '#TL': '~' } } })
-  const T_TILDE = am.token('#TL')
-
-  am.rule('val', (rs) => {
-    rs.open([
-      { s: [T_TILDE], a: (rule) => { rule.node = options.tildeValue ?? null } },
-    ])
-  })
+// A useless-but-real grammar: parse the literal token `hello`.
+function helloPlugin(am) {
+  am.options({ fixed: { token: { '#HI': 'hello' } } })
+  am.rule('val', (rs) => rs.open([
+    { s: ['#HI'], a: (r) => { r.node = 'world' } },
+  ]))
 }
 
-const am = new Amagama({ plugins: [json, myPlugin] })
-am.use(myPlugin)                      // or apply later
+const am = new Amagama({ plugins: [helloPlugin] })
+am.parse('hello')                     // 'world'
 ```
 
-`am.make()` derives a child instance with overridden options. The child
-inherits and re-runs each parent plugin against its merged options, so
-option-conditional alternatives get re-evaluated.
+## Quick example — BNF
 
-## BNF grammar
-
-The bundled `bnf` plugin compiles ABNF / BNF source into the engine's
-rule format:
+The bundled `bnf` plugin compiles ABNF / BNF into the engine's rule
+format:
 
 ```js
 const { Amagama, bnf } = require('amagama')
@@ -81,8 +56,33 @@ am.bnf('greet = "hi" / "hello"')
 am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
 ```
 
-`am.bnf.toSpec(source)` returns the GrammarSpec without installing —
-useful for inspecting the spec or saving it for later.
+`am.bnf.toSpec(source)` returns the GrammarSpec without installing — useful
+for inspecting or saving for later.
+
+## Plugins
+
+A plugin is a function `(amagama, options?) => void | Amagama`. Plugins
+add tokens, register matchers, modify rules, hook events, or expose
+new methods on the instance:
+
+```js
+function tildePlugin(am, options) {
+  am.options({ fixed: { token: { '#TL': '~' } } })
+  const T_TILDE = am.token('#TL')
+
+  am.rule('val', (rs) => {
+    rs.open([
+      { s: [T_TILDE], a: (rule) => { rule.node = options.tildeValue ?? null } },
+    ])
+  })
+}
+
+const am = new Amagama({ plugins: [tildePlugin] })
+```
+
+`am.make()` derives a child instance with overridden options. The child
+inherits and re-runs each parent plugin against its merged options, so
+option-conditional alternates get re-evaluated.
 
 ## Architecture
 
@@ -91,8 +91,7 @@ The engine is intentionally split:
 - **`Amagama` core** — lexer, parser, rule machinery. No grammar of
   its own.
 - **Plugins** in `src/plugins/<name>/` — each contributes a piece of
-  the runtime: a grammar (`json`), a converter (`bnf`), developer
-  tooling (`debug`).
+  the runtime: a converter (`bnf`), developer tooling (`debug`).
 
 The class never carries grammar by default; grammar is opt-in via the
 `plugins` option.
@@ -117,15 +116,17 @@ Plugins shipped in this package:
 
 | Plugin | Purpose |
 |---|---|
-| `json` | Strict JSON grammar (`JSON.parse`-equivalent). |
 | `bnf` | Adds `am.bnf(src)` — installs a grammar from a BNF string. |
 | `Debug` | Adds `am.debug.describe()` and parser tracing. |
 
+The `test/json-plugin.ts` test fixture is a worked example of a
+non-trivial grammar plugin (strict JSON).
+
 ## Go Version
 
-A [Go port](../go/) ships the relaxed-JSON grammar that the TS package
-no longer carries. Same engine architecture, same [test
-specs](../test/spec/) for behaviours that overlap.
+A [Go port](../go/) ships a relaxed-JSON grammar. Same engine
+architecture, same [test specs](../test/spec/) for behaviours that
+overlap.
 
 ```go
 import "github.com/amagamajs/amagama/go"
