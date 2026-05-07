@@ -56,10 +56,6 @@ export type AmagamaInternal = {
 }
 
 
-// Public shape of an Amagama instance. The class in src/amagama.ts
-// implements this interface; we declare it here so the engine modules
-// (parser, lexer, rules, utility) can reference the type without a
-// circular import on the class file.
 // Amagama is a runtime class defined in src/amagama.ts. The type-only
 // re-export here lets every other type definition in this file (and
 // the rest of the codebase that imports from `./types`) reference
@@ -77,8 +73,18 @@ export type Plugin = ((
   options?: Bag // TODO: InstalledPlugin.options is always defined ?
 }
 
-// Parsing options. See defaults.ts for commentary.
-export type Options = {
+// Parsing options. See defaults.ts for commentary on individual fields.
+//
+// This is the canonical option shape passed to `new Amagama(...)` and
+// `am.make(...)`. It also covers the result of `am.options()` and the
+// argument to `am.options(change)`.
+export type AmagamaOptions = {
+  // Plugins to apply at construction time. `new Amagama({ plugins:
+  // [jsonic] })` is sugar for `am.use(jsonic)` after construction —
+  // children inherit the parent's plugin list and re-run them with
+  // the merged options.
+  plugins?: Plugin[]
+
   safe?: {
     key: boolean
   }
@@ -241,7 +247,7 @@ export type Options = {
   }
   config?: {
     modify?: {
-      [plugin_name: string]: (config: Config, options: Options) => void
+      [plugin_name: string]: (config: Config, options: AmagamaOptions) => void
     }
   }
   parser?: {
@@ -602,7 +608,7 @@ export type LexMatcher = (
 // Construct a lexing function based on configuration.
 export type MakeLexMatcher = (
   cfg: Config,
-  opts: Options,
+  opts: AmagamaOptions,
 ) => LexMatcher | null | undefined | false
 
 export type LexCheck = (
@@ -689,7 +695,7 @@ export type ValModifier = (
   val: any,
   lex: Lex,
   cfg: Config,
-  opts: Options,
+  opts: AmagamaOptions,
 ) => string
 
 export type LexSub = (tkn: Token, rule: Rule, ctx: Context) => void

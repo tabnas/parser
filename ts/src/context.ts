@@ -13,7 +13,7 @@ import type {
   Bag,
   Config,
   LexSub,
-  Options,
+  AmagamaOptions,
   Plugin,
   Rule,
   RuleSpec,
@@ -27,7 +27,7 @@ import type {
 // remaining Context fields (rule, NORULE, log, lex …) get filled in
 // after construction.
 export type ContextInit = {
-  opts: Options
+  opts: AmagamaOptions
   cfg: Config
   meta: Bag
   src: () => string
@@ -48,7 +48,7 @@ export class Context {
   [key: string]: any
 
   uI = 0           // Rule index.
-  opts!: Options   // Amagama instance options.
+  opts!: AmagamaOptions   // Amagama instance options.
   cfg!: Config     // Amagama instance config.
   meta!: Bag       // Parse meta parameters.
   src!: () => string

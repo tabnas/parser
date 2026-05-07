@@ -26,7 +26,7 @@ import type {
   LexSub,
   MakeLexMatcher,
   NormAltSpec,
-  Options,
+  AmagamaOptions,
   Parser,
   Plugin,
   Point,
@@ -140,11 +140,8 @@ type Internal = {
 }
 
 
-// Construction options.
-// - Pass plain Options to seed the instance options.
-// - `plugins` is sugar for calling `use()` on each plugin in order.
-// - `parent` is internal: copies parser/config from another instance.
-type AmagamaOptions = Options & { plugins?: Plugin[] }
+// Construction options now live in types.ts as AmagamaOptions —
+// including the optional `plugins` array. Nothing extra is added here.
 
 
 class Amagama {
@@ -182,7 +179,7 @@ class Amagama {
 
   constructor(options?: AmagamaOptions, parent?: Amagama) {
     let plugins: Plugin[] = []
-    let opts: Options = {}
+    let opts: AmagamaOptions = {}
 
     if (options) {
       if (Array.isArray((options as any).plugins)) {
@@ -407,7 +404,7 @@ class Amagama {
   // Create a sibling instance with no defaults, no standard tokens, and
   // no grammar — for tests and for plugins that build everything from
   // scratch.
-  empty(options?: Options): Amagama {
+  empty(options?: AmagamaOptions): Amagama {
     return new Amagama({
       defaults$: false,
       standard$: false,
@@ -554,7 +551,7 @@ export type {
   LexSub,
   MakeLexMatcher,
   NormAltSpec,
-  Options,
+  AmagamaOptions,
   Parser,
   Plugin,
   Point,

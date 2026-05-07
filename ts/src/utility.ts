@@ -12,7 +12,7 @@ import type {
   Lex,
   LexMatcher,
   NormAltSpec,
-  Options,
+  AmagamaOptions,
   Rule,
   RuleSpec,
   Tin,
@@ -113,7 +113,7 @@ const S = {
 function configure(
   amagama: any,
   incfg: Config | undefined,
-  opts: Options,
+  opts: AmagamaOptions,
 ): Config {
   const cfg = incfg || ({} as Config)
 

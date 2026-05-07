@@ -17,7 +17,7 @@ import type {
 
 import { EMPTY, INSPECT } from './types'
 
-import type { Options } from './amagama'
+import type { AmagamaOptions } from './amagama'
 
 import {
   S,
@@ -164,7 +164,7 @@ const makeToken = (...params: ConstructorParameters<typeof Token>) =>
 
 const makeNoToken = () => makeToken('', -1, undefined, EMPTY, makePoint(-1))
 
-let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
+let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
 
   return function fixedMatcher(lex: Lex) {
@@ -202,7 +202,7 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
   }
 }
 
-let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
+let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   // Pre-sort both matcher lists at configure time so lexing iterates in
   // a deterministic order regardless of how the config object was built.
   // Value matchers: sort by user-supplied name (ascending).
@@ -323,7 +323,7 @@ type CommentDef = Config['comment']['def'] extends { [_: string]: infer T }
   ? T
   : never
 
-let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
+let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   let oc = opts.comment
 
   cfg.comment = {
@@ -566,7 +566,7 @@ function commentSuffixFnMatch(lex: Lex, fI: number, fn?: LexMatcher): number {
 
 // Match text, checking for literal values, optionally followed by a fixed token.
 // Text strings are terminated by end markers.
-let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
+let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   let ender = regexp(cfg.line.lex ? null : 's', '^(.*?)', ...cfg.rePart.ender)
 
   return function textMatcher(lex: Lex) {
@@ -660,7 +660,7 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
   }
 }
 
-let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
+let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   let mcfg = cfg.number
 
   let ender = regexp(
@@ -752,7 +752,7 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
   }
 }
 
-let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
+let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   // TODO: does `clean` make sense here?
 
   let os = opts.string || {}
@@ -976,7 +976,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: Options) => {
 }
 
 // Line ending matcher.
-let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
+let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   return function matchLine(lex: Lex) {
     if (!cfg.line.lex) return undefined
 
@@ -1025,7 +1025,7 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
 }
 
 // Space matcher.
-let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: Options) => {
+let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   return function spaceMatcher(lex: Lex) {
     if (!cfg.space.lex) return undefined
 
