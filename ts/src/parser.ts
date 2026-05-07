@@ -8,7 +8,6 @@ import type {
   Config,
   Options,
   ParsePrepare,
-  Parser,
   Rule,
   RuleDefiner,
   RuleSpec,
@@ -39,7 +38,11 @@ import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 import { makeRule, makeNoRule, makeRuleSpec } from './rules'
 
 
-class ParserImpl implements Parser {
+// Top-level rule-driven parser. Holds the rule map, the current
+// config, and the Amagama instance the rules belong to. `start()`
+// runs a parse from scratch; `clone()` produces a sibling for child
+// instances (Amagama#make).
+class Parser {
   options: Options
   cfg: Config
   rsm: RuleSpecMap = {}
@@ -202,7 +205,7 @@ class ParserImpl implements Parser {
   }
 
   clone(options: Options, config: Config, j: Amagama) {
-    let parser = new ParserImpl(options, config, j)
+    let parser = new Parser(options, config, j)
 
     // Inherit rules from parent, filtered by config.rule
     parser.rsm = Object.keys(this.rsm).reduce(
@@ -220,7 +223,7 @@ class ParserImpl implements Parser {
   }
 }
 
-const makeParser = (...params: ConstructorParameters<typeof ParserImpl>) =>
-  new ParserImpl(...params)
+const makeParser = (...params: ConstructorParameters<typeof Parser>) =>
+  new Parser(...params)
 
-export { makeRule, makeRuleSpec, makeParser }
+export { Parser, makeRule, makeRuleSpec, makeParser }
