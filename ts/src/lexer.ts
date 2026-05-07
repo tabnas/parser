@@ -216,7 +216,8 @@ function guardedMatcher(
 
 const CONSUME = 1 << 16
 const IS_ROW = 1 << 17
-const STOP = 1 << 18
+const CI_RESET = 1 << 18 // cI = 1 without rI++ (line chars in multi-line strings)
+const STOP = 1 << 19
 const STATE_MASK = 0xffff
 
 type ScanSpec = {
@@ -263,6 +264,8 @@ function runScan(
       sI++
       if (action & IS_ROW) {
         rI++
+        cI = 1
+      } else if (action & CI_RESET) {
         cI = 1
       } else {
         cI++
@@ -336,6 +339,68 @@ function buildCharRunSpec(
 const CHAR_RUN_TABLE = new Int32Array([
   STOP,
   CONSUME,
+])
+
+
+// Build a string-body scan spec for one quote character. Class 0 =
+// BODY (consume, advance col); class 1 = STOP (caller decides what
+// to do); class 2 = LINE (multi-line strings only — consume, reset
+// col); class 3 = LINE+ROW (multi-line — consume, reset col,
+// advance row). The opening / closing quote, the escape char, the
+// replace chars and any control char that can't be consumed in
+// the current quote context all map to class 1.
+//
+// One spec per quote char because the quote char is encoded in the
+// class table. For a typical config (1-3 quote chars) this is
+// cheap; the matcher caches them per make.
+function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
+  const qcc = qchar.charCodeAt(0)
+  const escCharCode = cfg.string.escCharCode
+  const replaceCodeMap = cfg.string.replaceCodeMap
+  const hasReplace = cfg.string.hasReplace
+  const isMultiLine = !!cfg.string.multiBitmap[qcc]
+  const lineBM = cfg.line.charsBitmap
+  const rowBM = cfg.line.rowCharsBitmap
+
+  const classOf = new Uint8Array(256)
+  for (let cc = 0; cc < 256; cc++) {
+    if (cc === qcc) {
+      classOf[cc] = 1
+    } else if (cc === escCharCode) {
+      classOf[cc] = 1
+    } else if (hasReplace && replaceCodeMap[cc] !== undefined) {
+      classOf[cc] = 1
+    } else if (cc < 32) {
+      if (isMultiLine && lineBM[cc]) {
+        classOf[cc] = rowBM[cc] ? 3 : 2
+      } else {
+        classOf[cc] = 1
+      }
+    }
+    // else BODY (class 0)
+  }
+
+  // Bytes >= 256 are always plain body chars (no special meaning).
+  const fallback = (_c: string): number => 0
+
+  return {
+    initialState: 0,
+    nclasses: 4,
+    classOf,
+    fallback,
+    table: STRING_BODY_TABLE,
+  }
+}
+
+// (s=0, BODY)         -> consume + col
+// (s=0, STOP)         -> stop, caller dispatches on src[sI]
+// (s=0, LINE_NONROW)  -> consume + cI=1 (multi-line)
+// (s=0, LINE_ROW)     -> consume + rI++; cI=1 (multi-line)
+const STRING_BODY_TABLE = new Int32Array([
+  CONSUME,
+  STOP,
+  CONSUME | CI_RESET,
+  CONSUME | IS_ROW,
 ])
 
 
@@ -940,192 +1005,160 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   cfg.string.escBitmap = charsBitmap(cfg.string.escMap)
   cfg.string.hasReplace = 0 < keys(cfg.string.replaceCodeMap).length
 
+  // Pre-build a body-scan ScanSpec per quote character. The spec
+  // classifies every byte 0..255 against THAT quote's role table
+  // (the quote char, the escape char, replace chars, and control /
+  // line chars depending on whether the quote allows multiline).
+  // The body-scan loop below is then just a runScan + dispatch.
+  const bodySpecs = new Map<number, ScanSpec>()
+  for (const qc of Object.keys(cfg.string.quoteMap)) {
+    bodySpecs.set(qc.charCodeAt(0), buildStringBodySpec(cfg, qc))
+  }
+  const scanOut: ScanOut = { sI: 0, rI: 0, cI: 0 }
+
   return guardedMatcher(cfg.string, function stringBody(lex) {
     const mcfg = cfg.string
-    let {
-      quoteMap,
-      quoteBitmap,
-      escMap,
-      escBitmap,
-      escChar,
-      escCharCode,
-      multiChars,
-      multiBitmap,
-      allowUnknown,
-      replaceCodeMap,
-      hasReplace,
+    const {
+      quoteMap, quoteBitmap, escMap, escCharCode,
+      multiChars, multiBitmap,
+      allowUnknown, replaceCodeMap, hasReplace,
     } = mcfg
 
-    let { pnt, src } = lex
-    let { sI, rI, cI } = pnt
-    let srclen = src.length
-    let qcc = src.charCodeAt(sI)
+    const { pnt, src } = lex
+    const startSI = pnt.sI
+    const startRI = pnt.rI
+    const srclen = src.length
+    const qcc = src.charCodeAt(startSI)
 
-    if (qcc < 256 ? quoteBitmap[qcc] : quoteMap[src[sI]]) {
-      const q = src[sI] // Quote character
-      const qI = sI
-      const qrI = rI
-      const isMultiLine =
-        qcc < 256 ? multiBitmap[qcc] : multiChars[q]
-      ++sI
-      ++cI
+    // Is this byte an opening quote?
+    if (!(qcc < 256 ? quoteBitmap[qcc] : quoteMap[src[startSI]])) return undefined
 
-      let s: string[] = []
-      let rs: string | undefined
+    const q = src[startSI]
+    const isMultiLine =
+      qcc < 256 ? !!multiBitmap[qcc] : !!multiChars[q]
+    const bodySpec =
+      bodySpecs.get(qcc) ||
+      (() => {
+        const spec = buildStringBodySpec(cfg, q)
+        bodySpecs.set(qcc, spec)
+        return spec
+      })()
 
-      for (sI; sI < srclen; sI++) {
+    let sI = startSI + 1
+    let rI = startRI
+    let cI = pnt.cI + 1
+
+    const buf: string[] = []
+
+    while (sI < srclen) {
+      // Body scan: consume body chars (and multi-line newlines)
+      // until something interesting (quote, escape, control, replace).
+      const bodyStart = sI
+      runScan(src, sI, rI, cI, bodySpec, scanOut)
+      sI = scanOut.sI
+      rI = scanOut.rI
+      cI = scanOut.cI
+      if (bodyStart < sI) buf.push(src.substring(bodyStart, sI))
+
+      if (sI >= srclen) break
+
+      const cc = src.charCodeAt(sI)
+
+      // Closing quote — string done.
+      if (cc === qcc) {
+        sI++
+        const tkn = lex.token('#ST', buf.join(EMPTY),
+          src.substring(startSI, sI), pnt)
+        pnt.sI = sI
+        pnt.rI = rI
+        pnt.cI = cI + 1
+        return tkn
+      }
+
+      // Replace map override.
+      if (hasReplace) {
+        const rs = replaceCodeMap[cc]
+        if (rs !== undefined) {
+          buf.push(rs)
+          sI++
+          cI++
+          continue
+        }
+      }
+
+      // Escape sequence.
+      if (cc === escCharCode) {
+        sI++
         cI++
-        let c = src[sI]
-        rs = undefined
-
-        // Quote char.
-        if (q === c) {
-          sI++
-          break // String finished.
-        }
-
-        // Escape char.
-        else if (escChar === c) {
+        if (sI >= srclen) break // unterminated
+        const ec = src[sI]
+        const es = escMap[ec]
+        if (es != null) {
+          buf.push(es)
           sI++
           cI++
-
-          let es = escMap[src[sI]]
-
-          if (null != es) {
-            s.push(es)
-          }
-
-          // ASCII escape \x**
-          else if ('x' === src[sI]) {
-            sI++
-            let cc = parseInt(src.substring(sI, sI + 2), 16)
-
-            if (isNaN(cc)) {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              sI = sI - 2
-              cI -= 2
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.invalid_ascii, sI, sI + 4)
-            }
-
-            let us = String.fromCharCode(cc)
-
-            s.push(us)
-            sI += 1 // Loop increments sI.
-            cI += 2
-          }
-
-          // Unicode escape \u**** and \u{*****}.
-          else if ('u' === src[sI]) {
-            sI++
-            let ux = '{' === src[sI] ? (sI++, 1) : 0
-            let ulen = ux ? 6 : 4
-
-            let cc = parseInt(src.substring(sI, sI + ulen), 16)
-
-            if (isNaN(cc)) {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              sI = sI - 2 - ux
-              cI -= 2
-
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.invalid_unicode, sI, sI + ulen + 2 + 2 * ux)
-            }
-
-            let us = String.fromCodePoint(cc)
-
-            s.push(us)
-            sI += ulen - 1 + ux // Loop increments sI.
-            cI += ulen + ux
-          } else if (allowUnknown) {
-            s.push(src[sI])
-          } else {
-            if (mcfg.abandon) {
-              return undefined
-            }
+        } else if ('x' === ec) {
+          sI++ // past 'x'
+          const xx = parseInt(src.substring(sI, sI + 2), 16)
+          if (isNaN(xx)) {
+            if (mcfg.abandon) return undefined
+            sI -= 2
+            cI -= 1
             pnt.sI = sI
-            pnt.cI = cI - 1
-            return lex.bad(S.unexpected, sI, sI + 1)
+            pnt.cI = cI
+            return lex.bad(S.invalid_ascii, sI, sI + 4)
           }
-        } else if (
-          hasReplace &&
-          undefined !== (rs = replaceCodeMap[src.charCodeAt(sI)])
-        ) {
-          s.push(rs)
+          buf.push(String.fromCharCode(xx))
+          sI += 2
+          cI += 3
+        } else if ('u' === ec) {
+          sI++ // past 'u'
+          const ux = '{' === src[sI] ? (sI++, 1) : 0
+          const ulen = ux ? 6 : 4
+          const uu = parseInt(src.substring(sI, sI + ulen), 16)
+          if (isNaN(uu)) {
+            if (mcfg.abandon) return undefined
+            sI = sI - 2 - ux
+            cI -= 1
+            pnt.sI = sI
+            pnt.cI = cI
+            return lex.bad(S.invalid_unicode, sI, sI + ulen + 2 + 2 * ux)
+          }
+          buf.push(String.fromCodePoint(uu))
+          sI += ulen + ux
+          cI += ulen + 1 + ux
+        } else if (allowUnknown) {
+          buf.push(ec)
+          sI++
           cI++
+        } else {
+          if (mcfg.abandon) return undefined
+          pnt.sI = sI
+          pnt.cI = cI
+          return lex.bad(S.unexpected, sI, sI + 1)
         }
-
-        // Body part of string.
-        else {
-          let bI = sI
-
-          // TODO: move to cfgx
-          let qc = q.charCodeAt(0)
-          let cc = src.charCodeAt(sI)
-
-          while (
-            (!hasReplace || undefined === (rs = replaceCodeMap[cc])) &&
-            sI < srclen &&
-            32 <= cc &&
-            qc !== cc &&
-            escCharCode !== cc
-          ) {
-            cc = src.charCodeAt(++sI)
-            cI++
-          }
-          cI--
-
-          if (undefined === rs && cc < 32) {
-            // TODO: move up - allow c < 32 to be a line char
-            // cc < 32 always so the bitmap is exhaustive here.
-            if (isMultiLine && cfg.line.charsBitmap[cc]) {
-              if (cfg.line.rowCharsBitmap[cc]) {
-                pnt.rI = ++rI
-              }
-
-              cI = 1
-              s.push(src.substring(bI, sI + 1))
-            } else {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.unprintable, sI, sI + 1)
-            }
-          } else {
-            s.push(src.substring(bI, sI))
-            sI--
-          }
-        }
+        continue
       }
 
-      if (src[sI - 1] !== q || pnt.sI === sI - 1) {
-        if (mcfg.abandon) {
-          return undefined
-        }
-        pnt.rI = qrI
-        return lex.bad(S.unterminated_string, qI, sI)
+      // Stopped on a control char (cc < 32) that wasn't a multi-line
+      // newline (those are consumed by the spec). Either an embedded
+      // line char in a non-multi-line string or a real unprintable.
+      // Both are errors.
+      if (cc < 32) {
+        if (mcfg.abandon) return undefined
+        pnt.sI = sI
+        pnt.cI = cI
+        return lex.bad(S.unprintable, sI, sI + 1)
       }
 
-      const tkn = lex.token(
-        '#ST',
-        s.join(EMPTY),
-        src.substring(pnt.sI, sI),
-        pnt,
-      )
-
-      pnt.sI = sI
-      pnt.rI = rI
-      pnt.cI = cI
-      return tkn
+      // Unreachable — the spec only stops on classes handled above.
+      break
     }
+
+    // Hit EOF without closing quote.
+    if (mcfg.abandon) return undefined
+    pnt.rI = startRI
+    return lex.bad(S.unterminated_string, startSI, sI)
   })
 }
 
