@@ -80,7 +80,7 @@ export type Plugin = ((
 // argument to `am.options(change)`.
 export type AmagamaOptions = {
   // Plugins to apply at construction time. `new Amagama({ plugins:
-  // [jsonic] })` is sugar for `am.use(jsonic)` after construction —
+  // [json] })` is sugar for `am.use(json)` after construction —
   // children inherit the parent's plugin list and re-run them with
   // the merged options.
   plugins?: Plugin[]

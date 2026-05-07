@@ -11,25 +11,17 @@ Create a parser instance. The class has no grammar by default; pass a
 `plugins` array to load one (or more) at construction time:
 
 ```js
-const { Amagama, jsonic } = require('amagama')
+const { Amagama, json } = require('amagama')
 
-const am = new Amagama({ plugins: [jsonic] })
-am.parse('a:1, b:2')                  // {"a": 1, "b": 2}
+const am = new Amagama({ plugins: [json] })
+am.parse('{"a":1}')                   // {"a": 1}
+am.parse('{a:1}')                     // throws — JSON-strict
 ```
 
 `options` is an [`AmagamaOptions`](options.md) object — every field is
 optional and merges with the defaults. The `plugins` field is the only
 field that doesn't survive into `am.options` after construction (it's
 consumed by the `use()` calls the constructor makes internally).
-
-For a strict-JSON parser, use the `json` plugin instead:
-
-```js
-const { Amagama, json } = require('amagama')
-const strict = new Amagama({ plugins: [json] })
-strict.parse('{"a":1}')               // {"a": 1}
-strict.parse('{a:1}')                 // throws
-```
 
 For a bare instance with no defaults, no standard tokens, and no
 grammar — useful as a base for building a parser from scratch — use
@@ -241,9 +233,8 @@ and state actions.
 
 | Module path | Purpose |
 |---|---|
-| `amagama` | re-exports `json`, `jsonic`, `bnf`, `Debug` for ergonomic destructuring. |
-| `amagama/dist/plugins/json` | Pure JSON grammar (`json` plugin). |
-| `amagama/dist/plugins/jsonic` | Relaxed-JSON grammar (`jsonic` plugin). |
+| `amagama` | re-exports `json`, `bnf`, `Debug` for ergonomic destructuring. |
+| `amagama/dist/plugins/json` | Strict JSON grammar (`json` plugin). |
 | `amagama/dist/plugins/bnf` | BNF → grammar plugin + `bnfConvert` / `parseBnf` / `BnfParseError` exports. |
 | `amagama/dist/plugins/debug` | Debug plugin (`Debug`) + tracing hooks. |
 
@@ -287,9 +278,8 @@ const {
   Amagama,            // the engine class
   AmagamaError,       // error class
 
-  // Grammar plugins
+  // Grammar plugin
   json,
-  jsonic,
 
   // Other plugins
   bnf,

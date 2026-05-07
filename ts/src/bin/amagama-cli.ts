@@ -2,7 +2,7 @@
 
 import Fs from 'node:fs'
 
-import { Amagama, jsonic, Plugin, util } from '../amagama'
+import { Amagama, json, Plugin, util } from '../amagama'
 
 import { Debug } from '../plugins/debug'
 
@@ -10,7 +10,7 @@ import { Debug } from '../plugins/debug'
 // Created lazily to avoid front-loading work on --help.
 let _defaultParser: Amagama | undefined
 function defaultParser(): Amagama {
-  return (_defaultParser ??= new Amagama({ plugins: [jsonic] }))
+  return (_defaultParser ??= new Amagama({ plugins: [json] }))
 }
 
 export async function run(argv: string[], console: Console) {
@@ -79,7 +79,7 @@ export async function run(argv: string[], console: Console) {
   options.debug = options.debug || {}
   options.debug.get_console = () => console
 
-  let amagama = new Amagama({ ...options, plugins: [jsonic] })
+  let amagama = new Amagama({ ...options, plugins: [json] })
 
   for (let pn in plugins) {
     amagama.use(plugins[pn], options.plugin?.[pn] || {})
@@ -117,9 +117,9 @@ export async function run(argv: string[], console: Console) {
       ? null
       : [replacer]
 
-  let json = JSON.stringify(data.val, replacer, space)
+  let output = JSON.stringify(data.val, replacer, space)
 
-  console.log(json)
+  console.log(output)
 }
 
 async function read_stdin(console: Console) {

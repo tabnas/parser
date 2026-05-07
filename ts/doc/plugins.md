@@ -2,8 +2,8 @@
 
 Plugins extend amagama by modifying the grammar, adding new token
 types, registering custom matchers, or subscribing to parse events.
-Most of the package itself is plugins — `json`, `jsonic`, `bnf`, and
-`Debug` all ship as plugins under `src/plugins/<name>/`.
+Most of the package itself is plugins — `json`, `bnf`, and `Debug`
+all ship as plugins under `src/plugins/<name>/`.
 
 ## Plugin Structure
 
@@ -16,15 +16,15 @@ function myPlugin(amagama, options) {
   // Modify the parser here
 }
 
-const { Amagama, jsonic } = require('amagama')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama, json } = require('amagama')
+const am = new Amagama({ plugins: [json] })
 am.use(myPlugin, { key: 'value' })
 ```
 
 You can pass plugins at construction time too, in order:
 
 ```js
-const am = new Amagama({ plugins: [jsonic, myPlugin] })
+const am = new Amagama({ plugins: [json, myPlugin] })
 ```
 
 Plugins should be idempotent (or guard against re-application) because
@@ -66,7 +66,7 @@ function wrapping(am) {
 }
 
 const wrapped = am.use(wrapping)
-wrapped.parse('a:1')              // works
+wrapped.parse('{"a":1}')          // works
 ```
 
 ## Adding Tokens
@@ -140,7 +140,7 @@ existing alternate list. Pass `mods` to control merge behaviour:
 | `p` | Push a new rule onto the stack by name (creates a child). |
 | `r` | Replace current rule with another by name (creates a sibling). |
 | `b` | Backtrack: number of tokens to put back. |
-| `g` | Group tag string (e.g. `'json'`, `'amagama,map'`). Used by `rule.include` / `rule.exclude` filtering. |
+| `g` | Group tag string (e.g. `'json'`, `'map,end'`). Used by `rule.include` / `rule.exclude` filtering. |
 | `c` | Condition: function that returns true to allow the alt, or an object pattern to match against `rule.n` counters. |
 | `n` | Increment named counters by these amounts. |
 | `u` | Custom data attached to the rule's `u` bag. |
@@ -176,7 +176,7 @@ matcher via the `match` option:
 
 ```js
 const am = new Amagama({
-  plugins: [jsonic],
+  plugins: [json],
   match: {
     lex: true,
     value: {
@@ -230,8 +230,7 @@ Plugins shipped in this package live under `src/plugins/<name>/`:
 
 ```
 src/plugins/
-├── json/index.ts                    # Pure JSON grammar
-├── jsonic/index.ts                  # jsonic relaxations on top of JSON
+├── json/index.ts                    # Strict JSON grammar
 ├── bnf/
 │   ├── index.ts                     # Plugin entry — adds am.bnf
 │   ├── converter.ts                 # BNF → GrammarSpec conversion
@@ -246,12 +245,15 @@ shorthand.
 
 ## Example: a tiny CSV plugin
 
+Build on top of the bare engine — a CSV grammar replaces the standard
+rules entirely.
+
 ```js
 function csvPlugin(am, opts) {
   // Drop newlines from IGNORE so they survive into the rule stream.
   am.options({
     tokenSet: { IGNORE: [undefined, null, undefined] },
-    rule: { start: 'csv', exclude: 'amagama,imp' },
+    rule: { start: 'csv' },
     lex: { emptyResult: [] },
   })
 
@@ -283,4 +285,5 @@ function csvPlugin(am, opts) {
 }
 ```
 
-The full version lives in `test/csv-grammar.test.js`.
+Apply with `am.use(csvPlugin)` on a bare instance (`new Amagama()`,
+no `json` plugin), or in the `plugins` array at construction time.

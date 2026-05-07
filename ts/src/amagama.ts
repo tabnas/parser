@@ -2,7 +2,9 @@
 
 /*  amagama.ts
  *  The Amagama class — core parsing engine. Grammar is provided by
- *  separate plugins (see src/plugins/json.ts and src/plugins/jsonic.ts).
+ *  plugins; the bundled `json` plugin (src/plugins/json/) gives a
+ *  strict-JSON grammar. Other grammars ship as separate plugin
+ *  modules.
  */
 
 import type {
@@ -155,7 +157,7 @@ class Amagama {
   // `options` is both a callable (set/get) and an indexable map of the
   // merged option tree. Plugins may read individual settings via
   // `am.options.<name>` and apply changes via `am.options({ ... })`.
-  options!: ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
+  options!: ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
   id!: string
   parent?: Amagama
 
@@ -236,9 +238,9 @@ class Amagama {
     // Build a callable+indexable `options` member up front so use()
     // and any plugin code below can rely on `this.options` already
     // existing and working.
-    const optionsFn = ((change?: Record<string, any> | string): Record<string, any> => {
+    const optionsFn = ((change?: Record<string, any>): Record<string, any> => {
       return this.#setOptions(change)
-    }) as ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
+    }) as ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
     deep(optionsFn, internal.merged)
     defprop(this, 'options', {
       value: optionsFn,
@@ -292,34 +294,18 @@ class Amagama {
 
 
   // Hash-private options setter. Public callers go through `options(change)`.
-  #setOptions(change?: Record<string, any> | string): Record<string, any> {
+  #setOptions(change?: Record<string, any>): Record<string, any> {
     if (null != change) {
-      let actualChange: Record<string, any> | undefined
-      if ('string' === typeof change) {
-        // Lazy-parse via a fresh jsonic instance.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { jsonic } = require('./plugins/jsonic') as { jsonic: Plugin }
-        const tmp = new Amagama({ plugins: [jsonic] })
-        const parsed = tmp.parse(change)
-        if (null != parsed && 'object' === typeof parsed) {
-          actualChange = parsed as Record<string, any>
-        }
-      } else {
-        actualChange = change
-      }
-
-      if (null != actualChange) {
-        deep(this.#internal.merged, actualChange)
-        configure(this, this.#internal.config, this.#internal.merged)
-        this.#internal.parser = this.#internal.parser.clone(
-          this.#internal.merged,
-          this.#internal.config,
-          this,
-        )
-        // Refresh the indexable view on `options` so subsequent
-        // property reads see the latest merged tree.
-        deep(this.options, this.#internal.merged)
-      }
+      deep(this.#internal.merged, change)
+      configure(this, this.#internal.config, this.#internal.merged)
+      this.#internal.parser = this.#internal.parser.clone(
+        this.#internal.merged,
+        this.#internal.config,
+        this,
+      )
+      // Refresh the indexable view on `options` so subsequent
+      // property reads see the latest merged tree.
+      deep(this.options, this.#internal.merged)
     }
     return { ...this.#internal.merged }
   }
@@ -438,23 +424,7 @@ class Amagama {
 
 
   // Apply a GrammarSpec (declarative rule definition) to this instance.
-  grammar(gsIn: GrammarSpec | string, setting?: GrammarSetting): this {
-    let gs: GrammarSpec
-    if ('string' === typeof gsIn) {
-      const tmp = new Amagama()
-      // Lazy require to avoid circular import; jsonic plugin is needed
-      // to parse the grammar string itself.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { jsonic } = require('./plugins/jsonic') as { jsonic: Plugin }
-      tmp.use(jsonic)
-      const parsed = tmp.parse(gsIn)
-      if (null == parsed || 'object' !== typeof parsed) {
-        return this
-      }
-      gs = parsed as GrammarSpec
-    } else {
-      gs = gsIn
-    }
+  grammar(gs: GrammarSpec, setting?: GrammarSetting): this {
 
     const altG = setting?.rule?.alt?.g
     const altGArr: string[] | null =
@@ -588,11 +558,8 @@ export {
   makeToken,
 }
 
-// Re-export the json + jsonic plugins for ergonomic usage:
-//   const { Amagama, json, jsonic } = require('amagama')
-// Plugins are loaded from sibling folders so callers can do
-// `const { Amagama, jsonic } = require('amagama')`.
+// Re-export the bundled plugins so callers can do
+// `const { Amagama, json, bnf, Debug } = require('amagama')`.
 export { json } from './plugins/json'
-export { jsonic } from './plugins/jsonic'
 export { bnf } from './plugins/bnf'
 export { Debug } from './plugins/debug'

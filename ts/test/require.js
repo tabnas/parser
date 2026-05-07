@@ -1,6 +1,6 @@
 const AmagamaDirect = require('..')
-const { Amagama, jsonic } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama, json } = require('..')
+const am = new Amagama({ plugins: [json] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 console.log('AmagamaDirect', AmagamaDirect('a:1'))

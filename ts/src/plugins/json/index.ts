@@ -56,7 +56,7 @@ const JSON_OPTIONS = {
 
 
 // Install the pure JSON rule set (val / map / list / pair / elem) on
-// the given Amagama instance. Exposed so the jsonic plugin can layer
+// the given Amagama instance. Exposed so other grammar plugins can layer
 // its extensions on top without re-declaring the JSON core.
 export function registerJsonGrammar(am: Amagama): void {
   const {

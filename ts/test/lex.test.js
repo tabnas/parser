@@ -4,8 +4,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, jsonic, makeLex, AmagamaError } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama, makeLex, AmagamaError } = require('..')
+const am = new Amagama()
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 describe('lex', function () {
@@ -453,86 +453,6 @@ describe('lex', function () {
     ])
   })
 
-  it('lex-flags', () => {
-    let no_comment = am.make({ comment: { lex: false } })
-    assert.deepEqual(J('a:1#b'), { a: 1 })
-    assert.deepEqual(J('a,1#b'), ['a', 1])
-    assert.deepEqual(no_comment.parse('a:1#b'), { a: '1#b' })
-    assert.deepEqual(no_comment.parse('a,1#b'), ['a', '1#b'])
-
-    // space becomes text if turned off
-    let no_space = am.make({ space: { lex: false } })
-    assert.deepEqual(J('a : 1'), { a: 1 })
-    assert.deepEqual(J('a , 1'), ['a', 1])
-    assert.deepEqual(no_space.parse('a :1'), { 'a ': 1 })
-    assert.deepEqual(no_space.parse('a ,1'), ['a ', 1])
-    assert.deepEqual(no_space.parse('a: 1'), { a: ' 1' })
-    assert.deepEqual(no_space.parse('a, 1'), ['a', ' 1'])
-
-    let no_number = am.make({ number: { lex: false } })
-    assert.deepEqual(J('a:1'), { a: 1 })
-    assert.deepEqual(J('a,1'), ['a', 1])
-    assert.deepEqual(no_number.parse('a:1'), { a: '1' })
-    assert.deepEqual(no_number.parse('a,1'), ['a', '1'])
-
-    let no_string = am.make({ string: { lex: false } })
-    assert.deepEqual(J('a:1'), { a: 1 })
-    assert.deepEqual(J('a,1'), ['a', 1])
-    assert.deepEqual(J('a:"a"'), { a: 'a' })
-    assert.deepEqual(J('"a",1'), ['a', 1])
-    assert.deepEqual(no_string.parse('a:1'), { a: 1 })
-    assert.deepEqual(no_string.parse('a,1'), ['a', 1])
-    assert.deepEqual(no_string.parse('a:"a"'), { a: '"a"' })
-    assert.deepEqual(no_string.parse('"a",1'), ['"a"', 1])
-
-    let no_text = am.make({ text: { lex: false } })
-    assert.deepEqual(J('a:b'), { a: 'b' })
-    assert.deepEqual(J('a, b '), ['a', 'b'])
-    assert.throws(() => no_text.parse('a:b c'), /unexpected/)
-    assert.throws(() => no_text.parse('a,b c'), /unexpected/)
-
-    let no_value = am.make({ value: { lex: false } })
-    assert.deepEqual(J('a:true'), { a: true })
-    assert.deepEqual(J('a,null'), ['a', null])
-    assert.deepEqual(no_value.parse('a:true'), { a: 'true' })
-    assert.deepEqual(no_value.parse('a,null'), ['a', 'null'])
-
-    // line becomes text if turned off
-    let no_line = am.make({ line: { lex: false } })
-    assert.deepEqual(J('a:\n1'), { a: 1 })
-    assert.deepEqual(J('a,\n1'), ['a', 1])
-    assert.deepEqual(no_line.parse('a:\n1'), { a: '\n1' })
-    assert.deepEqual(no_line.parse('a,\n1'), ['a', '\n1'])
-  })
-
-  it('custom-matcher', () => {
-    let tens = am.make()
-
-    tens.options({
-      lex: {
-        match: {
-          x10: {
-            order: 9e5,
-            make: () => (lex) => {
-              let pnt = lex.pnt
-              let marks = lex.src.substring(pnt.sI).match(/^%+/)
-              if (marks) {
-                let len = marks[0].length
-                let tkn = lex.token('#VL', 10 * len, marks, lex.pnt)
-                pnt.sI += len
-                pnt.cI += len
-                return tkn
-              }
-            },
-          },
-        },
-      },
-    })
-
-    // console.dir(tens.internal().config.lex)
-
-    assert.deepEqual(tens.parse('a:1,b:%%,c:[%%%%]'), { a: 1, b: 20, c: [40] })
-  })
 
   function st(tkn) {
     let out = []

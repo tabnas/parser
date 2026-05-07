@@ -17,8 +17,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, jsonic } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama } = require('..')
+const am = new Amagama()
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 

@@ -7,7 +7,7 @@
 import Fs from 'node:fs'
 
 import { bnfConvert } from '..'
-import { Amagama, jsonic } from '../../../amagama'
+import { Amagama, json } from '../../../amagama'
 
 
 export async function run(argv: string[], console: Console) {
@@ -82,7 +82,7 @@ export async function run(argv: string[], console: Console) {
       samples.push({ label: inp, input: inp })
     }
 
-    const j = new Amagama({ plugins: [jsonic] })
+    const j = new Amagama({ plugins: [json] })
     j.grammar(spec)
 
     let failed = 0

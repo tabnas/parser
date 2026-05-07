@@ -4,8 +4,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, jsonic } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { Amagama, json } = require('..')
+const am = new Amagama({ plugins: [json] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { Debug } = require('../dist/plugins/debug')
 
@@ -25,7 +25,7 @@ describe('api', function () {
       'SKIP',
     ])
 
-    // Spot-check the instance shape. Plugins (e.g. jsonic) decorate
+    // Spot-check the instance shape. Plugins (e.g. json) decorate
     // instances further; this just guards against accidental
     // additions to the core class.
     assert.deepEqual(keys(am).sort(), [

@@ -9,8 +9,8 @@ const Util = require('util')
 const { filterRules, modlist } = require('../dist/utility')
 const { strinject } = require('../dist/error')
 
-const { util, Amagama, jsonic, makeToken, makePoint } = require('..')
-const am = new Amagama({ plugins: [jsonic] })
+const { util, Amagama, json, makeToken, makePoint } = require('..')
+const am = new Amagama({ plugins: [json] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 
@@ -302,7 +302,7 @@ describe('utility', () => {
     log = []
     dir = []
     let j = am.make(cfg)
-    j.parse('a:1', { log: -1 })
+    j.parse('{"a":1}', { log: -1 })
     assert.deepEqual(dir[0].debug.print.config, true)
   })
 
