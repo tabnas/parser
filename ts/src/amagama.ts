@@ -1,8 +1,9 @@
 /* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  amagama.ts
- *  The Amagama class — core parsing engine. Grammar is provided by
- *  separate plugins (see src/plugins/json.ts and src/plugins/jsonic.ts).
+ *  The Amagama class — core parsing engine. The package ships no
+ *  grammar of its own: every grammar arrives via a plugin (the BNF
+ *  plugin in this repo, plus whatever a consumer brings).
  */
 
 import type {
@@ -155,15 +156,15 @@ class Amagama {
   // `options` is both a callable (set/get) and an indexable map of the
   // merged option tree. Plugins may read individual settings via
   // `am.options.<name>` and apply changes via `am.options({ ... })`.
-  options!: ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
+  options!: ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
   id!: string
   parent?: Amagama
 
-  // Made non-enumerable (via defprop in constructor) so plugin
-  // decoration / serialization doesn't surface internal config.
-  // Public on the class shape because TS structural typing rejects
-  // private members; treat as internal-only by convention.
-  _internal!: Internal
+  // Truly-private (ECMAScript hash-private) internal state. Inaccessible
+  // outside the class — for...in, Object.keys, JSON.stringify, and
+  // tests all see the instance as if this field didn't exist. Read it
+  // through the public `internal()` method.
+  #internal!: Internal
 
   // Static utility / constants for plugin code that holds the class.
   static util = util
@@ -200,12 +201,12 @@ class Amagama {
       mark: Math.random(),
       merged: undefined as unknown as Record<string, any>,
     }
-    defprop(this, '_internal', { value: internal, writable: true })
+    this.#internal = internal
 
     const merged_options = deep(
       {},
       parent
-        ? { ...parent._internal.merged }
+        ? { ...parent.#internal.merged }
         : false === (opts as any).defaults$
           ? {}
           : defaults,
@@ -236,9 +237,9 @@ class Amagama {
     // Build a callable+indexable `options` member up front so use()
     // and any plugin code below can rely on `this.options` already
     // existing and working.
-    const optionsFn = ((change?: Record<string, any> | string): Record<string, any> => {
-      return this._setOptions(change)
-    }) as ((change?: Record<string, any> | string) => Record<string, any>) & Record<string, any>
+    const optionsFn = ((change?: Record<string, any>): Record<string, any> => {
+      return this.#setOptions(change)
+    }) as ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
     deep(optionsFn, internal.merged)
     defprop(this, 'options', {
       value: optionsFn,
@@ -252,7 +253,7 @@ class Amagama {
       // etc), build a fresh parser, then re-run parent plugins on this
       // instance so option-conditional rule alts (e.g. `list.child`)
       // get re-evaluated against the child's merged options.
-      const parentInternal = parent._internal
+      const parentInternal = parent.#internal
       internal.config = configure(this, undefined, merged_options)
       assign(this.token, internal.config.t)
 
@@ -291,39 +292,21 @@ class Amagama {
   }
 
 
-  // Internal options setter. Public callers should use `options(change)`.
-  // Not flagged `private` because the class is exposed structurally and
-  // private members would break Plugin signature compatibility.
-  _setOptions(change?: Record<string, any> | string): Record<string, any> {
+  // Hash-private options setter. Public callers go through `options(change)`.
+  #setOptions(change?: Record<string, any>): Record<string, any> {
     if (null != change) {
-      let actualChange: Record<string, any> | undefined
-      if ('string' === typeof change) {
-        // Lazy-parse via a fresh jsonic instance.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { jsonic } = require('./plugins/jsonic') as { jsonic: Plugin }
-        const tmp = new Amagama({ plugins: [jsonic] })
-        const parsed = tmp.parse(change)
-        if (null != parsed && 'object' === typeof parsed) {
-          actualChange = parsed as Record<string, any>
-        }
-      } else {
-        actualChange = change
-      }
-
-      if (null != actualChange) {
-        deep(this._internal.merged, actualChange)
-        configure(this, this._internal.config, this._internal.merged)
-        this._internal.parser = this._internal.parser.clone(
-          this._internal.merged,
-          this._internal.config,
-          this,
-        )
-        // Refresh the indexable view on `options` so subsequent
-        // property reads see the latest merged tree.
-        deep(this.options, this._internal.merged)
-      }
+      deep(this.#internal.merged, change)
+      configure(this, this.#internal.config, this.#internal.merged)
+      this.#internal.parser = this.#internal.parser.clone(
+        this.#internal.merged,
+        this.#internal.config,
+        this,
+      )
+      // Refresh the indexable view on `options` so subsequent
+      // property reads see the latest merged tree.
+      deep(this.options, this.#internal.merged)
     }
-    return { ...this._internal.merged }
+    return { ...this.#internal.merged }
   }
 
 
@@ -331,8 +314,8 @@ class Amagama {
   // non-string inputs are returned as-is (matches the upstream contract).
   parse(src: any, meta?: any, parent_ctx?: any): any {
     if (S.string === typeof src) {
-      const internalParser = this._internal.parser
-      const optsParser: any = (this._internal.merged as any).parser
+      const internalParser = this.#internal.parser
+      const optsParser: any = (this.#internal.merged as any).parser
       const parser = optsParser?.start
         ? parserwrap(optsParser)
         : internalParser
@@ -343,7 +326,7 @@ class Amagama {
 
 
   config(): Config {
-    return deep(this._internal.config)
+    return deep(this.#internal.config)
   }
 
 
@@ -373,8 +356,8 @@ class Amagama {
     })
 
     const merged_plugin_options =
-      (this._internal.merged as any).plugin[plugin_name]
-    this._internal.plugins.push(plugin)
+      (this.#internal.merged as any).plugin[plugin_name]
+    this.#internal.plugins.push(plugin)
     plugin.options = merged_plugin_options
 
     return (plugin(this, merged_plugin_options) || this) as Amagama
@@ -387,7 +370,7 @@ class Amagama {
     name?: string,
     define?: RuleDefiner | null,
   ): RuleSpec | RuleSpecMap | this | undefined {
-    const result = this._internal.parser.rule(name, define)
+    const result = this.#internal.parser.rule(name, define)
     return result === undefined ? this : result
   }
 
@@ -422,12 +405,12 @@ class Amagama {
   // and fire in registration order.
   sub(spec: { lex?: any; rule?: any }): this {
     if (spec.lex) {
-      this._internal.sub.lex = this._internal.sub.lex || []
-      this._internal.sub.lex.push(spec.lex)
+      this.#internal.sub.lex = this.#internal.sub.lex || []
+      this.#internal.sub.lex.push(spec.lex)
     }
     if (spec.rule) {
-      this._internal.sub.rule = this._internal.sub.rule || []
-      this._internal.sub.rule.push(spec.rule)
+      this.#internal.sub.rule = this.#internal.sub.rule || []
+      this.#internal.sub.rule.push(spec.rule)
     }
     return this
   }
@@ -435,28 +418,12 @@ class Amagama {
 
   // Internal accessor used by parser, plugins, and debug code.
   internal(): Internal {
-    return this._internal
+    return this.#internal
   }
 
 
   // Apply a GrammarSpec (declarative rule definition) to this instance.
-  grammar(gsIn: GrammarSpec | string, setting?: GrammarSetting): this {
-    let gs: GrammarSpec
-    if ('string' === typeof gsIn) {
-      const tmp = new Amagama()
-      // Lazy require to avoid circular import; jsonic plugin is needed
-      // to parse the grammar string itself.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { jsonic } = require('./plugins/jsonic') as { jsonic: Plugin }
-      tmp.use(jsonic)
-      const parsed = tmp.parse(gsIn)
-      if (null == parsed || 'object' !== typeof parsed) {
-        return this
-      }
-      gs = parsed as GrammarSpec
-    } else {
-      gs = gsIn
-    }
+  grammar(gs: GrammarSpec, setting?: GrammarSetting): this {
 
     const altG = setting?.rule?.alt?.g
     const altGArr: string[] | null =
@@ -590,11 +557,7 @@ export {
   makeToken,
 }
 
-// Re-export the json + jsonic plugins for ergonomic usage:
-//   const { Amagama, json, jsonic } = require('amagama')
-// Plugins are loaded from sibling folders so callers can do
-// `const { Amagama, jsonic } = require('amagama')`.
-export { json } from './plugins/json'
-export { jsonic } from './plugins/jsonic'
+// Re-export the bundled plugins so callers can do
+// `const { Amagama, bnf, Debug } = require('amagama')`.
 export { bnf } from './plugins/bnf'
 export { Debug } from './plugins/debug'

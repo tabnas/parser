@@ -1,12 +1,14 @@
 /* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
-/*  plugins/json.ts
- *  Pure JSON grammar plugin.
+/*  test/json-plugin.ts
+ *  Strict JSON grammar plugin — kept here as a test fixture.
  *
- *  Registers a strict JSON grammar (val, map, list, pair, elem) and sets
- *  options that disable amagama's relaxed-JSON extensions. Use this
- *  plugin when you want JSON.parse-equivalent semantics with the
- *  amagama engine.
+ *  This used to ship in src/plugins/json/. The amagama package itself
+ *  is now grammar-free; consumers bring their own grammar plugin. This
+ *  file exists so the engine still has a non-trivial grammar to test
+ *  against (variant.test.js exercises JSON.parse-equivalence).
+ *
+ *  Compiled to dist-test/json-plugin.js via test/tsconfig.json.
  */
 
 import type {
@@ -15,7 +17,7 @@ import type {
   FuncRef,
   Plugin,
   Rule,
-} from '../../types'
+} from '..'
 
 const defprop = Object.defineProperty
 
@@ -56,7 +58,7 @@ const JSON_OPTIONS = {
 
 
 // Install the pure JSON rule set (val / map / list / pair / elem) on
-// the given Amagama instance. Exposed so the jsonic plugin can layer
+// the given Amagama instance. Exposed so other grammar plugins can layer
 // its extensions on top without re-declaring the JSON core.
 export function registerJsonGrammar(am: Amagama): void {
   const {

@@ -6,8 +6,11 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama, jsonic, bnf: bnfPlugin } = require('..')
-const am = new Amagama({ plugins: [jsonic, bnfPlugin] })
+const { Amagama, bnf: bnfPlugin } = require('..')
+// No grammar plugin: BNF supplies its own grammar via j.bnf(...).
+// json's restrictive lex options would block unquoted text and the
+// BNF inputs.
+const am = new Amagama({ plugins: [bnfPlugin] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const {
   bnfConvert: bnf,
@@ -860,11 +863,11 @@ describe('bnf', () => {
     it('bnf.toSpec builds the spec without installing', () => {
       const j = am.make()
       const spec = j.bnf.toSpec('g = "x"')
-      // Spec is returned; the default JSON grammar is still active
-      // since toSpec does not install the BNF grammar.
       assert.equal(spec.options.rule.start, '__start__')
-      assert.deepEqual(j.parse('a:1'), { a: 1 })
-      // A second call to install still works afterwards.
+      // toSpec returns the spec without touching j's rules, so the
+      // start rule isn't `__start__` yet.
+      assert.notEqual(j.internal().config.rule.start, '__start__')
+      // A separate install call still works afterwards.
       j.bnf('g = "x"')
       assert.deepEqual(j.parse('x'), { rule: 'g', src: 'x', kids: [] })
     })

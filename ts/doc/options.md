@@ -1,13 +1,44 @@
 # Options Reference
 
-Options are passed to `Amagama.make()` to create a configured parser instance.
-All fields are optional -- unset fields use defaults.
+Options are passed to `new Amagama(options)` (or to `am.make(options)`
+to derive a child) to configure a parser instance. All fields are
+optional — unset fields use defaults.
 
 ```js
-const j = Amagama.make({
+const { Amagama, bnf } = require('amagama')
+
+const am = new Amagama({
+  plugins: [bnf],
   comment: { lex: false },
-  number: { hex: false }
+  number: { hex: false },
 })
+```
+
+The complete option type is `AmagamaOptions` (see `src/types.ts`).
+
+## `plugins`
+
+Plugins to apply at construction time. Equivalent to calling
+`am.use(plugin)` in order after construction. Children of this
+instance (`am.make({ … })`) re-run every plugin in this list against
+their own merged options.
+
+```js
+new Amagama({ plugins: [bnf, Debug, myGrammarPlugin] })
+```
+
+`plugins` is consumed by the constructor — it's not stored back into
+`am.options.plugins`. Per-plugin options live under `options.plugin`
+(below).
+
+## `plugin`
+
+Per-plugin option bag. `am.use(myPlugin, { x: 1 })` stores `{ x: 1 }`
+under `options.plugin.mypluginname`. Plugins read their own settings
+from there.
+
+```js
+am.options.plugin.foo                 // foo's merged options
 ```
 
 ## `fixed`
@@ -146,7 +177,7 @@ Default value definitions:
 Add custom keywords:
 
 ```js
-Amagama.make({
+am.make({
   value: {
     def: {
       yes: { val: true },
@@ -200,8 +231,8 @@ Controls security features.
 Custom error message templates, keyed by error code.
 
 ```js
-Amagama.make({
-  error: { unexpected: 'bad character: ' }
+new Amagama({
+  error: { unexpected: 'bad character: ' },
 })
 ```
 
@@ -218,3 +249,17 @@ Controls debug output.
 | `get_console` | function | -- | Returns the console object for logging |
 | `maxlen` | number | -- | Max output length for debug strings |
 | `print` | object | -- | `{config?, src?}` debug print options |
+
+## Construction-only flags
+
+These three meta-flags only matter at instance construction. Once an
+instance exists, changing them has no effect.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `defaults$` | boolean | `true` | If `false`, skip merging in the built-in defaults — start from a blank options bag. |
+| `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (`#NR`, `#ST`, `#TX`, …). |
+| `grammar$` | boolean | -- | Reserved for plugins. Read by some plugins to opt out of registering grammar. |
+
+`am.empty(opts)` is shorthand for `new Amagama({ defaults$: false,
+standard$: false, grammar$: false, ...opts })`.
