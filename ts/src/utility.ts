@@ -231,13 +231,16 @@ function configure(
   cfg.space = {
     lex: !!opts.space?.lex,
     chars: charset(opts.space?.chars),
+    charsBitmap: charsBitmap(opts.space?.chars),
     check: opts.space?.check,
   }
 
   cfg.line = {
     lex: !!opts.line?.lex,
     chars: charset(opts.line?.chars),
+    charsBitmap: charsBitmap(opts.line?.chars),
     rowChars: charset(opts.line?.rowChars),
+    rowCharsBitmap: charsBitmap(opts.line?.rowChars),
     single: !!opts.line?.single,
     check: opts.line?.check,
   }
@@ -701,6 +704,26 @@ function charset(...parts: (string | object | boolean | undefined)[]): Chars {
       .reduce((a: any, c: string) => ((a[c] = c.charCodeAt(0)), a), {})
 }
 
+// Bitmap form of a `charset`: a 256-byte Uint8Array with `1` at every
+// index whose code-point appears in the input. Hot lexer loops index
+// it directly off `src.charCodeAt(sI)` instead of doing a sparse object
+// lookup keyed by a single-character string. Code-points >= 256 are
+// dropped; callers that need full-unicode chars must keep the original
+// `Chars` object as a fallback alongside the bitmap.
+function charsBitmap(...parts: (string | object | boolean | undefined)[]): Uint8Array {
+  const out = new Uint8Array(256)
+  for (const p of parts) {
+    if (null == p || false === p) continue
+    const s: string =
+      'string' === typeof p ? p : keys(p as object).join(EMPTY)
+    for (let i = 0; i < s.length; i++) {
+      const cc = s.charCodeAt(i)
+      if (cc < 256) out[cc] = 1
+    }
+  }
+  return out
+}
+
 // Remove all properties with values null or undefined. Note: mutates argument.
 function clean<T>(o: T): T {
   for (let p in o) {
@@ -991,6 +1014,7 @@ export {
   assign,
   badlex,
   charset,
+  charsBitmap,
   clean,
   clone,
   configure,

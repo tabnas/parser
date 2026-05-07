@@ -21,6 +21,7 @@ import type { AmagamaOptions } from './amagama'
 import {
   S,
   charset,
+  charsBitmap,
   clean,
   deep,
   escre,
@@ -387,13 +388,24 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
 
     // Single line comment.
 
+    const lineBM = cfg.line.charsBitmap
+    const rowBM = cfg.line.rowCharsBitmap
+    const lineChars = cfg.line.chars
+    const rowChars = cfg.line.rowChars
+
     for (let mc of lineComments) {
       if (fwd.startsWith(mc.start)) {
         let fwdlen = fwd.length
         let fI = mc.start.length
         cI += mc.start.length
         let suffixLen = 0
-        while (fI < fwdlen && !cfg.line.chars[fwd[fI]]) {
+        let cc
+        while (
+          fI < fwdlen &&
+          !((cc = fwd.charCodeAt(fI)) < 256
+            ? lineBM[cc]
+            : lineChars[fwd[fI]])
+        ) {
           let n = commentSuffixMatch(fwd, fI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
@@ -410,8 +422,13 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         else if (mc.eatline) {
           // Only absorb trailing line chars when termination came from
           // a line char (not from a suffix match).
-          while (fI < fwdlen && cfg.line.chars[fwd[fI]]) {
-            if (cfg.line.rowChars[fwd[fI]]) {
+          while (
+            fI < fwdlen &&
+            ((cc = fwd.charCodeAt(fI)) < 256
+              ? lineBM[cc]
+              : lineChars[fwd[fI]])
+          ) {
+            if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
               rI++
             }
             fI++
@@ -438,12 +455,14 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         let end = mc.end as string
         cI += mc.start.length
         let suffixLen = 0
+        let cc
         while (fI < fwdlen && !fwd.startsWith(end, fI)) {
           let n = commentSuffixMatch(fwd, fI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
-          if (cfg.line.rowChars[fwd[fI]]) {
+          cc = fwd.charCodeAt(fI)
+          if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
             rI++
             cI = 0
           }
@@ -455,7 +474,8 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         if (suffixLen > 0) {
           // Advance through the consumed suffix, tracking newlines.
           for (let k = 0; k < suffixLen; k++) {
-            if (cfg.line.rowChars[fwd[fI + k]]) {
+            cc = fwd.charCodeAt(fI + k)
+            if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI + k]]) {
               rI++
               cI = 0
             }
@@ -473,8 +493,13 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           cI += end.length
 
           if (mc.eatline) {
-            while (fI < fwdlen && cfg.line.chars[fwd[fI]]) {
-              if (cfg.line.rowChars[fwd[fI]]) {
+            while (
+              fI < fwdlen &&
+              ((cc = fwd.charCodeAt(fI)) < 256
+                ? lineBM[cc]
+                : lineChars[fwd[fI]])
+            ) {
+              if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
                 rI++
               }
               fI++
@@ -762,7 +787,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   // `chars: '"'`), the old quote/multi-char/escape entries from the
   // permissive default would otherwise linger.
   cfg.string.quoteMap = charset(os.chars)
+  cfg.string.quoteBitmap = charsBitmap(os.chars)
   cfg.string.multiChars = charset(os.multiChars)
+  cfg.string.multiBitmap = charsBitmap(os.multiChars)
   cfg.string.escMap = { ...os.escape }
   cfg.string.replaceCodeMap = omap(
     clean({ ...os.replace }),
@@ -780,6 +807,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   })
 
   cfg.string.escMap = clean(cfg.string.escMap)
+  cfg.string.escBitmap = charsBitmap(cfg.string.escMap)
   cfg.string.hasReplace = 0 < keys(cfg.string.replaceCodeMap).length
 
   return function stringMatcher(lex: Lex) {
@@ -795,10 +823,13 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 
     let {
       quoteMap,
+      quoteBitmap,
       escMap,
+      escBitmap,
       escChar,
       escCharCode,
       multiChars,
+      multiBitmap,
       allowUnknown,
       replaceCodeMap,
       hasReplace,
@@ -807,12 +838,14 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
     let { pnt, src } = lex
     let { sI, rI, cI } = pnt
     let srclen = src.length
+    let qcc = src.charCodeAt(sI)
 
-    if (quoteMap[src[sI]]) {
+    if (qcc < 256 ? quoteBitmap[qcc] : quoteMap[src[sI]]) {
       const q = src[sI] // Quote character
       const qI = sI
       const qrI = rI
-      const isMultiLine = multiChars[q]
+      const isMultiLine =
+        qcc < 256 ? multiBitmap[qcc] : multiChars[q]
       ++sI
       ++cI
 
@@ -929,8 +962,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 
           if (undefined === rs && cc < 32) {
             // TODO: move up - allow c < 32 to be a line char
-            if (isMultiLine && cfg.line.chars[src[sI]]) {
-              if (cfg.line.rowChars[src[sI]]) {
+            // cc < 32 always so the bitmap is exhaustive here.
+            if (isMultiLine && cfg.line.charsBitmap[cc]) {
+              if (cfg.line.rowCharsBitmap[cc]) {
                 pnt.rI = ++rI
               }
 
@@ -986,7 +1020,7 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       }
     }
 
-    let { chars, rowChars } = cfg.line
+    let { chars, charsBitmap: bm, rowChars, rowCharsBitmap: rbm } = cfg.line
     let { pnt, src } = lex
     let { sI, rI } = pnt
 
@@ -997,7 +1031,8 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       counts = {}
     }
 
-    while (chars[src[sI]]) {
+    let cc
+    while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
       if (counts) {
         counts[src[sI]] = (counts[src[sI]] || 0) + 1
 
@@ -1007,7 +1042,7 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
           }
         }
       }
-      rI += rowChars[src[sI]] ? 1 : 0
+      rI += (cc < 256 ? rbm[cc] : rowChars[src[sI]]) ? 1 : 0
       sI++
     }
 
@@ -1035,11 +1070,13 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       }
     }
 
-    let { chars } = cfg.space
+    let { chars, charsBitmap: bm } = cfg.space
     let { pnt, src } = lex
     let { sI, cI } = pnt
 
-    while (chars[src[sI]]) {
+    // Bitmap fast-path for ASCII; chars[] fallback for code-points >= 256.
+    let cc
+    while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
       sI++
       cI++
     }

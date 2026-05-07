@@ -355,6 +355,7 @@ export type Config = {
   space: {
     lex: boolean
     chars: Chars
+    charsBitmap: Uint8Array       // 256-byte fast-path lookup for chars
     check?: LexCheck
   }
 
@@ -362,7 +363,9 @@ export type Config = {
   line: {
     lex: boolean
     chars: Chars
-    rowChars: Chars // Row counting characters.
+    charsBitmap: Uint8Array       // 256-byte fast-path lookup for chars
+    rowChars: Chars               // Row counting characters.
+    rowCharsBitmap: Uint8Array    // 256-byte fast-path lookup for rowChars
     single: boolean
     check?: LexCheck
   }
@@ -390,10 +393,13 @@ export type Config = {
   string: {
     lex: boolean
     quoteMap: Chars
+    quoteBitmap: Uint8Array       // 256-byte fast-path lookup for quoteMap
     escMap: Record<string, any>
+    escBitmap: Uint8Array         // 256-byte fast-path lookup for escMap keys
     escChar?: string
     escCharCode?: number
     multiChars: Chars
+    multiBitmap: Uint8Array       // 256-byte fast-path lookup for multiChars
     allowUnknown: boolean
     replaceCodeMap: { [charCode: number]: string }
     hasReplace: boolean
