@@ -10,10 +10,9 @@
 
 import type {
   Amagama,
-  Bag,
   Config,
   LexSub,
-  Options,
+  AmagamaOptions,
   Plugin,
   Rule,
   RuleSpec,
@@ -27,9 +26,9 @@ import type {
 // remaining Context fields (rule, NORULE, log, lex …) get filled in
 // after construction.
 export type ContextInit = {
-  opts: Options
+  opts: AmagamaOptions
   cfg: Config
-  meta: Bag
+  meta: Record<string, any>
   src: () => string
   root: () => any
   plgn: () => Plugin[]
@@ -48,9 +47,9 @@ export class Context {
   [key: string]: any
 
   uI = 0           // Rule index.
-  opts!: Options   // Amagama instance options.
+  opts!: AmagamaOptions   // Amagama instance options.
   cfg!: Config     // Amagama instance config.
-  meta!: Bag       // Parse meta parameters.
+  meta!: Record<string, any>       // Parse meta parameters.
   src!: () => string
   root!: () => any
   plgn!: () => Plugin[]
@@ -59,7 +58,7 @@ export class Context {
   rule!: Rule      // Current rule instance — set by parser.start().
   sub!: { lex?: LexSub[]; rule?: RuleSub[] }
 
-  xs: Tin = -1     // Lex state tin.
+  xs: Tin = -1 as Tin // Lex state tin.
 
   // Consumed-token history. v1 / v2 (below) read from the top of
   // this stack. vAbs is the absolute count of pushed-not-rewound
@@ -79,7 +78,7 @@ export class Context {
   rsm!: { [name: string]: RuleSpec }
   log?: (...rest: any) => void
   F!: (s: any) => string
-  u: Bag = {}      // Custom meta data (for use by plugins).
+  u: Record<string, any> = {}      // Custom meta data (for use by plugins).
   NOTOKEN!: Token
   NORULE!: Rule
   lex?: any        // Attached by parser.start() once the lexer exists.

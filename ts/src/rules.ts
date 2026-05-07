@@ -10,7 +10,6 @@ import type {
   AltModifier,
   AltSpec,
   AltSpecish,
-  Bag,
   Config,
   Context,
   Counters,
@@ -54,8 +53,8 @@ class Rule {
   state: RuleState = OPEN
   n: Counters = Object.create(null)
   d = -1
-  u: Bag = Object.create(null)
-  k: Bag = Object.create(null)
+  u: Record<string, any> = Object.create(null)
+  k: Record<string, any> = Object.create(null)
   bo = false
   ao = false
   bc = false
@@ -174,8 +173,8 @@ class AltMatch {
   n?: Counters // increment named counters.
   a?: AltAction // Match actions.
   h?: AltModifier // Modify alternate match.
-  u?: Bag // Custom props to add to Rule.use.
-  k?: Bag // Custom props to add to Rule.keep and keep via push and replace.
+  u?: Record<string, any> // Custom props to add to Rule.use.
+  k?: Record<string, any> // Custom props to add to Rule.keep and keep via push and replace.
   g?: string[] // Named group tags (allows plugins to find alts).
   e?: Token // Errored on this token.
 }
@@ -851,7 +850,7 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
         .flat()
         .map((n) => 'string' === typeof n ? (r.ji.tokenSet(n) ?? r.ji.token(n)) : n)
         .flat()
-        .filter((tin) => 'number' === typeof tin)
+        .filter((tin) => 'number' === typeof tin) as Tin[]
       return tins
     }
 

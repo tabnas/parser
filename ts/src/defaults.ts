@@ -4,7 +4,7 @@
  *  Default option values.
  */
 
-import { Options } from './amagama'
+import { AmagamaOptions } from './amagama'
 
 // Functions that create token matching lexers.
 // The `make*Matcher` functions may optionally initialise
@@ -21,7 +21,7 @@ import {
 } from './lexer'
 
 
-const defaults: Options = {
+const defaults: AmagamaOptions = {
   // Prevent prototype pollution
   safe: {
     key: true,

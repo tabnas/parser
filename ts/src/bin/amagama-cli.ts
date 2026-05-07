@@ -2,7 +2,7 @@
 
 import Fs from 'node:fs'
 
-import { Amagama, jsonic, Plugin, Bag, util } from '../amagama'
+import { Amagama, jsonic, Plugin, util } from '../amagama'
 
 import { Debug } from '../plugins/debug'
 
@@ -137,7 +137,7 @@ async function read_stdin(console: Console) {
 
 // NOTE: uses vanilla Amagama to parse arg vals, so you can set complex
 // properties.  This will break if core Amagama is broken.
-function handle_props(propvals: string[]): Bag {
+function handle_props(propvals: string[]): Record<string, any> {
   let out = {}
 
   for (let propval of propvals) {
@@ -150,7 +150,7 @@ function handle_props(propvals: string[]): Bag {
   return out
 }
 
-function handle_plugins(plugins: string[]): Bag {
+function handle_plugins(plugins: string[]): Record<string, any> {
   let out: any = {}
   for (let name of plugins) {
     try {

@@ -6,13 +6,14 @@
 
 import type {
   AltSpec,
+  Amagama,
+  AmagamaOptions,
   Chars,
   Config,
   Context,
   Lex,
   LexMatcher,
   NormAltSpec,
-  Options,
   Rule,
   RuleSpec,
   Tin,
@@ -111,9 +112,9 @@ const S = {
 // Idempotent normalization of options.
 // See Config type for commentary.
 function configure(
-  amagama: any,
+  amagama: Amagama,
   incfg: Config | undefined,
-  opts: Options,
+  opts: AmagamaOptions,
 ): Config {
   const cfg = incfg || ({} as Config)
 
@@ -475,7 +476,9 @@ function tokenize<
   let token: string | Tin = tokenmap[ref]
 
   if (null == token && STRING === typeof ref) {
-    token = cfg.tI++
+    // The internal tI counter is a plain number; brand it to Tin
+    // here, the one place tins legitimately come from the counter.
+    token = cfg.tI++ as Tin
     tokenmap[token] = ref
     tokenmap[ref] = token
     tokenmap[(ref as string).substring(1)] = token
@@ -837,8 +840,7 @@ function parserwrap(parser: any) {
   return {
     start: function(
       src: string,
-      // amagama: Amagama,
-      amagama: any,
+      amagama: Amagama,
       meta?: any,
       parent_ctx?: any,
     ) {

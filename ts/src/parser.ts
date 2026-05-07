@@ -6,7 +6,7 @@
 
 import type {
   Config,
-  Options,
+  AmagamaOptions,
   ParsePrepare,
   Rule,
   RuleDefiner,
@@ -43,12 +43,12 @@ import { makeRule, makeNoRule, makeRuleSpec } from './rules'
 // runs a parse from scratch; `clone()` produces a sibling for child
 // instances (Amagama#make).
 class Parser {
-  options: Options
+  options: AmagamaOptions
   cfg: Config
   rsm: RuleSpecMap = {}
   ji: Amagama
 
-  constructor(options: Options, cfg: Config, j: Amagama) {
+  constructor(options: AmagamaOptions, cfg: Config, j: Amagama) {
     this.options = options
     this.cfg = cfg
     this.ji = j
@@ -86,7 +86,7 @@ class Parser {
     return rs
   }
 
-  start(src: string, amagama: any, meta?: any, parent_ctx?: any): any {
+  start(src: string, amagama: Amagama, meta?: any, parent_ctx?: any): any {
     let root: Rule
 
     let endtkn = makeToken(
@@ -204,7 +204,7 @@ class Parser {
     return result
   }
 
-  clone(options: Options, config: Config, j: Amagama) {
+  clone(options: AmagamaOptions, config: Config, j: Amagama) {
     let parser = new Parser(options, config, j)
 
     // Inherit rules from parent, filtered by config.rule
