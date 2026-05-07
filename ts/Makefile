@@ -20,20 +20,20 @@ clean-ts:
 
 # Go
 build-go:
-	cd go && go build ./...
+	cd ../go && go build ./...
 
 test-go:
-	cd go && go test -v ./...
+	cd ../go && go test -v ./...
 
 clean-go:
-	cd go && go clean
+	cd ../go && go clean
 
 # Publish Go module: make publish-go V=0.1.7
 publish-go: test-go
 	@test -n "$(V)" || (echo "Usage: make publish-go V=x.y.z" && exit 1)
-	sed -i '' 's/^const Version = ".*"/const Version = "$(V)"/' go/amagama.go
-	sed -i '' 's/^Version: .*/Version: $(V)/' go/README.md
-	git add go/amagama.go go/README.md
+	sed -i '' 's/^const Version = ".*"/const Version = "$(V)"/' ../go/amagama.go
+	sed -i '' 's/^Version: .*/Version: $(V)/' ../go/README.md
+	git add ../go/amagama.go ../go/README.md
 	git commit -m "go: v$(V)"
 	git tag go/v$(V)
 	git push origin main go/v$(V)
@@ -44,6 +44,6 @@ tags-go:
 
 reset:
 	npm run reset
-	cd go && go clean -cache
-	cd go && go build ./...
-	cd go && go test -v ./...
+	cd ../go && go clean -cache
+	cd ../go && go build ./...
+	cd ../go && go test -v ./...

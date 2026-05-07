@@ -4,7 +4,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const AmagamaCli = require('../dist/amagama-cli')
+const AmagamaCli = require('../dist/bin/amagama-cli')
 const jr = async (...rest) => await AmagamaCli.run(...rest)
 
 describe('cli', function () {
@@ -126,7 +126,7 @@ describe('cli', function () {
 
   it('plugin', async () => {
     let cn = make_cn()
-    await jr([0, 0, '-p', '../test/p0', '-o', 'plugin.p0.x=0', 'a:X'], cn)
+    await jr([0, 0, '-p', '../../test/p0', '-o', 'plugin.p0.x=0', 'a:X'], cn)
     assert.deepEqual(cn.d.log[0][0], '{"a":0}')
 
     cn = make_cn()
@@ -135,7 +135,7 @@ describe('cli', function () {
         0,
         0,
         '-p',
-        '../test/p0',
+        '../../test/p0',
         '-o',
         'plugin.p0.x=0',
         '-o',
@@ -147,7 +147,7 @@ describe('cli', function () {
     assert.deepEqual(cn.d.log[0][0], '{"a":0}')
 
     cn = make_cn()
-    await jr([0, 0, '-o', 'plugin.p1.y=1', '-p', '../test/p1', 'a:Y'], cn)
+    await jr([0, 0, '-o', 'plugin.p1.y=1', '-p', '../../test/p1', 'a:Y'], cn)
     assert.deepEqual(cn.d.log[0][0], '{"a":1}')
 
     cn = make_cn()
@@ -158,11 +158,11 @@ describe('cli', function () {
         '-o',
         'plugin.p0.x=0',
         '-p',
-        '../test/p0',
+        '../../test/p0',
         '-o',
         'plugin.p1.y=1',
         '-p',
-        '../test/p1',
+        '../../test/p1',
         'a:X,b:Y',
       ],
       cn,
@@ -170,12 +170,12 @@ describe('cli', function () {
     assert.deepEqual(cn.d.log[0][0], '{"a":0,"b":1}')
 
     cn = make_cn()
-    await jr([0, 0, '-p', '../test/p2', '-o', 'plugin.p2.z=2', 'a:Z'], cn)
+    await jr([0, 0, '-p', '../../test/p2', '-o', 'plugin.p2.z=2', 'a:Z'], cn)
     assert.deepEqual(cn.d.log[0][0], '{"a":2}')
 
     cn = make_cn()
     await jr(
-      [0, 0, '-p', '../test/pa-qa.js', '-o', 'plugin.paqa.q=3', 'a:Q'],
+      [0, 0, '-p', '../../test/pa-qa.js', '-o', 'plugin.paqa.q=3', 'a:Q'],
       cn,
     )
     assert.deepEqual(cn.d.log[0][0], '{"a":3}')

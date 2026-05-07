@@ -15,7 +15,7 @@ const {
   eliminateLeftRecursion,
   BnfParseError,
 } = require('../dist/plugins/bnf')
-const BnfCli = require('../dist/amagama-bnf-cli')
+const BnfCli = require('../dist/plugins/bnf/bin/amagama-bnf-cli')
 
 
 const FIXTURES = Path.join(__dirname, 'grammar')

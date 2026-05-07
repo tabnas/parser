@@ -10,8 +10,11 @@ function unescape(str) {
   })
 }
 
+// Spec TSVs live at the repo root (../../test/spec/) so the Go and TS
+// implementations share them. Tests under ts/test/ read them via this
+// helper.
 function loadTSV(name) {
-  const specPath = join(__dirname, 'spec', name + '.tsv')
+  const specPath = join(__dirname, '..', '..', 'test', 'spec', name + '.tsv')
 
   if (!existsSync(specPath)) {
     throw new Error('spec file not found: ' + specPath)

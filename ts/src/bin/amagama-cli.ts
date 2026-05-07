@@ -2,9 +2,9 @@
 
 import Fs from 'node:fs'
 
-import { Amagama, jsonic, Plugin, Bag, util } from './amagama'
+import { Amagama, jsonic, Plugin, Bag, util } from '../amagama'
 
-import { Debug } from './plugins/debug'
+import { Debug } from '../plugins/debug'
 
 // Default parser used by handle_props() to parse CLI option values.
 // Created lazily to avoid front-loading work on --help.

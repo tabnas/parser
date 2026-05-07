@@ -6,8 +6,8 @@
 
 import Fs from 'node:fs'
 
-import { bnfConvert } from './plugins/bnf'
-import { Amagama, jsonic } from './amagama'
+import { bnfConvert } from '..'
+import { Amagama, jsonic } from '../../../amagama'
 
 
 export async function run(argv: string[], console: Console) {
