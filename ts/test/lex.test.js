@@ -4,7 +4,9 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, makeLex, AmagamaError } = require('..')
+const { Amagama, jsonic, makeLex, AmagamaError } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 describe('lex', function () {
   let j, t, config
@@ -27,7 +29,7 @@ describe('lex', function () {
   }
 
   function lexstart(src) {
-    j = Amagama.make()
+    j = am.make()
     config = j.internal().config
     t = j.token
 
@@ -452,59 +454,59 @@ describe('lex', function () {
   })
 
   it('lex-flags', () => {
-    let no_comment = Amagama.make({ comment: { lex: false } })
-    assert.deepEqual(Amagama('a:1#b'), { a: 1 })
-    assert.deepEqual(Amagama('a,1#b'), ['a', 1])
-    assert.deepEqual(no_comment('a:1#b'), { a: '1#b' })
-    assert.deepEqual(no_comment('a,1#b'), ['a', '1#b'])
+    let no_comment = am.make({ comment: { lex: false } })
+    assert.deepEqual(J('a:1#b'), { a: 1 })
+    assert.deepEqual(J('a,1#b'), ['a', 1])
+    assert.deepEqual(no_comment.parse('a:1#b'), { a: '1#b' })
+    assert.deepEqual(no_comment.parse('a,1#b'), ['a', '1#b'])
 
     // space becomes text if turned off
-    let no_space = Amagama.make({ space: { lex: false } })
-    assert.deepEqual(Amagama('a : 1'), { a: 1 })
-    assert.deepEqual(Amagama('a , 1'), ['a', 1])
-    assert.deepEqual(no_space('a :1'), { 'a ': 1 })
-    assert.deepEqual(no_space('a ,1'), ['a ', 1])
-    assert.deepEqual(no_space('a: 1'), { a: ' 1' })
-    assert.deepEqual(no_space('a, 1'), ['a', ' 1'])
+    let no_space = am.make({ space: { lex: false } })
+    assert.deepEqual(J('a : 1'), { a: 1 })
+    assert.deepEqual(J('a , 1'), ['a', 1])
+    assert.deepEqual(no_space.parse('a :1'), { 'a ': 1 })
+    assert.deepEqual(no_space.parse('a ,1'), ['a ', 1])
+    assert.deepEqual(no_space.parse('a: 1'), { a: ' 1' })
+    assert.deepEqual(no_space.parse('a, 1'), ['a', ' 1'])
 
-    let no_number = Amagama.make({ number: { lex: false } })
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
-    assert.deepEqual(Amagama('a,1'), ['a', 1])
-    assert.deepEqual(no_number('a:1'), { a: '1' })
-    assert.deepEqual(no_number('a,1'), ['a', '1'])
+    let no_number = am.make({ number: { lex: false } })
+    assert.deepEqual(J('a:1'), { a: 1 })
+    assert.deepEqual(J('a,1'), ['a', 1])
+    assert.deepEqual(no_number.parse('a:1'), { a: '1' })
+    assert.deepEqual(no_number.parse('a,1'), ['a', '1'])
 
-    let no_string = Amagama.make({ string: { lex: false } })
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
-    assert.deepEqual(Amagama('a,1'), ['a', 1])
-    assert.deepEqual(Amagama('a:"a"'), { a: 'a' })
-    assert.deepEqual(Amagama('"a",1'), ['a', 1])
-    assert.deepEqual(no_string('a:1'), { a: 1 })
-    assert.deepEqual(no_string('a,1'), ['a', 1])
-    assert.deepEqual(no_string('a:"a"'), { a: '"a"' })
-    assert.deepEqual(no_string('"a",1'), ['"a"', 1])
+    let no_string = am.make({ string: { lex: false } })
+    assert.deepEqual(J('a:1'), { a: 1 })
+    assert.deepEqual(J('a,1'), ['a', 1])
+    assert.deepEqual(J('a:"a"'), { a: 'a' })
+    assert.deepEqual(J('"a",1'), ['a', 1])
+    assert.deepEqual(no_string.parse('a:1'), { a: 1 })
+    assert.deepEqual(no_string.parse('a,1'), ['a', 1])
+    assert.deepEqual(no_string.parse('a:"a"'), { a: '"a"' })
+    assert.deepEqual(no_string.parse('"a",1'), ['"a"', 1])
 
-    let no_text = Amagama.make({ text: { lex: false } })
-    assert.deepEqual(Amagama('a:b'), { a: 'b' })
-    assert.deepEqual(Amagama('a, b '), ['a', 'b'])
-    assert.throws(() => no_text('a:b c'), /unexpected/)
-    assert.throws(() => no_text('a,b c'), /unexpected/)
+    let no_text = am.make({ text: { lex: false } })
+    assert.deepEqual(J('a:b'), { a: 'b' })
+    assert.deepEqual(J('a, b '), ['a', 'b'])
+    assert.throws(() => no_text.parse('a:b c'), /unexpected/)
+    assert.throws(() => no_text.parse('a,b c'), /unexpected/)
 
-    let no_value = Amagama.make({ value: { lex: false } })
-    assert.deepEqual(Amagama('a:true'), { a: true })
-    assert.deepEqual(Amagama('a,null'), ['a', null])
-    assert.deepEqual(no_value('a:true'), { a: 'true' })
-    assert.deepEqual(no_value('a,null'), ['a', 'null'])
+    let no_value = am.make({ value: { lex: false } })
+    assert.deepEqual(J('a:true'), { a: true })
+    assert.deepEqual(J('a,null'), ['a', null])
+    assert.deepEqual(no_value.parse('a:true'), { a: 'true' })
+    assert.deepEqual(no_value.parse('a,null'), ['a', 'null'])
 
     // line becomes text if turned off
-    let no_line = Amagama.make({ line: { lex: false } })
-    assert.deepEqual(Amagama('a:\n1'), { a: 1 })
-    assert.deepEqual(Amagama('a,\n1'), ['a', 1])
-    assert.deepEqual(no_line('a:\n1'), { a: '\n1' })
-    assert.deepEqual(no_line('a,\n1'), ['a', '\n1'])
+    let no_line = am.make({ line: { lex: false } })
+    assert.deepEqual(J('a:\n1'), { a: 1 })
+    assert.deepEqual(J('a,\n1'), ['a', 1])
+    assert.deepEqual(no_line.parse('a:\n1'), { a: '\n1' })
+    assert.deepEqual(no_line.parse('a,\n1'), ['a', '\n1'])
   })
 
   it('custom-matcher', () => {
-    let tens = Amagama.make()
+    let tens = am.make()
 
     tens.options({
       lex: {
@@ -529,7 +531,7 @@ describe('lex', function () {
 
     // console.dir(tens.internal().config.lex)
 
-    assert.deepEqual(tens('a:1,b:%%,c:[%%%%]'), { a: 1, b: 20, c: [40] })
+    assert.deepEqual(tens.parse('a:1,b:%%,c:[%%%%]'), { a: 1, b: 20, c: [40] })
   })
 
   function st(tkn) {

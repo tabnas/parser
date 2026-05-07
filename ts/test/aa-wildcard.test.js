@@ -17,11 +17,13 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 
 function make_norules(opts) {
-  let j = Amagama.make(opts)
+  let j = am.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j
@@ -41,7 +43,7 @@ describe('aa-wildcard', () => {
       .close([{ s: '#ZZ' }])
     )
 
-    assert.doesNotThrow(() => j('a'))
+    assert.doesNotThrow(() => j.parse('a'))
   })
 
 
@@ -66,7 +68,7 @@ describe('aa-wildcard', () => {
       .close([{ s: '#ZZ' }])
     )
 
-    assert.doesNotThrow(() => j('x'))
+    assert.doesNotThrow(() => j.parse('x'))
   })
 
 
@@ -96,8 +98,8 @@ describe('aa-wildcard', () => {
       .close([{ s: '#ZZ' }])
     )
 
-    assert.doesNotThrow(() => j('p'))
-    assert.throws(() => j('q'), /unexpected/,
+    assert.doesNotThrow(() => j.parse('p'))
+    assert.throws(() => j.parse('q'), /unexpected/,
       'partition-1 tin at a different bit must not match via bitAA')
   })
 

@@ -17,7 +17,9 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 
 describe('probe-dispatch', () => {
@@ -37,20 +39,20 @@ Y   = *( ALPHA )
 `
 
     const makeParser = () => {
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       j.bnf(GRAMMAR)
       return j
     }
 
     it('accepts the X-absent (Y-only) shape', () => {
       const j = makeParser()
-      assert.doesNotThrow(() => j('abc'))
+      assert.doesNotThrow(() => j.parse('abc'))
     })
 
 
     it('accepts the X-present (X @ Y) shape', () => {
       const j = makeParser()
-      assert.doesNotThrow(() => j('ab@cd'))
+      assert.doesNotThrow(() => j.parse('ab@cd'))
     })
 
 
@@ -59,13 +61,13 @@ Y   = *( ALPHA )
       // X "@" Y parse — the probe consumes zero tokens before seeing
       // @, peeks @, commits to the "with" branch.
       const j = makeParser()
-      assert.doesNotThrow(() => j('@cd'))
+      assert.doesNotThrow(() => j.parse('@cd'))
     })
 
 
     it('accepts empty input (both X and Y nullable)', () => {
       const j = makeParser()
-      assert.doesNotThrow(() => j(' '))
+      assert.doesNotThrow(() => j.parse(' '))
     })
 
   })
@@ -74,7 +76,7 @@ Y   = *( ALPHA )
   describe('emitter shape', () => {
 
     it('synthesises probe/with/no/dispatch helper rules', () => {
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       const spec = j.bnf(`
 top = [ X "@" ] Y
 X   = *( ALPHA )
@@ -99,7 +101,7 @@ Y   = *( ALPHA )
     it('no-ambiguity grammars are left alone (no probe rules)', () => {
       // The optional's body ends with a terminal that can't be in
       // the tail's vocabulary, so FIRST-set dispatch suffices.
-      const j = Amagama.make()
+      const j = am.make()
       const spec = j.bnf(`
 top = [ X "!" ] Y
 X   = *( ALPHA )
@@ -119,7 +121,7 @@ Y   = *DIGIT
       // The `@` in [ X "@" ] is the disambiguator. If the probe
       // helper included @ in its vocab, it would eat the @ and the
       // peek would never see it — breaking the with-branch path.
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       const spec = j.bnf(`
 top = [ X "@" ] Y
 X   = *( ALPHA / "@" )
@@ -171,9 +173,9 @@ X    = *( ALPHA )
 B    = "-" "-"
 C    = *( ALPHA )
 `
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       j.bnf(GRAMMAR)
-      assert.doesNotThrow(() => j('abc--def'))
+      assert.doesNotThrow(() => j.parse('abc--def'))
     })
 
 
@@ -186,9 +188,9 @@ A = *( ALPHA )
 Z = "1"
 Y = "2"
 `
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       j.bnf(GRAMMAR)
-      assert.doesNotThrow(() => j('abc2'))
+      assert.doesNotThrow(() => j.parse('abc2'))
     })
 
   })
@@ -209,7 +211,7 @@ unreserved = ALPHA / "-" / "."
 `
 
     const makeParser = () => {
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       j.bnf(AUTHORITY)
       return j
     }
@@ -227,7 +229,7 @@ unreserved = ALPHA / "-" / "."
     for (const input of ACCEPT) {
       it(`accepts ${JSON.stringify(input)}`, () => {
         const j = makeParser()
-        assert.doesNotThrow(() => j(input))
+        assert.doesNotThrow(() => j.parse(input))
       })
     }
 

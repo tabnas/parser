@@ -471,7 +471,9 @@ function getBnfParser(): (src: string) => BnfProduction[] {
 
   const { Amagama } = require('./amagama')
 
-  const j = Amagama.make({
+  // BNF defines its own grammar from scratch, so we don't load the
+  // jsonic plugin — just use the bare engine with default tokens.
+  const j = new Amagama({
     rule: { start: 'bnf' },
     fixed: {
       token: {
@@ -554,7 +556,7 @@ function getBnfParser(): (src: string) => BnfProduction[] {
     })
   }
 
-  _bnfParser = (src: string) => j(src) as BnfProduction[]
+  _bnfParser = (src: string) => j.parse(src) as BnfProduction[]
   return _bnfParser
 }
 

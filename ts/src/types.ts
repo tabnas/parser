@@ -20,77 +20,9 @@ export const SKIP: unique symbol = Symbol.for('amagama.SKIP')
 
 export const STRING = 'string'
 
-// The main top-level utility function.
+// Parse function signature. Plugins occasionally type a parse callback
+// without holding a class instance; export the shape for them.
 export type AmagamaParse = (src: any, meta?: any, parent_ctx?: any) => any
-
-// The core API is exposed as methods on the main utility function.
-export interface AmagamaAPI {
-  // Explicit parse method.
-  parse: AmagamaParse
-
-  // Get and set partial option trees. Accepts a Bag object or a
-  // amagama-format string that is parsed into a Bag before applying.
-  options: Options & ((change_options?: Bag | string) => Bag)
-
-  // Get the current configuration (derived from options).
-  config: () => Config
-
-  // Create a new Amagama instance to customize.
-  make: (options?: Options | string) => Amagama
-
-  // Use a plugin
-  use: (plugin: Plugin, plugin_options?: Bag) => Amagama
-
-  // Get and set parser rules.
-  rule: (
-    name?: string,
-    define?: RuleDefiner | null,
-  ) => Amagama | RuleSpec | RuleSpecMap
-
-  // Provide new lex matcher.
-  // lex: (matchmaker: MakeLexMatcher) => void
-
-  empty: (options?: Options) => Amagama
-
-  // Token get and set for plugins. Reference by either name or Tin.
-  // NOTE: creates token if not yet defined (but only for name).
-  token: TokenMap &
-  TinMap &
-  (<A extends string | Tin>(ref: A) => A extends string ? Tin : string)
-
-  // TokenSet get and set for plugins. Reference by either name or Tin.
-  // NOTE: name->Tin[], but Tin->name (of containing set)
-  tokenSet: TokenSetMap &
-  TinSetMap &
-  (<A extends string | Tin>(ref: A) => A extends string ? Tin[] : string)
-
-  // Fixed token src get and set for plugins. Reference by either src or Tin.
-  fixed: TokenMap &
-  TinMap &
-  (<A extends string | Tin>(
-    ref: A,
-  ) => undefined | (A extends string ? Tin : string))
-
-  // Unique identifier string for each Amagama instance.
-  id: string
-
-  // Provide identifier for string conversion.
-  toString: () => string
-
-  // Subscribe to lexing and parsing events.
-  sub: (spec: { lex?: LexSub; rule?: RuleSub }) => Amagama
-
-  util: Bag
-
-  grammar: (gs: GrammarSpec | string, setting?: GrammarSetting) => void
-
-  // Convert a BNF grammar string into a amagama GrammarSpec and install
-  // it on this instance. Returns the generated spec. See src/bnf.ts.
-  // `bnf.toSpec(src, opts)` returns the spec without installing.
-  bnf: ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
-    toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
-  }
-}
 
 // BNF converter options. Re-declared here rather than imported to keep
 // types.ts free of circular cross-file references.
@@ -112,9 +44,79 @@ export type GrammarSetting = {
 }
 
 
-// The full library type.
-export type Amagama = AmagamaParse & // A function that parses.
-  AmagamaAPI & { [prop: string]: any } // A utility with API methods. // Extensible by plugin decoration.
+// Internal state held by every Amagama instance. Exposed via
+// `instance.internal()` for parser, plugins, and debug code.
+export type AmagamaInternal = {
+  parser: Parser
+  config: Config
+  plugins: Plugin[]
+  sub: { lex?: LexSub[]; rule?: RuleSub[] }
+  mark: number
+  merged: Bag
+}
+
+
+// Public shape of an Amagama instance. The class in src/amagama.ts
+// implements this interface; we declare it here so the engine modules
+// (parser, lexer, rules, utility) can reference the type without a
+// circular import on the class file.
+export interface Amagama {
+  parse(src: any, meta?: any, parent_ctx?: any): any
+
+  options(change?: Bag | string): Bag
+  config(): Config
+
+  use(plugin: Plugin, plugin_options?: Bag): Amagama
+  rule(
+    name?: string,
+    define?: RuleDefiner | null,
+  ): RuleSpec | RuleSpecMap | Amagama | undefined
+
+  make(options?: Options & { plugins?: Plugin[] }): Amagama
+  empty(options?: Options): Amagama
+
+  sub(spec: { lex?: LexSub; rule?: RuleSub }): Amagama
+  internal(): AmagamaInternal
+
+  grammar(gs: GrammarSpec | string, setting?: GrammarSetting): Amagama
+  bnf(src: string, opts?: BnfConvertOptions): GrammarSpec
+
+  // Token / fixed / tokenSet are dual-shape: callable for lookup-or-create
+  // and indexable as a map populated by `configure()`.
+  token: TokenMap &
+    TinMap &
+    (<A extends string | Tin>(ref: A) => A extends string ? Tin : string)
+  tokenSet: TokenSetMap &
+    TinSetMap &
+    (<A extends string | Tin>(ref: A) => A extends string ? Tin[] : string)
+  fixed: TokenMap &
+    TinMap &
+    (<A extends string | Tin>(
+      ref: A,
+    ) => undefined | (A extends string ? Tin : string))
+
+  id: string
+  util: Bag
+  parent?: Amagama
+
+  // Internal state. Treat as opaque; access via `internal()`. Declared
+  // here so the class implementation in src/amagama.ts is structurally
+  // compatible with this interface (TS doesn't infer a class with a
+  // required field as assignable to an interface that omits it, even
+  // with an index signature).
+  _internal: AmagamaInternal
+
+  // Internal options setter. Treat as opaque; use `options(change)`
+  // instead. Declared here for structural-typing compatibility with
+  // the class in src/amagama.ts (see _internal note above).
+  _setOptions(change?: Bag | string): Bag
+
+  toString(): string
+
+  // Plugin decoration: plugins may attach extra members.
+  [key: string]: any
+}
+
 
 // Define a plugin to extend the provided Amagama instance.
 export type Plugin = ((

@@ -30,7 +30,9 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 const GRAMMAR = Fs.readFileSync(
   Path.join(__dirname, 'grammar', 'rfc3986-uri.abnf'),
@@ -47,13 +49,13 @@ describe('rfc3986', () => {
       // nullable alternatives, transitive core-rule inclusion, and
       // the ABNF-wide case-insensitive string default all have to
       // co-exist cleanly.
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       assert.doesNotThrow(() => j.bnf(GRAMMAR))
     })
 
 
     it('every RFC 3986 production survives into the emitted spec', () => {
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       const spec = j.bnf(GRAMMAR)
       // Every name from the .abnf file should appear as a rule in
       // the spec (plus `__start__` and the generated helpers).
@@ -83,7 +85,7 @@ describe('rfc3986', () => {
       // synthesises a probe + phase-retry dispatcher for it; the
       // presence of `authority$pdN$probe` / `$with` / `$no` rules in
       // the spec confirms the rewrite fired.
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       const spec = j.bnf(GRAMMAR)
       const names = Object.keys(spec.rule)
       assert.ok(names.some((n) => /^authority\$pd\d+\$probe$/.test(n)),
@@ -100,7 +102,7 @@ describe('rfc3986', () => {
   describe('URI acceptance', () => {
 
     const parser = (() => {
-      const j = Amagama.make({ rewind: { history: 4096 } })
+      const j = am.make({ rewind: { history: 4096 } })
       j.bnf(GRAMMAR)
       return j
     })()
@@ -126,7 +128,7 @@ describe('rfc3986', () => {
 
     for (const uri of ACCEPT) {
       it(`accepts ${JSON.stringify(uri)}`, { timeout: 5000 }, () => {
-        assert.doesNotThrow(() => parser(uri))
+        assert.doesNotThrow(() => parser.parse(uri))
       })
     }
 
@@ -138,7 +140,7 @@ describe('rfc3986', () => {
 
     for (const uri of REJECT) {
       it(`rejects ${JSON.stringify(uri)}`, { timeout: 5000 }, () => {
-        assert.throws(() => parser(uri), /unexpected/)
+        assert.throws(() => parser.parse(uri), /unexpected/)
       })
     }
 

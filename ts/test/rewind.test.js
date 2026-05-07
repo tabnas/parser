@@ -11,11 +11,13 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 
 function make_norules(opts) {
-  let j = Amagama.make(opts)
+  let j = am.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j
@@ -45,7 +47,7 @@ describe('rewind', () => {
         }]),
     )
 
-    j('abc')
+    j.parse('abc')
     assert.deepEqual(recorded, ['a', 'b', 'c', ''])
   })
 
@@ -73,7 +75,7 @@ describe('rewind', () => {
         .close([{ s: '#ZZ' }]),
     )
 
-    j('abc')
+    j.parse('abc')
     assert.deepEqual(seen, { v1: 'c', v2: 'b' })
   })
 
@@ -115,7 +117,7 @@ describe('rewind', () => {
         }]),
     )
 
-    j('abc')
+    j.parse('abc')
     assert.deepEqual(trace, [
       'first:abc',
       'after-rewind-v-len:0',
@@ -157,7 +159,7 @@ describe('rewind', () => {
         }]),
     )
 
-    j('abcd')
+    j.parse('abcd')
     // Full history at the end of tail's open: all four tokens again
     // (a was not rewound; bcd were rewound and re-consumed).
     assert.equal(second, 'abcd')
@@ -187,7 +189,7 @@ describe('rewind', () => {
         .close([{ s: '#ZZ' }]),
     )
 
-    j('a')
+    j.parse('a')
     assert.equal(ok, true)
   })
 
@@ -230,7 +232,7 @@ describe('rewind', () => {
         }]),
     )
 
-    j('a b c')
+    j.parse('a b c')
     assert.equal(branch, 'A')
   })
 
@@ -263,7 +265,7 @@ describe('rewind', () => {
         }]),
     )
 
-    j('ab')
+    j.parse('ab')
     // Open fired once on the initial pass and once again after rewind.
     assert.equal(attempts, 2)
   })
@@ -296,7 +298,7 @@ describe('rewind', () => {
     )
 
     // 20 a's — well above 2*cap.
-    j('a a a a a a a a a a a a a a a a a a a a')
+    j.parse('a a a a a a a a a a a a a a a a a a a a')
     assert.ok(maxSeen <= 2 * 4,
       `ctx.v grew to ${maxSeen}, expected <= ${2 * 4}`)
     // The cap never shrinks below `history` itself, so the parser
@@ -337,7 +339,7 @@ describe('rewind', () => {
         ]),
     )
 
-    j('a a a a a')
+    j.parse('a a a a a')
     assert.equal(rewound, 3)
   })
 
@@ -363,7 +365,7 @@ describe('rewind', () => {
     )
 
     assert.throws(
-      () => j('a a a a a a'),
+      () => j.parse('a a a a a a'),
       /ctx\.rewind target 0 is outside the retained history/,
     )
   })
@@ -390,7 +392,7 @@ describe('rewind', () => {
         .close([{ s: '#ZZ' }]),
     )
 
-    j('a a a a a a a a a a')
+    j.parse('a a a a a a a a a a')
     assert.equal(finalV, 10)
   })
 
@@ -419,7 +421,7 @@ describe('rewind', () => {
 
     // 200 a's — would be batch-evicted under the default cap of 64
     // (max 128), but Infinity keeps every one.
-    j(Array(200).fill('a').join(' '))
+    j.parse(Array(200).fill('a').join(' '))
     assert.ok(maxV >= 200, `expected >= 200 retained, got ${maxV}`)
   })
 

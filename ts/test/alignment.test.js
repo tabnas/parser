@@ -8,10 +8,12 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, AmagamaError } = require('..')
+const { Amagama, jsonic, AmagamaError } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 
-const j = Amagama
+const j = am
 const JS = (x) => JSON.stringify(x)
 
 // deepEqual compares values via JSON roundtrip to handle null-prototype objects.
@@ -22,24 +24,24 @@ function deepEqual(actual, expected, msg) {
 // --- Shared TSV test helpers ---
 
 function tsvTest(name, parser) {
-  parser = parser || Amagama
+  parser = parser || am
   const entries = loadTSV(name)
   for (const { cols: [input, expected], row } of entries) {
-    const result = parser(input)
+    const result = parser.parse(input)
     deepEqual(result, JSON.parse(expected),
       `${name} row ${row}: input=${input} expected=${expected}`)
   }
 }
 
 function tsvErrorTest(name, parser) {
-  parser = parser || Amagama
+  parser = parser || am
   const entries = loadTSV(name)
   for (const { cols: [input, expected], row } of entries) {
     if (!expected.startsWith('ERROR:')) {
       throw new Error(`${name} row ${row}: expected column must start with ERROR:`)
     }
     const code = expected.slice(6)
-    assert.throws(() => parser(input), (err) => {
+    assert.throws(() => parser.parse(input), (err) => {
       return err instanceof AmagamaError && err.code === code
     }, `${name} row ${row}: input=${input} expected=${expected}`)
   }
@@ -48,7 +50,7 @@ function tsvErrorTest(name, parser) {
 function tsvNullTest(name) {
   const entries = loadTSV(name)
   for (const { cols: [input, expected], row } of entries) {
-    const result = Amagama(input)
+    const result = J(input)
     // TS returns undefined for empty/comment-only input, which is equivalent
     // to Go's nil. The TSV says "null" but in TS this is actually undefined.
     assert.ok(result === undefined || result === null,
@@ -68,7 +70,7 @@ describe('alignment', function () {
     // safe.key only blocks __proto__ on arrays (which have real prototypes).
     const entries = loadTSV('alignment-safe-key')
     for (const { cols: [input, expected], row } of entries) {
-      const result = Amagama(input)
+      const result = J(input)
       const exp = JSON.parse(expected)
       deepEqual(result, exp,
         `alignment-safe-key row ${row}: input=${input} expected=${expected}`)
@@ -98,22 +100,22 @@ describe('alignment', function () {
   // --- Exclude group TSV tests ---
 
   it('exclude-strict-json', () => {
-    const jj = Amagama.make({ rule: { exclude: 'amagama,imp' } })
+    const jj = am.make({ rule: { exclude: 'amagama,imp' } })
     tsvTest('exclude-strict-json', jj)
   })
 
   it('exclude-strict-json-errors', () => {
-    const jj = Amagama.make({ rule: { exclude: 'amagama,imp' } })
+    const jj = am.make({ rule: { exclude: 'amagama,imp' } })
     tsvErrorTest('exclude-strict-json-errors', jj)
   })
 
   it('exclude-comma', () => {
-    const jj = Amagama.make({ rule: { exclude: 'comma' } })
+    const jj = am.make({ rule: { exclude: 'comma' } })
     tsvTest('exclude-comma', jj)
   })
 
   it('exclude-comma-errors', () => {
-    const jj = Amagama.make({ rule: { exclude: 'comma' } })
+    const jj = am.make({ rule: { exclude: 'comma' } })
     tsvErrorTest('exclude-comma-errors', jj)
   })
 
@@ -122,12 +124,12 @@ describe('alignment', function () {
   it('include-json', () => {
     // include="json" keeps only json-tagged alts, producing a parser that
     // behaves like strict-JSON. Shared TSV ensures TS and Go agree.
-    const jj = Amagama.make({ rule: { include: 'json' } })
+    const jj = am.make({ rule: { include: 'json' } })
     tsvTest('include-json', jj)
   })
 
   it('include-json-errors', () => {
-    const jj = Amagama.make({ rule: { include: 'json' } })
+    const jj = am.make({ rule: { include: 'json' } })
     tsvErrorTest('include-json-errors', jj)
   })
 
@@ -138,7 +140,7 @@ describe('alignment', function () {
     // NOTE: TS's makeCommentMatcher requires lex:true explicitly on every
     // def (Go defaults it to true); setting it here keeps both runners
     // configured identically.
-    const jj = Amagama.make({
+    const jj = am.make({
       comment: {
         def: {
           hash: { line: true, start: '#', lex: true, suffix: '@@' },
@@ -153,7 +155,7 @@ describe('alignment', function () {
   it('feature-comment-suffix-block', () => {
     // Block comment with a custom suffix terminator — suffix is consumed
     // and short-circuits the usual End-required behaviour.
-    const jj = Amagama.make({
+    const jj = am.make({
       comment: {
         def: {
           hash: { line: true, start: '#', lex: true },
@@ -174,85 +176,85 @@ describe('alignment', function () {
   })
 
   it('lex-errors-exclude-amagama-imp', () => {
-    const jj = Amagama.make({ rule: { exclude: 'amagama,imp' } })
+    const jj = am.make({ rule: { exclude: 'amagama,imp' } })
     tsvErrorTest('lex-errors', jj)
   })
 
   it('lex-errors-exclude-amagama-imp-comma', () => {
-    const jj = Amagama.make({ rule: { exclude: 'amagama,imp,comma' } })
+    const jj = am.make({ rule: { exclude: 'amagama,imp,comma' } })
     tsvErrorTest('lex-errors', jj)
   })
 
   // --- Direct TS tests for option-dependent features ---
 
   it('map-extend-false', () => {
-    const ji = Amagama.make({ map: { extend: false } })
-    deepEqual(ji('{a:{b:1},a:{c:2}}'), { a: { c: 2 } })
+    const ji = am.make({ map: { extend: false } })
+    deepEqual(ji.parse('{a:{b:1},a:{c:2}}'), { a: { c: 2 } })
   })
 
   it('map-merge-func', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       map: {
         merge: (prev, val) => prev,
       },
     })
-    deepEqual(ji('{a:1,a:2}'), { a: 1 })
+    deepEqual(ji.parse('{a:1,a:2}'), { a: 1 })
   })
 
   it('safe-key-objects', () => {
-    const result = Amagama('{__proto__:1,a:2}')
+    const result = J('{__proto__:1,a:2}')
     assert.strictEqual(result.__proto__, 1)
     assert.strictEqual(result.a, 2)
   })
 
   it('safe-key-arrays', () => {
-    const result = Amagama('[1,2,__proto__:3]')
+    const result = J('[1,2,__proto__:3]')
     deepEqual(result, [1, 2])
     assert.notStrictEqual(result.__proto__.toString, '3')
   })
 
   it('safe-key-false', () => {
-    const ji = Amagama.make({ safe: { key: false } })
-    const result = ji('[1,2,__proto__:{toString:FAIL}]')
+    const ji = am.make({ safe: { key: false } })
+    const result = ji.parse('[1,2,__proto__:{toString:FAIL}]')
     assert.ok(('' + result.toString).startsWith('FAIL'))
   })
 
   it('string-escape-errors', () => {
-    const ji = Amagama.make({ string: { allowUnknown: false } })
-    assert.throws(() => ji('"\\w"'))
+    const ji = am.make({ string: { allowUnknown: false } })
+    assert.throws(() => ji.parse('"\\w"'))
   })
 
   it('string-abandon', () => {
-    const ji = Amagama.make({ string: { abandon: true } })
-    const result = ji('"abc')
+    const ji = am.make({ string: { abandon: true } })
+    const result = ji.parse('"abc')
     assert.ok(result !== undefined && result !== null)
   })
 
   it('string-replace', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       string: { replace: { A: 'B', D: '' } },
     })
-    assert.strictEqual(ji('"aAc"'), 'aBc')
-    assert.strictEqual(ji('"aAcDe"'), 'aBce')
+    assert.strictEqual(ji.parse('"aAc"'), 'aBc')
+    assert.strictEqual(ji.parse('"aAcDe"'), 'aBce')
   })
 
   it('number-exclude', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       number: {
         exclude: /^00/,
       },
     })
-    assert.strictEqual(ji('0099'), '0099')
-    assert.strictEqual(ji('99'), 99)
+    assert.strictEqual(ji.parse('0099'), '0099')
+    assert.strictEqual(ji.parse('99'), 99)
   })
 
   it('line-single', () => {
-    const ji = Amagama.make({ line: { single: true } })
-    deepEqual(ji('a\n\nb'), ['a', 'b'])
+    const ji = am.make({ line: { single: true } })
+    deepEqual(ji.parse('a\n\nb'), ['a', 'b'])
   })
 
   it('comment-eatline', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       comment: {
         def: {
           hash: { line: true, start: '#', eatline: true },
@@ -261,26 +263,26 @@ describe('alignment', function () {
         },
       },
     })
-    deepEqual(ji('a:1#x\nb:2'), { a: 1, b: 2 })
+    deepEqual(ji.parse('a:1#x\nb:2'), { a: 1, b: 2 })
   })
 
   it('text-modify', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       text: {
         modify: [(val) => (typeof val === 'string' ? val.toUpperCase() : val)],
       },
     })
-    assert.strictEqual(ji('hello'), 'HELLO')
-    assert.strictEqual(ji('"hello"'), 'hello')
+    assert.strictEqual(ji.parse('hello'), 'HELLO')
+    assert.strictEqual(ji.parse('"hello"'), 'hello')
   })
 
   it('list-property-guard', () => {
-    const ji = Amagama.make({ list: { property: false, pair: false } })
-    assert.throws(() => ji('[a:1]'))
+    const ji = am.make({ list: { property: false, pair: false } })
+    assert.throws(() => ji.parse('[a:1]'))
   })
 
   it('exclude-amagama', () => {
-    const ji = Amagama.make()
+    const ji = am.make()
 
     let openBefore, closeBefore
     ji.rule('val', (rs) => {
@@ -302,23 +304,23 @@ describe('alignment', function () {
   })
 
   it('result-fail', () => {
-    const ji = Amagama.make({ result: { fail: ['FAIL'] } })
-    assert.throws(() => ji('FAIL'))
-    assert.strictEqual(ji('OK'), 'OK')
+    const ji = am.make({ result: { fail: ['FAIL'] } })
+    assert.throws(() => ji.parse('FAIL'))
+    assert.strictEqual(ji.parse('OK'), 'OK')
   })
 
   it('finish-rule-false', () => {
-    const ji = Amagama.make({ rule: { finish: false } })
-    assert.throws(() => ji('{a:1'))
+    const ji = am.make({ rule: { finish: false } })
+    assert.throws(() => ji.parse('{a:1'))
   })
 
   it('empty-disabled', () => {
-    const ji = Amagama.make({ lex: { empty: false } })
-    assert.throws(() => ji(''))
+    const ji = am.make({ lex: { empty: false } })
+    assert.throws(() => ji.parse(''))
   })
 
   it('custom-values', () => {
-    const ji = Amagama.make({
+    const ji = am.make({
       value: {
         def: {
           true: { val: true },
@@ -328,8 +330,8 @@ describe('alignment', function () {
         },
       },
     })
-    assert.strictEqual(ji('NaN'), 'NaN-custom')
-    assert.strictEqual(ji('true'), true)
+    assert.strictEqual(ji.parse('NaN'), 'NaN-custom')
+    assert.strictEqual(ji.parse('true'), true)
   })
 
   it('deep-undefined', () => {
@@ -342,21 +344,21 @@ describe('alignment', function () {
   })
 
   it('error-propagation', () => {
-    assert.throws(() => j('}'), /unexpected/)
-    assert.throws(() => j(']'), /unexpected/)
+    assert.throws(() => j.parse('}'), /unexpected/)
+    assert.throws(() => j.parse(']'), /unexpected/)
   })
 
   it('trailing-content', () => {
-    assert.throws(() => j('a:1,2'), /unexpected/)
+    assert.throws(() => j.parse('a:1,2'), /unexpected/)
   })
 
   it('lex-subscriber', () => {
-    const ji = Amagama.make()
+    const ji = am.make()
     const tokens = []
     ji.sub({ lex: (tkn) => {
       tokens.push(tkn.tin)
     }})
-    ji('a:1')
+    ji.parse('a:1')
     assert.ok(tokens.length > 0)
   })
 })

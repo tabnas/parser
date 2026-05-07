@@ -4,9 +4,11 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, AmagamaError } = require('..')
+const { Amagama, jsonic, AmagamaError } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
-const je = (s) => () => Amagama(s)
+const je = (s) => () => J(s)
 
 const JS = (x) => JSON.stringify(x)
 
@@ -14,7 +16,7 @@ describe('error', function () {
   it('error-message', () => {
     let src0 = '\n\n\n\n\n\n\n\n\n\n   "\\u0000"'
     try {
-      Amagama(src0)
+      J(src0)
     } catch (e) {
       assert.deepEqual(e.message, 
         `\u001b[91m[amagama/invalid_unicode]:\u001b[0m invalid unicode escape: "\\\\u0000"
@@ -40,7 +42,7 @@ describe('error', function () {
   })
 
   it('plugin-errors', () => {
-    let k = Amagama.make().use(function foo(amagama) {
+    let k = am.make().use(function foo(amagama) {
       amagama.options({
         tag: 'zed',
         error: {
@@ -73,7 +75,7 @@ describe('error', function () {
 
     /*
     try {
-      k(src0)
+      k.parse(src0)
     }
     catch(e) {
       console.log(e)
@@ -81,7 +83,7 @@ describe('error', function () {
     */
 
     try {
-      k(src0, { xlog: -1 })
+      k.parse(src0, { xlog: -1 })
     } catch (e) {
       assert.deepEqual(e.message, 
         '\u001b[91m[amagama/foo]:\u001b[0m foo: FOO!\n' +
@@ -100,7 +102,7 @@ describe('error', function () {
       )
     }
 
-    assert.throws(() => k('a:1,\nb:FOO'), /foo/)
+    assert.throws(() => k.parse('a:1,\nb:FOO'), /foo/)
   })
 
   it('lex-unicode', () => {
@@ -131,7 +133,7 @@ describe('error', function () {
 
     /*
     try {
-      Amagama(src0)
+      J(src0)
     }
     catch(e) {
       console.log(e)
@@ -146,7 +148,7 @@ describe('error', function () {
 
     /*
     try {
-      Amagama(src0)
+      J(src0)
     }
     catch(e) {
       console.log(e)
@@ -156,7 +158,7 @@ describe('error', function () {
 
   it('error-json-desc', () => {
     try {
-      Amagama(']')
+      J(']')
     } catch (e) {
       // console.log(e)
       assert.deepEqual(
@@ -172,10 +174,10 @@ describe('error', function () {
     // expect(je('{a')).throw(/incomplete/)
 
     // TODO: should all be null
-    //expect(Amagama('a:')).equal({a:undefined})
-    //expect(Amagama('{a:')).equal({a:undefined})
-    //expect(Amagama('{a:,b:')).equal({a:undefined,b:undefined})
-    //expect(Amagama('a:,b:')).equal({a:undefined,b:undefined})
+    //expect(J('a:')).equal({a:undefined})
+    //expect(J('{a:')).equal({a:undefined})
+    //expect(J('{a:,b:')).equal({a:undefined,b:undefined})
+    //expect(J('a:,b:')).equal({a:undefined,b:undefined})
 
     // Invalid pair.
     assert.throws(je('{]'), /unexpected/)
@@ -204,18 +206,18 @@ describe('error', function () {
     assert.throws(je('{a:1]'), /unexpected/)
 
     // These are actually OK
-    assert.deepEqual(Amagama(',]'), [null])
-    assert.deepEqual(Amagama('{a:}'), { a: null })
-    assert.deepEqual(Amagama('{a:b:}'), { a: { b: null } })
+    assert.deepEqual(J(',]'), [null])
+    assert.deepEqual(J('{a:}'), { a: null })
+    assert.deepEqual(J('{a:b:}'), { a: { b: null } })
 
-    assert.deepEqual(JS(Amagama('[a:1]')), '[]')
-    assert.deepEqual(Amagama('[a:1]').a, 1)
+    assert.deepEqual(JS(J('[a:1]')), '[]')
+    assert.deepEqual(J('[a:1]').a, 1)
 
-    assert.deepEqual(JS(Amagama('[a:]')), '[]')
-    assert.deepEqual(Amagama('[a:]').a, null)
+    assert.deepEqual(JS(J('[a:]')), '[]')
+    assert.deepEqual(J('[a:]').a, null)
   })
 
   it('api-error', () => {
-    assert.throws(() => Amagama.make().use(null), /Amagama\.use:/)
+    assert.throws(() => am.make().use(null), /Amagama\.use:/)
   })
 })

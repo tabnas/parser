@@ -14,20 +14,13 @@ const assert = require('node:assert')
 // const describe = lab.describe
 // const it = lab.it
 // 
-const {
-  Amagama,
-  Parser,
-  AmagamaError,
-  OPEN,
-  CLOSE,
-  BEFORE,
-  AFTER,
-  make,
-} = require('..')
+const { Amagama, jsonic, Parser, AmagamaError, OPEN, CLOSE, BEFORE, AFTER, make } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 describe('doc', function () {
   it('method-amagama', () => {
-    let earth = Amagama('name: Terra, moons: [{name: Luna}]')
+    let earth = J('name: Terra, moons: [{name: Luna}]')
     assert.deepEqual(earth, {
       name: 'Terra',
       moons: [
@@ -40,56 +33,56 @@ describe('doc', function () {
 
   // TODO: test without actually writing to STDOUT
   // it('method-amagama-log', () => {
-  //   let one = Amagama('1', {log:-1}) // one === 1
+  //   let one = J('1', {log:-1}) // one === 1
   //   expect(one).equal(1)
   // })
 
   it('method-make', () => {
-    let array_of_numbers = Amagama('1,2,3')
+    let array_of_numbers = J('1,2,3')
     // array_of_numbers === [1, 2, 3]
     assert.deepEqual(array_of_numbers, [1, 2, 3])
 
-    let no_numbers_please = Amagama.make({ number: { lex: false } })
-    let array_of_strings = no_numbers_please('1,2,3')
+    let no_numbers_please = am.make({ number: { lex: false } })
+    let array_of_strings = no_numbers_please.parse('1,2,3')
     // array_of_strings === ['1', '2', '3']
     assert.deepEqual(array_of_strings, ['1', '2', '3'])
   })
 
   it('method-make-inherit', () => {
-    let no_numbers_please = Amagama.make({ number: { lex: false } })
-    let out = no_numbers_please('1,2,3') // === ['1', '2', '3'] as before
+    let no_numbers_please = am.make({ number: { lex: false } })
+    let out = no_numbers_please.parse('1,2,3') // === ['1', '2', '3'] as before
     assert.deepEqual(out, ['1', '2', '3'])
 
     let pipe_separated = no_numbers_please.make({
       fixed: { token: { '#CA': '|' } },
     })
-    out = pipe_separated('1|2|3') // === ['1', '2', '3'], but:
+    out = pipe_separated.parse('1|2|3') // === ['1', '2', '3'], but:
     assert.deepEqual(out, ['1', '2', '3'])
-    out = pipe_separated('1,2,3') // === '1,2,3' !!!
+    out = pipe_separated.parse('1,2,3') // === '1,2,3' !!!
     assert.deepEqual(out, '1,2,3')
   })
 
   it('method-options', () => {
-    let amagama = Amagama.make()
+    let amagama = am.make()
 
     let options = amagama.options()
     assert.deepEqual(options.comment.lex, true)
     assert.deepEqual(amagama.options.comment.lex, true)
 
-    let no_comment = Amagama.make()
+    let no_comment = am.make()
     no_comment.options({ comment: { lex: false } })
     assert.deepEqual(no_comment.options().comment.lex, false)
     assert.deepEqual(no_comment.options.comment.lex, false)
 
     // Returns {"a": 1, "#b": 2}
-    let out = no_comment(`
+    let out = no_comment.parse(`
    a: 1
    #b: 2
  `)
     assert.deepEqual(out, { a: 1, '#b': 2 })
 
     // Whereas this returns only {"a": 1} as # starts a one line comment
-    out = Amagama(`
+    out = J(`
   a: 1
   #b: 2
 `)
@@ -97,14 +90,14 @@ describe('doc', function () {
   })
 
   it('method-use', () => {
-    let amagama = Amagama.make().use(function piper(amagama) {
+    let amagama = am.make().use(function piper(amagama) {
       amagama.options({ fixed: { token: { '#CA': '~' } } })
     })
 
     assert.deepEqual(amagama.options.fixed.token['#CA'], '~')
     assert.deepEqual(amagama.internal().config.fixed.token['~'], 17)
 
-    let out = amagama('a~b~c') // === ['a', 'b', 'c']
+    let out = amagama.parse('a~b~c') // === ['a', 'b', 'c']
     assert.deepEqual(out, ['a', 'b', 'c'])
   })
 
@@ -113,8 +106,8 @@ describe('doc', function () {
       let sep = amagama.options.plugin.sepper.sep
       amagama.options({ fixed: { token: { '#CA': sep } } })
     }
-    let amagama = Amagama.make().use(sepper, { sep: ';' })
-    let out = amagama('a;b;c') // === ['a', 'b', 'c']
+    let amagama = am.make().use(sepper, { sep: ';' })
+    let out = amagama.parse('a;b;c') // === ['a', 'b', 'c']
     assert.deepEqual(out, ['a', 'b', 'c'])
   })
 
@@ -129,13 +122,13 @@ describe('doc', function () {
         return this.foo() * 2
       }
     }
-    let amagama = Amagama.make().use(foo).use(bar)
+    let amagama = am.make().use(foo).use(bar)
     assert.deepEqual(amagama.foo(), 1)
     assert.deepEqual(amagama.bar(), 2)
   })
 
   it('method-rule', () => {
-    let concat = Amagama.make()
+    let concat = am.make()
     assert.deepEqual(Object.keys(concat.rule()), [
       'val',
       'map',
@@ -157,9 +150,9 @@ describe('doc', function () {
       ])
     })
 
-    assert.deepEqual(concat('"a" "b"', { xlog: -1 }), 'ab')
-    assert.deepEqual(concat('["a" "b"]', { xlog: -1 }), ['ab'])
-    assert.deepEqual(concat('{x:"a" "b",y:1}', { xlog: -1 }), { x: 'ab', y: 1 })
+    assert.deepEqual(concat.parse('"a" "b"', { xlog: -1 }), 'ab')
+    assert.deepEqual(concat.parse('["a" "b"]', { xlog: -1 }), ['ab'])
+    assert.deepEqual(concat.parse('{x:"a" "b",y:1}', { xlog: -1 }), { x: 'ab', y: 1 })
 
     concat.options({
       fixed: { token: { '#HH': '%' } },
@@ -173,12 +166,12 @@ describe('doc', function () {
       rulespec.open([{ s: [HH], p: 'hundred' }])
     })
 
-    assert.deepEqual(concat('{x:1, y:%}', { xlog: -1 }), { x: 1, y: 100 })
+    assert.deepEqual(concat.parse('{x:1, y:%}', { xlog: -1 }), { x: 1, y: 100 })
   })
 
   /* METHOD REMOVED FROM API
   it('method-lex', () => {
-    let tens = Amagama.make()
+    let tens = am.make()
 
     tens.lex((cfg, opts) => (lex, rule) => {
       let pnt = lex.pnt
@@ -192,12 +185,12 @@ describe('doc', function () {
       }
     })
 
-    assert.deepEqual(tens('a:1,b:%%,c:[%%%%]'), { a: 1, b: 20, c: [40] })
+    assert.deepEqual(tens.parse('a:1,b:%%,c:[%%%%]'), { a: 1, b: 20, c: [40] })
   })
   */
 
   it('method-token', () => {
-    let amagama = Amagama.make()
+    let amagama = am.make()
     amagama.token.ST // === 11, String token identification number
     amagama.token(11) // === '#ST', String token name
     amagama.token('#ST') // === 11, String token name
@@ -205,6 +198,6 @@ describe('doc', function () {
 
   it('property-id', () => {
     assert.deepEqual(null != Amagama.id.match(/Amagama.*/), true)
-    assert.deepEqual(null != Amagama.make({ tag: 'foo' }).id.match(/Amagama.*foo/), true)
+    assert.deepEqual(null != am.make({ tag: 'foo' }).id.match(/Amagama.*foo/), true)
   })
 })

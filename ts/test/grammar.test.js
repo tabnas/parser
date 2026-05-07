@@ -4,14 +4,16 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 
 describe('grammar-options', () => {
 
   it('plain-options-string-escape', () => {
     // Grammar spec with options that configure string escape sequences.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         string: {
@@ -21,15 +23,15 @@ describe('grammar-options', () => {
     })
 
     // Custom escape \z should produce Z.
-    assert.deepEqual(j('a:"x\\zy"'), { a: 'xZy' })
+    assert.deepEqual(j.parse('a:"x\\zy"'), { a: 'xZy' })
     // Standard escapes still work.
-    assert.deepEqual(j('a:"x\\ny"'), { a: 'x\ny' })
+    assert.deepEqual(j.parse('a:"x\\ny"'), { a: 'x\ny' })
   })
 
 
   it('plain-options-comment-lex', () => {
     // Disable comment lexing via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         comment: { lex: false },
@@ -37,13 +39,13 @@ describe('grammar-options', () => {
     })
 
     // Hash is no longer a comment, so it becomes part of text.
-    assert.deepEqual(j('a:1,b:2'), { a: 1, b: 2 })
+    assert.deepEqual(j.parse('a:1,b:2'), { a: 1, b: 2 })
   })
 
 
   it('plain-options-value-def', () => {
     // Define custom value literals.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         value: {
@@ -55,26 +57,26 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:yes,b:no,c:1'), { a: true, b: false, c: 1 })
+    assert.deepEqual(j.parse('a:yes,b:no,c:1'), { a: true, b: false, c: 1 })
   })
 
 
   it('plain-options-map-extend', () => {
     // Disable map extend (duplicate keys overwrite).
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         map: { extend: false },
       },
     })
 
-    assert.deepEqual(j('a:1,a:2'), { a: 2 })
+    assert.deepEqual(j.parse('a:1,a:2'), { a: 2 })
   })
 
 
   it('options-with-funcref-map-merge', () => {
     // Use FuncRef for the map.merge function.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@addMerge': (prev, curr) => {
@@ -90,15 +92,15 @@ describe('grammar-options', () => {
     })
 
     // Duplicate numeric keys should be summed.
-    assert.deepEqual(j('a:1,a:2'), { a: 3 })
+    assert.deepEqual(j.parse('a:1,a:2'), { a: 3 })
     // Non-numeric values still overwrite.
-    assert.deepEqual(j('b:x,b:y'), { b: 'y' })
+    assert.deepEqual(j.parse('b:x,b:y'), { b: 'y' })
   })
 
 
   it('options-with-funcref-parse-prepare', () => {
     // Use FuncRef for parse.prepare to inject context metadata.
-    let j = Amagama.make()
+    let j = am.make()
     let preparedWith = null
 
     j.grammar({
@@ -116,17 +118,17 @@ describe('grammar-options', () => {
       },
     })
 
-    j('a:1')
+    j.parse('a:1')
     assert.equal(preparedWith, 'default')
 
-    j('b:2', { tag: 'test-run' })
+    j.parse('b:2', { tag: 'test-run' })
     assert.equal(preparedWith, 'test-run')
   })
 
 
   it('options-and-rules-combined', () => {
     // Grammar spec with both options and rules in a single call.
-    let j = Amagama.make()
+    let j = am.make()
 
     j.grammar({
       ref: {
@@ -154,16 +156,16 @@ describe('grammar-options', () => {
     })
 
     // Custom values from options should work.
-    assert.deepEqual(j('a:on'), { a: true })
-    assert.deepEqual(j('a:off'), { a: false })
+    assert.deepEqual(j.parse('a:on'), { a: true })
+    assert.deepEqual(j.parse('a:off'), { a: false })
     // String values get uppercased by the rule action.
-    assert.deepEqual(j('a:hello'), { a: 'HELLO' })
+    assert.deepEqual(j.parse('a:hello'), { a: 'HELLO' })
   })
 
 
   it('options-fixed-tokens', () => {
     // Add custom fixed tokens via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
 
     j.grammar({
       options: {
@@ -185,26 +187,26 @@ describe('grammar-options', () => {
       ])
     })
 
-    assert.deepEqual(j('a:=>'), { a: '<arrow>' })
+    assert.deepEqual(j.parse('a:=>'), { a: '<arrow>' })
   })
 
 
   it('options-number-hex', () => {
     // Enable hex number parsing via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         number: { hex: true },
       },
     })
 
-    assert.deepEqual(j('a:0xFF'), { a: 255 })
+    assert.deepEqual(j.parse('a:0xFF'), { a: 255 })
   })
 
 
   it('options-safe-key', () => {
     // Disable safe key mode via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         safe: { key: false },
@@ -212,14 +214,14 @@ describe('grammar-options', () => {
     })
 
     // With safe key disabled, __proto__ should be a regular key.
-    let r = j('__proto__:1')
+    let r = j.parse('__proto__:1')
     assert.equal(r.__proto__, 1)
   })
 
 
   it('options-rule-start', () => {
     // Set rule.start to change the starting rule via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
 
     j.rule('myval', (rs) => {
       rs.open([
@@ -235,13 +237,13 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.equal(j('5'), 50)
+    assert.equal(j.parse('5'), 50)
   })
 
 
   it('options-tokenset', () => {
     // Configure tokenSet via grammar options to restrict KEY to strings only.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tokenSet: {
@@ -251,15 +253,15 @@ describe('grammar-options', () => {
     })
 
     // String key should work.
-    assert.deepEqual(j('"a":1'), { a: 1 })
+    assert.deepEqual(j.parse('"a":1'), { a: 1 })
     // Unquoted text key should fail since #TX is no longer in KEY.
-    assert.throws(() => j('a:1'), /unexpected/)
+    assert.throws(() => j.parse('a:1'), /unexpected/)
   })
 
 
   it('options-funcref-unresolved-passthrough', () => {
     // FuncRef strings that don't match any ref entry pass through as-is.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tag: 'test-tag',
@@ -272,7 +274,7 @@ describe('grammar-options', () => {
 
   it('options-nested-funcref', () => {
     // FuncRef resolution should work at any nesting depth.
-    let j = Amagama.make()
+    let j = am.make()
     let checkCalled = false
 
     j.grammar({
@@ -289,14 +291,14 @@ describe('grammar-options', () => {
       },
     })
 
-    j('a:1')
+    j.parse('a:1')
     assert.equal(checkCalled, true)
   })
 
 
   it('options-string-replace-char', () => {
     // Configure single-character string replacement via grammar options.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         string: {
@@ -307,13 +309,13 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:"aXb"'), { a: 'aYb' })
+    assert.deepEqual(j.parse('a:"aXb"'), { a: 'aYb' })
   })
 
 
   it('options-multiple-grammar-calls', () => {
     // Multiple grammar calls should layer options.
-    let j = Amagama.make()
+    let j = am.make()
 
     j.grammar({
       options: {
@@ -335,27 +337,27 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:yes,b:no'), { a: true, b: false })
+    assert.deepEqual(j.parse('a:yes,b:no'), { a: true, b: false })
   })
 
 
   it('options-only-no-rules', () => {
     // Grammar spec with only options and no rules should work.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         number: { sep: '_' },
       },
     })
 
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 
   it('options-funcref-in-array', () => {
     // FuncRef resolution should work inside arrays.
     let modified = false
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@mod': (val, _lex, _rule) => {
@@ -370,14 +372,14 @@ describe('grammar-options', () => {
       },
     })
 
-    j('a:hello')
+    j.parse('a:hello')
     assert.equal(modified, true)
   })
 
 
   it('options-regex-match-token', () => {
     // Use @/…/ to specify a RegExp for a custom match token.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         match: {
@@ -393,17 +395,17 @@ describe('grammar-options', () => {
     })
 
     // 'a' matches #ID and #ID is in KEY, so a:1 parses as a pair.
-    assert.deepEqual(j('a:1'), { a: 1 })
-    assert.deepEqual(j('foo:bar'), { foo: 'bar' })
+    assert.deepEqual(j.parse('a:1'), { a: 1 })
+    assert.deepEqual(j.parse('foo:bar'), { foo: 'bar' })
     // 'a*' does not match #ID, and #TX is not in KEY, so this throws.
-    assert.throws(() => j('a*:1'), /unexpected/)
+    assert.throws(() => j.parse('a*:1'), /unexpected/)
   })
 
 
   it('options-regex-number-exclude', () => {
     // Use @/…/ for number.exclude to reject leading-zero numbers.
     // Note: ^0[0-9]+$ properly matches "01", "023" etc. but not "0" alone.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         number: {
@@ -412,16 +414,16 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:0'), { a: 0 })
-    assert.deepEqual(j('a:01'), { a: '01' })
-    assert.deepEqual(j('a:123'), { a: 123 })
+    assert.deepEqual(j.parse('a:0'), { a: 0 })
+    assert.deepEqual(j.parse('a:01'), { a: '01' })
+    assert.deepEqual(j.parse('a:123'), { a: 123 })
   })
 
 
   it('options-regex-value-match', () => {
     // Use @/…/ in value.def with a FuncRef val for regex-matched values.
     // When value.def has a `match` RegExp, `val` must be a function.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@valOn': () => true,
@@ -437,14 +439,14 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:ON,b:Off,c:1'), { a: true, b: false, c: 1 })
-    assert.deepEqual(j('a:on,b:OFF'), { a: true, b: false })
+    assert.deepEqual(j.parse('a:ON,b:Off,c:1'), { a: true, b: false, c: 1 })
+    assert.deepEqual(j.parse('a:on,b:OFF'), { a: true, b: false })
   })
 
 
   it('options-regex-with-flags', () => {
     // Verify regex flags are passed through correctly.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@valYes': () => 'YES!',
@@ -459,15 +461,15 @@ describe('grammar-options', () => {
     })
 
     // The /i flag makes it case-insensitive.
-    assert.deepEqual(j('a:YES'), { a: 'YES!' })
-    assert.deepEqual(j('a:Yes'), { a: 'YES!' })
-    assert.deepEqual(j('a:yes'), { a: 'YES!' })
+    assert.deepEqual(j.parse('a:YES'), { a: 'YES!' })
+    assert.deepEqual(j.parse('a:Yes'), { a: 'YES!' })
+    assert.deepEqual(j.parse('a:yes'), { a: 'YES!' })
   })
 
 
   it('options-regex-no-flags', () => {
     // Verify @/…/ without flags produces a flagless (case-sensitive) RegExp.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         number: {
@@ -478,15 +480,15 @@ describe('grammar-options', () => {
 
     // Without flags, the regex is case-sensitive (irrelevant for numbers,
     // but tests the no-flags code path).
-    assert.deepEqual(j('a:0'), { a: 0 })
-    assert.deepEqual(j('a:42'), { a: 42 })
-    assert.deepEqual(j('a:01'), { a: '01' })
+    assert.deepEqual(j.parse('a:0'), { a: 0 })
+    assert.deepEqual(j.parse('a:42'), { a: 42 })
+    assert.deepEqual(j.parse('a:01'), { a: '01' })
   })
 
 
   it('options-regex-mixed-with-funcref', () => {
     // Both @/…/ regex and @name FuncRef in the same grammar spec.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@prepend': (prev, curr) => {
@@ -505,16 +507,16 @@ describe('grammar-options', () => {
     })
 
     // FuncRef merge: duplicate keys concatenate.
-    assert.deepEqual(j('a:x,a:y'), { a: 'xy' })
+    assert.deepEqual(j.parse('a:x,a:y'), { a: 'xy' })
     // RegExp exclude: leading-zero numbers become text.
-    assert.deepEqual(j('a:007'), { a: '007' })
-    assert.deepEqual(j('a:42'), { a: 42 })
+    assert.deepEqual(j.parse('a:007'), { a: '007' })
+    assert.deepEqual(j.parse('a:42'), { a: 42 })
   })
 
 
   it('options-regex-in-array', () => {
     // @/…/ resolution should work inside arrays.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@valT': () => true,
@@ -530,14 +532,14 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('[T, F, 1]'), [true, false, 1])
+    assert.deepEqual(j.parse('[T, F, 1]'), [true, false, 1])
   })
 
 
   it('options-regex-match-value', () => {
     // Use @/…/ in match.value for regexp-based value matching.
     // match.value runs against the forward source, so no $ anchor.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@valOn': () => true,
@@ -553,14 +555,14 @@ describe('grammar-options', () => {
       },
     })
 
-    assert.deepEqual(j('a:ON,b:off'), { a: true, b: false })
-    assert.deepEqual(j('a:on'), { a: true })
+    assert.deepEqual(j.parse('a:ON,b:off'), { a: true, b: false })
+    assert.deepEqual(j.parse('a:on'), { a: true })
   })
 
 
   it('options-regex-resolve-nested', () => {
     // @/…/ resolution works inside nested option objects.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@valYes': () => 'yes!',
@@ -578,15 +580,15 @@ describe('grammar-options', () => {
     })
 
     // Both nested @/…/ patterns resolve correctly.
-    assert.deepEqual(j('a:Y'), { a: 'yes!' })
-    assert.deepEqual(j('a:01'), { a: '01' })
-    assert.deepEqual(j('a:42'), { a: 42 })
+    assert.deepEqual(j.parse('a:Y'), { a: 'yes!' })
+    assert.deepEqual(j.parse('a:01'), { a: '01' })
+    assert.deepEqual(j.parse('a:42'), { a: 42 })
   })
 
 
   it('options-escape-at-prefix', () => {
     // @@ escapes to a literal @ string.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tag: '@@my-tag',
@@ -599,7 +601,7 @@ describe('grammar-options', () => {
 
   it('options-escape-at-regex-like', () => {
     // @@ prevents @/…/ from being interpreted as a regex.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tag: '@@/not-a-regex/',
@@ -612,7 +614,7 @@ describe('grammar-options', () => {
 
   it('options-escape-at-funcref-like', () => {
     // @@ prevents @name from being interpreted as a FuncRef.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       ref: {
         '@myFunc': () => 'resolved',
@@ -628,7 +630,7 @@ describe('grammar-options', () => {
 
   it('options-escape-at-nested', () => {
     // @@ escape works inside nested objects and arrays.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         error: {
@@ -643,34 +645,34 @@ describe('grammar-options', () => {
 
   it('grammar-text-string', () => {
     // grammar() accepts a string, parsing it internally.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar('options: { number: { sep: "_" } }')
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 
   it('grammar-text-string-number-exclude', () => {
     // grammar() with string can use @/<regexp>/ declarative form.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(`options: { number: { exclude: '@/^0[0-9]+$/' } }`)
-    assert.deepEqual(j('a:01'), { a: '01' })
-    assert.deepEqual(j('a:42'), { a: 42 })
+    assert.deepEqual(j.parse('a:01'), { a: '01' })
+    assert.deepEqual(j.parse('a:42'), { a: 42 })
   })
 
 
   it('grammar-text-string-empty', () => {
     // Empty/whitespace grammar text is a no-op, not a crash.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar('')
     j.grammar('  ')
     j.grammar('# just a comment')
-    assert.deepEqual(j('a:1'), { a: 1 })
+    assert.deepEqual(j.parse('a:1'), { a: 1 })
   })
 
 
   it('grammar-text-string-options-and-rules', () => {
     // grammar(string) processes both options and rule definitions.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(`
       options: { number: { sep: "_" } },
       rule: {
@@ -682,14 +684,14 @@ describe('grammar-options', () => {
       }
     `)
     // Options took effect.
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 
   it('grammar-text-then-options-preserved', () => {
     // grammar(string) sets options and rules. A subsequent options() call
     // must preserve both (options via deep merge, rules via RSM preservation).
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(`
       options: { number: { sep: "_" } },
       rule: {
@@ -705,7 +707,7 @@ describe('grammar-options', () => {
     j.options({ number: { hex: true } })
 
     // Options from grammar(string) should still be in effect.
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 
@@ -713,7 +715,7 @@ describe('grammar-options', () => {
     // Excluding "amagama" and "imp" should remove ALL amagama/imp-tagged alts.
     // Regression: a typo "elem.amagama" (dot) instead of "elem,amagama" (comma)
     // left a list alt active that broke string matching in strict JSON mode.
-    let j = Amagama.make({ rule: { exclude: 'amagama,imp' } })
+    let j = am.make({ rule: { exclude: 'amagama,imp' } })
     let rules = j.internal().parser.rule()
     for (let [name, rs] of Object.entries(rules)) {
       for (let alt of [...(rs.def.open || []), ...(rs.def.close || [])]) {
@@ -732,8 +734,8 @@ describe('grammar-options', () => {
     }
 
     // Strict JSON parsing should work correctly.
-    assert.deepEqual(j('{"a":"hello","b":1}'), { a: 'hello', b: 1 })
-    assert.deepEqual(j('[1,"two",3]'), [1, 'two', 3])
+    assert.deepEqual(j.parse('{"a":"hello","b":1}'), { a: 'hello', b: 1 })
+    assert.deepEqual(j.parse('[1,"two",3]'), [1, 'two', 3])
   })
 
 
@@ -741,7 +743,7 @@ describe('grammar-options', () => {
     // All group tags (g fields) in grammar alts must be comma-separated
     // lowercase identifiers [a-z] only. No dots, spaces, or other chars.
     // Regression guard for the "elem.amagama" typo.
-    let j = Amagama.make()
+    let j = am.make()
     let rules = j.internal().parser.rule()
     let tagRe = /^[a-z]+$/
     for (let [name, rs] of Object.entries(rules)) {
@@ -783,7 +785,7 @@ describe('grammar-options', () => {
   it('skip-in-grammar-options-tokenset', () => {
     // @SKIP in tokenSet arrays preserves defaults at those positions,
     // acting like undefined (sparse array holes).
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tokenSet: {
@@ -796,15 +798,15 @@ describe('grammar-options', () => {
     })
 
     // #TX is still in KEY (preserved by @SKIP), so text keys work.
-    assert.deepEqual(j('a:1'), { a: 1 })
+    assert.deepEqual(j.parse('a:1'), { a: 1 })
     // #ST is added to KEY.
-    assert.deepEqual(j('"b":2'), { b: 2 })
+    assert.deepEqual(j.parse('"b":2'), { b: 2 })
   })
 
 
   it('skip-in-grammar-options-value-def', () => {
     // @SKIP can preserve existing value definitions when merging.
-    let j = Amagama.make()
+    let j = am.make()
 
     // First, add a custom value.
     j.grammar({
@@ -812,7 +814,7 @@ describe('grammar-options', () => {
         value: { def: { yes: { val: true } } },
       },
     })
-    assert.deepEqual(j('a:yes'), { a: true })
+    assert.deepEqual(j.parse('a:yes'), { a: true })
 
     // Second grammar call: use @SKIP to avoid overwriting 'yes'.
     j.grammar({
@@ -821,14 +823,14 @@ describe('grammar-options', () => {
       },
     })
     // 'yes' is preserved, 'no' is added.
-    assert.deepEqual(j('a:yes,b:no'), { a: true, b: false })
+    assert.deepEqual(j.parse('a:yes,b:no'), { a: true, b: false })
   })
 
 
   it('skip-does-not-resolve-as-funcref', () => {
     // @SKIP is a built-in sentinel, not a FuncRef lookup.
     // Even if ref contains '@SKIP', the sentinel takes precedence.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       options: {
         tag: 'original',
@@ -855,7 +857,7 @@ describe('grammar-options', () => {
     // The `c` property of an alt can be a FuncRef that resolves to a
     // condition function: (rule, ctx, altmatch) => boolean.
     // When the condition returns false the alt is skipped.
-    let j = Amagama.make()
+    let j = am.make()
 
     let condCalls = 0
 
@@ -885,19 +887,19 @@ describe('grammar-options', () => {
     })
 
     // Top-level value is wrapped in an array by the conditioned alt.
-    assert.deepEqual(j('a:1'), [{ a: 1 }])
+    assert.deepEqual(j.parse('a:1'), [{ a: 1 }])
     assert.ok(condCalls > 0, 'condition function was called')
 
     // The inner value 1 is at depth > 0, so the condition returns false
     // for it — only the top-level map gets wrapped.
-    assert.deepEqual(j('a:1,b:2'), [{ a: 1, b: 2 }])
+    assert.deepEqual(j.parse('a:1,b:2'), [{ a: 1, b: 2 }])
   })
 
 
   it('alt-condition-funcref-false-skips', () => {
     // A condition FuncRef that always returns false causes the alt
     // to never match, so it has no effect.
-    let j = Amagama.make()
+    let j = am.make()
 
     j.grammar({
       ref: {
@@ -918,8 +920,8 @@ describe('grammar-options', () => {
     })
 
     // The @boom action never fires because @never blocks the alt.
-    assert.deepEqual(j('a:1'), { a: 1 })
-    assert.deepEqual(j('[1,2]'), [1, 2])
+    assert.deepEqual(j.parse('a:1'), { a: 1 })
+    assert.deepEqual(j.parse('[1,2]'), [1, 2])
   })
 
 
@@ -936,7 +938,7 @@ describe('grammar-options', () => {
   it('grammar-setting-alt-g-string', () => {
     // A comma-separated string value for setting.rule.alt.g is split and
     // appended to every alt's g array in the grammar.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(
       {
         rule: {
@@ -960,7 +962,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-alt-g-array', () => {
     // An array value for setting.rule.alt.g is appended verbatim.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(
       {
         rule: {
@@ -983,7 +985,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-alt-g-absent-is-noop', () => {
     // Omitting the setting leaves the grammar's g tags untouched.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar({
       rule: {
         val: {
@@ -998,7 +1000,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-alt-g-empty-string', () => {
     // An empty g string in the setting is a no-op (no empty tags appended).
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(
       { rule: { val: { close: [{ s: '#ZZ', g: 'alpha' }] } } },
       { rule: { alt: { g: '' } } }
@@ -1017,7 +1019,7 @@ describe('grammar-options', () => {
         },
       },
     }
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(gs, { rule: { alt: { g: 'extra' } } })
 
     // Caller's alt object still has its original g value.
@@ -1027,7 +1029,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-alt-g-on-text-grammar', () => {
     // Setting works when gs is a amagama text string too.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(
       `
         rule: {
@@ -1050,7 +1052,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-alt-g-inject-form', () => {
     // The setting is also applied when the rule uses the {alts, inject} form.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(
       {
         rule: {
@@ -1082,7 +1084,7 @@ describe('grammar-options', () => {
       'a', 'Foo', '1foo', '', 'foo!', 'foo bar', 'FOO',
     ]
     for (let tag of bad) {
-      let j = Amagama.make()
+      let j = am.make()
       assert.throws(
         () => j.grammar({
           rule: { val: { close: [{ s: '#ZZ', g: tag }] } },
@@ -1101,7 +1103,7 @@ describe('grammar-options', () => {
       'fo-o', 'custom-from-text', 'alpha-beta',
     ]
     for (let tag of good) {
-      let j = Amagama.make()
+      let j = am.make()
       j.grammar({
         rule: { val: { close: [{ s: '#ZZ', g: tag }] } },
       })
@@ -1111,7 +1113,7 @@ describe('grammar-options', () => {
 
   it('grammar-setting-invalid-tag-rejected', () => {
     // A setting-supplied tag is also validated by normalt().
-    let j = Amagama.make()
+    let j = am.make()
     assert.throws(
       () => j.grammar(
         { rule: { val: { close: [{ s: '#ZZ', g: 'ok' }] } } },
@@ -1125,37 +1127,37 @@ describe('grammar-options', () => {
   // --- options() accepts a amagama-format string --------------------------
 
   it('options-as-string-basic', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options('number: { sep: "_" }')
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 
   it('options-as-string-deep-merge', () => {
-    let j = Amagama.make()
+    let j = am.make()
     // First apply one option via string, then another via object — both
     // survive because options() deep-merges.
     j.options('number: { sep: "_" }')
     j.options({ number: { hex: true } })
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
-    assert.deepEqual(j('b:0xff'), { b: 255 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('b:0xff'), { b: 255 })
   })
 
 
   it('options-as-string-empty-noop', () => {
-    let j = Amagama.make()
+    let j = am.make()
     // Empty string parses to null — should be a no-op, not an error.
     j.options('')
-    assert.deepEqual(j('a:1'), { a: 1 })
+    assert.deepEqual(j.parse('a:1'), { a: 1 })
   })
 
 
   it('options-string-via-grammar-still-works', () => {
     // grammar(string) continues to accept options + rules in text form;
     // this exercises the shared code path.
-    let j = Amagama.make()
+    let j = am.make()
     j.grammar(`options: { number: { sep: "_" } }`)
-    assert.deepEqual(j('a:1_000'), { a: 1000 })
+    assert.deepEqual(j.parse('a:1_000'), { a: 1000 })
   })
 
 })
@@ -1166,54 +1168,54 @@ describe('info-marker', () => {
 
   it('info-default-off', () => {
     // By default, no marker is attached.
-    let j = Amagama.make()
-    let r = j('a:1')
+    let j = am.make()
+    let r = j.parse('a:1')
     assert.equal(r.__info__, undefined)
 
-    let arr = j('[1,2]')
+    let arr = j.parse('[1,2]')
     assert.equal(arr.__info__, undefined)
   })
 
 
   it('info-map-explicit', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('{a:1}')
+    let r = j.parse('{a:1}')
     assert.equal(r.__info__.implicit, false)
     assert.deepEqual(r.__info__.meta, {})
   })
 
 
   it('info-map-implicit', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('a:1')
+    let r = j.parse('a:1')
     assert.equal(r.__info__.implicit, true)
     assert.deepEqual(r.__info__.meta, {})
   })
 
 
   it('info-list-explicit', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { list: true } })
-    let r = j('[1,2]')
+    let r = j.parse('[1,2]')
     assert.equal(r.__info__.implicit, false)
   })
 
 
   it('info-list-implicit', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { list: true } })
-    let r = j('1,2')
+    let r = j.parse('1,2')
     assert.equal(r.__info__.implicit, true)
   })
 
 
   it('info-map-only', () => {
     // info.map without info.list: list nodes have no marker.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('a:[1,2]')
+    let r = j.parse('a:[1,2]')
     assert.notEqual(r.__info__, undefined)
     assert.equal(r.a.__info__, undefined)
   })
@@ -1221,18 +1223,18 @@ describe('info-marker', () => {
 
   it('info-list-only', () => {
     // info.list without info.map: map nodes have no marker.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { list: true } })
-    let r = j('[{a:1}]')
+    let r = j.parse('[{a:1}]')
     assert.notEqual(r.__info__, undefined)
     assert.equal(r[0].__info__, undefined)
   })
 
 
   it('info-non-enumerable', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true, list: true } })
-    let r = j('a:1,b:2')
+    let r = j.parse('a:1,b:2')
     // __info__ should not appear in Object.keys
     assert.ok(!Object.keys(r).includes('__info__'))
     // __info__ should not appear in JSON.stringify
@@ -1245,9 +1247,9 @@ describe('info-marker', () => {
 
 
   it('info-meta-bag', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('a:1')
+    let r = j.parse('a:1')
     assert.deepEqual(r.__info__.meta, {})
     // Should be writable.
     r.__info__.meta.custom = 'test'
@@ -1256,9 +1258,9 @@ describe('info-marker', () => {
 
 
   it('info-text-quoted', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { text: true } })
-    let r = j('"hello"')
+    let r = j.parse('"hello"')
     assert.equal(r.__info__.quote, '"')
     assert.equal(r + '', 'hello')
     assert.equal(r.valueOf(), 'hello')
@@ -1266,18 +1268,18 @@ describe('info-marker', () => {
 
 
   it('info-text-single-quoted', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { text: true } })
-    let r = j("'hello'")
+    let r = j.parse("'hello'")
     assert.equal(r.__info__.quote, "'")
     assert.equal(r + '', 'hello')
   })
 
 
   it('info-text-unquoted', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { text: true } })
-    let r = j('hello')
+    let r = j.parse('hello')
     assert.equal(r.__info__.quote, '')
     assert.equal(r + '', 'hello')
   })
@@ -1285,18 +1287,18 @@ describe('info-marker', () => {
 
   it('info-text-off-by-default', () => {
     // Strings remain primitives when only map/list are enabled.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true, list: true } })
-    let r = j('a:hello')
+    let r = j.parse('a:hello')
     assert.equal(typeof r.a, 'string')
     assert.equal(r.a, 'hello')
   })
 
 
   it('info-custom-marker', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true, marker: '__meta__' } })
-    let r = j('a:1')
+    let r = j.parse('a:1')
     assert.equal(r.__info__, undefined)
     assert.notEqual(r.__meta__, undefined)
     assert.equal(r.__meta__.implicit, true)
@@ -1304,9 +1306,9 @@ describe('info-marker', () => {
 
 
   it('info-nested', () => {
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true, list: true } })
-    let r = j('a:[1,2],b:{c:3}')
+    let r = j.parse('a:[1,2],b:{c:3}')
     // Top-level map is implicit.
     assert.equal(r.__info__.implicit, true)
     // Nested list is explicit.
@@ -1318,9 +1320,9 @@ describe('info-marker', () => {
 
   it('info-marker-key-dropped', () => {
     // User keys matching the info marker are silently dropped.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('a:1,__info__:2,b:3')
+    let r = j.parse('a:1,__info__:2,b:3')
     assert.deepEqual(Object.keys(r).sort(), ['a', 'b'])
     assert.equal(r.a, 1)
     assert.equal(r.b, 3)
@@ -1331,9 +1333,9 @@ describe('info-marker', () => {
 
   it('info-marker-key-dropped-json', () => {
     // Also works in strict JSON syntax path.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true } })
-    let r = j('{"a":1,"__info__":2}')
+    let r = j.parse('{"a":1,"__info__":2}')
     assert.deepEqual(Object.keys(r), ['a'])
     assert.equal(r.__info__.implicit, false)
   })
@@ -1341,9 +1343,9 @@ describe('info-marker', () => {
 
   it('info-marker-key-dropped-custom', () => {
     // Custom marker name is also protected.
-    let j = Amagama.make()
+    let j = am.make()
     j.options({ info: { map: true, marker: '__meta__' } })
-    let r = j('a:1,__meta__:2')
+    let r = j.parse('a:1,__meta__:2')
     assert.deepEqual(Object.keys(r).sort(), ['a'])
     assert.equal(r.__meta__.implicit, true)
   })
@@ -1351,16 +1353,16 @@ describe('info-marker', () => {
 
   it('info-marker-key-not-dropped-when-off', () => {
     // When info.map is off, the key is NOT dropped.
-    let j = Amagama.make()
-    let r = j('a:1,__info__:2')
+    let j = am.make()
+    let r = j.parse('a:1,__info__:2')
     assert.equal(r.__info__, 2)
   })
 
 
   it('info-child$-unchanged', () => {
     // list.child behavior is unaffected by info.list.
-    let j = Amagama.make({ list: { child: true }, info: { list: true } })
-    let r = j('[:1,a,b]')
+    let j = am.make({ list: { child: true }, info: { list: true } })
+    let r = j.parse('[:1,a,b]')
     assert.equal(r['child$'], 1)
     assert.deepEqual(Array.from(r), ['a', 'b'])
     assert.notEqual(r.__info__, undefined)
@@ -1374,7 +1376,7 @@ describe('info-marker', () => {
     // the accumulated fnref map, so every fnref call added another copy of
     // every already-registered reserved handler.
     let mergeCalls = 0
-    let j = Amagama.make({
+    let j = am.make({
       map: {
         merge: (prev, curr) => {
           mergeCalls++
@@ -1395,7 +1397,7 @@ describe('info-marker', () => {
       'pair bc actions unchanged by unrelated @pair-ao registration')
 
     mergeCalls = 0
-    j('a:{x:1},a:{y:2},a:{z:3}')
+    j.parse('a:{x:1},a:{y:2},a:{z:3}')
     assert.equal(mergeCalls, 2,
       'merge called once per duplicate key (not twice due to duplicate bc actions)')
   })

@@ -4,11 +4,13 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, Lexer, makeParser, AmagamaError, make } = require('..')
+const { Amagama, jsonic, Lexer, makeParser, AmagamaError, make } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 describe('plugin', function () {
   it('parent-safe', () => {
-    let c0 = Amagama.make({
+    let c0 = am.make({
       a: 1,
       fixed: { token: { '#B': 'b' } },
     })
@@ -17,7 +19,7 @@ describe('plugin', function () {
     c0.bar = 11
 
     // Amagama unaffected
-    assert.deepEqual(Amagama('b'), 'b')
+    assert.deepEqual(J('b'), 'b')
     assert.equal(Amagama.foo, undefined)
     assert.equal(Amagama.bar, undefined)
 
@@ -33,7 +35,7 @@ describe('plugin', function () {
     assert.deepEqual(c0.foo(), 'FOO')
     assert.deepEqual(c0.bar, 11)
 
-    assert.throws(() => c0('b'), /unexpected/)
+    assert.throws(() => c0.parse('b'), /unexpected/)
 
     // console.log('c0 int A', c0.internal().mark, c0.internal().config.fixed)
 
@@ -66,8 +68,8 @@ describe('plugin', function () {
     assert.deepEqual(c1.foo(), 'FOO')
     assert.deepEqual(c1.bar, 11)
 
-    assert.throws(() => c1('b'), /unexpected/)
-    assert.throws(() => c1('d'), /unexpected/)
+    assert.throws(() => c1.parse('b'), /unexpected/)
+    assert.throws(() => c1.parse('d'), /unexpected/)
 
     // console.log('c1 int A', c1.internal().mark, c1.internal().config.fixed)
     // console.log('c0 int B', c0.internal().mark, c0.internal().config.fixed)
@@ -86,7 +88,7 @@ describe('plugin', function () {
     assert.deepEqual(c0.foo(), 'FOO')
     assert.deepEqual(c0.bar, 11)
 
-    assert.throws(() => c0('b'), /unexpected/)
+    assert.throws(() => c0.parse('b'), /unexpected/)
 
     assert.equal(c0.options.c, undefined)
     assert.equal(c0.token['#D'], undefined)
@@ -129,17 +131,17 @@ describe('plugin', function () {
     assert.throws(() => Amagama.use(make_token_plugin('A', 'aaa')))
 
     // use make to avoid polluting Amagama
-    const j = make()
+    const j = new Amagama({ plugins: [jsonic] })
     j.use(make_token_plugin('A', 'aaa'))
-    assert.deepEqual(j('x:A,y:B,z:C', { xlog: -1 }), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C', { xlog: -1 }), { x: 'aaa', y: 'B', z: 'C' })
 
     const a1 = j.make({ a: 1 })
     assert.deepEqual(a1.options.a, 1)
     assert.equal(j.options.a, undefined)
     assert.deepEqual(j.internal().parser === a1.internal().parser, false)
     assert.deepEqual(j.token.OB === a1.token.OB, true)
-    assert.deepEqual(a1('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(j('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a1.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
 
     const a2 = j.make({ a: 2 })
     assert.deepEqual(a2.options.a, 2)
@@ -149,14 +151,14 @@ describe('plugin', function () {
     assert.deepEqual(a2.internal().parser === a1.internal().parser, false)
     assert.deepEqual(j.token.OB === a2.token.OB, true)
     assert.deepEqual(a2.token.OB === a1.token.OB, true)
-    assert.deepEqual(a2('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(a1('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(j('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a2.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a1.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
 
     a2.use(make_token_plugin('B', 'bbb'))
-    assert.deepEqual(a2('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
-    assert.deepEqual(a1('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(j('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a2.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
+    assert.deepEqual(a1.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
 
     const a22 = a2.make({ a: 22 })
     assert.deepEqual(a22.options.a, 22)
@@ -171,22 +173,22 @@ describe('plugin', function () {
     assert.deepEqual(j.token.OB === a22.token.OB, true)
     assert.deepEqual(a22.token.OB === a1.token.OB, true)
     assert.deepEqual(a2.token.OB === a1.token.OB, true)
-    assert.deepEqual(a22('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
-    assert.deepEqual(a2('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
-    assert.deepEqual(a1('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(j('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a22.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
+    assert.deepEqual(a2.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
+    assert.deepEqual(a1.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
 
     a22.use(make_token_plugin('C', 'ccc'))
-    assert.deepEqual(a22('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'ccc' })
-    assert.deepEqual(a2('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
-    assert.deepEqual(a1('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
-    assert.deepEqual(j('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(a22.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'ccc' })
+    assert.deepEqual(a2.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'bbb', z: 'C' })
+    assert.deepEqual(a1.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
+    assert.deepEqual(j.parse('x:A,y:B,z:C'), { x: 'aaa', y: 'B', z: 'C' })
   })
 
   it('plugin-opts', () => {
     // use make to avoid polluting Amagama
     let x = null
-    const j = make()
+    const j = new Amagama({ plugins: [jsonic] })
     j.use(
       function foo(amagama) {
         x = amagama.options.plugin.foo.x
@@ -197,7 +199,7 @@ describe('plugin', function () {
   })
 
   it('wrap-amagama', () => {
-    const j = make()
+    const j = new Amagama({ plugins: [jsonic] })
     let jp = j.use(function foo(amagama) {
       return new Proxy(amagama, {})
     })
@@ -205,7 +207,7 @@ describe('plugin', function () {
   })
 
   it('config-modifiers', () => {
-    const j = make()
+    const j = new Amagama({ plugins: [jsonic] })
     j.use(function foo(amagama) {
       amagama.options({
         config: {
@@ -219,7 +221,7 @@ describe('plugin', function () {
   })
 
   it('decorate', () => {
-    const j = make()
+    const j = new Amagama({ plugins: [jsonic] })
 
     let jp0 = j.use(function foo(amagama) {
       amagama.foo = () => 'FOO'
@@ -235,7 +237,7 @@ describe('plugin', function () {
   })
 
   it('context-api', () => {
-    let j0 = Amagama.make().use(function (amagama) {
+    let j0 = am.make().use(function (amagama) {
       amagama.rule('val', (rs) => {
         rs.ac((r, ctx) => {
           assert.deepEqual(ctx.uI > 0, true)
@@ -251,11 +253,11 @@ describe('plugin', function () {
       })
     })
 
-    assert.deepEqual(j0('a:1'), { a: 1 })
+    assert.deepEqual(j0.parse('a:1'), { a: 1 })
   })
 
   it('custom-parser-error', () => {
-    let j = Amagama.make().use(function foo(amagama) {
+    let j = am.make().use(function foo(amagama) {
       amagama.options({
         parser: {
           start: function (src, amagama, meta) {
@@ -289,16 +291,16 @@ describe('plugin', function () {
       })
     })
 
-    // j('e:2')
+    // j.parse('e:2')
 
-    assert.throws(() => j('e:0'), /e:0/s)
-    assert.throws(() => j('e:1', { log: () => null }), /e:1/s)
-    assert.throws(() => j('e:2'), /e:2/s)
+    assert.throws(() => j.parse('e:0'), /e:0/s)
+    assert.throws(() => j.parse('e:1', { log: () => null }), /e:1/s)
+    assert.throws(() => j.parse('e:2'), /e:2/s)
   })
 
 
   it('plugin-errmsg', () => {
-    const j = make().use(
+    const j = new Amagama({ plugins: [jsonic] }).use(
       function Foo(amagama) {
         amagama.options({
           errmsg: {
@@ -313,7 +315,7 @@ describe('plugin', function () {
     )
 
     try {
-      j('x::1')
+      j.parse('x::1')
       assert.deepEqual(true, false)
     }
     catch(e) {
@@ -323,7 +325,7 @@ describe('plugin', function () {
     }
 
     try {
-      j('x:"s')
+      j.parse('x:"s')
       assert.deepEqual(true, false)
     }
     catch(e) {

@@ -9,10 +9,12 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 function makeCsv() {
-  const j = Amagama.make({
+  const j = am.make({
     tokenSet: {
       // Default IGNORE is [#SP, #LN, #CM]. Drop #LN so newlines become
       // parsing tokens; keep space and comment in IGNORE.
@@ -109,54 +111,54 @@ describe('csv-grammar', () => {
   const csv = makeCsv()
 
   it('empty-input', () => {
-    assert.deepEqual(csv(''), [])
+    assert.deepEqual(csv.parse(''), [])
   })
 
   it('single-row', () => {
-    assert.deepEqual(csv('a,b,c'), [['a', 'b', 'c']])
+    assert.deepEqual(csv.parse('a,b,c'), [['a', 'b', 'c']])
   })
 
   it('multiple-rows', () => {
-    assert.deepEqual(csv('a,b\nc,d'), [['a', 'b'], ['c', 'd']])
+    assert.deepEqual(csv.parse('a,b\nc,d'), [['a', 'b'], ['c', 'd']])
   })
 
   it('trailing-newline', () => {
-    assert.deepEqual(csv('a,b,c\n'), [['a', 'b', 'c']])
+    assert.deepEqual(csv.parse('a,b,c\n'), [['a', 'b', 'c']])
   })
 
   it('blank-lines-skipped', () => {
-    assert.deepEqual(csv('a,b\n\nc,d\n'), [['a', 'b'], ['c', 'd']])
+    assert.deepEqual(csv.parse('a,b\n\nc,d\n'), [['a', 'b'], ['c', 'd']])
   })
 
   it('numbers-are-parsed', () => {
-    assert.deepEqual(csv('1,2,3'), [[1, 2, 3]])
+    assert.deepEqual(csv.parse('1,2,3'), [[1, 2, 3]])
   })
 
   it('quoted-strings', () => {
-    assert.deepEqual(csv('"hello","world"'), [['hello', 'world']])
+    assert.deepEqual(csv.parse('"hello","world"'), [['hello', 'world']])
   })
 
   it('mixed-types', () => {
-    assert.deepEqual(csv('a,1,"x",true'), [['a', 1, 'x', true]])
+    assert.deepEqual(csv.parse('a,1,"x",true'), [['a', 1, 'x', true]])
   })
 
   it('empty-leading-field', () => {
-    assert.deepEqual(csv(',a,b'), [['', 'a', 'b']])
+    assert.deepEqual(csv.parse(',a,b'), [['', 'a', 'b']])
   })
 
   it('empty-middle-field', () => {
-    assert.deepEqual(csv('a,,b'), [['a', '', 'b']])
+    assert.deepEqual(csv.parse('a,,b'), [['a', '', 'b']])
   })
 
   it('empty-trailing-field', () => {
-    assert.deepEqual(csv('a,b,'), [['a', 'b', '']])
+    assert.deepEqual(csv.parse('a,b,'), [['a', 'b', '']])
   })
 
   it('single-cell-row', () => {
-    assert.deepEqual(csv('x\ny'), [['x'], ['y']])
+    assert.deepEqual(csv.parse('x\ny'), [['x'], ['y']])
   })
 
   it('keywords-recognised', () => {
-    assert.deepEqual(csv('true,false,null'), [[true, false, null]])
+    assert.deepEqual(csv.parse('true,false,null'), [[true, false, null]])
   })
 })

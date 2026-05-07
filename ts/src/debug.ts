@@ -73,7 +73,7 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
               '\t' +
               te[1] +
               '\t' +
-              ((s: string) => (s ? '"' + s + '"' : ''))(
+              ((s: string | number) => (s ? '"' + s + '"' : ''))(
                 cfg.fixed.ref[te[0] as string] || '',
               )
             )

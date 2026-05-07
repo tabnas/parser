@@ -1,7 +1,9 @@
-const { Amagama, util } = require('..')
+const { Amagama, jsonic, util } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { Debug } = require('../dist/debug')
 
-let j = Amagama.make()
+let j = am.make()
   .use(function dive(amagama) {
     amagama.options({
       fixed: {
@@ -45,7 +47,7 @@ let j = Amagama.make()
 console.log(j.debug.describe())
 
 console.log(
-  j(
+  j.parse(
     `
 {
   a: 1

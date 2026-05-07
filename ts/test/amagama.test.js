@@ -15,19 +15,21 @@ const assert = require('node:assert')
 
 // const I = Util.inspect
 
-const { Amagama, AmagamaError, makeRule, makeRuleSpec } = require('..')
+const { Amagama, jsonic, AmagamaError, makeRule, makeRuleSpec } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 const Exhaust = require('./exhaust')
 const Large = require('./large')
 const JsonStandard = require('./json-standard')
 
-let j = Amagama
+let j = am
 
 function tsvTest(name) {
   const entries = loadTSV(name)
   for (const { cols: [input, expected], row } of entries) {
     try {
-      assert.deepEqual(Amagama(input), JSON.parse(expected))
+      assert.deepEqual(J(input), JSON.parse(expected))
     } catch (err) {
       err.message = `${name} row ${row}: input=${input} expected=${expected}\n${err.message}`
       throw err
@@ -41,7 +43,7 @@ describe('amagama', function () {
   })
 
   it('options', () => {
-    let j = Amagama.make({ x: 1 })
+    let j = am.make({ x: 1 })
 
     assert.deepEqual(j.options.x, 1)
     assert.deepEqual(Object.keys({ x: 1 }).reduce((a,k)=>(a[k]=({ ...j.options })[k],a),{}), { x: 1 })
@@ -67,7 +69,7 @@ describe('amagama', function () {
     assert.deepEqual(j.options().comment.lex, false)
     assert.deepEqual(j.internal().config.comment.lex, false)
 
-    let k = Amagama.make()
+    let k = am.make()
     assert.deepEqual(k.options.comment.lex, true)
     assert.deepEqual(k.options().comment.lex, true)
     assert.deepEqual(k.internal().config.comment.lex, true)
@@ -84,7 +86,7 @@ describe('amagama', function () {
     assert.deepEqual(k.internal().config.comment.lex, false)
     assert.deepEqual(k.rule().val.def.open.length, 3)
 
-    let k1 = Amagama.make()
+    let k1 = am.make()
     k1.use((amagama) => {
       amagama.options({
         rule: { exclude: 'json' },
@@ -95,7 +97,7 @@ describe('amagama', function () {
   })
 
   it('token-gen', () => {
-    let j = Amagama.make()
+    let j = am.make()
 
     let suffix = Math.random()
     let s = j.token('__' + suffix)
@@ -123,7 +125,7 @@ describe('amagama', function () {
   })
 
   it('token-fixed', () => {
-    let j = Amagama.make()
+    let j = am.make()
 
     assert.deepEqual({ ...j.fixed }, {
       12: '{',
@@ -219,14 +221,14 @@ describe('amagama', function () {
 
   it('syntax-errors', () => {
     // bad close
-    assert.throws(() => j('}'))
-    assert.throws(() => j(']'))
+    assert.throws(() => j.parse('}'))
+    assert.throws(() => j.parse(']'))
 
     // top level already is a map
-    assert.throws(() => j('a:1,2'))
+    assert.throws(() => j.parse('a:1,2'))
 
     // values not valid inside map
-    assert.throws(() => j('x:{1,2}'))
+    assert.throws(() => j.parse('x:{1,2}'))
   })
 
   it('process-scalars', () => {
@@ -254,7 +256,7 @@ describe('amagama', function () {
   })
 
   it('process-comment', () => {
-    assert.deepEqual(j('a:q\nb:w #X\nc:r \n\nd:t\n\n#'), {
+    assert.deepEqual(j.parse('a:q\nb:w #X\nc:r \n\nd:t\n\n#'), {
       a: 'q',
       b: 'w',
       c: 'r',
@@ -262,7 +264,7 @@ describe('amagama', function () {
     })
 
     let jm = j.make({ comment: { lex: false } })
-    assert.deepEqual(jm('a:q\nb:w#X\nc:r \n\nd:t'), {
+    assert.deepEqual(jm.parse('a:q\nb:w#X\nc:r \n\nd:t'), {
       a: 'q',
       b: 'w#X',
       c: 'r',
@@ -279,7 +281,7 @@ describe('amagama', function () {
   })
 
   it('api', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
     assert.deepEqual(Amagama.parse('a:1'), { a: 1 })
   })
 
@@ -335,14 +337,14 @@ describe('amagama', function () {
     assert.deepEqual('' + Amagama, s0)
     assert.deepEqual('' + Amagama, '' + Amagama)
 
-    let j1 = Amagama.make()
+    let j1 = am.make()
     let s1 = '' + j1
     assert.ok(s1.match(/Amagama.*/) != null)
     assert.deepEqual('' + j1, s1)
     assert.deepEqual('' + j1, '' + j1)
     assert.notDeepEqual(s0, s1)
 
-    let j2 = Amagama.make({ tag: 'foo' })
+    let j2 = am.make({ tag: 'foo' })
     let s2 = '' + j2
     assert.ok(s2.match(/Amagama.*foo/) != null)
     assert.deepEqual('' + j2, s2)
@@ -412,28 +414,28 @@ describe('amagama', function () {
   })
 
   it('src-not-string', () => {
-    assert.deepEqual(Amagama({}), {})
-    assert.deepEqual(Amagama([]), [])
-    assert.deepEqual(Amagama(true), true)
-    assert.deepEqual(Amagama(false), false)
-    assert.deepEqual(Amagama(null), null)
-    assert.deepEqual(Amagama(undefined), undefined)
-    assert.deepEqual(Amagama(1), 1)
-    assert.deepEqual(Amagama(/a/), /a/)
+    assert.deepEqual(J({}), {})
+    assert.deepEqual(J([]), [])
+    assert.deepEqual(J(true), true)
+    assert.deepEqual(J(false), false)
+    assert.deepEqual(J(null), null)
+    assert.deepEqual(J(undefined), undefined)
+    assert.deepEqual(J(1), 1)
+    assert.deepEqual(J(/a/), /a/)
 
     let sa = Symbol('a')
-    assert.deepEqual(Amagama(sa), sa)
+    assert.deepEqual(J(sa), sa)
   })
 
   it('src-empty-string', () => {
-    assert.deepEqual(Amagama(''), undefined)
+    assert.deepEqual(J(''), undefined)
 
-    assert.throws(() => Amagama.make({ lex: { empty: false } }).parse(''), /unexpected.*:1:1/s,)
+    assert.throws(() => am.make({ lex: { empty: false } }).parse(''), /unexpected.*:1:1/s,)
   })
 })
 
 function make_empty(opts) {
-  let j = Amagama.make(opts)
+  let j = am.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j

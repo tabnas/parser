@@ -709,31 +709,33 @@ function clean<T>(o: T): T {
 }
 
 // TODO: rename to filterAlts
-function filterRules(rs: RuleSpec, cfg: Config) {
-  let rsnames: (keyof RuleSpec['def'])[] = ['open', 'close']
-  for (let rsn of rsnames) {
-    ; (rs.def[rsn] as AltSpec[]) = (rs.def[rsn] as AltSpec[])
-
-      // Convert comma separated rule group name list to string[].
-      .map(
-        (as: AltSpec) => (
-          (as.g =
-            'string' === typeof as.g
-              ? (as.g || '').split(/\s*,+\s*/)
-              : as.g || []),
-          as
-        ),
-      )
-
-      // Keep rule if any group name matches, or if there are no includes.
+function filterRules(rs: RuleSpec, cfg: Config): RuleSpec {
+  // Build a fresh def with cloned alt objects so callers (notably
+  // Parser.clone) can pass a parent rule-spec without leaking
+  // mutation back to the parent. Previously this function rewrote
+  // rs.def[rsn] in-place, which made child instances share filtered
+  // alt arrays with their parent and corrupted later parses on the
+  // parent.
+  const newDef: any = { ...rs.def }
+  const rsnames: (keyof RuleSpec['def'])[] = ['open', 'close']
+  for (const rsn of rsnames) {
+    newDef[rsn] = (rs.def[rsn] as AltSpec[])
+      // Clone each alt while normalising `g` from string to string[].
+      .map((as: AltSpec) => ({
+        ...as,
+        g:
+          'string' === typeof as.g
+            ? (as.g || '').split(/\s*,+\s*/)
+            : as.g || [],
+      }))
+      // Keep alt if any group name matches, or if no includes were set.
       .filter((as: AltSpec) =>
         cfg.rule.include.reduce(
           (a: boolean, g) => a || (null != as.g && -1 !== as.g.indexOf(g)),
           0 === cfg.rule.include.length,
         ),
       )
-
-      // Drop rule if any group name matches, unless there are no excludes.
+      // Drop alt if any group name matches an exclude.
       .filter((as: AltSpec) =>
         cfg.rule.exclude.reduce(
           (a: boolean, g) => a && (null == as.g || -1 === as.g.indexOf(g)),
@@ -742,7 +744,12 @@ function filterRules(rs: RuleSpec, cfg: Config) {
       )
   }
 
-  return rs
+  // Preserve the RuleSpec prototype (it carries .open/.close/.fnref
+  // methods) by cloning via Object.create rather than spread.
+  const newRs: RuleSpec = Object.create(Object.getPrototypeOf(rs))
+  Object.assign(newRs, rs)
+  newRs.def = newDef
+  return newRs
 }
 
 function prop(obj: any, path: string, val?: any): any {

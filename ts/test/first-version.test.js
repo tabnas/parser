@@ -4,17 +4,19 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, Lexer } = require('..')
+const { Amagama, jsonic, Lexer } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 const pv_perf = require('./first-version-perf')
 
-let j = Amagama
+let j = am
 
 function tsvTest(name) {
   const entries = loadTSV(name)
   for (const { cols: [input, expected], row } of entries) {
     try {
-      assert.deepEqual(Amagama(input), JSON.parse(expected))
+      assert.deepEqual(J(input), JSON.parse(expected))
     } catch (err) {
       err.message = `${name} row ${row}: input=${input} expected=${expected}\n${err.message}`
       throw err
@@ -31,19 +33,19 @@ describe('first-version', function () {
   it('fv-funky-input', function () {
     // Object values are just returned
     assert.deepEqual('{"foo":1,"bar":"zed"}', 
-      JSON.stringify(j({ foo: 1, bar: 'zed' })),
+      JSON.stringify(j.parse({ foo: 1, bar: 'zed' })),
     )
 
-    assert.deepEqual('["a","b"]', JSON.stringify(j(['a', 'b'])))
+    assert.deepEqual('["a","b"]', JSON.stringify(j.parse(['a', 'b'])))
 
     // DIFF a: -> {a:null}
-    assert.deepEqual(j('a:'), { a: null })
+    assert.deepEqual(j.parse('a:'), { a: null })
 
     // DIFF b:\n -> {b:null}
-    assert.deepEqual(j('b:\n'), { b: null })
+    assert.deepEqual(j.parse('b:\n'), { b: null })
 
     // DIFF c:\r => {c:null}
-    assert.deepEqual(j('c:\r'), { c: null })
+    assert.deepEqual(j.parse('c:\r'), { c: null })
   })
 
   it('fv-types', function () {
@@ -59,7 +61,7 @@ describe('first-version', function () {
   })
 
   it('fv-empty', function () {
-    // DIFF expect(j("")).equal('{}')
+    // DIFF expect(j.parse("")).equal('{}')
   })
 
   it('fv-arrays', function () {
@@ -71,10 +73,10 @@ describe('first-version', function () {
   })
 
   it('fv-strings', function () {
-    assert.deepEqual(j('a:\'\',b:""'), { a: '', b: '' })
+    assert.deepEqual(j.parse('a:\'\',b:""'), { a: '', b: '' })
 
     assert.deepEqual(
-      j(
+      j.parse(
         "a:'x', aa: 'x' , b:'y\"z', bb: 'y\"z' ,bbb:\"y'z\", bbbb: \"y'z\", c:\"\\n\", d:'\\n'",
       ), {
       a: 'x',
@@ -196,23 +198,23 @@ describe('first-version', function () {
 
     x = '{}'
     g = js(jp(x))
-    assert.deepEqual(js(j(x)), g)
+    assert.deepEqual(js(j.parse(x)), g)
 
     x = ' \r\n\t{ \r\n\t} \r\n\t'
     g = js(jp(x))
-    assert.deepEqual(js(j(x)), g)
+    assert.deepEqual(js(j.parse(x)), g)
 
     x = ' \r\n\t{ \r\n\t"a":1 \r\n\t} \r\n\t'
     g = js(jp(x))
-    assert.deepEqual(js(j(x)), g)
+    assert.deepEqual(js(j.parse(x)), g)
 
     x = '{"a":[[{"b":1}],{"c":[{"d":1}]}]}'
     g = js(jp(x))
-    assert.deepEqual(js(j(x)), g)
+    assert.deepEqual(js(j.parse(x)), g)
 
     x = '[' + x + ']'
     g = js(jp(x))
-    assert.deepEqual(js(j(x)), g)
+    assert.deepEqual(js(j.parse(x)), g)
   })
 
   // NOTE: coverage tracing slows this down - a lot!

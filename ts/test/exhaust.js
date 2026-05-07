@@ -3,7 +3,9 @@
 const Util = require('util')
 const I = Util.inspect
 
-const { Amagama, Lexer } = require('..')
+const { Amagama, jsonic, Lexer } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 module.exports = exhaust
 
@@ -12,7 +14,7 @@ if (require.main === module) {
 }
 
 function exhaust(size, print) {
-  const j01 = Amagama.make()
+  const j01 = am.make()
 
   const config = j01.internal().config
   const opts = j01.options
@@ -75,7 +77,7 @@ function exhaust(size, print) {
       }
     }
     try {
-      let d = j01(ts.s)
+      let d = j01.parse(ts.s)
       rmc++
       //rm[''+ts.c+'|`'+ts.s+'`'] = d
     } catch (e) {

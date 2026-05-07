@@ -7,7 +7,7 @@
 import Fs from 'node:fs'
 
 import { bnf } from './bnf'
-import { Amagama } from './amagama'
+import { Amagama, jsonic } from './amagama'
 
 
 export async function run(argv: string[], console: Console) {
@@ -82,13 +82,13 @@ export async function run(argv: string[], console: Console) {
       samples.push({ label: inp, input: inp })
     }
 
-    const j = Amagama.make()
+    const j = new Amagama({ plugins: [jsonic] })
     j.grammar(spec)
 
     let failed = 0
     for (const { label, input } of samples) {
       try {
-        const tree = j(input)
+        const tree = j.parse(input)
         console.log(
           `ok: ${JSON.stringify(label)} -> ` +
           JSON.stringify(tree, null, args.space || undefined))

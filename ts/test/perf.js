@@ -1,10 +1,12 @@
 const Util = require('util')
 
-const { Amagama, Lexer } = require('..')
+const { Amagama, jsonic, Lexer } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const config = Amagama.internal().config
-const opts = Amagama.make().options
+const opts = am.make().options
 
-const ZZ = Amagama.make().token.ZZ
+const ZZ = am.make().token.ZZ
 
 let inputs = [
   {
@@ -59,11 +61,11 @@ function run_parse() {
 function count_parse(input) {
   let start = Date.now()
 
-  let json = JSON.stringify(Amagama(input))
+  let json = JSON.stringify(J(input))
 
   // warm up
   while (Date.now() - start < 2000) {
-    Amagama(input)
+    J(input)
     JSON.parse(json)
   }
 
@@ -71,7 +73,7 @@ function count_parse(input) {
   start = Date.now()
 
   while (Date.now() - start < 1000) {
-    Amagama(input)
+    J(input)
     count++
   }
 
@@ -83,5 +85,5 @@ function count_parse(input) {
     json_count++
   }
 
-  return [count, json_count, Amagama(input)]
+  return [count, json_count, J(input)]
 }

@@ -11,7 +11,9 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 function defineDirective(j, { name, open, action }) {
   const tokenName = '#OD_' + name
@@ -30,7 +32,7 @@ function defineDirective(j, { name, open, action }) {
 }
 
 function makeJ() {
-  const j = Amagama.make()
+  const j = am.make()
   defineDirective(j, {
     name: 'upper',
     open: '@up',
@@ -48,42 +50,42 @@ describe('directive-grammar', () => {
   const j = makeJ()
 
   it('upper-string', () => {
-    assert.equal(j('@up "hello"'), 'HELLO')
+    assert.equal(j.parse('@up "hello"'), 'HELLO')
   })
 
   it('upper-bare', () => {
-    assert.equal(j('@up hello'), 'HELLO')
+    assert.equal(j.parse('@up hello'), 'HELLO')
   })
 
   it('upper-number', () => {
-    assert.equal(j('@up 42'), '42')
+    assert.equal(j.parse('@up 42'), '42')
   })
 
   it('wrap-number', () => {
-    assert.deepEqual(j('@wrap 42'), { wrapped: 42 })
+    assert.deepEqual(j.parse('@wrap 42'), { wrapped: 42 })
   })
 
   it('wrap-keyword', () => {
-    assert.deepEqual(j('@wrap true'), { wrapped: true })
+    assert.deepEqual(j.parse('@wrap true'), { wrapped: true })
   })
 
   it('directive-in-list', () => {
-    assert.deepEqual(j('[1, @up "x", 2]'), [1, 'X', 2])
+    assert.deepEqual(j.parse('[1, @up "x", 2]'), [1, 'X', 2])
   })
 
   it('directive-in-map', () => {
-    assert.deepEqual(j('{a: @up "v", b: @wrap 3}'), { a: 'V', b: { wrapped: 3 } })
+    assert.deepEqual(j.parse('{a: @up "v", b: @wrap 3}'), { a: 'V', b: { wrapped: 3 } })
   })
 
   it('nested-directives', () => {
-    assert.deepEqual(j('@wrap @up "hi"'), { wrapped: 'HI' })
+    assert.deepEqual(j.parse('@wrap @up "hi"'), { wrapped: 'HI' })
   })
 
   it('directive-wrapping-list', () => {
-    assert.deepEqual(j('@wrap [1, @up "x"]'), { wrapped: [1, 'X'] })
+    assert.deepEqual(j.parse('@wrap [1, @up "x"]'), { wrapped: [1, 'X'] })
   })
 
   it('directive-wrapping-map', () => {
-    assert.deepEqual(j('@wrap {k: @up "v"}'), { wrapped: { k: 'V' } })
+    assert.deepEqual(j.parse('@wrap {k: @up "v"}'), { wrapped: { k: 'V' } })
   })
 })

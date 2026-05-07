@@ -2,9 +2,16 @@
 
 import Fs from 'node:fs'
 
-import { Amagama, Plugin, Bag, util } from './amagama'
+import { Amagama, jsonic, Plugin, Bag, util } from './amagama'
 
 import { Debug } from './debug'
+
+// Default parser used by handle_props() to parse CLI option values.
+// Created lazily to avoid front-loading work on --help.
+let _defaultParser: Amagama | undefined
+function defaultParser(): Amagama {
+  return (_defaultParser ??= new Amagama({ plugins: [jsonic] }))
+}
 
 export async function run(argv: string[], console: Console) {
   const args = {
@@ -72,7 +79,7 @@ export async function run(argv: string[], console: Console) {
   options.debug = options.debug || {}
   options.debug.get_console = () => console
 
-  let amagama = Amagama.make(options)
+  let amagama = new Amagama({ ...options, plugins: [jsonic] })
 
   for (let pn in plugins) {
     amagama.use(plugins[pn], options.plugin?.[pn] || {})
@@ -86,23 +93,23 @@ export async function run(argv: string[], console: Console) {
 
   for (let fp of args.files) {
     if ('string' === typeof fp && '' !== fp) {
-      util.deep(data, { val: amagama(Fs.readFileSync(fp).toString(), meta) })
+      util.deep(data, { val: amagama.parse(Fs.readFileSync(fp).toString(), meta) })
     }
   }
 
   if (0 === args.sources.length || args.stdin) {
     let stdin = await read_stdin(console)
-    util.deep(data, { val: amagama(stdin, meta) })
+    util.deep(data, { val: amagama.parse(stdin, meta) })
   }
 
   for (let src of args.sources) {
-    util.deep(data, { val: amagama(src, meta) })
+    util.deep(data, { val: amagama.parse(src, meta) })
   }
 
   options.JSON =
     null == options.JSON || 'object' !== typeof options.JSON ? {} : options.JSON
-  let replacer = Amagama(options.JSON.replacer)
-  let space = Amagama(options.JSON.space)
+  let replacer = defaultParser().parse(options.JSON.replacer)
+  let space = defaultParser().parse(options.JSON.space)
 
   replacer = Array.isArray(replacer)
     ? replacer
@@ -136,7 +143,7 @@ function handle_props(propvals: string[]): Bag {
   for (let propval of propvals) {
     let pv = propval.split(/=/)
     if ('' !== pv[0] && '' !== pv[1]) {
-      let val = Amagama(pv[1])
+      let val = defaultParser().parse(pv[1])
       util.prop(out, pv[0], val)
     }
   }

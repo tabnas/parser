@@ -3,7 +3,9 @@
 const Util = require('util')
 const I = Util.inspect
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 module.exports = large
 
@@ -12,14 +14,14 @@ if (require.main === module) {
 }
 
 function large(size, print) {
-  const j01 = Amagama.make()
+  const j01 = am.make()
 
   const v0 = 'a'.repeat(1000 * size)
   const s0 = '"' + v0 + '"'
 
   print && console.log('LEN:', v0.length)
   const start = Date.now()
-  const o0 = Amagama(s0)
+  const o0 = J(s0)
   const ok = v0 == o0
   print && console.log('EQL:', ok)
   print && console.log('DUR:', Date.now() - start)

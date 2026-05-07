@@ -4,15 +4,17 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, AmagamaError, makeRule, makeFixedMatcher } = require('..')
+const { Amagama, jsonic, AmagamaError, makeRule, makeFixedMatcher } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { Debug } = require('../dist/debug')
 
-let j = Amagama
+let j = am
 let { keys } = j.util
 
 describe('custom', () => {
   it('fixed-tokens', () => {
-    let j = Amagama.make({
+    let j = am.make({
       fixed: {
         token: {
           '#NOT': '~',
@@ -40,7 +42,7 @@ describe('custom', () => {
       ])
     })
 
-    let out = j('a:~,b:1,c:~,d:=>,e::-,f:##,g:///,h:a,i:# foo')
+    let out = j.parse('a:~,b:1,c:~,d:=>,e::-,f:##,g:///,h:a,i:# foo')
 
     assert.deepEqual(out, {
       a: '<not>',
@@ -61,7 +63,7 @@ describe('custom', () => {
       tuesday: 'tue',
     }
 
-    let j = Amagama.make()
+    let j = am.make()
 
     j.options({
       match: {
@@ -106,21 +108,21 @@ describe('custom', () => {
       return rs
     })
 
-    assert.deepEqual(j('a:1', { xlog: -1 }), { a: 1 })
-    assert.deepEqual(j('a:x', { xlog: -1 }), { a: 'x' })
-    assert.throws(() => j('a*:1'), /unexpected/)
+    assert.deepEqual(j.parse('a:1', { xlog: -1 }), { a: 1 })
+    assert.deepEqual(j.parse('a:x', { xlog: -1 }), { a: 'x' })
+    assert.throws(() => j.parse('a*:1'), /unexpected/)
 
-    assert.deepEqual(j('a:monday', { xlog: -1 }), { a: 'mon' })
+    assert.deepEqual(j.parse('a:monday', { xlog: -1 }), { a: 'mon' })
 
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
-    assert.deepEqual(Amagama('a*:1'), { 'a*': 1 })
-    assert.deepEqual(Amagama('b:monday'), { b: 'monday' })
+    assert.deepEqual(J('a:1'), { a: 1 })
+    assert.deepEqual(J('a*:1'), { 'a*': 1 })
+    assert.deepEqual(J('b:monday'), { b: 'monday' })
   })
 
   it('string-replace', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
-    let j0 = Amagama.make({
+    let j0 = am.make({
       string: {
         replace: {
           A: 'B',
@@ -129,11 +131,11 @@ describe('custom', () => {
       },
     })
 
-    assert.deepEqual(j0('"aAc"'), 'aBc')
-    assert.deepEqual(j0('"aAcDe"'), 'aBce')
-    assert.throws(() => j0('x:\n "Ac\n"'), /unprintable.*2:6/s)
+    assert.deepEqual(j0.parse('"aAc"'), 'aBc')
+    assert.deepEqual(j0.parse('"aAcDe"'), 'aBce')
+    assert.throws(() => j0.parse('x:\n "Ac\n"'), /unprintable.*2:6/s)
 
-    let j1 = Amagama.make({
+    let j1 = am.make({
       string: {
         replace: {
           A: 'B',
@@ -142,10 +144,10 @@ describe('custom', () => {
       },
     })
 
-    assert.deepEqual(j1('"aAc\n"'), 'aBcX')
-    assert.throws(() => j1('x:\n "ac\n\r"'), /unprintable.*2:7/s)
+    assert.deepEqual(j1.parse('"aAc\n"'), 'aBcX')
+    assert.throws(() => j1.parse('x:\n "ac\n\r"'), /unprintable.*2:7/s)
 
-    let j2 = Amagama.make({
+    let j2 = am.make({
       string: {
         replace: {
           A: 'B',
@@ -154,24 +156,24 @@ describe('custom', () => {
       },
     })
 
-    assert.deepEqual(j2('"aAc\n"'), 'aBc')
-    assert.throws(() => j2('x:\n "ac\n\r"'), /unprintable.*2:7/s)
+    assert.deepEqual(j2.parse('"aAc\n"'), 'aBc')
+    assert.throws(() => j2.parse('x:\n "ac\n\r"'), /unprintable.*2:7/s)
   })
 
   it('parser-empty-clean', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
-    let j = Amagama.empty()
+    let j = am.empty()
     assert.deepEqual(keys({ ...j.token }).length, 0)
     assert.deepEqual(keys({ ...j.fixed }).length, 0)
     assert.deepEqual(Object.keys(j.rule()), [])
-    assert.deepEqual(j('a:1'), undefined)
+    assert.deepEqual(j.parse('a:1'), undefined)
   })
 
   it('parser-empty-fixed', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
-    let j = Amagama.empty({
+    let j = am.empty({
       fixed: {
         lex: true,
         token: {
@@ -197,7 +199,7 @@ describe('custom', () => {
       rs.open({ s: [rs.tin('#T0')] }).bc((r) => (r.node = '~T0~'))
     })
 
-    assert.deepEqual(j('t0', { xlog: -1 }), '~T0~')
+    assert.deepEqual(j.parse('t0', { xlog: -1 }), '~T0~')
   })
 
   it('parser-handler-actives', () => {
@@ -228,7 +230,7 @@ describe('custom', () => {
         .ac(() => (b += 'ac;'))
     })
 
-    assert.deepEqual(j('a'), 1111)
+    assert.deepEqual(j.parse('a'), 1111)
     assert.deepEqual(b, 'bo;') // m: is too late to avoid bo
   })
 
@@ -247,22 +249,22 @@ describe('custom', () => {
     j.rule('top', (rs) =>
       rsdef(rs).bo((rule, ctx) => ctx.t0.bad('foo', { bar: 'BO' })),
     )
-    assert.throws(() => j('a'), /foo.*BO/s)
+    assert.throws(() => j.parse('a'), /foo.*BO/s)
 
     j.rule('top', (rs) =>
       rsdef(rs).ao((rule, ctx) => ctx.t0.bad('foo', { bar: 'AO' })),
     )
-    assert.throws(() => j('a'), /foo.*AO/s)
+    assert.throws(() => j.parse('a'), /foo.*AO/s)
 
     j.rule('top', (rs) =>
       rsdef(rs).bc((rule, ctx) => ctx.t0.bad('foo', { bar: 'BC' })),
     )
-    assert.throws(() => j('a'), /foo.*BC/s)
+    assert.throws(() => j.parse('a'), /foo.*BC/s)
 
     j.rule('top', (rs) =>
       rsdef(rs).ac((rule, ctx) => ctx.t0.bad('foo', { bar: 'AC' })),
     )
-    assert.throws(() => j('a'), /foo.*AC/s)
+    assert.throws(() => j.parse('a'), /foo.*AC/s)
   })
 
   it('parser-before-after-state', () => {
@@ -276,16 +278,16 @@ describe('custom', () => {
         .close([{ s: [AA, AA] }])
 
     j.rule('top', (rs) => rsdef(rs).bo((rule) => (rule.node = 'BO')))
-    assert.deepEqual(j('a'), 'BO')
+    assert.deepEqual(j.parse('a'), 'BO')
 
     j.rule('top', (rs) => rsdef(rs).ao((rule) => (rule.node = 'AO')))
-    assert.deepEqual(j('a'), 'AO')
+    assert.deepEqual(j.parse('a'), 'AO')
 
     j.rule('top', (rs) => rsdef(rs).bc((rule) => (rule.node = 'BC')))
-    assert.deepEqual(j('a'), 'BC')
+    assert.deepEqual(j.parse('a'), 'BC')
 
     j.rule('top', (rs) => rsdef(rs).ac((rule) => (rule.node = 'AC')))
-    assert.deepEqual(j('a'), 'AC')
+    assert.deepEqual(j.parse('a'), 'AC')
   })
 
   it('parser-empty-seq', () => {
@@ -296,7 +298,7 @@ describe('custom', () => {
     let rsdef = (rs) => rs.clear().open([{ s: [AA] }])
     j.rule('top', (rs) => rsdef(rs).bo((rule) => (rule.node = 4444)))
 
-    assert.deepEqual(j('a'), 4444)
+    assert.deepEqual(j.parse('a'), 4444)
   })
 
   it('parser-alt-ops', () => {
@@ -333,7 +335,7 @@ describe('custom', () => {
       )
     })
 
-    assert.deepEqual(j('a', { xlog: -1 }), { o: 'A' })
+    assert.deepEqual(j.parse('a', { xlog: -1 }), { o: 'A' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), ['gz', 'ga'])
 
     // Prepend by default
@@ -343,7 +345,7 @@ describe('custom', () => {
       )
     })
 
-    assert.deepEqual(j('ab'), { o: 'AB' })
+    assert.deepEqual(j.parse('ab'), { o: 'AB' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), [
       'gb',
       'gz',
@@ -359,7 +361,7 @@ describe('custom', () => {
       )
     })
 
-    assert.deepEqual(j('abc'), { o: 'ABC' })
+    assert.deepEqual(j.parse('abc'), { o: 'ABC' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), [
       'gb',
       'gz',
@@ -377,7 +379,7 @@ describe('custom', () => {
       )
     })
 
-    assert.deepEqual(j('bcd'), { o: 'BCD' })
+    assert.deepEqual(j.parse('bcd'), { o: 'BCD' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), [
       'gb',
       'gz',
@@ -395,7 +397,7 @@ describe('custom', () => {
       )
     })
 
-    assert.deepEqual(j('bcde'), { o: 'BCDE' })
+    assert.deepEqual(j.parse('bcde'), { o: 'BCDE' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), [
       'gz',
       'gb', // 0 -> 1
@@ -409,7 +411,7 @@ describe('custom', () => {
       j.rule('top', (rs) => rs.open([], { delete: [1, 3] }))
     })
 
-    assert.deepEqual(j('cd'), { o: 'CD' })
+    assert.deepEqual(j.parse('cd'), { o: 'CD' })
     assert.deepEqual(j.rule('top').def.open.map((alt) => alt.g[0]), [
       'gz',
       'gd',
@@ -428,8 +430,8 @@ describe('custom', () => {
       rsdef(rs).ac((rule) => (rule.node = rule.o0.val + rule.o1.val)),
     )
 
-    assert.deepEqual(j('a\nb'), 'ab')
-    assert.throws(() => j('AAA,'), /unexpected.*AAA/)
+    assert.deepEqual(j.parse('a\nb'), 'ab')
+    assert.throws(() => j.parse('AAA,'), /unexpected.*AAA/)
   })
 
   it('parser-token-error-why', () => {
@@ -445,11 +447,11 @@ describe('custom', () => {
         .ac((rule, ctx) => ctx.t0.bad('foo', { bar: 'AAA' })),
     )
 
-    assert.throws(() => j('a'), /foo.*AAA/s)
+    assert.throws(() => j.parse('a'), /foo.*AAA/s)
   })
 
   it('parser-multi-alts', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
     let j = make_norules({ rule: { start: 'top' } })
 
@@ -473,9 +475,9 @@ describe('custom', () => {
         .ac((r) => (r.node = (r.o0.src + r.o1.src).toUpperCase())),
     )
 
-    assert.deepEqual(j('ab'), 'AB')
-    assert.deepEqual(j('ac'), 'AC')
-    assert.throws(() => j('ad'), /unexpected.*d/)
+    assert.deepEqual(j.parse('ab'), 'AB')
+    assert.deepEqual(j.parse('ac'), 'AC')
+    assert.throws(() => j.parse('ad'), /unexpected.*d/)
   })
 
   it('parser-value', () => {
@@ -488,7 +490,7 @@ describe('custom', () => {
     let o0 = { x: 1 }
     let f1 = () => 'F1'
 
-    let j = Amagama.make({
+    let j = am.make({
       value: {
         def: {
           foo: { val: 'FOO' },
@@ -507,28 +509,28 @@ describe('custom', () => {
       },
     })
 
-    assert.deepEqual(j('foo'), 'FOO')
-    assert.deepEqual(j('bar'), 'BAR')
-    assert.deepEqual(j('zed'), 123)
-    assert.deepEqual(j('qaz'), false)
+    assert.deepEqual(j.parse('foo'), 'FOO')
+    assert.deepEqual(j.parse('bar'), 'BAR')
+    assert.deepEqual(j.parse('zed'), 123)
+    assert.deepEqual(j.parse('qaz'), false)
 
     // Options get copied, so `obj` should remain {x:1}
     o0.x = 2
-    assert.deepEqual(j('obj'), { x: 1 })
+    assert.deepEqual(j.parse('obj'), { x: 1 })
 
-    assert.deepEqual(j('car'), { m: true })
-    assert.deepEqual(j('car') instanceof Car, true)
+    assert.deepEqual(j.parse('car'), { m: true })
+    assert.deepEqual(j.parse('car') instanceof Car, true)
 
-    assert.deepEqual(j('fun'), 'f0')
-    assert.deepEqual(j('high'), f1)
+    assert.deepEqual(j.parse('fun'), 'f0')
+    assert.deepEqual(j.parse('high'), f1)
 
     // constructor is protected
-    assert.deepEqual(j('ferry'), { m: true })
-    assert.deepEqual(j('ferry') instanceof Car, true)
+    assert.deepEqual(j.parse('ferry'), { m: true })
+    assert.deepEqual(j.parse('ferry') instanceof Car, true)
   })
 
   it('parser-mixed-token', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
     let cs = [
       'Q', // generic char
@@ -536,7 +538,7 @@ describe('custom', () => {
     ]
 
     for (let c of cs) {
-      let j = Amagama.make()
+      let j = am.make()
       j.options({
         fixed: {
           token: {
@@ -567,21 +569,21 @@ describe('custom', () => {
         ])
       })
 
-      assert.deepEqual(j('[' + c + 'x' + c + 'y]'), ['@x', '@y'])
+      assert.deepEqual(j.parse('[' + c + 'x' + c + 'y]'), ['@x', '@y'])
     }
   })
 
   it('merge', () => {
     // verify standard merges
-    assert.deepEqual(Amagama('a:1,a:2'), { a: 2 })
-    assert.deepEqual(Amagama('a:1,a:2,a:3'), { a: 3 })
-    assert.deepEqual(Amagama('a:{x:1},a:{y:2}'), { a: { x: 1, y: 2 } })
-    assert.deepEqual(Amagama('a:{x:1},a:{y:2},a:{z:3}'), {
+    assert.deepEqual(J('a:1,a:2'), { a: 2 })
+    assert.deepEqual(J('a:1,a:2,a:3'), { a: 3 })
+    assert.deepEqual(J('a:{x:1},a:{y:2}'), { a: { x: 1, y: 2 } })
+    assert.deepEqual(J('a:{x:1},a:{y:2},a:{z:3}'), {
       a: { x: 1, y: 2, z: 3 },
     })
 
     let b = ''
-    let j = Amagama.make({
+    let j = am.make({
       map: {
         merge: (prev, curr) => {
           return prev + curr
@@ -589,12 +591,12 @@ describe('custom', () => {
       },
     })
 
-    assert.deepEqual(j('a:1,a:2'), { a: 3 })
-    assert.deepEqual(j('a:1,a:2,a:3'), { a: 6 })
+    assert.deepEqual(j.parse('a:1,a:2'), { a: 3 })
+    assert.deepEqual(j.parse('a:1,a:2,a:3'), { a: 6 })
   })
 
   it('parser-condition-depth', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
     let j = make_norules({
       fixed: { token: { '#F': 'f', '#B': 'b' } },
@@ -633,7 +635,7 @@ describe('custom', () => {
         .ao((r) => (r.node.o += 'B')),
     )
 
-    assert.deepEqual(j('fb'), { o: 'TFB' })
+    assert.deepEqual(j.parse('fb'), { o: 'TFB' })
 
     j.rule('bar', (rs) =>
       rs
@@ -642,11 +644,11 @@ describe('custom', () => {
         .ao((r) => (r.node.o += 'B')),
     )
 
-    assert.throws(() => j('fb'), /unexpected/)
+    assert.throws(() => j.parse('fb'), /unexpected/)
   })
 
   it('parser-condition-counter', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
     let j = make_norules({
       fixed: { token: { '#F': 'f', '#B': 'b' } },
@@ -687,7 +689,7 @@ describe('custom', () => {
         .ao((r) => (r.node.o += 'B')),
     )
 
-    assert.deepEqual(j('fb'), { o: 'TFB' })
+    assert.deepEqual(j.parse('fb'), { o: 'TFB' })
 
     j.rule('bar', (rs) =>
       rs
@@ -701,11 +703,11 @@ describe('custom', () => {
         .ao((r) => (r.node.o += 'B')),
     )
 
-    assert.throws(() => j('fb'), /unexpected/)
+    assert.throws(() => j.parse('fb'), /unexpected/)
   })
 
   it('parser-keep-propagates', () => {
-    assert.deepEqual(Amagama('a:1'), { a: 1 })
+    assert.deepEqual(J('a:1'), { a: 1 })
 
     let j = make_norules({
       fixed: { token: { '#F': 'f', '#B': 'b', '#Z': 'z' } },
@@ -741,7 +743,7 @@ describe('custom', () => {
           .bc((r) => r.node.out.push(`BC-ZED<${r.k.color},${r.u.planet}>`))
       })
 
-    assert.deepEqual(j('fbz'), {
+    assert.deepEqual(j.parse('fbz'), {
       out: [
         'AO-TOP<red,mars>',
         'AO-FOO<red,undefined>',
@@ -757,7 +759,7 @@ describe('custom', () => {
 })
 
 function make_norules(opts) {
-  let j = Amagama.make(opts)
+  let j = am.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j

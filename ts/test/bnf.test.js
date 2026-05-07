@@ -6,7 +6,9 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const {
   bnf,
   parseBnf,
@@ -223,62 +225,62 @@ describe('bnf', () => {
   describe('EBNF desugaring', () => {
 
     it('optional: accepts presence or absence', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "hi" [ "there" ]')
-      assert.doesNotThrow(() => j('hi'))
-      assert.doesNotThrow(() => j('hi there'))
-      assert.throws(() => j('hi nope'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('hi'))
+      assert.doesNotThrow(() => j.parse('hi there'))
+      assert.throws(() => j.parse('hi nope'), /unexpected/)
     })
 
 
     it('star: zero or more', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = *"x" "end"')
-      assert.doesNotThrow(() => j('end'))
-      assert.doesNotThrow(() => j('x end'))
-      assert.doesNotThrow(() => j('x x x end'))
-      assert.throws(() => j('y end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('end'))
+      assert.doesNotThrow(() => j.parse('x end'))
+      assert.doesNotThrow(() => j.parse('x x x end'))
+      assert.throws(() => j.parse('y end'), /unexpected/)
     })
 
 
     it('plus: one or more', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = 1*"x" "end"')
-      assert.doesNotThrow(() => j('x end'))
-      assert.doesNotThrow(() => j('x x x end'))
-      assert.throws(() => j('end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('x end'))
+      assert.doesNotThrow(() => j.parse('x x x end'))
+      assert.throws(() => j.parse('end'), /unexpected/)
     })
 
 
     it('bounded repetition m*n', () => {
       // ABNF 2*4"x" matches 2, 3, or 4 occurrences.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = 2*4"x" "end"')
-      assert.throws(() => j('end'), /unexpected/)        // 0
-      assert.throws(() => j('x end'), /unexpected/)      // 1
-      assert.doesNotThrow(() => j('x x end'))            // 2
-      assert.doesNotThrow(() => j('x x x end'))          // 3
-      assert.doesNotThrow(() => j('x x x x end'))        // 4
-      assert.throws(() => j('x x x x x end'), /unexpected/) // 5
+      assert.throws(() => j.parse('end'), /unexpected/)        // 0
+      assert.throws(() => j.parse('x end'), /unexpected/)      // 1
+      assert.doesNotThrow(() => j.parse('x x end'))            // 2
+      assert.doesNotThrow(() => j.parse('x x x end'))          // 3
+      assert.doesNotThrow(() => j.parse('x x x x end'))        // 4
+      assert.throws(() => j.parse('x x x x x end'), /unexpected/) // 5
     })
 
 
     it('exact repetition n', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = 3"x" "end"')
-      assert.throws(() => j('x x end'), /unexpected/)
-      assert.doesNotThrow(() => j('x x x end'))
-      assert.throws(() => j('x x x x end'), /unexpected/)
+      assert.throws(() => j.parse('x x end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('x x x end'))
+      assert.throws(() => j.parse('x x x x end'), /unexpected/)
     })
 
 
     it('upper-bounded repetition *n', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = *2"x" "end"')
-      assert.doesNotThrow(() => j('end'))
-      assert.doesNotThrow(() => j('x end'))
-      assert.doesNotThrow(() => j('x x end'))
-      assert.throws(() => j('x x x end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('end'))
+      assert.doesNotThrow(() => j.parse('x end'))
+      assert.doesNotThrow(() => j.parse('x x end'))
+      assert.throws(() => j.parse('x x x end'), /unexpected/)
     })
 
   })
@@ -288,51 +290,51 @@ describe('bnf', () => {
 
     it('single hex value matches as the corresponding char', () => {
       // %x61 = 'a'
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %x61')
-      assert.doesNotThrow(() => j('a'))
-      assert.throws(() => j('b'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('a'))
+      assert.throws(() => j.parse('b'), /unexpected/)
     })
 
 
     it('decimal and binary bases match the same char', () => {
       // %d97 = %x61 = %b1100001 = 'a'
-      const dec = Amagama.make()
+      const dec = am.make()
       dec.bnf('g = %d97')
-      assert.doesNotThrow(() => dec('a'))
+      assert.doesNotThrow(() => dec.parse('a'))
 
-      const bin = Amagama.make()
+      const bin = am.make()
       bin.bnf('g = %b1100001')
-      assert.doesNotThrow(() => bin('a'))
+      assert.doesNotThrow(() => bin.parse('a'))
     })
 
 
     it('concatenated code points build a multi-char literal', () => {
       // %x66.6f.6f = 'foo'
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %x66.6f.6f')
-      assert.doesNotThrow(() => j('foo'))
-      assert.throws(() => j('bar'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('foo'))
+      assert.throws(() => j.parse('bar'), /unexpected/)
     })
 
 
     it('ranges match any single char in the range', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %x30-39')
-      assert.doesNotThrow(() => j('0'))
-      assert.doesNotThrow(() => j('5'))
-      assert.doesNotThrow(() => j('9'))
-      assert.throws(() => j('a'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('0'))
+      assert.doesNotThrow(() => j.parse('5'))
+      assert.doesNotThrow(() => j.parse('9'))
+      assert.throws(() => j.parse('a'), /unexpected/)
     })
 
 
     it('ranges compose with ABNF repetition', () => {
       // 1*DIGIT where DIGIT = %x30-39.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('digits = 1*DIGIT\nDIGIT = %x30-39')
-      assert.doesNotThrow(() => j('1'))
-      assert.doesNotThrow(() => j('12345'))
-      assert.throws(() => j('abc'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('1'))
+      assert.doesNotThrow(() => j.parse('12345'))
+      assert.throws(() => j.parse('abc'), /unexpected/)
     })
 
   })
@@ -341,48 +343,48 @@ describe('bnf', () => {
   describe('ABNF case-insensitive strings', () => {
 
     it('bare "foo" matches in any case (ABNF default)', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "GET"')
-      assert.doesNotThrow(() => j('GET'))
-      assert.doesNotThrow(() => j('get'))
-      assert.doesNotThrow(() => j('Get'))
-      assert.doesNotThrow(() => j('gEt'))
+      assert.doesNotThrow(() => j.parse('GET'))
+      assert.doesNotThrow(() => j.parse('get'))
+      assert.doesNotThrow(() => j.parse('Get'))
+      assert.doesNotThrow(() => j.parse('gEt'))
     })
 
 
     it('%s"foo" forces a case-sensitive match', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %s"GET"')
-      assert.doesNotThrow(() => j('GET'))
-      assert.throws(() => j('get'), /unexpected/)
-      assert.throws(() => j('Get'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('GET'))
+      assert.throws(() => j.parse('get'), /unexpected/)
+      assert.throws(() => j.parse('Get'), /unexpected/)
     })
 
 
     it('%i"foo" is the explicit form of the default', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %i"GET"')
-      assert.doesNotThrow(() => j('GET'))
-      assert.doesNotThrow(() => j('get'))
+      assert.doesNotThrow(() => j.parse('GET'))
+      assert.doesNotThrow(() => j.parse('get'))
     })
 
 
     it('literal with no letters is case-independent regardless', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "+"')
-      assert.doesNotThrow(() => j('+'))
+      assert.doesNotThrow(() => j.parse('+'))
     })
 
 
     it('sensitive and insensitive variants of the same literal are distinct', () => {
       // %s"foo" (sensitive) only matches "foo" exactly; "foo"
       // (insensitive) accepts any case. Both should coexist.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = %s"foo" / "BAR"')
-      assert.doesNotThrow(() => j('foo'))
-      assert.throws(() => j('FOO'), /unexpected/)  // sensitive
-      assert.doesNotThrow(() => j('bar'))         // insensitive
-      assert.doesNotThrow(() => j('BAR'))
+      assert.doesNotThrow(() => j.parse('foo'))
+      assert.throws(() => j.parse('FOO'), /unexpected/)  // sensitive
+      assert.doesNotThrow(() => j.parse('bar'))         // insensitive
+      assert.doesNotThrow(() => j.parse('BAR'))
     })
 
   })
@@ -391,30 +393,30 @@ describe('bnf', () => {
   describe('ABNF incremental alternatives', () => {
 
     it('name =/ alt folds into the earlier production', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('command = "get"\ncommand =/ "post"\ncommand =/ "delete"')
-      assert.doesNotThrow(() => j('get'))
-      assert.doesNotThrow(() => j('post'))
-      assert.doesNotThrow(() => j('delete'))
-      assert.throws(() => j('put'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('get'))
+      assert.doesNotThrow(() => j.parse('post'))
+      assert.doesNotThrow(() => j.parse('delete'))
+      assert.throws(() => j.parse('put'), /unexpected/)
     })
 
 
     it('a single =/ appends one alternative', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "a"\ng =/ "b"')
-      assert.doesNotThrow(() => j('a'))
-      assert.doesNotThrow(() => j('b'))
+      assert.doesNotThrow(() => j.parse('a'))
+      assert.doesNotThrow(() => j.parse('b'))
     })
 
 
     it('multi-alt increments merge cleanly', () => {
       // An increment can itself introduce several alternatives.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "a"\ng =/ "b" / "c"')
-      assert.doesNotThrow(() => j('a'))
-      assert.doesNotThrow(() => j('b'))
-      assert.doesNotThrow(() => j('c'))
+      assert.doesNotThrow(() => j.parse('a'))
+      assert.doesNotThrow(() => j.parse('b'))
+      assert.doesNotThrow(() => j.parse('c'))
     })
 
 
@@ -448,18 +450,18 @@ describe('bnf', () => {
 
 
     it('a sequence can wrap across multiple lines', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf([
         'req = "GET"',
         '      "path"',
         '      "end"',
       ].join('\n'))
-      assert.doesNotThrow(() => j('GET path end'))
+      assert.doesNotThrow(() => j.parse('GET path end'))
     })
 
 
     it('wrapped rules sit alongside normal rules without interaction', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf([
         'verb = "GET"',
         '     / "POST"',
@@ -467,10 +469,10 @@ describe('bnf', () => {
         '     / "/api"',
       ].join('\n'))
       // verb rule accepts both methods
-      const jverb = Amagama.make()
+      const jverb = am.make()
       jverb.bnf('verb = "GET" / "POST"')
-      assert.doesNotThrow(() => jverb('GET'))
-      assert.doesNotThrow(() => jverb('POST'))
+      assert.doesNotThrow(() => jverb.parse('GET'))
+      assert.doesNotThrow(() => jverb.parse('POST'))
     })
 
   })
@@ -479,47 +481,47 @@ describe('bnf', () => {
   describe('ABNF core rules (RFC 5234 Appendix B.1)', () => {
 
     it('DIGIT is auto-included when referenced', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('number = 1*DIGIT')
-      assert.doesNotThrow(() => j('12345'))
-      assert.throws(() => j('abc'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('12345'))
+      assert.throws(() => j.parse('abc'), /unexpected/)
     })
 
 
     it('ALPHA matches upper and lower letters', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('word = 1*ALPHA')
-      assert.doesNotThrow(() => j('hello'))
-      assert.doesNotThrow(() => j('WORLD'))
-      assert.doesNotThrow(() => j('MixedCase'))
-      assert.throws(() => j('123'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('hello'))
+      assert.doesNotThrow(() => j.parse('WORLD'))
+      assert.doesNotThrow(() => j.parse('MixedCase'))
+      assert.throws(() => j.parse('123'), /unexpected/)
     })
 
 
     it('HEXDIG transitively pulls in DIGIT', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('hex = 1*HEXDIG')
-      assert.doesNotThrow(() => j('DEADBEEF'))
-      assert.doesNotThrow(() => j('12AB'))
-      assert.throws(() => j('xyz'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('DEADBEEF'))
+      assert.doesNotThrow(() => j.parse('12AB'))
+      assert.throws(() => j.parse('xyz'), /unexpected/)
     })
 
 
     it('BIT matches 0 or 1', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('bits = 1*BIT')
-      assert.doesNotThrow(() => j('0101'))
-      assert.throws(() => j('012'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('0101'))
+      assert.throws(() => j.parse('012'), /unexpected/)
     })
 
 
     it('user can override a core rule', () => {
       // Locally redefining DIGIT as "only odd digits" wins over
       // the core definition.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('number = 1*DIGIT\nDIGIT = "1" / "3" / "5" / "7" / "9"')
-      assert.doesNotThrow(() => j('135'))
-      assert.throws(() => j('246'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('135'))
+      assert.throws(() => j.parse('246'), /unexpected/)
     })
 
 
@@ -531,31 +533,31 @@ describe('bnf', () => {
 
 
     it('grouping selects among alternatives', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = ("a" / "b") "c"')
-      assert.doesNotThrow(() => j('a c'))
-      assert.doesNotThrow(() => j('b c'))
-      assert.throws(() => j('c'), /unexpected/)
-      assert.throws(() => j('x c'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('a c'))
+      assert.doesNotThrow(() => j.parse('b c'))
+      assert.throws(() => j.parse('c'), /unexpected/)
+      assert.throws(() => j.parse('x c'), /unexpected/)
     })
 
 
     it('group with plus: one or more sub-sequences', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = 1*("a" "b") "end"')
-      assert.doesNotThrow(() => j('a b end'))
-      assert.doesNotThrow(() => j('a b a b a b end'))
-      assert.throws(() => j('end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('a b end'))
+      assert.doesNotThrow(() => j.parse('a b a b a b end'))
+      assert.throws(() => j.parse('end'), /unexpected/)
     })
 
 
     it('group of alternatives with star', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = *("a" / "b") "end"')
-      assert.doesNotThrow(() => j('end'))
-      assert.doesNotThrow(() => j('a end'))
-      assert.doesNotThrow(() => j('a b a end'))
-      assert.throws(() => j('c end'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('end'))
+      assert.doesNotThrow(() => j.parse('a end'))
+      assert.doesNotThrow(() => j.parse('a b a end'))
+      assert.throws(() => j.parse('c end'), /unexpected/)
     })
 
   })
@@ -570,15 +572,15 @@ describe('bnf', () => {
   describe('fixture round-trips', () => {
 
     it('arith.bnf accepts precedence-free arithmetic', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('arith.bnf'))
-      assert.doesNotThrow(() => j('1'))
-      assert.doesNotThrow(() => j('1 + 2'))
-      assert.doesNotThrow(() => j('1 + 2 * 3'))
-      assert.doesNotThrow(() => j('( 1 + 2 ) * 3'))
-      assert.doesNotThrow(() => j('1 + ( 2 * 3 ) - 4 / 5'))
-      assert.throws(() => j('1 +'), /unexpected/)
-      assert.throws(() => j('+ 1'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('1'))
+      assert.doesNotThrow(() => j.parse('1 + 2'))
+      assert.doesNotThrow(() => j.parse('1 + 2 * 3'))
+      assert.doesNotThrow(() => j.parse('( 1 + 2 ) * 3'))
+      assert.doesNotThrow(() => j.parse('1 + ( 2 * 3 ) - 4 / 5'))
+      assert.throws(() => j.parse('1 +'), /unexpected/)
+      assert.throws(() => j.parse('+ 1'), /unexpected/)
     })
 
 
@@ -586,26 +588,26 @@ describe('bnf', () => {
       // The fixture uses simple single-letter terminals in place of
       // quoted strings until ABNF %x ranges arrive — exercise it
       // with matching inputs.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('json-subset.bnf'))
-      assert.doesNotThrow(() => j('1'))
-      assert.doesNotThrow(() => j('a'))
-      assert.doesNotThrow(() => j('{ a : 1 }'))
-      assert.doesNotThrow(() => j('[ 1 , 2 , 3 ]'))
-      assert.doesNotThrow(() => j('{ a : [ 1 , 2 ] , b : c }'))
-      assert.throws(() => j('{ a 1 }'), /unexpected/)  // missing colon
+      assert.doesNotThrow(() => j.parse('1'))
+      assert.doesNotThrow(() => j.parse('a'))
+      assert.doesNotThrow(() => j.parse('{ a : 1 }'))
+      assert.doesNotThrow(() => j.parse('[ 1 , 2 , 3 ]'))
+      assert.doesNotThrow(() => j.parse('{ a : [ 1 , 2 ] , b : c }'))
+      assert.throws(() => j.parse('{ a 1 }'), /unexpected/)  // missing colon
     })
 
 
     it('arith-leftrec.bnf parses the same language as arith.bnf', () => {
       // Same language, but written in the natural left-recursive form.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('arith-leftrec.bnf'))
-      assert.doesNotThrow(() => j('1'))
-      assert.doesNotThrow(() => j('1 + 2 * 3'))
-      assert.doesNotThrow(() => j('( 1 + 2 ) * 3'))
-      assert.doesNotThrow(() => j('1 / 2 + 3 - 4 * 5'))
-      assert.throws(() => j('+ 1'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('1'))
+      assert.doesNotThrow(() => j.parse('1 + 2 * 3'))
+      assert.doesNotThrow(() => j.parse('( 1 + 2 ) * 3'))
+      assert.doesNotThrow(() => j.parse('1 / 2 + 3 - 4 * 5'))
+      assert.throws(() => j.parse('+ 1'), /unexpected/)
     })
 
   })
@@ -658,17 +660,17 @@ describe('bnf', () => {
       // `a = a` adds nothing to the language (it just re-derives
       // P with no progress), so the pass drops it. The remaining alt
       // defines a's actual language.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('a = a / "x"')
-      assert.doesNotThrow(() => j('x'))
-      assert.throws(() => j('y'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('x'))
+      assert.throws(() => j.parse('y'), /unexpected/)
     })
 
 
     it('left-recursive grammar produces the same parses as the rewritten one', () => {
-      const j1 = Amagama.make()
+      const j1 = am.make()
       j1.bnf(loadFixture('arith.bnf'))
-      const j2 = Amagama.make()
+      const j2 = am.make()
       j2.bnf(loadFixture('arith-leftrec.bnf'))
       // The two grammars accept the same set of strings (we only
       // assert that both either accept or both reject — the trees
@@ -676,8 +678,8 @@ describe('bnf', () => {
       // differently).
       const samples = ['1', '1 + 2', '( 1 + 2 ) * 3', '1 / 2 + 3 - 4']
       for (const s of samples) {
-        assert.doesNotThrow(() => j1(s), `arith should accept ${s}`)
-        assert.doesNotThrow(() => j2(s), `arith-leftrec should accept ${s}`)
+        assert.doesNotThrow(() => j1.parse(s), `arith should accept ${s}`)
+        assert.doesNotThrow(() => j2.parse(s), `arith-leftrec should accept ${s}`)
       }
     })
 
@@ -704,41 +706,41 @@ describe('bnf', () => {
 
 
     it('two-rule cycle: accepts shortest seed derivation', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
       // p = q x ; q = z  → "z x"
-      assert.doesNotThrow(() => j('z x'))
+      assert.doesNotThrow(() => j.parse('z x'))
     })
 
 
     it('two-rule cycle: accepts one-step unfold', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
       // q = p y = (z x) y  ⇒  p = q x = z x y x
-      assert.doesNotThrow(() => j('z x y x'))
+      assert.doesNotThrow(() => j.parse('z x y x'))
     })
 
 
     it('two-rule cycle: accepts two-step unfold', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
       // p = z x y x y x (iterate once more)
-      assert.doesNotThrow(() => j('z x y x y x'))
+      assert.doesNotThrow(() => j.parse('z x y x y x'))
     })
 
 
     it('two-rule cycle: rejects input missing required trailing x', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
-      assert.throws(() => j('z'), /unexpected/)
+      assert.throws(() => j.parse('z'), /unexpected/)
     })
 
 
     it('two-rule cycle: rejects input starting on the wrong seed', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
       // "y x" has no legal derivation — must be preceded by q's seed.
-      assert.throws(() => j('y x'), /unexpected/)
+      assert.throws(() => j.parse('y x'), /unexpected/)
     })
 
 
@@ -746,32 +748,32 @@ describe('bnf', () => {
       // The test's own timeout is the safety net: the guard must
       // terminate the parse attempt even when no legal derivation
       // exists for the input.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_2)
-      assert.throws(() => j('w'), /unexpected/)
+      assert.throws(() => j.parse('w'), /unexpected/)
     })
 
 
     it('three-rule cycle: accepts shortest seed derivation', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_3)
       // c = x ; b = x 2 ; a = x 2 1
-      assert.doesNotThrow(() => j('x 2 1'))
+      assert.doesNotThrow(() => j.parse('x 2 1'))
     })
 
 
     it('three-rule cycle: accepts one-step unfold', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_3)
       // c = a 3 = (x 2 1) 3 ; b = x 2 1 3 2 ; a = x 2 1 3 2 1
-      assert.doesNotThrow(() => j('x 2 1 3 2 1'))
+      assert.doesNotThrow(() => j.parse('x 2 1 3 2 1'))
     })
 
 
     it('three-rule cycle: rejects premature stop', { timeout: 2000 }, () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(INDIRECT_3)
-      assert.throws(() => j('x 2'), /unexpected/)
+      assert.throws(() => j.parse('x 2'), /unexpected/)
     })
 
 
@@ -781,13 +783,13 @@ describe('bnf', () => {
       // topo-orders b before a, inlines b's alts (including ε)
       // into a, then drops the resulting `[a]` trivial alt.
       const src = 'a = b a / "x"\nb = "y" /'
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(src)
-      assert.doesNotThrow(() => j('x'))
-      assert.doesNotThrow(() => j('y x'))
-      assert.doesNotThrow(() => j('y y y x'))
-      assert.throws(() => j('y'), /unexpected/)
-      assert.throws(() => j('z'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('x'))
+      assert.doesNotThrow(() => j.parse('y x'))
+      assert.doesNotThrow(() => j.parse('y y y x'))
+      assert.throws(() => j.parse('y'), /unexpected/)
+      assert.throws(() => j.parse('z'), /unexpected/)
     })
 
 
@@ -796,11 +798,11 @@ describe('bnf', () => {
       // A longer chain of nullable leading refs that Paull's has
       // to collapse in a single topo pass.
       const src = 'a = b a / "x"\nb = c\nc = "y" /'
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(src)
-      assert.doesNotThrow(() => j('x'))
-      assert.doesNotThrow(() => j('y x'))
-      assert.doesNotThrow(() => j('y y x'))
+      assert.doesNotThrow(() => j.parse('x'))
+      assert.doesNotThrow(() => j.parse('y x'))
+      assert.doesNotThrow(() => j.parse('y y x'))
     })
 
 
@@ -810,12 +812,12 @@ describe('bnf', () => {
       const src =
         'a = b "x" / "init"\n' +
         'b = a "y" / "z"'
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(src)
-      assert.doesNotThrow(() => j('init'))    // a's direct seed
-      assert.doesNotThrow(() => j('z x'))     // through b's seed
-      assert.doesNotThrow(() => j('init y x')) // a-seed, then b-y, then a-x
-      assert.throws(() => j('z'), /unexpected/)
+      assert.doesNotThrow(() => j.parse('init'))    // a's direct seed
+      assert.doesNotThrow(() => j.parse('z x'))     // through b's seed
+      assert.doesNotThrow(() => j.parse('init y x')) // a-seed, then b-y, then a-x
+      assert.throws(() => j.parse('z'), /unexpected/)
     })
 
   })
@@ -824,30 +826,30 @@ describe('bnf', () => {
   describe('amagama.bnf()', () => {
 
     it('installs grammar and parses matching input', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('greet.bnf'))
       // Parser accepts both alternates without throwing.
-      assert.doesNotThrow(() => j('hi'))
-      assert.doesNotThrow(() => j('hello'))
+      assert.doesNotThrow(() => j.parse('hi'))
+      assert.doesNotThrow(() => j.parse('hello'))
     })
 
 
     it('rejects input outside the grammar', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('greet.bnf'))
-      assert.throws(() => j('bye'), /unexpected/)
+      assert.throws(() => j.parse('bye'), /unexpected/)
     })
 
 
     it('parses a two-terminal sequence', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(loadFixture('pair.bnf'))
-      assert.doesNotThrow(() => j('a b'))
+      assert.doesNotThrow(() => j.parse('a b'))
     })
 
 
     it('returns the emitted spec', () => {
-      const j = Amagama.make()
+      const j = am.make()
       const spec = j.bnf('g = "x"')
       assert.equal(spec.options.rule.start, '__start__')
       // Case-insensitive literal emits as a match.token regex.
@@ -856,15 +858,15 @@ describe('bnf', () => {
 
 
     it('bnf.toSpec builds the spec without installing', () => {
-      const j = Amagama.make()
+      const j = am.make()
       const spec = j.bnf.toSpec('g = "x"')
       // Spec is returned; the default JSON grammar is still active
       // since toSpec does not install the BNF grammar.
       assert.equal(spec.options.rule.start, '__start__')
-      assert.deepEqual(j('a:1'), { a: 1 })
+      assert.deepEqual(j.parse('a:1'), { a: 1 })
       // A second call to install still works afterwards.
       j.bnf('g = "x"')
-      assert.deepEqual(j('x'), { rule: 'g', src: 'x', kids: [] })
+      assert.deepEqual(j.parse('x'), { rule: 'g', src: 'x', kids: [] })
     })
 
 
@@ -872,19 +874,19 @@ describe('bnf', () => {
       // Every user-declared rule becomes a `{rule, src, kids}`
       // node. Leaf rules (only terminals / char classes) have empty
       // kids and carry the matched text as `src`.
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf('g = "hi" / "hello"')
-      assert.deepEqual(j('hi'), { rule: 'g', src: 'hi', kids: [] })
-      assert.deepEqual(j('hello'), { rule: 'g', src: 'hello', kids: [] })
+      assert.deepEqual(j.parse('hi'), { rule: 'g', src: 'hi', kids: [] })
+      assert.deepEqual(j.parse('hello'), { rule: 'g', src: 'hello', kids: [] })
 
       // Note: under current Paull-style LR elimination, a leading
       // ref to another user rule gets inlined, so that rule does
       // NOT appear as a child node. `p = "a" q, q = "b"` works
       // because `q` is NOT at the leading position of p's alt —
       // it's preceded by the `"a"` terminal.
-      const j2 = Amagama.make()
+      const j2 = am.make()
       j2.bnf('p = "a" q\nq = "b"')
-      assert.deepEqual(j2('a b'), {
+      assert.deepEqual(j2.parse('a b'), {
         rule: 'p',
         src: 'ab',
         kids: [{ rule: 'q', src: 'b', kids: [] }],
@@ -893,7 +895,7 @@ describe('bnf', () => {
 
 
     it('ergonomic AST for composite rules (pair = name "=" value)', () => {
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(`
 x = "x" name "=" value
 name = 1*ALPHA
@@ -901,7 +903,7 @@ value = 1*DIGIT
 `)
       // "x" at the leading position keeps name/value as kids; both
       // leaf rules return as `{rule, src, kids: []}`.
-      assert.deepEqual(j('xfoo=42'), {
+      assert.deepEqual(j.parse('xfoo=42'), {
         rule: 'x',
         src: 'xfoo=42',
         kids: [
@@ -917,12 +919,12 @@ value = 1*DIGIT
       // named rules visible in the AST (Paull's substitution only
       // inlines LEADING refs; a `[` term at the alt's head blocks
       // the inlining).
-      const j = Amagama.make()
+      const j = am.make()
       j.bnf(`
 list = "[" item *("," item) "]"
 item = 1*ALPHA
 `)
-      assert.deepEqual(j('[a,b,c]'), {
+      assert.deepEqual(j.parse('[a,b,c]'), {
         rule: 'list',
         src: '[a,b,c]',
         kids: [

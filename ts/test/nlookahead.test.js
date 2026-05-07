@@ -6,11 +6,13 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 
 function make_norules(opts) {
-  let j = Amagama.make(opts)
+  let j = am.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j
@@ -32,9 +34,9 @@ describe('nlookahead', () => {
         .ac((r) => (r.node = r.o[0].src + r.o[1].src + r.o[2].src)),
     )
 
-    assert.deepEqual(j('abc'), 'abc')
-    assert.throws(() => j('abd'), /unexpected.*d/)
-    assert.throws(() => j('axc'), /unexpected.*x/)
+    assert.deepEqual(j.parse('abc'), 'abc')
+    assert.throws(() => j.parse('abd'), /unexpected.*d/)
+    assert.throws(() => j.parse('axc'), /unexpected.*x/)
   })
 
 
@@ -55,10 +57,10 @@ describe('nlookahead', () => {
         }),
     )
 
-    assert.deepEqual(j('abcde'), 'abcde')
+    assert.deepEqual(j.parse('abcde'), 'abcde')
     // Mismatch at position 4 throws "unexpected" (error site is the
     // first token of the failed alt, per parser convention).
-    assert.throws(() => j('abcdf'), /unexpected/)
+    assert.throws(() => j.parse('abcdf'), /unexpected/)
   })
 
 
@@ -85,13 +87,13 @@ describe('nlookahead', () => {
         .close([{ s: '#ZZ' }]),
     )
 
-    assert.deepEqual(j('abc'), 'abc')
-    assert.deepEqual(j('abd'), 'abd')
-    assert.deepEqual(j('ab'), 'ab')
-    assert.deepEqual(j('a'), 'a')
+    assert.deepEqual(j.parse('abc'), 'abc')
+    assert.deepEqual(j.parse('abd'), 'abd')
+    assert.deepEqual(j.parse('ab'), 'ab')
+    assert.deepEqual(j.parse('a'), 'a')
     // 'abe': 3-token alts mismatch at position 2, 2-token alt matches
     // 'ab', leaving 'e' — the close `#ZZ` fails on 'e'.
-    assert.throws(() => j('abe'), /unexpected/)
+    assert.throws(() => j.parse('abe'), /unexpected/)
   })
 
 
@@ -118,7 +120,7 @@ describe('nlookahead', () => {
         }),
     )
 
-    assert.deepEqual(j('abc'), {
+    assert.deepEqual(j.parse('abc'), {
       o0: 'a', o1: 'b', o2: 'c',
       os: 3, oN: 3, same: true,
     })
@@ -146,7 +148,7 @@ describe('nlookahead', () => {
         .ac((r) => (r.node = 'ok')),
     )
 
-    j('abc')
+    j.parse('abc')
     assert.deepEqual(seenLegacy, { t0: 'a', t1: 'b' })
     assert.deepEqual(seenArray, { t0: 'a', t1: 'b', t2: 'c' })
   })
@@ -193,7 +195,7 @@ describe('nlookahead', () => {
         .close([{ s: '#ZZ' }]),
     )
 
-    j('abc')
+    j.parse('abc')
     assert.deepEqual(innerSaw, ['a', 'b', 'c'])
   })
 
@@ -213,7 +215,7 @@ describe('nlookahead', () => {
     // original first token 'a' per parser convention (error site is
     // ctx.t[0], not the first mismatching token).
     try {
-      j('abx')
+      j.parse('abx')
       assert.fail('expected throw')
     } catch (err) {
       assert.match(err.message, /unexpected/)
@@ -241,12 +243,12 @@ describe('nlookahead', () => {
     )
 
     // Middle position is unconstrained, outer positions must match.
-    assert.deepEqual(j('axc'), 'axc')
-    assert.deepEqual(j('a!c'), 'a!c')
+    assert.deepEqual(j.parse('axc'), 'axc')
+    assert.deepEqual(j.parse('a!c'), 'a!c')
     // Third token still required to be 'c'.
-    assert.throws(() => j('axd'), /unexpected/)
+    assert.throws(() => j.parse('axd'), /unexpected/)
     // First token still required to be 'a'.
-    assert.throws(() => j('bxc'), /unexpected/)
+    assert.throws(() => j.parse('bxc'), /unexpected/)
   })
 
 
@@ -267,11 +269,11 @@ describe('nlookahead', () => {
         }),
     )
 
-    assert.deepEqual(j('abcd'), 'abcd')
-    assert.deepEqual(j('axcd'), 'axcd')
-    assert.deepEqual(j('abyd'), 'abyd')
-    assert.deepEqual(j('axyd'), 'axyd')
-    assert.throws(() => j('abbb'), /unexpected/)
+    assert.deepEqual(j.parse('abcd'), 'abcd')
+    assert.deepEqual(j.parse('axcd'), 'axcd')
+    assert.deepEqual(j.parse('abyd'), 'abyd')
+    assert.deepEqual(j.parse('axyd'), 'axyd')
+    assert.throws(() => j.parse('abbb'), /unexpected/)
   })
 
 })

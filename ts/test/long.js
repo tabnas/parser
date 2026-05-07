@@ -5,7 +5,9 @@
 
 const Fs = require('fs')
 
-const { Amagama } = require('..')
+const { Amagama, jsonic } = require('..')
+const am = new Amagama({ plugins: [jsonic] })
+const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 const strs = [
   {
@@ -71,7 +73,7 @@ function long(print, str, count, lencheck) {
   let ms = Object.values(process.memoryUsage())
   print && console.log(ms.join('\t'))
   let start = Date.now()
-  let d0 = Amagama(str)
+  let d0 = J(str)
   let dur = Date.now() - start
   let me = Object.values(process.memoryUsage())
   print && console.log(me.join('\t'))
