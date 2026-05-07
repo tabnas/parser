@@ -189,40 +189,155 @@ function guardedMatcher(
 }
 
 
-// Consume a run of line characters from `src[sI..]`, counting how
-// many were row-incrementing (`rowBitmap` / `rowChars`). The bitmap
-// is the ASCII fast path; the `Chars` object catches non-ASCII
-// members. When `single` is true the walk stops as soon as the same
-// character would repeat (so callers emit one #LN per newline).
+// ---------------------------------------------------------------------------
+// Declarative single-character state machine driver.
 //
-// Used by the comment matcher's `eatline` tails. The hot matchers
-// (space, line) inline this pattern by hand to dodge the per-call
-// allocation of the {sI, rows} return object — the bench showed
-// the call-site regression was almost entirely that allocation.
-function runLineChars(
-  src: string,
-  sI: number,
-  bitmap: Uint8Array,
-  chars: Record<string, any>,
-  rowBitmap: Uint8Array,
-  rowChars: Record<string, any>,
-  single: boolean,
-): { sI: number; rows: number } {
-  let cc
-  let rows = 0
-  let counts: Record<string, number> | undefined = single ? {} : undefined
-  while ((cc = src.charCodeAt(sI)) < 256 ? bitmap[cc] : chars[src[sI]]) {
-    if (counts) {
-      const c = src[sI]
-      const n = (counts[c] || 0) + 1
-      counts[c] = n
-      if (n > 1) break
-    }
-    if (cc < 256 ? rowBitmap[cc] : rowChars[src[sI]]) rows++
-    sI++
-  }
-  return { sI, rows }
+// The simpler matchers (space, line, comment-eatline tails) all
+// have the shape "walk bytes, dispatch on (state, char-class), emit
+// position-tracking actions, stop when told". The driver below
+// centralises that shape.
+//
+// Each spec declares:
+//   - `initialState`           which state the walk starts in
+//   - `nclasses`               how many byte-classes the spec uses
+//   - `classOf` (Uint8Array)   per-byte class index (ASCII fast path)
+//   - `fallback`               class for non-ASCII bytes
+//   - `table`   (Int32Array)   action keyed on `state * nclasses + class`
+//
+// An action is a packed Int32 — `STATE_MASK` bits hold the next
+// state, plus three single-bit flags below. The driver applies
+// CONSUME / IS_ROW first, then transitions, then STOP. That ordering
+// makes "consume the char that ends the match" express as
+// `CONSUME | STOP`, while "stop without consuming" is just `STOP`.
+//
+// Performance-wise the loop is uniform: one Uint8Array index, one
+// Int32Array index, three bit tests, no function calls per byte.
+// ---------------------------------------------------------------------------
+
+const CONSUME = 1 << 16
+const IS_ROW = 1 << 17
+const STOP = 1 << 18
+const STATE_MASK = 0xffff
+
+type ScanSpec = {
+  readonly initialState: number
+  readonly nclasses: number
+  readonly classOf: Uint8Array
+  readonly fallback: (c: string) => number
+  readonly table: Int32Array
 }
+
+type ScanOut = { sI: number; rI: number; cI: number }
+
+// Walk `src` from `(startSI, startRI, startCI)` according to `spec`.
+// Position fields are written into `out` (a caller-owned scratch
+// object — no allocation per call). Returns true if any char was
+// consumed.
+//
+// Takes raw position numbers rather than a Point because some
+// callers (notably the comment matcher) track positions as locals
+// against a sliced `fwd` string rather than on the lex's pnt.
+function runScan(
+  src: string,
+  startSI: number,
+  startRI: number,
+  startCI: number,
+  spec: ScanSpec,
+  out: ScanOut,
+): boolean {
+  let sI = startSI
+  let rI = startRI
+  let cI = startCI
+  const len = src.length
+  const ncls = spec.nclasses
+  const classOf = spec.classOf
+  const table = spec.table
+  let state = spec.initialState
+
+  while (sI < len) {
+    const cc = src.charCodeAt(sI)
+    const cls = cc < 256 ? classOf[cc] : spec.fallback(src[sI])
+    const action = table[state * ncls + cls]
+
+    if (action & CONSUME) {
+      sI++
+      if (action & IS_ROW) {
+        rI++
+        cI = 1
+      } else {
+        cI++
+      }
+    }
+    state = action & STATE_MASK
+    if (action & STOP) break
+  }
+
+  out.sI = sI
+  out.rI = rI
+  out.cI = cI
+  return startSI < sI
+}
+
+
+// Build a 3-class line-run spec from cfg.line. Class 0 = not a line
+// char, class 1 = line char, class 2 = line char that also advances
+// the row counter. Used by the line matcher (when not in `single`
+// mode) and by the comment matcher's `eatline` tails.
+function buildLineRunSpec(cfgLine: Config['line']): ScanSpec {
+  const classOf = new Uint8Array(256)
+  for (let cc = 0; cc < 256; cc++) {
+    if (cfgLine.charsBitmap[cc]) {
+      classOf[cc] = cfgLine.rowCharsBitmap[cc] ? 2 : 1
+    }
+  }
+  const lineChars = cfgLine.chars
+  const rowChars = cfgLine.rowChars
+  const fallback = (c: string): number => {
+    if (lineChars[c]) return rowChars[c] ? 2 : 1
+    return 0
+  }
+  return {
+    initialState: 0,
+    nclasses: 3,
+    classOf,
+    fallback,
+    table: LINE_RUN_TABLE,
+  }
+}
+
+// (state=0, class=NOT_LINE) -> stop
+// (state=0, class=LINE)     -> consume, stay in 0
+// (state=0, class=LINE+ROW) -> consume + row, stay in 0
+const LINE_RUN_TABLE = new Int32Array([
+  STOP,
+  CONSUME,
+  CONSUME | IS_ROW,
+])
+
+
+// Build a 2-class run spec from a chars / charsBitmap pair. Class 0
+// = not in set, class 1 = in set. Used by the space matcher.
+function buildCharRunSpec(
+  charsBitmap: Uint8Array,
+  chars: Record<string, any>,
+): ScanSpec {
+  const fallback = (c: string): number => (chars[c] ? 1 : 0)
+  return {
+    initialState: 0,
+    nclasses: 2,
+    classOf: charsBitmap, // already 0/1
+    fallback,
+    table: CHAR_RUN_TABLE,
+  }
+}
+
+// (state=0, class=OUT) -> stop
+// (state=0, class=IN)  -> consume col, stay in 0
+const CHAR_RUN_TABLE = new Int32Array([
+  STOP,
+  CONSUME,
+])
+
 
 
 let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
@@ -411,6 +526,12 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
     ? values(cfg.comment.def).filter((c) => c.lex && !c.line).sort(byStartLenDesc)
     : []
 
+  // Eatline tail: a 3-class line-run state machine, same shape as
+  // the line matcher's no-single path. Built once per matcher build
+  // so the table and class array are reused across comment matches.
+  const lineRunSpec = buildLineRunSpec(cfg.line)
+  const scanOut: ScanOut = { sI: 0, rI: 0, cI: 0 }
+
   return guardedMatcher(cfg.comment, function commentBody(lex) {
     let pnt = lex.pnt
     let fwd = lex.fwd
@@ -453,12 +574,12 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         }
         else if (mc.eatline) {
           // Only absorb trailing line chars when termination came from
-          // a line char (not from a suffix match).
-          const r = runLineChars(
-            fwd, fI, lineBM, lineChars, rowBM, rowChars, false,
-          )
-          rI += r.rows
-          fI = r.sI
+          // a line char (not from a suffix match). cI is intentionally
+          // NOT pulled from scanOut — current semantics leave the
+          // pnt.cI at end-of-comment-body even after eating newlines.
+          runScan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+          rI = scanOut.rI
+          fI = scanOut.sI
         }
 
         let csrc = fwd.substring(0, fI)
@@ -519,11 +640,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           cI += end.length
 
           if (mc.eatline) {
-            const r = runLineChars(
-              fwd, fI, lineBM, lineChars, rowBM, rowChars, false,
-            )
-            rI += r.rows
-            fI = r.sI
+            runScan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+            rI = scanOut.rI
+            fI = scanOut.sI
           }
 
           let csrc = fwd.substring(0, fI + end.length)
@@ -1012,71 +1131,77 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 
 // Line ending matcher.
 //
-// Spec (matches `runLineChars`, inlined here for speed since this is
-// a per-newline hot path): "Consume a run of `cfg.line.chars`,
-// counting `rowChars` to advance the row counter. If `single`, stop
-// as soon as the same character would repeat (so each newline emits
-// its own #LN)."
-let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) =>
-  guardedMatcher(cfg.line, function lineBody(lex) {
+// The non-single path is the 3-class line-run state machine
+// (LINE_RUN_TABLE). `single` mode tracks "has this exact char been
+// seen yet" — that's not bounded by a small state count so it stays
+// inline.
+let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+  const spec = buildLineRunSpec(cfg.line)
+  const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
+
+  return guardedMatcher(cfg.line, function lineBody(lex) {
     const { pnt, src } = lex
-    const bm = cfg.line.charsBitmap
-    const rbm = cfg.line.rowCharsBitmap
-    const chars = cfg.line.chars
-    const rowChars = cfg.line.rowChars
-    const single = cfg.line.single
 
-    let sI = pnt.sI
-    let rI = pnt.rI
-    let cc
-    const counts: Record<string, number> | undefined = single ? {} : undefined
-
-    while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
-      if (counts) {
+    if (cfg.line.single) {
+      // Inline: tracks per-char counts to stop at the first repeat.
+      const bm = cfg.line.charsBitmap
+      const rbm = cfg.line.rowCharsBitmap
+      const chars = cfg.line.chars
+      const rowChars = cfg.line.rowChars
+      let sI = pnt.sI
+      let rI = pnt.rI
+      let cc
+      const counts: Record<string, number> = {}
+      while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
         const c = src[sI]
         const n = (counts[c] || 0) + 1
         counts[c] = n
         if (n > 1) break
+        if (cc < 256 ? rbm[cc] : rowChars[src[sI]]) rI++
+        sI++
       }
-      if (cc < 256 ? rbm[cc] : rowChars[src[sI]]) rI++
-      sI++
+      if (pnt.sI < sI) {
+        const msrc = src.substring(pnt.sI, sI)
+        const tkn = lex.token('#LN', undefined, msrc, pnt)
+        pnt.sI = sI
+        pnt.rI = rI
+        pnt.cI = 1
+        return tkn
+      }
+      return
     }
 
-    if (pnt.sI < sI) {
-      const msrc = src.substring(pnt.sI, sI)
+    if (runScan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+      const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#LN', undefined, msrc, pnt)
-      pnt.sI = sI
-      pnt.rI = rI
+      pnt.sI = out.sI
+      pnt.rI = out.rI
       pnt.cI = 1
       return tkn
     }
   })
+}
 
 // Space matcher.
 //
-// Spec (matches `runChars`, inlined here for speed since this is a
-// per-whitespace hot path): "Consume a run of `cfg.space.chars`;
-// emit one #SP token covering the run."
-let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) =>
-  guardedMatcher(cfg.space, function spaceBody(lex) {
-    const { pnt, src } = lex
-    const bm = cfg.space.charsBitmap
-    const chars = cfg.space.chars
-    const startSI = pnt.sI
-    let sI = startSI
-    let cc
-    while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
-      sI++
-    }
+// Spec: walk a run of `cfg.space.chars`. Class 0 = not a space,
+// class 1 = a space. The driver does the rest.
+let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+  const spec = buildCharRunSpec(cfg.space.charsBitmap, cfg.space.chars)
+  const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
-    if (startSI < sI) {
-      const msrc = src.substring(startSI, sI)
+  return guardedMatcher(cfg.space, function spaceBody(lex) {
+    const { pnt, src } = lex
+    if (runScan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+      const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#SP', undefined, msrc, pnt)
-      pnt.sI = sI
-      pnt.cI += sI - startSI
+      pnt.sI = out.sI
+      pnt.rI = out.rI
+      pnt.cI = out.cI
       return tkn
     }
   })
+}
 
 function subMatchFixed(
   lex: Lex,
