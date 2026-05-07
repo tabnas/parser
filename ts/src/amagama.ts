@@ -253,6 +253,20 @@ class Amagama {
       configurable: true,
     })
 
+    // `bnf` is a callable + `.toSpec`. Build it here so plugins
+    // referencing `am.bnf(...)` or `am.bnf.toSpec(...)` work after
+    // construction.
+    const bnfFn = ((src: string, opts?: BnfConvertOptions) => {
+      const spec = bnfConvert(src, opts)
+      this.grammar(spec)
+      return spec
+    }) as ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
+      toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
+    }
+    bnfFn.toSpec = (src: string, opts?: BnfConvertOptions) =>
+      bnfConvert(src, opts)
+    this.bnf = bnfFn
+
     if (parent) {
       // Inherit config + carry parent properties (plugin decorations
       // etc), build a fresh parser, then re-run parent plugins on this
@@ -526,23 +540,16 @@ class Amagama {
   }
 
 
-  // Convert a BNF grammar string into a GrammarSpec and install it.
-  bnf(src: string, opts?: BnfConvertOptions): GrammarSpec {
-    const spec = bnfConvert(src, opts)
-    this.grammar(spec)
-    return spec
-  }
-
-
-  // Build a GrammarSpec from BNF without installing.
-  static bnfToSpec(src: string, opts?: BnfConvertOptions): GrammarSpec {
-    return bnfConvert(src, opts)
-  }
-
-
   // Convenience: util bag accessible per-instance too.
   get util(): Bag {
     return util
+  }
+
+
+  // bnf is a callable instance member rather than a method so it can
+  // expose `toSpec` as a property — matches the upstream shape.
+  bnf!: ((src: string, opts?: BnfConvertOptions) => GrammarSpec) & {
+    toSpec: (src: string, opts?: BnfConvertOptions) => GrammarSpec
   }
 }
 

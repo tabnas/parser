@@ -282,18 +282,18 @@ describe('amagama', function () {
 
   it('api', () => {
     assert.deepEqual(J('a:1'), { a: 1 })
-    assert.deepEqual(Amagama.parse('a:1'), { a: 1 })
+    assert.deepEqual(am.parse('a:1'), { a: 1 })
   })
 
   it('rule-spec', () => {
     let cfg = {}
 
-    let rs0 = j.makeRuleSpec({}, cfg, {})
+    let rs0 = makeRuleSpec({}, cfg, {})
     assert.deepEqual(rs0.name, '')
     assert.deepEqual(rs0.def.open, [])
     assert.deepEqual(rs0.def.close, [])
 
-    let rs1 = j.makeRuleSpec({}, cfg, {
+    let rs1 = makeRuleSpec({}, cfg, {
       open: [
         {},
         { c: () => true },
@@ -306,7 +306,7 @@ describe('amagama', function () {
     assert.deepEqual(typeof rs1.def.open[1].c === 'function', true)
     assert.deepEqual(typeof rs1.def.open[2].c === 'function', true)
 
-    let rs2 = j.makeRuleSpec({}, cfg, {
+    let rs2 = makeRuleSpec({}, cfg, {
       open: [
         { c: (r) => r.lte('a', 10) && r.lte('b', 20) },
       ],
@@ -332,10 +332,10 @@ describe('amagama', function () {
   })
 
   it('id-string', function () {
-    let s0 = '' + Amagama
+    let s0 = '' + am
     assert.ok(s0.match(/Amagama.*/) != null)
-    assert.deepEqual('' + Amagama, s0)
-    assert.deepEqual('' + Amagama, '' + Amagama)
+    assert.deepEqual('' + am, s0)
+    assert.deepEqual('' + am, '' + am)
 
     let j1 = am.make()
     let s1 = '' + j1
@@ -410,7 +410,7 @@ describe('amagama', function () {
 
   // Validate pure JSON to ensure Amagama is always a superset.
   it('json-standard', function () {
-    JsonStandard(Amagama)
+    JsonStandard(am)
   })
 
   it('src-not-string', () => {
