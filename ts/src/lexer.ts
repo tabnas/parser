@@ -9,6 +9,7 @@ import type {
   Rule,
   Config,
   Context,
+  LexCheck,
   LexMatcher,
   MakeLexMatcher,
   NormAltSpec,
@@ -165,6 +166,29 @@ const makeToken = (...params: ConstructorParameters<typeof Token>) =>
 const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-1))
 
 
+// Wrap a matcher body in the standard entry guards: skip when
+// `mcfg.lex` is false, and consult an optional `check` hook that
+// may short-circuit by returning `{ done: true, token }`.
+//
+// `mcfg` is captured once at matcher-build time. The matcher
+// factories are re-invoked on every `am.make()` clone (via
+// `configure()`), so a stale closure can never outlive the cfg
+// snapshot it was built from.
+function guardedMatcher(
+  mcfg: { lex: boolean; check?: LexCheck | undefined },
+  body: LexMatcher,
+): LexMatcher {
+  return function guarded(lex, rule, tI) {
+    if (!mcfg.lex) return undefined
+    if (mcfg.check) {
+      const r = mcfg.check(lex)
+      if (r && r.done) return r.token
+    }
+    return body(lex, rule, tI)
+  }
+}
+
+
 // Consume a run of line characters from `src[sI..]`, counting how
 // many were row-incrementing (`rowBitmap` / `rowChars`). The bitmap
 // is the ASCII fast path; the `Chars` object catches non-ASCII
@@ -204,17 +228,8 @@ function runLineChars(
 let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
 
-  return function fixedMatcher(lex: Lex) {
-    let mcfg = cfg.fixed
-    if (!mcfg.lex) return undefined
-
-    if (cfg.fixed.check) {
-      let check = cfg.fixed.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.fixed, function fixedBody(lex) {
+    const mcfg = cfg.fixed
     let pnt = lex.pnt
     let fwd = lex.fwd
 
@@ -236,7 +251,7 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
         return tkn
       }
     }
-  }
+  })
 }
 
 let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
@@ -256,21 +271,11 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
     return null
   }
 
-  return function matchMatcher(lex: Lex, rule: Rule, tI: number = 0) {
-    let mcfg = cfg.match
-    if (!mcfg.lex) return undefined
-
-    if (cfg.match.check) {
-      let check = cfg.match.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.match, function matchBody(lex, rule, tI = 0) {
     let pnt = lex.pnt
     let fwd = lex.fwd
 
-    let oc = 'o' === rule.state ? 0 : 1
+    let oc = 'o' === (rule as Rule).state ? 0 : 1
 
     for (let valueMatcher of valueMatchers) {
       if (valueMatcher.match instanceof RegExp) {
@@ -345,7 +350,7 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
         }
       }
     }
-  }
+  })
 }
 
 // NOTE 1: matchers return arbitrary tokens and describe lexing using
@@ -406,17 +411,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
     ? values(cfg.comment.def).filter((c) => c.lex && !c.line).sort(byStartLenDesc)
     : []
 
-  return function matchComment(lex: Lex, _rule: Rule) {
-    let mcfg = cfg.comment
-    if (!mcfg.lex) return undefined
-
-    if (cfg.comment.check) {
-      let check = cfg.comment.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.comment, function commentBody(lex) {
     let pnt = lex.pnt
     let fwd = lex.fwd
 
@@ -548,7 +543,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         }
       }
     }
-  }
+  })
 }
 
 // normalizeCommentSuffix splits the polymorphic suffix option value
@@ -738,17 +733,8 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => 
     ? regexp('g', escre(mcfg.sepChar as string))
     : undefined
 
-  return function matchNumber(lex: Lex) {
+  return guardedMatcher(cfg.number, function numberBody(lex) {
     mcfg = cfg.number
-    if (!mcfg.lex) return undefined
-
-    if (cfg.number.check) {
-      let check = cfg.number.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
     let pnt = lex.pnt
     let fwd = lex.fwd
     let valdef = cfg.value.def
@@ -798,7 +784,7 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => 
 
       return out
     }
-  }
+  })
 }
 
 let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
@@ -835,17 +821,8 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   cfg.string.escBitmap = charsBitmap(cfg.string.escMap)
   cfg.string.hasReplace = 0 < keys(cfg.string.replaceCodeMap).length
 
-  return function stringMatcher(lex: Lex) {
-    let mcfg = cfg.string
-    if (!mcfg.lex) return undefined
-
-    if (cfg.string.check) {
-      let check = cfg.string.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.string, function stringBody(lex) {
+    const mcfg = cfg.string
     let {
       quoteMap,
       quoteBitmap,
@@ -1030,7 +1007,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
       pnt.cI = cI
       return tkn
     }
-  }
+  })
 }
 
 // Line ending matcher.
@@ -1040,17 +1017,8 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 // counting `rowChars` to advance the row counter. If `single`, stop
 // as soon as the same character would repeat (so each newline emits
 // its own #LN)."
-let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
-  return function matchLine(lex: Lex) {
-    if (!cfg.line.lex) return undefined
-
-    if (cfg.line.check) {
-      let check = cfg.line.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) =>
+  guardedMatcher(cfg.line, function lineBody(lex) {
     const { pnt, src } = lex
     const bm = cfg.line.charsBitmap
     const rbm = cfg.line.rowCharsBitmap
@@ -1082,25 +1050,15 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       pnt.cI = 1
       return tkn
     }
-  }
-}
+  })
 
 // Space matcher.
 //
 // Spec (matches `runChars`, inlined here for speed since this is a
 // per-whitespace hot path): "Consume a run of `cfg.space.chars`;
 // emit one #SP token covering the run."
-let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
-  return function spaceMatcher(lex: Lex) {
-    if (!cfg.space.lex) return undefined
-
-    if (cfg.space.check) {
-      let check = cfg.space.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) =>
+  guardedMatcher(cfg.space, function spaceBody(lex) {
     const { pnt, src } = lex
     const bm = cfg.space.charsBitmap
     const chars = cfg.space.chars
@@ -1118,8 +1076,7 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       pnt.cI += sI - startSI
       return tkn
     }
-  }
-}
+  })
 
 function subMatchFixed(
   lex: Lex,
