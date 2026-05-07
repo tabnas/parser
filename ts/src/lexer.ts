@@ -164,6 +164,43 @@ const makeToken = (...params: ConstructorParameters<typeof Token>) =>
 
 const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-1))
 
+
+// Consume a run of line characters from `src[sI..]`, counting how
+// many were row-incrementing (`rowBitmap` / `rowChars`). The bitmap
+// is the ASCII fast path; the `Chars` object catches non-ASCII
+// members. When `single` is true the walk stops as soon as the same
+// character would repeat (so callers emit one #LN per newline).
+//
+// Used by the comment matcher's `eatline` tails. The hot matchers
+// (space, line) inline this pattern by hand to dodge the per-call
+// allocation of the {sI, rows} return object — the bench showed
+// the call-site regression was almost entirely that allocation.
+function runLineChars(
+  src: string,
+  sI: number,
+  bitmap: Uint8Array,
+  chars: Record<string, any>,
+  rowBitmap: Uint8Array,
+  rowChars: Record<string, any>,
+  single: boolean,
+): { sI: number; rows: number } {
+  let cc
+  let rows = 0
+  let counts: Record<string, number> | undefined = single ? {} : undefined
+  while ((cc = src.charCodeAt(sI)) < 256 ? bitmap[cc] : chars[src[sI]]) {
+    if (counts) {
+      const c = src[sI]
+      const n = (counts[c] || 0) + 1
+      counts[c] = n
+      if (n > 1) break
+    }
+    if (cc < 256 ? rowBitmap[cc] : rowChars[src[sI]]) rows++
+    sI++
+  }
+  return { sI, rows }
+}
+
+
 let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
 
@@ -422,17 +459,11 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         else if (mc.eatline) {
           // Only absorb trailing line chars when termination came from
           // a line char (not from a suffix match).
-          while (
-            fI < fwdlen &&
-            ((cc = fwd.charCodeAt(fI)) < 256
-              ? lineBM[cc]
-              : lineChars[fwd[fI]])
-          ) {
-            if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
-              rI++
-            }
-            fI++
-          }
+          const r = runLineChars(
+            fwd, fI, lineBM, lineChars, rowBM, rowChars, false,
+          )
+          rI += r.rows
+          fI = r.sI
         }
 
         let csrc = fwd.substring(0, fI)
@@ -493,17 +524,11 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           cI += end.length
 
           if (mc.eatline) {
-            while (
-              fI < fwdlen &&
-              ((cc = fwd.charCodeAt(fI)) < 256
-                ? lineBM[cc]
-                : lineChars[fwd[fI]])
-            ) {
-              if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
-                rI++
-              }
-              fI++
-            }
+            const r = runLineChars(
+              fwd, fI, lineBM, lineChars, rowBM, rowChars, false,
+            )
+            rI += r.rows
+            fI = r.sI
           }
 
           let csrc = fwd.substring(0, fI + end.length)
@@ -1009,6 +1034,12 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 }
 
 // Line ending matcher.
+//
+// Spec (matches `runLineChars`, inlined here for speed since this is
+// a per-newline hot path): "Consume a run of `cfg.line.chars`,
+// counting `rowChars` to advance the row counter. If `single`, stop
+// as soon as the same character would repeat (so each newline emits
+// its own #LN)."
 let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   return function matchLine(lex: Lex) {
     if (!cfg.line.lex) return undefined
@@ -1020,45 +1051,45 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       }
     }
 
-    let { chars, charsBitmap: bm, rowChars, rowCharsBitmap: rbm } = cfg.line
-    let { pnt, src } = lex
-    let { sI, rI } = pnt
+    const { pnt, src } = lex
+    const bm = cfg.line.charsBitmap
+    const rbm = cfg.line.rowCharsBitmap
+    const chars = cfg.line.chars
+    const rowChars = cfg.line.rowChars
+    const single = cfg.line.single
 
-    let single = cfg.line.single
-    let counts: Record<string, number> | undefined = undefined
-
-    if (single) {
-      counts = {}
-    }
-
+    let sI = pnt.sI
+    let rI = pnt.rI
     let cc
+    const counts: Record<string, number> | undefined = single ? {} : undefined
+
     while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
       if (counts) {
-        counts[src[sI]] = (counts[src[sI]] || 0) + 1
-
-        if (single) {
-          if (1 < counts[src[sI]]) {
-            break
-          }
-        }
+        const c = src[sI]
+        const n = (counts[c] || 0) + 1
+        counts[c] = n
+        if (n > 1) break
       }
-      rI += (cc < 256 ? rbm[cc] : rowChars[src[sI]]) ? 1 : 0
+      if (cc < 256 ? rbm[cc] : rowChars[src[sI]]) rI++
       sI++
     }
 
     if (pnt.sI < sI) {
-      let msrc = src.substring(pnt.sI, sI)
+      const msrc = src.substring(pnt.sI, sI)
       const tkn = lex.token('#LN', undefined, msrc, pnt)
-      pnt.sI += msrc.length
+      pnt.sI = sI
       pnt.rI = rI
       pnt.cI = 1
-
       return tkn
     }
   }
 }
 
 // Space matcher.
+//
+// Spec (matches `runChars`, inlined here for speed since this is a
+// per-whitespace hot path): "Consume a run of `cfg.space.chars`;
+// emit one #SP token covering the run."
 let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   return function spaceMatcher(lex: Lex) {
     if (!cfg.space.lex) return undefined
@@ -1070,22 +1101,21 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       }
     }
 
-    let { chars, charsBitmap: bm } = cfg.space
-    let { pnt, src } = lex
-    let { sI, cI } = pnt
-
-    // Bitmap fast-path for ASCII; chars[] fallback for code-points >= 256.
+    const { pnt, src } = lex
+    const bm = cfg.space.charsBitmap
+    const chars = cfg.space.chars
+    const startSI = pnt.sI
+    let sI = startSI
     let cc
     while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
       sI++
-      cI++
     }
 
-    if (pnt.sI < sI) {
-      let msrc = src.substring(pnt.sI, sI)
+    if (startSI < sI) {
+      const msrc = src.substring(startSI, sI)
       const tkn = lex.token('#SP', undefined, msrc, pnt)
-      pnt.sI += msrc.length
-      pnt.cI = cI
+      pnt.sI = sI
+      pnt.cI += sI - startSI
       return tkn
     }
   }
