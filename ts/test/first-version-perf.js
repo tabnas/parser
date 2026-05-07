@@ -1,8 +1,7 @@
 // NOTE: the perf test used in the first version, reused against this version.
 // *Not* a test of the perf of the first verison!
 
-var { Amagama, jsonic } = require('..')
-var j = new Amagama({ plugins: [jsonic] })
+var j = require('..').Amagama
 
 function pv_perf(dur) {
   var input =
@@ -13,12 +12,12 @@ function pv_perf(dur) {
   var start = Date.now(),
     count = 0
   while (Date.now() - start < dur) {
-    j.parse(input)
+    j(input)
   }
 
   ;(start = Date.now()), (count = 0)
   while (Date.now() - start < dur) {
-    j.parse(input)
+    j(input)
     count++
   }
 

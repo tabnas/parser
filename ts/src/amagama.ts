@@ -55,6 +55,7 @@ import {
   defprop,
   entries,
   escre,
+  filterRules,
   findTokenSet,
   keys,
   makelog,
@@ -238,35 +239,9 @@ class Amagama {
     this.fixed = ((ref: string | Tin) =>
       internal.config.fixed.ref[ref as any]) as any
 
-    if (parent) {
-      // Inherit parser + config from parent so plugin decorations persist.
-      const parentInternal = parent._internal
-      internal.config = deep({}, parentInternal.config)
-      configure(this, internal.config, merged_options)
-      assign(this.token, internal.config.t)
-
-      // Carry parent properties (plugin decorations, etc).
-      for (const k of Object.keys(parent)) {
-        if (undefined === (this as any)[k]) {
-          (this as any)[k] = (parent as any)[k]
-        }
-      }
-
-      internal.plugins = [...parentInternal.plugins]
-      internal.parser = parentInternal.parser.clone(
-        merged_options,
-        internal.config,
-        this,
-      )
-    } else {
-      internal.config = configure(this, undefined, merged_options)
-      internal.parser = makeParser(merged_options, internal.config, this)
-      assign(this.token, internal.config.t)
-    }
-
-    // Build a callable+indexable `options` member. The function form
-    // mutates `internal.merged`; the property form is a snapshot of the
-    // merged options at construction time, refreshed on each set call.
+    // Build a callable+indexable `options` member up front so use()
+    // and any plugin code below can rely on `this.options` already
+    // existing and working.
     const optionsFn = ((change?: Bag | string): Bag => {
       return this._setOptions(change)
     }) as ((change?: Bag | string) => Bag) & Bag
@@ -277,6 +252,44 @@ class Amagama {
       enumerable: true,
       configurable: true,
     })
+
+    if (parent) {
+      // Inherit config + carry parent properties (plugin decorations
+      // etc), build a fresh parser, then re-run parent plugins on this
+      // instance so option-conditional rule alts (e.g. `list.child`)
+      // get re-evaluated against the child's merged options.
+      const parentInternal = parent._internal
+      internal.config = configure(this, undefined, merged_options)
+      assign(this.token, internal.config.t)
+
+      for (const k of Object.keys(parent)) {
+        if (undefined === (this as any)[k]) {
+          (this as any)[k] = (parent as any)[k]
+        }
+      }
+
+      internal.parser = makeParser(merged_options, internal.config, this)
+      const inherited = parentInternal.plugins
+      internal.plugins = []
+      for (const plugin of inherited) {
+        this.use(plugin)
+      }
+      // After plugins re-register their rules with the child's
+      // options, apply rule.include / rule.exclude filtering. The
+      // alts we re-evaluated may include groups the user wanted to
+      // strip (e.g. `make({ rule: { exclude: 'amagama' } })`).
+      const rsm: RuleSpecMap = internal.parser.rule() as RuleSpecMap
+      const filtered: RuleSpecMap = {}
+      for (const rn of Object.keys(rsm)) {
+        filtered[rn] = filterRules(rsm[rn], internal.config) as RuleSpec
+      }
+      ;(internal.parser as any).rsm = filtered
+      ;(internal.parser as any).norm()
+    } else {
+      internal.config = configure(this, undefined, merged_options)
+      internal.parser = makeParser(merged_options, internal.config, this)
+      assign(this.token, internal.config.t)
+    }
 
     for (const plugin of plugins) {
       this.use(plugin)
