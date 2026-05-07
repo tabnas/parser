@@ -2,10 +2,14 @@
 
 Version: 0.1.22
 
-A Go port of [amagama](https://github.com/amagamajs/amagama), the lenient
-JSON parser. Same architecture, same syntax, same results. If you
-already use amagama in TypeScript, you know what this does. If you don't,
-read on.
+A Go port of [amagama](https://github.com/amagamajs/amagama) — the
+lenient JSON parser. The TypeScript reference implementation lives at
+[`../ts/`](../ts/) in this repo; both runtimes share the spec fixtures
+under [`../test/spec/`](../test/spec/) so they stay in lockstep.
+
+Same architecture, same syntax, same results. If you already use
+amagama in TypeScript, you know what this does. If you don't, read
+on.
 
 amagama accepts all standard JSON -- and then goes further. Unquoted
 keys, implicit objects, comments, trailing commas, single-quoted

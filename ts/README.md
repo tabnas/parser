@@ -10,7 +10,7 @@ a:1,foo:bar  →  {"a": 1, "foo": "bar"}
 
 It's a JSON parser that isn't strict. And it's very, very extensible.
 
-Available for [TypeScript/JavaScript](#install) and [Go](go/).
+Available for [TypeScript/JavaScript](#install) and [Go](../go/).
 
 ## Install
 
@@ -20,22 +20,36 @@ npm install amagama
 
 ## Quick Example
 
-```js
-const { Amagama } = require('amagama')
+amagama is a class. Create an instance with the grammar plugin you
+want, then call `parse`:
 
-// Relaxed syntax, just works
-Amagama('a:1, b:2')           // {"a": 1, "b": 2}
-Amagama('x, y, z')            // ["x", "y", "z"]
-Amagama('{a: {b: 1, c: 2}}') // {"a": {"b": 1, "c": 2}}
+```js
+const { Amagama, jsonic } = require('amagama')
+
+const am = new Amagama({ plugins: [jsonic] })
+
+am.parse('a:1, b:2')              // {"a": 1, "b": 2}
+am.parse('x, y, z')               // ["x", "y", "z"]
+am.parse('{a: {b: 1, c: 2}}')     // {"a": {"b": 1, "c": 2}}
 ```
 
 ```ts
-import { Amagama } from 'amagama'
+import { Amagama, jsonic } from 'amagama'
 
-Amagama('a:1, b:2') // {"a": 1, "b": 2}
+const am = new Amagama({ plugins: [jsonic] })
+am.parse('a:1, b:2')              // {"a": 1, "b": 2}
 ```
 
-## What Syntax Does amagama Accept?
+For strict JSON (no relaxations), swap the plugin:
+
+```js
+const { Amagama, json } = require('amagama')
+const strict = new Amagama({ plugins: [json] })
+strict.parse('{"a":1}')           // {"a": 1}
+strict.parse('{a:1}')             // throws — JSON.parse-equivalent
+```
+
+## What Syntax Does the jsonic Plugin Accept?
 
 More than you'd expect. All of the following parse to `{"a": 1, "b": "B"}`:
 
@@ -59,7 +73,7 @@ b:B
 ```
 
 ```
-{ "a": 100e-2, '\u0062':`\x42`, }
+{ "a": 100e-2, 'b':`\x42`, }
 ```
 
 That last one mixes double quotes, single quotes, backticks, unicode
@@ -84,6 +98,27 @@ Here's the full set of relaxations:
 
 For the full syntax reference, see [doc/syntax.md](doc/syntax.md).
 
+## Architecture
+
+The engine is intentionally split:
+
+- **`Amagama` core** — lexer, parser, rule machinery. No grammar of
+  its own.
+- **Plugins** in `src/plugins/<name>/` — each contributes a piece of
+  the runtime: a grammar (`json`, `jsonic`), a converter (`bnf`),
+  developer tooling (`debug`).
+
+The class never carries grammar by default; everything is opt-in via
+`plugins`. To embed BNF-defined grammar:
+
+```js
+const { Amagama, jsonic, bnf } = require('amagama')
+
+const am = new Amagama({ plugins: [jsonic, bnf] })
+am.bnf('greet = "hi" / "hello"')
+am.parse('hi')
+```
+
 ## Customization
 
 You might be tempted to think a lenient parser is a simple thing. It
@@ -94,10 +129,13 @@ understand the internals to do it.
 
 ### Options
 
-Let's start simple. Create a configured instance with `Amagama.make()`:
+Tweak parser/lexer behaviour at construction time, or via
+`am.options(...)` afterwards. A child instance can override anything:
 
 ```js
-const lenient = Amagama.make({
+const am = new Amagama({ plugins: [jsonic] })
+
+const lenient = am.make({
   comment: { lex: false },         // disable comments
   number: { hex: false },          // disable hex numbers
   value: {
@@ -105,7 +143,7 @@ const lenient = Amagama.make({
   }
 })
 
-lenient('yes')  // true
+lenient.parse('yes')               // true
 ```
 
 Options compose. You turn things off, you turn things on, you define new
@@ -133,9 +171,9 @@ function myPlugin(amagama, options) {
   })
 }
 
-const j = Amagama.make()
-j.use(myPlugin, { tildeValue: 42 })
-j('~')  // 42
+const am = new Amagama({ plugins: [jsonic] })
+am.use(myPlugin, { tildeValue: 42 })
+am.parse('~')                      // 42
 ```
 
 Consider what just happened: we invented a new syntax element (`~`),
@@ -151,20 +189,31 @@ See [doc/api.md](doc/api.md) for the full API.
 
 The essentials:
 
-| Function / Property | Description |
+| Construct | Description |
 |---|---|
-| `Amagama(src)` | Parse a string with default settings |
-| `Amagama.make(options?)` | Create a configured parser instance |
-| `instance.use(plugin, opts?)` | Register a plugin |
-| `instance.rule(name, definer)` | Modify a grammar rule |
-| `instance.token(ref)` | Get or create a token type |
-| `instance.sub({lex?, rule?})` | Subscribe to parse events |
-| `instance.options` | Current options |
+| `new Amagama(options?)` | Create a parser instance. Pass `{ plugins: [...] }` for grammar. |
+| `am.parse(src, meta?, parent_ctx?)` | Parse a string. |
+| `am.make(options?)` | Derive a child instance with overridden options (inherits parent plugins). |
+| `am.empty(options?)` | Bare instance: no defaults, no standard tokens, no grammar. |
+| `am.use(plugin, opts?)` | Apply a plugin to this instance. Returns the instance (or what the plugin returned). |
+| `am.options(change?)` | Get the merged option tree, or apply a partial change. |
+| `am.rule(name?, definer?)` | Read or modify a grammar rule. |
+| `am.token(ref)` | Look up a token name ↔ Tin. |
+| `am.sub({lex?, rule?})` | Subscribe to parse events. |
+
+Plugins shipped in this package:
+
+| Plugin | Purpose |
+|---|---|
+| `json` | Pure JSON grammar (`JSON.parse`-equivalent). |
+| `jsonic` | The relaxed-JSON grammar shown above. Layered on top of `json`. |
+| `bnf` | Adds `am.bnf(src)` — installs a grammar from a BNF string. |
+| `Debug` | Adds `am.debug.describe()` and parser tracing. |
 
 ## Go Version
 
 There's a Go port with the same core parsing behavior. Same syntax,
-same relaxations, same results. See the [Go documentation](go/) for
+same relaxations, same results. See the [Go documentation](../go/) for
 installation and usage.
 
 ```go
@@ -176,4 +225,3 @@ result, err := amagama.Parse("a:1, b:2")
 ## License
 
 MIT. Copyright (c) Richard Rodger.
-
