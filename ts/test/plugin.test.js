@@ -200,8 +200,16 @@ describe('plugin', function () {
 
   it('wrap-amagama', () => {
     const j = new Amagama({ plugins: [jsonic] })
+    // Amagama uses ES #private state; the wrapping Proxy must bind
+    // methods to the underlying instance so private-field access
+    // resolves to the real class instance instead of the proxy.
     let jp = j.use(function foo(amagama) {
-      return new Proxy(amagama, {})
+      return new Proxy(amagama, {
+        get(target, prop) {
+          const v = target[prop]
+          return 'function' === typeof v ? v.bind(target) : v
+        },
+      })
     })
     assert.deepEqual(jp.parse('a:1'), { a: 1 })
   })
