@@ -1,0 +1,169 @@
+# Writing Plugins (Go)
+
+Plugins extend amagama by modifying the grammar, adding token types,
+registering custom matchers, or subscribing to parse events.
+
+## Plugin Structure
+
+A plugin is a function with signature `Plugin`:
+
+```go
+type Plugin func(j *Amagama, opts map[string]any)
+```
+
+Register a plugin with `Use`:
+
+```go
+func myPlugin(j *amagama.Amagama, opts map[string]any) {
+    // modify the parser
+}
+
+j := amagama.Make()
+j.Use(myPlugin, map[string]any{"key": "value"})
+```
+
+Plugins are re-applied when `Derive()` creates a child instance.
+
+## Adding Tokens
+
+Register a new fixed token:
+
+```go
+func tildePlugin(j *amagama.Amagama, opts map[string]any) {
+    TL := j.Token("#TL", "~")
+    _ = TL
+}
+```
+
+Token names use `#XX` format by convention. Built-in tokens:
+
+| Name | Src | Description |
+|---|---|---|
+| `#OB` | `{` | Open brace |
+| `#CB` | `}` | Close brace |
+| `#OS` | `[` | Open square bracket |
+| `#CS` | `]` | Close square bracket |
+| `#CL` | `:` | Colon |
+| `#CA` | `,` | Comma |
+| `#NR` | -- | Number |
+| `#ST` | -- | String |
+| `#TX` | -- | Text |
+| `#VL` | -- | Value (keyword) |
+| `#SP` | -- | Space |
+| `#LN` | -- | Line ending |
+| `#CM` | -- | Comment |
+| `#BD` | -- | Bad (error) |
+| `#ZZ` | -- | End of input |
+
+## Modifying Rules
+
+The parser has named rules, each with `Open` and `Close` alternate lists.
+
+```go
+func myPlugin(j *amagama.Amagama, opts map[string]any) {
+    TL := j.Token("#TL", "~")
+
+    j.Rule("val", func(rs *amagama.RuleSpec, p *amagama.Parser) {
+        // Prepend a new alternate to the open phase
+        rs.Open = append([]*amagama.AltSpec{{
+            S: [][]amagama.Tin{{TL}},
+            A: func(r *amagama.Rule, ctx *amagama.Context) {
+                r.Node = 42
+            },
+        }}, rs.Open...)
+    })
+}
+```
+
+### AltSpec Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `S` | `[][]Tin` | Token pattern to match |
+| `A` | `StateAction` | Action: `func(r *Rule, ctx *Context)` |
+| `P` | `string` | Push a new rule by name |
+| `R` | `string` | Replace current rule |
+| `B` | `int` | Backtrack: tokens to put back |
+| `G` | `string` | Group tag (e.g., `"json"`, `"amagama,map"`) |
+| `H` | `AltModifier` | Custom handler: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
+| `E` | `func(r *Rule, ctx *Context) *Token` | Error function |
+| `PF` | `func(r *Rule, ctx *Context) string` | Dynamic push |
+| `RF` | `func(r *Rule, ctx *Context) string` | Dynamic replace |
+| `BF` | `func(r *Rule, ctx *Context) int` | Dynamic backtrack |
+
+### State Actions
+
+Each `RuleSpec` has four hook points:
+
+| Hook | When |
+|---|---|
+| `BO` | Before open alternates are tried |
+| `AO` | After an open alternate matches |
+| `BC` | Before close alternates are tried |
+| `AC` | After a close alternate matches |
+
+```go
+j.Rule("map", func(rs *amagama.RuleSpec, p *amagama.Parser) {
+    originalAO := rs.AO
+    rs.AO = func(r *amagama.Rule, ctx *amagama.Context) {
+        if originalAO != nil {
+            originalAO(r, ctx)
+        }
+        fmt.Println("opened a map")
+    }
+})
+```
+
+## Custom Matchers
+
+For syntax beyond the built-in matchers, register a matcher via
+`options.lex.match` (mirrors TS `amagama.options({ lex: { match: ... } })`):
+
+```go
+j.SetOptions(amagama.Options{Lex: &amagama.LexOptions{
+    Match: map[string]*amagama.MatchSpec{
+        "date": {Order: 1_000_000, Make: func(_ *amagama.LexConfig, _ *amagama.Options) amagama.LexMatcher {
+            return func(lex *amagama.Lex, rule *amagama.Rule) *amagama.Token {
+                // Read from lex.Cursor(), advance if matched, return *Token or nil
+                return nil
+            }
+        }},
+    },
+}})
+```
+
+`Order` determines ordering (lower runs first). Built-in priorities:
+fixed=2M, space=3M, line=4M, string=5M, comment=6M, number=7M, text=8M.
+Setting a spec under an existing name replaces it.
+
+## Subscribing to Events
+
+```go
+j.Sub(
+    func(tkn *amagama.Token, rule *amagama.Rule, ctx *amagama.Context) {
+        fmt.Println("lexed:", tkn)
+    },
+    func(rule *amagama.Rule, ctx *amagama.Context) {
+        fmt.Println("rule:", rule.Name)
+    },
+)
+```
+
+Pass `nil` for either subscriber to skip it.
+
+## Token Sets
+
+Access groups of tokens:
+
+```go
+ignore := j.TokenSet("IGNORE") // [#SP, #LN, #CM]
+vals   := j.TokenSet("VAL")    // [#TX, #NR, #ST, #VL]
+keys   := j.TokenSet("KEY")    // [#TX, #NR, #ST, #VL]
+```
+
+## Differences from TypeScript Plugins
+
+- No plugin option namespacing or defaults merging
+- `StateAction` has no return value (cannot return error tokens)
+- Custom matchers register via `options.lex.match` (same key/order shape as TS)
+- See [differences.md](differences.md) for the full list

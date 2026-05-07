@@ -1,0 +1,106 @@
+# Differences from TypeScript
+
+The TypeScript version is the authoritative implementation. The Go version is
+a faithful port but has some differences in behavior, missing features, and
+Go-specific additions.
+
+## Behavioral Differences
+
+These affect parse output for the same input.
+
+### Number + Text Tokenization
+
+Input like `123abc` produces separate number and text tokens in TypeScript
+but is rejected as not-a-number in Go (treated as text).
+
+```
+// TypeScript: 123abc → number(123) + text("abc")
+// Go:         123abc → text("123abc")
+```
+
+### Empty / Whitespace Input
+
+Both implementations short-circuit exact empty-string input (`""`).
+Whitespace/comment-only input is processed through the normal parse flow in both
+implementations and resolves to `null`/`nil` by grammar behavior.
+
+### Token Consumption
+
+When no grammar alternate matches, both implementations now raise an immediate
+parse error. Token consumption behavior is aligned.
+
+## Missing Features
+
+The following TypeScript features are not yet available in Go:
+
+| Feature | TS Option | Notes |
+|---|---|---|
+| Custom match matchers | `match.token`, `match.value` | Use `options.lex.match` instead |
+
+## Go-Specific Features
+
+These are available only in the Go version:
+
+### `TextInfo` Option
+
+Wraps string and text values in a `Text` struct that preserves the quote
+character used:
+
+```go
+j := amagama.Make(amagama.Options{TextInfo: boolp(true)})
+result, _ := j.Parse(`'hello'`)
+// result: amagama.Text{Quote: '\'', Str: "hello"}
+```
+
+### `ListRef` Option
+
+Wraps arrays in a `ListRef` struct with metadata:
+
+```go
+j := amagama.Make(amagama.Options{ListRef: boolp(true)})
+result, _ := j.Parse("a, b, c")
+// result: amagama.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
+```
+
+### `MapRef` Option
+
+Wraps objects in a `MapRef` struct with metadata:
+
+```go
+j := amagama.Make(amagama.Options{MapRef: boolp(true)})
+result, _ := j.Parse("a:1")
+// result: amagama.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
+```
+
+## Plugin Differences
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Plugin signature | `(amagama, opts?) => void` | `func(j *Amagama, opts map[string]any)` |
+| Rule definer | Receives `RuleSpec` + `Parser` | Receives `*RuleSpec` only |
+| State actions | Can return error tokens | No return value |
+| Option namespacing | Plugin options merged by name | No namespacing |
+| Custom matchers | Via `match` option | Via `options.lex.match` (keyed by name, same shape) |
+
+## Error Handling Differences
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Parse errors | Thrown as exceptions | Returned as `error` |
+| Error messages | Template variable injection | Static messages |
+| ANSI colors | Supported | Not supported |
+| Error hints | Rich suffix with source context | Simple `Hint` string field |
+
+## Type System
+
+TypeScript returns untyped `any`. Go returns `any` but the concrete types are
+predictable:
+
+| Value | Go Type |
+|---|---|
+| Objects | `map[string]any` (or `MapRef` with option) |
+| Arrays | `[]any` (or `ListRef` with option) |
+| Strings | `string` (or `Text` with option) |
+| Numbers | `float64` |
+| Booleans | `bool` |
+| Null | `nil` |
