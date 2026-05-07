@@ -416,51 +416,12 @@ export interface Rule {
 }
 
 // The current parse state and associated context.
-export type Context = {
-  uI: number // Rule index.
-  opts: Options // Amagama instance options.
-  cfg: Config // Amagama instance config.
-  meta: Bag // Parse meta parameters.
-  src: () => string // source text to parse.
-  root: () => any // Root node.
-  plgn: () => Plugin[] // Amagama instance plugins.
-  inst: () => Amagama // Current Amagama instance.
-  rule: Rule // Current rule instance.
-  sub: {
-    lex?: LexSub[]
-    rule?: RuleSub[]
-  }
-  xs: Tin // Lex state tin.
-  v: Token[] // Stack of consumed tokens (newest at top), used for rewind.
-  vAbs: number // Absolute count of pushed-not-rewound tokens; mark/rewind key.
-  v2: Token // Previous previous token (alias of v[v.length - 2]).
-  v1: Token // Previous token (alias of v[v.length - 1]).
-  t: Token[] // Lookahead buffer; t[i] is NOTOKEN if unfetched.
-
-  // Save a rewind mark at the current parse position. The returned
-  // value can be passed to `rewind` to replay the tokens consumed
-  // since the mark was taken, re-feeding them through the lexer's
-  // pending-token queue.
-  mark: () => number
-  rewind: (mark: number) => void
-
-  // Legacy aliases for the first two slots of the lookahead buffer.
-  // @deprecated Use t[0] and t[1] instead.
-  t0: Token // Alias of t[0] (current token).
-  t1: Token // Alias of t[1] (next token).
-
-  tC: number // Token count.
-  kI: number // Parser rule iteration count.
-  rs: Rule[] // Rule stack.
-  rsI: number
-  rsm: { [name: string]: RuleSpec } // RuleSpec lookup map (by rule name).
-  // next: (r: Rule) => Token // Move to next token.
-  log?: (...rest: any) => void // Log parse/lex step (if defined).
-  F: (s: any) => string // Format arbitrary data as length-limited string.
-  u: Bag // Custom meta data (for use by plugins)
-  NOTOKEN: Token // Per parse "null" Token
-  NORULE: Rule // Per parse "null" Rule
-}
+// Per-parse Context. The runtime class is in src/context.ts; this
+// type-only import + re-export lets other type definitions in this
+// file (and the rest of the codebase that imports from `./types`)
+// keep referencing `Context` without pulling in the class itself.
+import type { Context } from './context'
+export type { Context }
 
 export interface Lex {
   src: String
