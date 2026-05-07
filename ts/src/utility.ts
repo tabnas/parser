@@ -6,13 +6,14 @@
 
 import type {
   AltSpec,
+  Amagama,
+  AmagamaOptions,
   Chars,
   Config,
   Context,
   Lex,
   LexMatcher,
   NormAltSpec,
-  AmagamaOptions,
   Rule,
   RuleSpec,
   Tin,
@@ -111,7 +112,7 @@ const S = {
 // Idempotent normalization of options.
 // See Config type for commentary.
 function configure(
-  amagama: any,
+  amagama: Amagama,
   incfg: Config | undefined,
   opts: AmagamaOptions,
 ): Config {
@@ -837,8 +838,7 @@ function parserwrap(parser: any) {
   return {
     start: function(
       src: string,
-      // amagama: Amagama,
-      amagama: any,
+      amagama: Amagama,
       meta?: any,
       parent_ctx?: any,
     ) {

@@ -254,7 +254,7 @@ export type AmagamaOptions = {
     start?: (
       lexer: any,
       src: string,
-      amagama: any,
+      amagama: Amagama,
       meta?: any,
       parent_ctx?: any,
     ) => any

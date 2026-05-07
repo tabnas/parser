@@ -86,7 +86,7 @@ class Parser {
     return rs
   }
 
-  start(src: string, amagama: any, meta?: any, parent_ctx?: any): any {
+  start(src: string, amagama: Amagama, meta?: any, parent_ctx?: any): any {
     let root: Rule
 
     let endtkn = makeToken(
