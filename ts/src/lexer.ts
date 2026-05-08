@@ -238,7 +238,7 @@ type ScanOut = { sI: number; rI: number; cI: number }
 // Takes raw position numbers rather than a Point because some
 // callers (notably the comment matcher) track positions as locals
 // against a sliced `fwd` string rather than on the lex's pnt.
-function runScan(
+function scan(
   src: string,
   startSI: number,
   startRI: number,
@@ -642,7 +642,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           // a line char (not from a suffix match). cI is intentionally
           // NOT pulled from scanOut — current semantics leave the
           // pnt.cI at end-of-comment-body even after eating newlines.
-          runScan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+          scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
           rI = scanOut.rI
           fI = scanOut.sI
         }
@@ -705,7 +705,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           cI += end.length
 
           if (mc.eatline) {
-            runScan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+            scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
             rI = scanOut.rI
             fI = scanOut.sI
           }
@@ -1009,7 +1009,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   // classifies every byte 0..255 against THAT quote's role table
   // (the quote char, the escape char, replace chars, and control /
   // line chars depending on whether the quote allows multiline).
-  // The body-scan loop below is then just a runScan + dispatch.
+  // The body-scan loop below is then just a scan + dispatch.
   const bodySpecs = new Map<number, ScanSpec>()
   for (const qc of Object.keys(cfg.string.quoteMap)) {
     bodySpecs.set(qc.charCodeAt(0), buildStringBodySpec(cfg, qc))
@@ -1054,7 +1054,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
       // Body scan: consume body chars (and multi-line newlines)
       // until something interesting (quote, escape, control, replace).
       const bodyStart = sI
-      runScan(src, sI, rI, cI, bodySpec, scanOut)
+      scan(src, sI, rI, cI, bodySpec, scanOut)
       sI = scanOut.sI
       rI = scanOut.rI
       cI = scanOut.cI
@@ -1204,7 +1204,7 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
       return
     }
 
-    if (runScan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
       const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#LN', undefined, msrc, pnt)
       pnt.sI = out.sI
@@ -1225,7 +1225,7 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
 
   return guardedMatcher(cfg.space, function spaceBody(lex) {
     const { pnt, src } = lex
-    if (runScan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
       const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#SP', undefined, msrc, pnt)
       pnt.sI = out.sI
@@ -1429,7 +1429,7 @@ export {
   // Lex scan primitives — exposed so plugin authors can build their
   // own matchers on the same state-machine driver.
   guardedMatcher,
-  runScan,
+  scan,
   buildCharRunSpec,
   buildLineRunSpec,
   buildStringBodySpec,

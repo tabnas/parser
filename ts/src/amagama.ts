@@ -96,7 +96,7 @@ import {
   makeToken,
   // Lex scan primitives — re-exposed via util for plugin authors.
   guardedMatcher,
-  runScan,
+  scan,
   buildCharRunSpec,
   buildLineRunSpec,
   buildStringBodySpec,
@@ -142,7 +142,7 @@ const util: Record<string, any> = {
   // reuse the same state-machine driver and spec builders the core
   // matchers use. See the matchers in src/lexer.ts for examples.
   guardedMatcher,
-  runScan,
+  scan,
   buildCharRunSpec,
   buildLineRunSpec,
   buildStringBodySpec,
