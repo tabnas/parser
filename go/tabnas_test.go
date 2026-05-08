@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"bufio"
@@ -166,18 +166,18 @@ func specDir() string {
 
 // parserTSVFiles lists all parser-related TSV files (excluding utility-* files).
 var parserTSVFiles = []string{
-	"amagama-basic-json.tsv",
-	"amagama-basic-array-tree.tsv",
-	"amagama-basic-mixed-tree.tsv",
-	"amagama-basic-object-tree.tsv",
-	"amagama-funky-keys.tsv",
-	"amagama-process-array.tsv",
-	"amagama-process-implicit-object.tsv",
-	"amagama-process-mixed-nodes.tsv",
-	"amagama-process-object-tree.tsv",
-	"amagama-process-scalars.tsv",
-	"amagama-process-text.tsv",
-	"amagama-process-whitespace.tsv",
+	"tabnas-basic-json.tsv",
+	"tabnas-basic-array-tree.tsv",
+	"tabnas-basic-mixed-tree.tsv",
+	"tabnas-basic-object-tree.tsv",
+	"tabnas-funky-keys.tsv",
+	"tabnas-process-array.tsv",
+	"tabnas-process-implicit-object.tsv",
+	"tabnas-process-mixed-nodes.tsv",
+	"tabnas-process-object-tree.tsv",
+	"tabnas-process-scalars.tsv",
+	"tabnas-process-text.tsv",
+	"tabnas-process-whitespace.tsv",
 	"comma-implicit-comma.tsv",
 	"comma-optional-comma.tsv",
 	"feature-debug-cases.tsv",

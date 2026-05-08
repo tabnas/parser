@@ -11,14 +11,14 @@
 //   3. rewinds to the mark and retries into either the `X D Y` branch
 //      (if D was seen) or the `Y` branch (if not).
 //
-// The pattern uses only standard amagama primitives: r:/p:/c:/k: and
+// The pattern uses only standard tabnas primitives: r:/p:/c:/k: and
 // ctx.mark/rewind/t — no new parser machinery is needed.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, bnf: bnfPlugin } = require('..')
-const am = new Amagama({ plugins: [bnfPlugin] })
+const { Tabnas, bnf: bnfPlugin } = require('..')
+const am = new Tabnas({ plugins: [bnfPlugin] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 

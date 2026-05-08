@@ -9,9 +9,9 @@ const Util = require('util')
 const { filterRules, modlist } = require('../dist/utility')
 const { strinject } = require('../dist/error')
 
-const { util, Amagama, makeToken, makePoint } = require('..')
+const { util, Tabnas, makeToken, makePoint } = require('..')
 const { json } = require('../dist-test/json-plugin')
-const am = new Amagama({ plugins: [json] })
+const am = new Tabnas({ plugins: [json] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 
@@ -318,7 +318,7 @@ describe('utility', () => {
           unknown: 'unknown-code',
         },
         errmsg: {
-          name: 'amagama',
+          name: 'tabnas',
           suffix: true,
         },
         hint: {

@@ -1,17 +1,17 @@
-# amagama (Go)
+# tabnas (Go)
 
 Version: 0.1.22
 
-A Go port of [amagama](https://github.com/amagamajs/amagama) — the
+A Go port of [tabnas](https://github.com/amagamajs/tabnas) — the
 lenient JSON parser. The TypeScript reference implementation lives at
 [`../ts/`](../ts/) in this repo; both runtimes share the spec fixtures
 under [`../test/spec/`](../test/spec/) so they stay in lockstep.
 
 Same architecture, same syntax, same results. If you already use
-amagama in TypeScript, you know what this does. If you don't, read
+tabnas in TypeScript, you know what this does. If you don't, read
 on.
 
-amagama accepts all standard JSON -- and then goes further. Unquoted
+tabnas accepts all standard JSON -- and then goes further. Unquoted
 keys, implicit objects, comments, trailing commas, single-quoted
 strings, multiline strings, path diving, and more. It parses what you
 meant, not just what you typed.
@@ -19,7 +19,7 @@ meant, not just what you typed.
 ## Install
 
 ```bash
-go get github.com/amagamajs/amagama/go@latest
+go get github.com/amagamajs/tabnas/go@latest
 ```
 
 ## Quick Example
@@ -29,11 +29,11 @@ package main
 
 import (
     "fmt"
-    "github.com/amagamajs/amagama/go"
+    "github.com/amagamajs/tabnas/go"
 )
 
 func main() {
-    result, err := amagama.Parse("a:1, b:2")
+    result, err := tabnas.Parse("a:1, b:2")
     if err != nil {
         panic(err)
     }
@@ -51,8 +51,8 @@ parser instance with whatever behavior you need:
 ```go
 func boolp(b bool) *bool { return &b }
 
-j := amagama.Make(amagama.Options{
-    Number: &amagama.NumberOptions{Lex: boolp(false)},
+j := tabnas.Make(tabnas.Options{
+    Number: &tabnas.NumberOptions{Lex: boolp(false)},
 })
 
 result, err := j.Parse("a:1, b:2")
@@ -64,7 +64,7 @@ it later.
 
 ## Syntax
 
-amagama accepts all standard JSON plus the relaxations listed in the
+tabnas accepts all standard JSON plus the relaxations listed in the
 [syntax reference](doc/syntax.md). Here are the highlights:
 
 - **Unquoted keys**: `a:1` &rarr; `{"a": 1}`

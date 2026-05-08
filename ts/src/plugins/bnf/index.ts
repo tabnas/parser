@@ -2,7 +2,7 @@
 
 /*  plugins/bnf/index.ts
  *  BNF plugin — adds `am.bnf(src)` (install) and `am.bnf.toSpec(src)`
- *  (build without installing) to an Amagama instance.
+ *  (build without installing) to an Tabnas instance.
  *
  *  The conversion logic itself lives in ./converter.ts; this file
  *  exposes it both as a Plugin (for `am.use(bnf)`) and as bare
@@ -10,7 +10,7 @@
  */
 
 import type {
-  Amagama,
+  Tabnas,
   BnfConvertOptions,
   GrammarSpec,
   Plugin,
@@ -29,7 +29,7 @@ import {
 // Plugin entry point. Decorates the instance with a callable `bnf`
 // member that converts and installs a grammar, plus `bnf.toSpec` for
 // callers that just want the spec.
-const bnf: Plugin = function bnf(am: Amagama, _options?: any): void {
+const bnf: Plugin = function bnf(am: Tabnas, _options?: any): void {
   const fn = ((src: string, opts?: BnfConvertOptions): GrammarSpec => {
     const spec = bnfConvert(src, opts)
     am.grammar(spec)

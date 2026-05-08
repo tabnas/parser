@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"reflect"
@@ -6,7 +6,7 @@ import (
 )
 
 // Tests for the Util bag and its helpers. Mirrors the TS util functions
-// (src/utility.ts: keys, values, entries, omap) under TS amagama.util.
+// (src/utility.ts: keys, values, entries, omap) under TS tabnas.util.
 
 func TestKeys_NilMapReturnsEmpty(t *testing.T) {
 	if got := Keys(nil); !reflect.DeepEqual(got, []string{}) {
@@ -91,7 +91,7 @@ func TestOmap_ExtraPairs(t *testing.T) {
 	}
 }
 
-func TestAmagama_Util_ExposesHelpers(t *testing.T) {
+func TestTabnas_Util_ExposesHelpers(t *testing.T) {
 	j := Make()
 	u := j.Util()
 

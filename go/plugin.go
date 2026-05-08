@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"fmt"
@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// Plugin is a function that modifies a Amagama instance.
+// Plugin is a function that modifies a Tabnas instance.
 // Plugins can add custom tokens, matchers, and rule modifications.
 // Returns an error if the plugin fails to initialize.
-type Plugin func(j *Amagama, opts map[string]any) error
+type Plugin func(j *Tabnas, opts map[string]any) error
 
 // LexMatcher is a custom lexer matcher function.
 // It receives the lexer and the current parsing rule, and returns a Token
@@ -59,15 +59,15 @@ type pluginEntry struct {
 	opts   map[string]any
 }
 
-// Use registers and invokes a plugin on this Amagama instance.
-// The plugin function is called with the Amagama instance and optional options.
+// Use registers and invokes a plugin on this Tabnas instance.
+// The plugin function is called with the Tabnas instance and optional options.
 // Returns an error if the plugin fails to initialize.
 //
 // Example:
 //
-//	j := amagama.Make()
+//	j := tabnas.Make()
 //	err := j.Use(myPlugin, map[string]any{"key": "value"})
-func (j *Amagama) Use(plugin Plugin, opts ...map[string]any) error {
+func (j *Tabnas) Use(plugin Plugin, opts ...map[string]any) error {
 	var pluginOpts map[string]any
 	if len(opts) > 0 && opts[0] != nil {
 		pluginOpts = opts[0]
@@ -85,9 +85,9 @@ func (j *Amagama) Use(plugin Plugin, opts ...map[string]any) error {
 //
 // Example:
 //
-//	j := amagama.Make()
+//	j := tabnas.Make()
 //	err := j.UseDefaults(hoover.Hoover, hoover.Defaults, map[string]any{...})
-func (j *Amagama) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map[string]any) error {
+func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map[string]any) error {
 	pluginOpts := Deep(map[string]any{}, defaults).(map[string]any)
 	if len(opts) > 0 && opts[0] != nil {
 		pluginOpts = Deep(pluginOpts, opts[0]).(map[string]any)
@@ -102,7 +102,7 @@ func (j *Amagama) UseDefaults(plugin Plugin, defaults map[string]any, opts ...ma
 // alternates, and BO/BC/AO/AC state actions.
 //
 // If the rule does not exist, a new empty RuleSpec is created.
-// Returns the Amagama instance for chaining.
+// Returns the Tabnas instance for chaining.
 //
 // Example:
 //
@@ -112,7 +112,7 @@ func (j *Amagama) UseDefaults(plugin Plugin, defaults map[string]any, opts ...ma
 //	        A: func(r *Rule, ctx *Context) { r.Node = "custom" },
 //	    }}, rs.Open...)
 //	})
-func (j *Amagama) Rule(name string, definer RuleDefiner) *Amagama {
+func (j *Tabnas) Rule(name string, definer RuleDefiner) *Tabnas {
 	rs := j.parser.RSM[name]
 	if rs == nil {
 		rs = &RuleSpec{Name: name}
@@ -135,7 +135,7 @@ func (j *Amagama) Rule(name string, definer RuleDefiner) *Amagama {
 //
 //	// Look up existing token
 //	OB := j.Token("#OB", "")
-func (j *Amagama) Token(name string, src ...string) Tin {
+func (j *Tabnas) Token(name string, src ...string) Tin {
 	// Look up existing token by name.
 	if tin, ok := j.tinByName[name]; ok {
 		// If src provided, update the fixed token mapping.
@@ -176,8 +176,8 @@ func (j *Amagama) Token(name string, src ...string) Tin {
 
 // FixedSrc returns the Tin for a fixed token source string (e.g. "{" → TinOB).
 // Returns 0 if the source string is not a fixed token.
-// Matches TS `amagama.fixed('b')`.
-func (j *Amagama) FixedSrc(src string) Tin {
+// Matches TS `tabnas.fixed('b')`.
+func (j *Tabnas) FixedSrc(src string) Tin {
 	if tin, ok := j.parser.Config.FixedTokens[src]; ok {
 		return tin
 	}
@@ -186,8 +186,8 @@ func (j *Amagama) FixedSrc(src string) Tin {
 
 // FixedTin returns the source string for a fixed token Tin (e.g. TinOB → "{").
 // Returns "" if the Tin is not a fixed token.
-// Matches TS `amagama.fixed(18)`.
-func (j *Amagama) FixedTin(tin Tin) string {
+// Matches TS `tabnas.fixed(18)`.
+func (j *Tabnas) FixedTin(tin Tin) string {
 	for src, t := range j.parser.Config.FixedTokens {
 		if t == tin {
 			return src
@@ -204,7 +204,7 @@ func (j *Amagama) FixedTin(tin Tin) string {
 //	comment=6000000, number=7000000, text=8000000
 //
 // Use Order < 2000000 to run before all built-ins (matching TS match behavior).
-func (j *Amagama) registerMatchSpecs(opts *Options) {
+func (j *Tabnas) registerMatchSpecs(opts *Options) {
 	if opts.Lex == nil || opts.Lex.Match == nil {
 		return
 	}
@@ -240,7 +240,7 @@ func (j *Amagama) registerMatchSpecs(opts *Options) {
 //   - nil: remove any existing src→tin mapping(s) for that name.
 //
 // Mirrors the TS `options.fixed.token` semantics (StrMap with null = delete).
-func (j *Amagama) applyFixedTokens(opts *Options) {
+func (j *Tabnas) applyFixedTokens(opts *Options) {
 	if opts.Fixed == nil || opts.Fixed.Token == nil {
 		return
 	}
@@ -274,7 +274,7 @@ func (j *Amagama) applyFixedTokens(opts *Options) {
 
 
 // Plugins returns the list of installed plugins (for introspection).
-func (j *Amagama) Plugins() []Plugin {
+func (j *Tabnas) Plugins() []Plugin {
 	out := make([]Plugin, len(j.plugins))
 	for i, pe := range j.plugins {
 		out[i] = pe.plugin
@@ -284,17 +284,17 @@ func (j *Amagama) Plugins() []Plugin {
 
 // Config returns the parser's LexConfig for direct inspection or modification.
 // Use with care — prefer Token(), Rule(), and options.lex.match for most work.
-func (j *Amagama) Config() *LexConfig {
+func (j *Tabnas) Config() *LexConfig {
 	return j.parser.Config
 }
 
 // RSM returns the rule spec map for direct inspection or modification.
-func (j *Amagama) RSM() map[string]*RuleSpec {
+func (j *Tabnas) RSM() map[string]*RuleSpec {
 	return j.parser.RSM
 }
 
 // TinName returns the name for a Tin value, checking both built-in and custom tokens.
-func (j *Amagama) TinName(tin Tin) string {
+func (j *Tabnas) TinName(tin Tin) string {
 	if name, ok := j.nameByTin[tin]; ok {
 		return name
 	}
@@ -306,7 +306,7 @@ func (j *Amagama) TinName(tin Tin) string {
 // "KEY" (text, number, string, value).
 // Custom sets can be added via SetTokenSet.
 // Returns nil if the set name is not recognized.
-func (j *Amagama) TokenSet(name string) []Tin {
+func (j *Tabnas) TokenSet(name string) []Tin {
 	// Check custom sets first.
 	if j.customTokenSets != nil {
 		if tins, ok := j.customTokenSets[name]; ok {
@@ -342,7 +342,7 @@ func (j *Amagama) TokenSet(name string) []Tin {
 // Matches TS options.tokenSet.
 // Also updates the per-instance config sets (IgnoreSet, ValSet, KeySet)
 // to keep them in sync, matching TS cfg.tokenSetTins behavior.
-func (j *Amagama) SetTokenSet(name string, tins []Tin) {
+func (j *Tabnas) SetTokenSet(name string, tins []Tin) {
 	if j.customTokenSets == nil {
 		j.customTokenSets = make(map[string][]Tin)
 	}
@@ -370,8 +370,8 @@ func (j *Amagama) SetTokenSet(name string, tins []Tin) {
 // Sub subscribes to lex and/or rule events.
 // LexSub fires after each non-ignored token is lexed.
 // RuleSub fires after each rule processing step.
-// Returns the Amagama instance for chaining.
-func (j *Amagama) Sub(lexSub LexSub, ruleSub RuleSub) *Amagama {
+// Returns the Tabnas instance for chaining.
+func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 	if lexSub != nil {
 		j.lexSubs = append(j.lexSubs, lexSub)
 	}
@@ -381,10 +381,10 @@ func (j *Amagama) Sub(lexSub LexSub, ruleSub RuleSub) *Amagama {
 	return j
 }
 
-// Derive creates a new Amagama instance inheriting this instance's config,
+// Derive creates a new Tabnas instance inheriting this instance's config,
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
-// This matches TypeScript's amagama.make(options, parent).
-func (j *Amagama) Derive(opts ...Options) *Amagama {
+// This matches TypeScript's tabnas.make(options, parent).
+func (j *Tabnas) Derive(opts ...Options) *Tabnas {
 	// Start with parent's options, merge with new ones.
 	child := Make(opts...)
 
@@ -474,7 +474,7 @@ func (j *Amagama) Derive(opts ...Options) *Amagama {
 		if err := pe.plugin(child, pe.opts); err != nil {
 			// Plugin errors during Derive are programming errors; panic
 			// since Derive doesn't return an error.
-			panic("amagama: plugin error during Derive: " + err.Error())
+			panic("tabnas: plugin error during Derive: " + err.Error())
 		}
 	}
 
@@ -516,7 +516,7 @@ func (j *Amagama) Derive(opts ...Options) *Amagama {
 // When called from within a plugin (during re-apply), skips plugin
 // re-application to avoid infinite recursion.
 // Returns the instance for chaining.
-func (j *Amagama) SetOptions(opts Options) *Amagama {
+func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	merged := Deep(*j.options, opts).(Options)
 	j.options = &merged
 
@@ -666,12 +666,12 @@ func (j *Amagama) SetOptions(opts Options) *Amagama {
 	return j
 }
 
-// SetOptionsText parses a amagama-format options string, converts it to an
+// SetOptionsText parses a tabnas-format options string, converts it to an
 // Options struct via MapToOptions, and applies it via SetOptions.
 // Returns the instance for chaining and any parse error encountered.
 // Complement to SetOptions that accepts a textual specification of the
 // desired options tree.
-func (j *Amagama) SetOptionsText(text string) (*Amagama, error) {
+func (j *Tabnas) SetOptionsText(text string) (*Tabnas, error) {
 	if text == "" {
 		return j, nil
 	}
@@ -696,7 +696,7 @@ func (j *Amagama) SetOptionsText(text string) (*Amagama, error) {
 // dropped whenever the include set is non-empty.
 // Use rule.include option to opt alts into the grammar (e.g. "json"
 // for strict-JSON mode where plugins pre-tag their alts with "json").
-func (j *Amagama) include(groups ...string) *Amagama {
+func (j *Tabnas) include(groups ...string) *Tabnas {
 	includeSet := buildTagSet(groups)
 	if len(includeSet) == 0 {
 		return j
@@ -710,8 +710,8 @@ func (j *Amagama) include(groups ...string) *Amagama {
 
 // exclude removes grammar alternates tagged with any of the given group names.
 // Group names are comma-separated in AltSpec.G fields.
-// Use rule.exclude option to strip groups (e.g. "amagama" for strict JSON).
-func (j *Amagama) exclude(groups ...string) *Amagama {
+// Use rule.exclude option to strip groups (e.g. "tabnas" for strict JSON).
+func (j *Tabnas) exclude(groups ...string) *Tabnas {
 	excludeSet := buildTagSet(groups)
 
 	for _, rs := range j.parser.RSM {
@@ -782,8 +782,8 @@ func filterAltsInclude(alts []*AltSpec, includeSet map[string]bool) []*AltSpec {
 	return result
 }
 
-// ParseMeta parses a amagama string with metadata passed through to the parse context.
+// ParseMeta parses a tabnas string with metadata passed through to the parse context.
 // The meta map is accessible in rule actions/conditions via ctx.Meta.
-func (j *Amagama) ParseMeta(src string, meta map[string]any) (any, error) {
+func (j *Tabnas) ParseMeta(src string, meta map[string]any) (any, error) {
 	return j.parseInternal(src, meta)
 }

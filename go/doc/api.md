@@ -1,7 +1,7 @@
 # API Reference (Go)
 
 ```go
-import "github.com/amagamajs/amagama/go"
+import "github.com/amagamajs/tabnas/go"
 ```
 
 ## Parsing
@@ -12,77 +12,77 @@ Parse a string using default settings. Convenience function that creates a
 fresh parser for each call.
 
 ```go
-result, err := amagama.Parse("a:1, b:2")
+result, err := tabnas.Parse("a:1, b:2")
 // result: map[string]any{"a": float64(1), "b": float64(2)}
 ```
 
-### `(*Amagama) Parse(src string) (any, error)`
+### `(*Tabnas) Parse(src string) (any, error)`
 
 Parse using an instance's configuration.
 
 ```go
-j := amagama.Make()
+j := tabnas.Make()
 result, err := j.Parse("a:1")
 ```
 
-### `(*Amagama) ParseMeta(src string, meta map[string]any) (any, error)`
+### `(*Tabnas) ParseMeta(src string, meta map[string]any) (any, error)`
 
 Parse with metadata accessible in rule actions via `ctx.Meta`.
 
 ```go
-result, err := j.ParseMeta("a:1", map[string]any{"filename": "config.amagama"})
+result, err := j.ParseMeta("a:1", map[string]any{"filename": "config.tabnas"})
 ```
 
 ## Instance Management
 
-### `Make(opts ...Options) *Amagama`
+### `Make(opts ...Options) *Tabnas`
 
 Create a new parser instance. Unset option fields use defaults.
 
 ```go
-j := amagama.Make(amagama.Options{
-    Comment: &amagama.CommentOptions{Lex: boolp(false)},
-    Number:  &amagama.NumberOptions{Hex: boolp(false)},
+j := tabnas.Make(tabnas.Options{
+    Comment: &tabnas.CommentOptions{Lex: boolp(false)},
+    Number:  &tabnas.NumberOptions{Hex: boolp(false)},
 })
 ```
 
-### `(*Amagama) Derive(opts ...Options) *Amagama`
+### `(*Tabnas) Derive(opts ...Options) *Tabnas`
 
 Create a child instance inheriting the parent's configuration, plugins, custom
 tokens, and subscriptions. Changes to the child do not affect the parent.
 
 ```go
-child := j.Derive(amagama.Options{
-    Comment: &amagama.CommentOptions{Lex: boolp(false)},
+child := j.Derive(tabnas.Options{
+    Comment: &tabnas.CommentOptions{Lex: boolp(false)},
 })
 ```
 
-### `(*Amagama) SetOptions(opts Options) *Amagama`
+### `(*Tabnas) SetOptions(opts Options) *Tabnas`
 
 Deep-merge new options into the instance and rebuild the configuration,
 grammar, and plugins. Nil/zero fields in opts do not overwrite existing values,
 matching the TypeScript `options()` setter behavior. Returns the instance for
 chaining.
 
-### `(*Amagama) Options() Options`
+### `(*Tabnas) Options() Options`
 
 Returns a copy of the instance's current options.
 
-### `(*Amagama) Decorate(name string, value any) *Amagama`
+### `(*Tabnas) Decorate(name string, value any) *Tabnas`
 
 Set a named value on the instance. This is the Go equivalent of the
 TypeScript pattern where plugins add properties dynamically
-(`amagama.foo = () => 'FOO'`). Decorations are inherited by `Derive`.
+(`tabnas.foo = () => 'FOO'`). Decorations are inherited by `Derive`.
 
 ```go
-j.Use(func(j *amagama.Amagama, opts map[string]any) {
+j.Use(func(j *tabnas.Tabnas, opts map[string]any) {
     j.Decorate("greet", func(name string) string {
         return "hello " + name
     })
 })
 ```
 
-### `(*Amagama) Decoration(name string) any`
+### `(*Tabnas) Decoration(name string) any`
 
 Returns a named value previously set by `Decorate`, or nil.
 
@@ -93,7 +93,7 @@ fmt.Println(fn("world")) // "hello world"
 
 ## Grammar
 
-### `(*Amagama) Rule(name string, definer RuleDefiner) *Amagama`
+### `(*Tabnas) Rule(name string, definer RuleDefiner) *Tabnas`
 
 Modify or create a grammar rule. The definer callback receives the
 `*RuleSpec` and the owning `*Parser`, and can modify the rule's
@@ -101,21 +101,21 @@ Modify or create a grammar rule. The definer callback receives the
 The parser is available for inspecting or referencing other rules.
 
 ```go
-j.Rule("val", func(rs *amagama.RuleSpec, p *amagama.Parser) {
-    rs.Open = append([]*amagama.AltSpec{{
-        S: [][]amagama.Tin{{myToken}},
-        A: func(r *amagama.Rule, ctx *amagama.Context) {
+j.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
+    rs.Open = append([]*tabnas.AltSpec{{
+        S: [][]tabnas.Tin{{myToken}},
+        A: func(r *tabnas.Rule, ctx *tabnas.Context) {
             r.Node = "custom"
         },
     }}, rs.Open...)
 })
 ```
 
-### `(*Amagama) RSM() map[string]*RuleSpec`
+### `(*Tabnas) RSM() map[string]*RuleSpec`
 
 Returns the rule spec map for direct inspection.
 
-### `(*Amagama) Token(name string, src ...string) Tin`
+### `(*Tabnas) Token(name string, src ...string) Tin`
 
 Register a new token type or look up an existing one. With `src`, registers
 a fixed token mapping.
@@ -125,20 +125,20 @@ TL := j.Token("#TL", "~")  // register ~ as #TL token
 OB := j.Token("#OB", "")   // look up existing #OB token
 ```
 
-### `(*Amagama) TokenSet(name string) []Tin`
+### `(*Tabnas) TokenSet(name string) []Tin`
 
 Get a named token set:
 - `"IGNORE"` -- space, line, comment tokens
 - `"VAL"` -- text, number, string, value tokens
 - `"KEY"` -- text, number, string, value tokens
 
-### `(*Amagama) TinName(tin Tin) string`
+### `(*Tabnas) TinName(tin Tin) string`
 
 Returns the name for a token identification number.
 
 ## Plugins
 
-### `(*Amagama) Use(plugin Plugin, opts ...map[string]any) *Amagama`
+### `(*Tabnas) Use(plugin Plugin, opts ...map[string]any) *Tabnas`
 
 Register and execute a plugin. Returns the instance for chaining.
 
@@ -149,17 +149,17 @@ j.Use(myPlugin, map[string]any{"key": "value"})
 ### `Plugin` type
 
 ```go
-type Plugin func(j *Amagama, opts map[string]any)
+type Plugin func(j *Tabnas, opts map[string]any)
 ```
 
-### `(*Amagama) Plugins() []Plugin`
+### `(*Tabnas) Plugins() []Plugin`
 
 Returns the list of installed plugins.
 
 ## Custom Matchers
 
 Register custom lexer matchers via `options.lex.match`, keyed by name.
-This mirrors the TypeScript `amagama.options({ lex: { match: ... } })` API.
+This mirrors the TypeScript `tabnas.options({ lex: { match: ... } })` API.
 Matchers are tried in priority order (lower first). Built-in priorities:
 
 | Matcher | Priority |
@@ -175,11 +175,11 @@ Matchers are tried in priority order (lower first). Built-in priorities:
 Use an `Order` below 2,000,000 to run before all built-ins.
 
 ```go
-j := amagama.Make()
-j.SetOptions(amagama.Options{Lex: &amagama.LexOptions{
-    Match: map[string]*amagama.MatchSpec{
-        "date": {Order: 1_000_000, Make: func(_ *amagama.LexConfig, _ *amagama.Options) amagama.LexMatcher {
-            return func(lex *amagama.Lex, rule *amagama.Rule) *amagama.Token {
+j := tabnas.Make()
+j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{
+    Match: map[string]*tabnas.MatchSpec{
+        "date": {Order: 1_000_000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+            return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
                 // ... read from lex.Cursor(), advance on match, return a Token
                 return nil
             }
@@ -207,12 +207,12 @@ the cursor if it produces a token.
 
 ## Events
 
-### `(*Amagama) Sub(lexSub LexSub, ruleSub RuleSub) *Amagama`
+### `(*Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas`
 
 Subscribe to lex and/or rule events. Pass `nil` for either to skip.
 
 ```go
-j.Sub(func(tkn *amagama.Token, rule *amagama.Rule, ctx *amagama.Context) {
+j.Sub(func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
     fmt.Println("token:", tkn)
 }, nil)
 ```
@@ -226,25 +226,25 @@ type RuleSub func(rule *Rule, ctx *Context)
 
 ## Configuration
 
-### `(*Amagama) Config() *LexConfig`
+### `(*Tabnas) Config() *LexConfig`
 
 Returns the parser's internal configuration for direct inspection or
 modification. Prefer `Token()`, `Rule()`, and `options.lex.match` for most work.
 
-### `(*Amagama) Exclude(groups ...string) *Amagama`
+### `(*Tabnas) Exclude(groups ...string) *Tabnas`
 
 Remove grammar alternates tagged with the given group names.
 
 ```go
-j.Exclude("amagama") // keep only JSON-tagged rules for strict parsing
+j.Exclude("tabnas") // keep only JSON-tagged rules for strict parsing
 ```
 
 ## Error Handling
 
-Parse errors are returned as `*AmagamaError`:
+Parse errors are returned as `*TabnasError`:
 
 ```go
-type AmagamaError struct {
+type TabnasError struct {
     Code   string // "unexpected", "unterminated_string", "unterminated_comment"
     Detail string // Human-readable message
     Pos    int    // 0-based character position
@@ -256,9 +256,9 @@ type AmagamaError struct {
 ```
 
 ```go
-result, err := amagama.Parse("{a:")
+result, err := tabnas.Parse("{a:")
 if err != nil {
-    if je, ok := err.(*amagama.AmagamaError); ok {
+    if je, ok := err.(*tabnas.TabnasError); ok {
         fmt.Println(je.Code, "at line", je.Row)
     }
 }
@@ -271,8 +271,8 @@ Go requires a pointer to pass `*bool` option fields. A common pattern:
 ```go
 func boolp(b bool) *bool { return &b }
 
-amagama.Options{
-    Comment: &amagama.CommentOptions{Lex: boolp(false)},
+tabnas.Options{
+    Comment: &tabnas.CommentOptions{Lex: boolp(false)},
 }
 ```
 
@@ -284,4 +284,4 @@ amagama.Options{
 const Version = "0.1.6"
 ```
 
-The current version of the amagama Go module.
+The current version of the tabnas Go module.

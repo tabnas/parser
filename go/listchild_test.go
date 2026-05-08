@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 
 // makeChildParser creates a parser with List.Child enabled.
 // ListRef is automatically enabled by list.child.
-func makeChildParser() *Amagama {
+func makeChildParser() *Tabnas {
 	return Make(Options{List: &ListOptions{Child: boolPtr(true)}})
 }
 

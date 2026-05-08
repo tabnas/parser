@@ -1,25 +1,25 @@
 # API Reference
 
-amagama exposes a single class — `Amagama` — plus the bundled `bnf`
+tabnas exposes a single class — `Tabnas` — plus the bundled `bnf`
 and `Debug` plugins. The package ships **no grammar** of its own;
 every grammar arrives via a plugin.
 
 ## Construction
 
-### `new Amagama(options?)`
+### `new Tabnas(options?)`
 
 Create a parser instance. The class has no grammar by default; pass a
 `plugins` array to load one (or more) at construction time:
 
 ```js
-const { Amagama, bnf } = require('amagama')
+const { Tabnas, bnf } = require('tabnas')
 
-const am = new Amagama({ plugins: [bnf] })
+const am = new Tabnas({ plugins: [bnf] })
 am.bnf('greet = "hi" / "hello"')
 am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
 ```
 
-`options` is an [`AmagamaOptions`](options.md) object — every field is
+`options` is an [`TabnasOptions`](options.md) object — every field is
 optional and merges with the defaults. The `plugins` field is the only
 field that doesn't survive into `am.options` after construction (it's
 consumed by the `use()` calls the constructor makes internally).
@@ -166,7 +166,7 @@ return whatever the plugin returns, falling back to the instance:
 
 ```js
 const wrapped = am.use((am) => new Proxy(am, {
-  // Amagama uses ES #private state; bind methods to the underlying
+  // Tabnas uses ES #private state; bind methods to the underlying
   // instance so private-field access works through the Proxy.
   get(target, prop) {
     const v = target[prop]
@@ -196,7 +196,7 @@ am.sub({
 
 | Property | Description |
 |---|---|
-| `am.id` | Unique-per-instance string id (`'Amagama/<ts>/<rand>[/<tag>]'`). |
+| `am.id` | Unique-per-instance string id (`'Tabnas/<ts>/<rand>[/<tag>]'`). |
 | `am.parent` | Parent instance, if this was created via `parent.make()`. |
 | `am.toString()` | Returns `am.id`. |
 
@@ -211,7 +211,7 @@ for things the public API doesn't surface; user code rarely needs it.
 
 ## Utilities
 
-### `Amagama.util` (static)
+### `Tabnas.util` (static)
 
 Bag of helpers for plugin authors:
 
@@ -227,16 +227,16 @@ Bag of helpers for plugin authors:
 ### Constants
 
 `OPEN`, `CLOSE`, `BEFORE`, `AFTER`, `EMPTY`, `SKIP` — exported as both
-named exports and `Amagama.X` static members. Used in rule definitions
+named exports and `Tabnas.X` static members. Used in rule definitions
 and state actions.
 
 ## Plugins shipped with this package
 
 | Module path | Purpose |
 |---|---|
-| `amagama` | re-exports `bnf`, `Debug` for ergonomic destructuring. |
-| `amagama/dist/plugins/bnf` | BNF → grammar plugin + `bnfConvert` / `parseBnf` / `BnfParseError` exports. |
-| `amagama/dist/plugins/debug` | Debug plugin (`Debug`) + tracing hooks. |
+| `tabnas` | re-exports `bnf`, `Debug` for ergonomic destructuring. |
+| `tabnas/dist/plugins/bnf` | BNF → grammar plugin + `bnfConvert` / `parseBnf` / `BnfParseError` exports. |
+| `tabnas/dist/plugins/debug` | Debug plugin (`Debug`) + tracing hooks. |
 
 A strict-JSON grammar plugin lives as a test fixture under
 [`test/json-plugin.ts`](../test/json-plugin.ts) — useful as a worked
@@ -253,21 +253,21 @@ main module. Notable shapes:
 
 | Type | Description |
 |---|---|
-| `Amagama` | Class type of the engine instance. |
-| `AmagamaOptions` | The full option shape (with `plugins?: Plugin[]`). |
-| `AmagamaInternal` | Shape returned by `am.internal()`. |
-| `Plugin` | `(amagama, options?) => void \| Amagama`, plus optional `defaults`. |
+| `Tabnas` | Class type of the engine instance. |
+| `TabnasOptions` | The full option shape (with `plugins?: Plugin[]`). |
+| `TabnasInternal` | Shape returned by `am.internal()`. |
+| `Plugin` | `(tabnas, options?) => void \| Tabnas`, plus optional `defaults`. |
 | `Tin` | Branded `number` for token ids. |
 | `Token`, `Lex`, `Point` | Lexer types (also classes). |
 | `Rule`, `RuleSpec`, `AltMatch`, `AltSpec` | Parser types. |
-| `Config` | Internal compiled form of `AmagamaOptions`. |
+| `Config` | Internal compiled form of `TabnasOptions`. |
 | `Context` | Per-parse state passed to rule actions and matchers. |
 | `GrammarSpec`, `GrammarAltSpec` | Declarative-grammar JSON shapes. |
 | `BnfConvertOptions` | BNF plugin's optional input. |
 
 ## Error Handling
 
-Parse failures throw an `AmagamaError`:
+Parse failures throw an `TabnasError`:
 
 | Property | Description |
 |---|---|
@@ -280,8 +280,8 @@ Parse failures throw an `AmagamaError`:
 
 ```js
 const {
-  Amagama,            // the engine class
-  AmagamaError,       // error class
+  Tabnas,            // the engine class
+  TabnasError,       // error class
 
   // Plugins
   bnf,
@@ -296,7 +296,7 @@ const {
   makeFixedMatcher, makeSpaceMatcher, makeLineMatcher,
   makeStringMatcher, makeCommentMatcher, makeNumberMatcher, makeTextMatcher,
 
-  // Utility bag (also Amagama.util)
+  // Utility bag (also Tabnas.util)
   util,
-} = require('amagama')
+} = require('tabnas')
 ```

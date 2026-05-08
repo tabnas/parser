@@ -1,17 +1,17 @@
-// Package amagama provides a lenient JSON parser that supports relaxed syntax
+// Package tabnas provides a lenient JSON parser that supports relaxed syntax
 // including unquoted keys, implicit objects/arrays, comments, trailing commas,
 // single-quoted strings, path diving (nested object shorthand), and more.
 //
-// It is a Go port of the amagama TypeScript library, faithfully implementing
+// It is a Go port of the tabnas TypeScript library, faithfully implementing
 // the same matcher-based lexer and rule-based parser architecture.
-package amagama
+package tabnas
 
 import (
 	"strconv"
 	"strings"
 )
 
-// Version is the current version of the amagama Go module.
+// Version is the current version of the tabnas Go module.
 const Version = "0.1.22"
 
 // Error message templates matching TypeScript defaults.
@@ -22,9 +22,9 @@ var errorMessages = map[string]string{
 	"unknown":              "unknown error: ",
 }
 
-// AmagamaError is the error type returned by Parse when parsing fails.
+// TabnasError is the error type returned by Parse when parsing fails.
 // It includes structured details about the error location and cause.
-type AmagamaError struct {
+type TabnasError struct {
 	Code   string // Error code: "unterminated_string", "unterminated_comment", "unexpected"
 	Detail string // Human-readable detail message (e.g. "unterminated string: \"abc")
 	Pos    int    // 0-based character position in source
@@ -34,13 +34,13 @@ type AmagamaError struct {
 	Hint   string // Additional explanatory text for this error code
 
 	fullSource string      // Complete input source (for generating site extract)
-	tag        string      // Custom error tag name (TS: errmsg.name), defaults to "amagama"
+	tag        string      // Custom error tag name (TS: errmsg.name), defaults to "tabnas"
 	color      ColorConfig // ANSI palette applied by Error(); zero value disables colour
 }
 
-// Error returns a formatted error message matching the TypeScript AmagamaError format:
+// Error returns a formatted error message matching the TypeScript TabnasError format:
 //
-//	[amagama/<code>]: <message>
+//	[tabnas/<code>]: <message>
 //	  --> <row>:<col>
 //	 <line-2> | <source>
 //	 <line-1> | <source>
@@ -51,7 +51,7 @@ type AmagamaError struct {
 //
 // When e.color.Active is true the header, arrow, caret, and line-number
 // gutter are wrapped in ANSI escapes — matching TS error.ts output.
-func (e *AmagamaError) Error() string {
+func (e *TabnasError) Error() string {
 	msg := e.Detail
 
 	hi, _, line, reset := e.color.Codes()
@@ -61,7 +61,7 @@ func (e *AmagamaError) Error() string {
 	// Line 1: [tag/<code>]: <message>
 	tag := e.tag
 	if tag == "" {
-		tag = "amagama"
+		tag = "tabnas"
 	}
 	b.WriteString(hi)
 	b.WriteString("[")
@@ -167,18 +167,18 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 	return strings.Join(result, "\n")
 }
 
-// makeAmagamaError creates a AmagamaError with the proper Detail message.
+// makeTabnasError creates a TabnasError with the proper Detail message.
 // The colour palette defaults to disabled (zero-value ColorConfig); for
 // parser-path errors use (*Parser).makeError instead, which injects the
 // resolved palette from config.
-func makeAmagamaError(code, src, fullSource string, pos, row, col int) *AmagamaError {
+func makeTabnasError(code, src, fullSource string, pos, row, col int) *TabnasError {
 	tmpl, ok := errorMessages[code]
 	if !ok {
 		tmpl = errorMessages["unknown"]
 	}
 	detail := tmpl + src
 
-	return &AmagamaError{
+	return &TabnasError{
 		Code:       code,
 		Detail:     detail,
 		Pos:        pos,
@@ -189,7 +189,7 @@ func makeAmagamaError(code, src, fullSource string, pos, row, col int) *AmagamaE
 	}
 }
 
-// Parse parses a amagama string and returns the resulting Go value.
+// Parse parses a tabnas string and returns the resulting Go value.
 // The returned value can be:
 //   - map[string]any for objects
 //   - []any for arrays
@@ -198,7 +198,7 @@ func makeAmagamaError(code, src, fullSource string, pos, row, col int) *AmagamaE
 //   - bool for booleans
 //   - nil for null or empty input
 //
-// Returns a *AmagamaError if the input contains a syntax error.
+// Returns a *TabnasError if the input contains a syntax error.
 func Parse(src string) (any, error) {
 	p := NewParser()
 	return p.Start(src)

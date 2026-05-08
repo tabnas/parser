@@ -9,6 +9,7 @@ import type {
   Rule,
   Config,
   Context,
+  LexCheck,
   LexMatcher,
   MakeLexMatcher,
   NormAltSpec,
@@ -16,11 +17,12 @@ import type {
 
 import { EMPTY, INSPECT } from './types'
 
-import type { AmagamaOptions } from './amagama'
+import type { TabnasOptions } from './tabnas'
 
 import {
   S,
   charset,
+  charsBitmap,
   clean,
   deep,
   escre,
@@ -163,20 +165,251 @@ const makeToken = (...params: ConstructorParameters<typeof Token>) =>
 
 const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-1))
 
-let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
-  let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
 
-  return function fixedMatcher(lex: Lex) {
-    let mcfg = cfg.fixed
+// Wrap a matcher body in the standard entry guards: skip when
+// `mcfg.lex` is false, and consult an optional `check` hook that
+// may short-circuit by returning `{ done: true, token }`.
+//
+// `mcfg` is captured once at matcher-build time. The matcher
+// factories are re-invoked on every `am.make()` clone (via
+// `configure()`), so a stale closure can never outlive the cfg
+// snapshot it was built from.
+function guardedMatcher(
+  mcfg: { lex: boolean; check?: LexCheck | undefined },
+  body: LexMatcher,
+): LexMatcher {
+  return function guarded(lex, rule, tI) {
     if (!mcfg.lex) return undefined
+    if (mcfg.check) {
+      const r = mcfg.check(lex)
+      if (r && r.done) return r.token
+    }
+    return body(lex, rule, tI)
+  }
+}
 
-    if (cfg.fixed.check) {
-      let check = cfg.fixed.check(lex)
-      if (check && check.done) {
-        return check.token
+
+// ---------------------------------------------------------------------------
+// Declarative single-character state machine driver.
+//
+// The simpler matchers (space, line, comment-eatline tails) all
+// have the shape "walk bytes, dispatch on (state, char-class), emit
+// position-tracking actions, stop when told". The driver below
+// centralises that shape.
+//
+// Each spec declares:
+//   - `initialState`           which state the walk starts in
+//   - `nclasses`               how many byte-classes the spec uses
+//   - `classOf` (Uint8Array)   per-byte class index (ASCII fast path)
+//   - `fallback`               class for non-ASCII bytes
+//   - `table`   (Int32Array)   action keyed on `state * nclasses + class`
+//
+// An action is a packed Int32 — `STATE_MASK` bits hold the next
+// state, plus three single-bit flags below. The driver applies
+// CONSUME / IS_ROW first, then transitions, then STOP. That ordering
+// makes "consume the char that ends the match" express as
+// `CONSUME | STOP`, while "stop without consuming" is just `STOP`.
+//
+// Performance-wise the loop is uniform: one Uint8Array index, one
+// Int32Array index, three bit tests, no function calls per byte.
+// ---------------------------------------------------------------------------
+
+const CONSUME = 1 << 16
+const IS_ROW = 1 << 17
+const CI_RESET = 1 << 18 // cI = 1 without rI++ (line chars in multi-line strings)
+const STOP = 1 << 19
+const STATE_MASK = 0xffff
+
+type ScanSpec = {
+  readonly initialState: number
+  readonly nclasses: number
+  readonly classOf: Uint8Array
+  readonly fallback: (c: string) => number
+  readonly table: Int32Array
+}
+
+type ScanOut = { sI: number; rI: number; cI: number }
+
+// Walk `src` from `(startSI, startRI, startCI)` according to `spec`.
+// Position fields are written into `out` (a caller-owned scratch
+// object — no allocation per call). Returns true if any char was
+// consumed.
+//
+// Takes raw position numbers rather than a Point because some
+// callers (notably the comment matcher) track positions as locals
+// against a sliced `fwd` string rather than on the lex's pnt.
+function scan(
+  src: string,
+  startSI: number,
+  startRI: number,
+  startCI: number,
+  spec: ScanSpec,
+  out: ScanOut,
+): boolean {
+  let sI = startSI
+  let rI = startRI
+  let cI = startCI
+  const len = src.length
+  const ncls = spec.nclasses
+  const classOf = spec.classOf
+  const table = spec.table
+  let state = spec.initialState
+
+  while (sI < len) {
+    const cc = src.charCodeAt(sI)
+    const cls = cc < 256 ? classOf[cc] : spec.fallback(src[sI])
+    const action = table[state * ncls + cls]
+
+    if (action & CONSUME) {
+      sI++
+      if (action & IS_ROW) {
+        rI++
+        cI = 1
+      } else if (action & CI_RESET) {
+        cI = 1
+      } else {
+        cI++
       }
     }
+    state = action & STATE_MASK
+    if (action & STOP) break
+  }
 
+  out.sI = sI
+  out.rI = rI
+  out.cI = cI
+  return startSI < sI
+}
+
+
+// Build a 3-class line-run spec from cfg.line. Class 0 = not a line
+// char, class 1 = line char, class 2 = line char that also advances
+// the row counter. Used by the line matcher (when not in `single`
+// mode) and by the comment matcher's `eatline` tails.
+function buildLineRunSpec(cfgLine: Config['line']): ScanSpec {
+  const classOf = new Uint8Array(256)
+  for (let cc = 0; cc < 256; cc++) {
+    if (cfgLine.charsBitmap[cc]) {
+      classOf[cc] = cfgLine.rowCharsBitmap[cc] ? 2 : 1
+    }
+  }
+  const lineChars = cfgLine.chars
+  const rowChars = cfgLine.rowChars
+  const fallback = (c: string): number => {
+    if (lineChars[c]) return rowChars[c] ? 2 : 1
+    return 0
+  }
+  return {
+    initialState: 0,
+    nclasses: 3,
+    classOf,
+    fallback,
+    table: LINE_RUN_TABLE,
+  }
+}
+
+// (state=0, class=NOT_LINE) -> stop
+// (state=0, class=LINE)     -> consume, stay in 0
+// (state=0, class=LINE+ROW) -> consume + row, stay in 0
+const LINE_RUN_TABLE = new Int32Array([
+  STOP,
+  CONSUME,
+  CONSUME | IS_ROW,
+])
+
+
+// Build a 2-class run spec from a chars / charsBitmap pair. Class 0
+// = not in set, class 1 = in set. Used by the space matcher.
+function buildCharRunSpec(
+  charsBitmap: Uint8Array,
+  chars: Record<string, any>,
+): ScanSpec {
+  const fallback = (c: string): number => (chars[c] ? 1 : 0)
+  return {
+    initialState: 0,
+    nclasses: 2,
+    classOf: charsBitmap, // already 0/1
+    fallback,
+    table: CHAR_RUN_TABLE,
+  }
+}
+
+// (state=0, class=OUT) -> stop
+// (state=0, class=IN)  -> consume col, stay in 0
+const CHAR_RUN_TABLE = new Int32Array([
+  STOP,
+  CONSUME,
+])
+
+
+// Build a string-body scan spec for one quote character. Class 0 =
+// BODY (consume, advance col); class 1 = STOP (caller decides what
+// to do); class 2 = LINE (multi-line strings only — consume, reset
+// col); class 3 = LINE+ROW (multi-line — consume, reset col,
+// advance row). The opening / closing quote, the escape char, the
+// replace chars and any control char that can't be consumed in
+// the current quote context all map to class 1.
+//
+// One spec per quote char because the quote char is encoded in the
+// class table. For a typical config (1-3 quote chars) this is
+// cheap; the matcher caches them per make.
+function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
+  const qcc = qchar.charCodeAt(0)
+  const escCharCode = cfg.string.escCharCode
+  const replaceCodeMap = cfg.string.replaceCodeMap
+  const hasReplace = cfg.string.hasReplace
+  const isMultiLine = !!cfg.string.multiBitmap[qcc]
+  const lineBM = cfg.line.charsBitmap
+  const rowBM = cfg.line.rowCharsBitmap
+
+  const classOf = new Uint8Array(256)
+  for (let cc = 0; cc < 256; cc++) {
+    if (cc === qcc) {
+      classOf[cc] = 1
+    } else if (cc === escCharCode) {
+      classOf[cc] = 1
+    } else if (hasReplace && replaceCodeMap[cc] !== undefined) {
+      classOf[cc] = 1
+    } else if (cc < 32) {
+      if (isMultiLine && lineBM[cc]) {
+        classOf[cc] = rowBM[cc] ? 3 : 2
+      } else {
+        classOf[cc] = 1
+      }
+    }
+    // else BODY (class 0)
+  }
+
+  // Bytes >= 256 are always plain body chars (no special meaning).
+  const fallback = (_c: string): number => 0
+
+  return {
+    initialState: 0,
+    nclasses: 4,
+    classOf,
+    fallback,
+    table: STRING_BODY_TABLE,
+  }
+}
+
+// (s=0, BODY)         -> consume + col
+// (s=0, STOP)         -> stop, caller dispatches on src[sI]
+// (s=0, LINE_NONROW)  -> consume + cI=1 (multi-line)
+// (s=0, LINE_ROW)     -> consume + rI++; cI=1 (multi-line)
+const STRING_BODY_TABLE = new Int32Array([
+  CONSUME,
+  STOP,
+  CONSUME | CI_RESET,
+  CONSUME | IS_ROW,
+])
+
+
+
+let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
+  let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
+
+  return guardedMatcher(cfg.fixed, function fixedBody(lex) {
+    const mcfg = cfg.fixed
     let pnt = lex.pnt
     let fwd = lex.fwd
 
@@ -198,10 +431,10 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
         return tkn
       }
     }
-  }
+  })
 }
 
-let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   // Pre-sort both matcher lists at configure time so lexing iterates in
   // a deterministic order regardless of how the config object was built.
   // Value matchers: sort by user-supplied name (ascending).
@@ -218,21 +451,11 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
     return null
   }
 
-  return function matchMatcher(lex: Lex, rule: Rule, tI: number = 0) {
-    let mcfg = cfg.match
-    if (!mcfg.lex) return undefined
-
-    if (cfg.match.check) {
-      let check = cfg.match.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.match, function matchBody(lex, rule, tI = 0) {
     let pnt = lex.pnt
     let fwd = lex.fwd
 
-    let oc = 'o' === rule.state ? 0 : 1
+    let oc = 'o' === (rule as Rule).state ? 0 : 1
 
     for (let valueMatcher of valueMatchers) {
       if (valueMatcher.match instanceof RegExp) {
@@ -307,7 +530,7 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
         }
       }
     }
-  }
+  })
 }
 
 // NOTE 1: matchers return arbitrary tokens and describe lexing using
@@ -322,7 +545,7 @@ type CommentDef = Config['comment']['def'] extends { [_: string]: infer T }
   ? T
   : never
 
-let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   let oc = opts.comment
 
   cfg.comment = {
@@ -368,17 +591,13 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
     ? values(cfg.comment.def).filter((c) => c.lex && !c.line).sort(byStartLenDesc)
     : []
 
-  return function matchComment(lex: Lex, _rule: Rule) {
-    let mcfg = cfg.comment
-    if (!mcfg.lex) return undefined
+  // Eatline tail: a 3-class line-run state machine, same shape as
+  // the line matcher's no-single path. Built once per matcher build
+  // so the table and class array are reused across comment matches.
+  const lineRunSpec = buildLineRunSpec(cfg.line)
+  const scanOut: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
-    if (cfg.comment.check) {
-      let check = cfg.comment.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
+  return guardedMatcher(cfg.comment, function commentBody(lex) {
     let pnt = lex.pnt
     let fwd = lex.fwd
 
@@ -387,13 +606,24 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
 
     // Single line comment.
 
+    const lineBM = cfg.line.charsBitmap
+    const rowBM = cfg.line.rowCharsBitmap
+    const lineChars = cfg.line.chars
+    const rowChars = cfg.line.rowChars
+
     for (let mc of lineComments) {
       if (fwd.startsWith(mc.start)) {
         let fwdlen = fwd.length
         let fI = mc.start.length
         cI += mc.start.length
         let suffixLen = 0
-        while (fI < fwdlen && !cfg.line.chars[fwd[fI]]) {
+        let cc
+        while (
+          fI < fwdlen &&
+          !((cc = fwd.charCodeAt(fI)) < 256
+            ? lineBM[cc]
+            : lineChars[fwd[fI]])
+        ) {
           let n = commentSuffixMatch(fwd, fI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
@@ -409,13 +639,12 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         }
         else if (mc.eatline) {
           // Only absorb trailing line chars when termination came from
-          // a line char (not from a suffix match).
-          while (fI < fwdlen && cfg.line.chars[fwd[fI]]) {
-            if (cfg.line.rowChars[fwd[fI]]) {
-              rI++
-            }
-            fI++
-          }
+          // a line char (not from a suffix match). cI is intentionally
+          // NOT pulled from scanOut — current semantics leave the
+          // pnt.cI at end-of-comment-body even after eating newlines.
+          scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+          rI = scanOut.rI
+          fI = scanOut.sI
         }
 
         let csrc = fwd.substring(0, fI)
@@ -438,12 +667,14 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         let end = mc.end as string
         cI += mc.start.length
         let suffixLen = 0
+        let cc
         while (fI < fwdlen && !fwd.startsWith(end, fI)) {
           let n = commentSuffixMatch(fwd, fI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
-          if (cfg.line.rowChars[fwd[fI]]) {
+          cc = fwd.charCodeAt(fI)
+          if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
             rI++
             cI = 0
           }
@@ -455,7 +686,8 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         if (suffixLen > 0) {
           // Advance through the consumed suffix, tracking newlines.
           for (let k = 0; k < suffixLen; k++) {
-            if (cfg.line.rowChars[fwd[fI + k]]) {
+            cc = fwd.charCodeAt(fI + k)
+            if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI + k]]) {
               rI++
               cI = 0
             }
@@ -473,12 +705,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
           cI += end.length
 
           if (mc.eatline) {
-            while (fI < fwdlen && cfg.line.chars[fwd[fI]]) {
-              if (cfg.line.rowChars[fwd[fI]]) {
-                rI++
-              }
-              fI++
-            }
+            scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+            rI = scanOut.rI
+            fI = scanOut.sI
           }
 
           let csrc = fwd.substring(0, fI + end.length)
@@ -498,7 +727,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => 
         }
       }
     }
-  }
+  })
 }
 
 // normalizeCommentSuffix splits the polymorphic suffix option value
@@ -565,7 +794,7 @@ function commentSuffixFnMatch(lex: Lex, fI: number, fn?: LexMatcher): number {
 
 // Match text, checking for literal values, optionally followed by a fixed token.
 // Text strings are terminated by end markers.
-let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   let ender = regexp(cfg.line.lex ? null : 's', '^(.*?)', ...cfg.rePart.ender)
 
   return function textMatcher(lex: Lex) {
@@ -659,7 +888,7 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   }
 }
 
-let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let mcfg = cfg.number
 
   let ender = regexp(
@@ -688,17 +917,8 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => 
     ? regexp('g', escre(mcfg.sepChar as string))
     : undefined
 
-  return function matchNumber(lex: Lex) {
+  return guardedMatcher(cfg.number, function numberBody(lex) {
     mcfg = cfg.number
-    if (!mcfg.lex) return undefined
-
-    if (cfg.number.check) {
-      let check = cfg.number.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
     let pnt = lex.pnt
     let fwd = lex.fwd
     let valdef = cfg.value.def
@@ -748,10 +968,10 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => 
 
       return out
     }
-  }
+  })
 }
 
-let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   // TODO: does `clean` make sense here?
 
   let os = opts.string || {}
@@ -762,7 +982,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   // `chars: '"'`), the old quote/multi-char/escape entries from the
   // permissive default would otherwise linger.
   cfg.string.quoteMap = charset(os.chars)
+  cfg.string.quoteBitmap = charsBitmap(os.chars)
   cfg.string.multiChars = charset(os.multiChars)
+  cfg.string.multiBitmap = charsBitmap(os.multiChars)
   cfg.string.escMap = { ...os.escape }
   cfg.string.replaceCodeMap = omap(
     clean({ ...os.replace }),
@@ -780,278 +1002,238 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   })
 
   cfg.string.escMap = clean(cfg.string.escMap)
+  cfg.string.escBitmap = charsBitmap(cfg.string.escMap)
   cfg.string.hasReplace = 0 < keys(cfg.string.replaceCodeMap).length
 
-  return function stringMatcher(lex: Lex) {
-    let mcfg = cfg.string
-    if (!mcfg.lex) return undefined
+  // Pre-build a body-scan ScanSpec per quote character. The spec
+  // classifies every byte 0..255 against THAT quote's role table
+  // (the quote char, the escape char, replace chars, and control /
+  // line chars depending on whether the quote allows multiline).
+  // The body-scan loop below is then just a scan + dispatch.
+  const bodySpecs = new Map<number, ScanSpec>()
+  for (const qc of Object.keys(cfg.string.quoteMap)) {
+    bodySpecs.set(qc.charCodeAt(0), buildStringBodySpec(cfg, qc))
+  }
+  const scanOut: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
-    if (cfg.string.check) {
-      let check = cfg.string.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
-    let {
-      quoteMap,
-      escMap,
-      escChar,
-      escCharCode,
-      multiChars,
-      allowUnknown,
-      replaceCodeMap,
-      hasReplace,
+  return guardedMatcher(cfg.string, function stringBody(lex) {
+    const mcfg = cfg.string
+    const {
+      quoteMap, quoteBitmap, escMap, escCharCode,
+      multiChars, multiBitmap,
+      allowUnknown, replaceCodeMap, hasReplace,
     } = mcfg
 
-    let { pnt, src } = lex
-    let { sI, rI, cI } = pnt
-    let srclen = src.length
+    const { pnt, src } = lex
+    const startSI = pnt.sI
+    const startRI = pnt.rI
+    const srclen = src.length
+    const qcc = src.charCodeAt(startSI)
 
-    if (quoteMap[src[sI]]) {
-      const q = src[sI] // Quote character
-      const qI = sI
-      const qrI = rI
-      const isMultiLine = multiChars[q]
-      ++sI
-      ++cI
+    // Is this byte an opening quote?
+    if (!(qcc < 256 ? quoteBitmap[qcc] : quoteMap[src[startSI]])) return undefined
 
-      let s: string[] = []
-      let rs: string | undefined
+    const q = src[startSI]
+    const isMultiLine =
+      qcc < 256 ? !!multiBitmap[qcc] : !!multiChars[q]
+    const bodySpec =
+      bodySpecs.get(qcc) ||
+      (() => {
+        const spec = buildStringBodySpec(cfg, q)
+        bodySpecs.set(qcc, spec)
+        return spec
+      })()
 
-      for (sI; sI < srclen; sI++) {
+    let sI = startSI + 1
+    let rI = startRI
+    let cI = pnt.cI + 1
+
+    const buf: string[] = []
+
+    while (sI < srclen) {
+      // Body scan: consume body chars (and multi-line newlines)
+      // until something interesting (quote, escape, control, replace).
+      const bodyStart = sI
+      scan(src, sI, rI, cI, bodySpec, scanOut)
+      sI = scanOut.sI
+      rI = scanOut.rI
+      cI = scanOut.cI
+      if (bodyStart < sI) buf.push(src.substring(bodyStart, sI))
+
+      if (sI >= srclen) break
+
+      const cc = src.charCodeAt(sI)
+
+      // Closing quote — string done.
+      if (cc === qcc) {
+        sI++
+        const tkn = lex.token('#ST', buf.join(EMPTY),
+          src.substring(startSI, sI), pnt)
+        pnt.sI = sI
+        pnt.rI = rI
+        pnt.cI = cI + 1
+        return tkn
+      }
+
+      // Replace map override.
+      if (hasReplace) {
+        const rs = replaceCodeMap[cc]
+        if (rs !== undefined) {
+          buf.push(rs)
+          sI++
+          cI++
+          continue
+        }
+      }
+
+      // Escape sequence.
+      if (cc === escCharCode) {
+        sI++
         cI++
-        let c = src[sI]
-        rs = undefined
-
-        // Quote char.
-        if (q === c) {
-          sI++
-          break // String finished.
-        }
-
-        // Escape char.
-        else if (escChar === c) {
+        if (sI >= srclen) break // unterminated
+        const ec = src[sI]
+        const es = escMap[ec]
+        if (es != null) {
+          buf.push(es)
           sI++
           cI++
-
-          let es = escMap[src[sI]]
-
-          if (null != es) {
-            s.push(es)
-          }
-
-          // ASCII escape \x**
-          else if ('x' === src[sI]) {
-            sI++
-            let cc = parseInt(src.substring(sI, sI + 2), 16)
-
-            if (isNaN(cc)) {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              sI = sI - 2
-              cI -= 2
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.invalid_ascii, sI, sI + 4)
-            }
-
-            let us = String.fromCharCode(cc)
-
-            s.push(us)
-            sI += 1 // Loop increments sI.
-            cI += 2
-          }
-
-          // Unicode escape \u**** and \u{*****}.
-          else if ('u' === src[sI]) {
-            sI++
-            let ux = '{' === src[sI] ? (sI++, 1) : 0
-            let ulen = ux ? 6 : 4
-
-            let cc = parseInt(src.substring(sI, sI + ulen), 16)
-
-            if (isNaN(cc)) {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              sI = sI - 2 - ux
-              cI -= 2
-
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.invalid_unicode, sI, sI + ulen + 2 + 2 * ux)
-            }
-
-            let us = String.fromCodePoint(cc)
-
-            s.push(us)
-            sI += ulen - 1 + ux // Loop increments sI.
-            cI += ulen + ux
-          } else if (allowUnknown) {
-            s.push(src[sI])
-          } else {
-            if (mcfg.abandon) {
-              return undefined
-            }
+        } else if ('x' === ec) {
+          sI++ // past 'x'
+          const xx = parseInt(src.substring(sI, sI + 2), 16)
+          if (isNaN(xx)) {
+            if (mcfg.abandon) return undefined
+            sI -= 2
+            cI -= 1
             pnt.sI = sI
-            pnt.cI = cI - 1
-            return lex.bad(S.unexpected, sI, sI + 1)
+            pnt.cI = cI
+            return lex.bad(S.invalid_ascii, sI, sI + 4)
           }
-        } else if (
-          hasReplace &&
-          undefined !== (rs = replaceCodeMap[src.charCodeAt(sI)])
-        ) {
-          s.push(rs)
+          buf.push(String.fromCharCode(xx))
+          sI += 2
+          cI += 3
+        } else if ('u' === ec) {
+          sI++ // past 'u'
+          const ux = '{' === src[sI] ? (sI++, 1) : 0
+          const ulen = ux ? 6 : 4
+          const uu = parseInt(src.substring(sI, sI + ulen), 16)
+          if (isNaN(uu)) {
+            if (mcfg.abandon) return undefined
+            sI = sI - 2 - ux
+            cI -= 1
+            pnt.sI = sI
+            pnt.cI = cI
+            return lex.bad(S.invalid_unicode, sI, sI + ulen + 2 + 2 * ux)
+          }
+          buf.push(String.fromCodePoint(uu))
+          sI += ulen + ux
+          cI += ulen + 1 + ux
+        } else if (allowUnknown) {
+          buf.push(ec)
+          sI++
           cI++
+        } else {
+          if (mcfg.abandon) return undefined
+          pnt.sI = sI
+          pnt.cI = cI
+          return lex.bad(S.unexpected, sI, sI + 1)
         }
-
-        // Body part of string.
-        else {
-          let bI = sI
-
-          // TODO: move to cfgx
-          let qc = q.charCodeAt(0)
-          let cc = src.charCodeAt(sI)
-
-          while (
-            (!hasReplace || undefined === (rs = replaceCodeMap[cc])) &&
-            sI < srclen &&
-            32 <= cc &&
-            qc !== cc &&
-            escCharCode !== cc
-          ) {
-            cc = src.charCodeAt(++sI)
-            cI++
-          }
-          cI--
-
-          if (undefined === rs && cc < 32) {
-            // TODO: move up - allow c < 32 to be a line char
-            if (isMultiLine && cfg.line.chars[src[sI]]) {
-              if (cfg.line.rowChars[src[sI]]) {
-                pnt.rI = ++rI
-              }
-
-              cI = 1
-              s.push(src.substring(bI, sI + 1))
-            } else {
-              if (mcfg.abandon) {
-                return undefined
-              }
-              pnt.sI = sI
-              pnt.cI = cI
-              return lex.bad(S.unprintable, sI, sI + 1)
-            }
-          } else {
-            s.push(src.substring(bI, sI))
-            sI--
-          }
-        }
+        continue
       }
 
-      if (src[sI - 1] !== q || pnt.sI === sI - 1) {
-        if (mcfg.abandon) {
-          return undefined
-        }
-        pnt.rI = qrI
-        return lex.bad(S.unterminated_string, qI, sI)
+      // Stopped on a control char (cc < 32) that wasn't a multi-line
+      // newline (those are consumed by the spec). Either an embedded
+      // line char in a non-multi-line string or a real unprintable.
+      // Both are errors.
+      if (cc < 32) {
+        if (mcfg.abandon) return undefined
+        pnt.sI = sI
+        pnt.cI = cI
+        return lex.bad(S.unprintable, sI, sI + 1)
       }
 
-      const tkn = lex.token(
-        '#ST',
-        s.join(EMPTY),
-        src.substring(pnt.sI, sI),
-        pnt,
-      )
-
-      pnt.sI = sI
-      pnt.rI = rI
-      pnt.cI = cI
-      return tkn
+      // Unreachable — the spec only stops on classes handled above.
+      break
     }
-  }
+
+    // Hit EOF without closing quote.
+    if (mcfg.abandon) return undefined
+    pnt.rI = startRI
+    return lex.bad(S.unterminated_string, startSI, sI)
+  })
 }
 
 // Line ending matcher.
-let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
-  return function matchLine(lex: Lex) {
-    if (!cfg.line.lex) return undefined
+//
+// The non-single path is the 3-class line-run state machine
+// (LINE_RUN_TABLE). `single` mode tracks "has this exact char been
+// seen yet" — that's not bounded by a small state count so it stays
+// inline.
+let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
+  const spec = buildLineRunSpec(cfg.line)
+  const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
-    if (cfg.line.check) {
-      let check = cfg.line.check(lex)
-      if (check && check.done) {
-        return check.token
+  return guardedMatcher(cfg.line, function lineBody(lex) {
+    const { pnt, src } = lex
+
+    if (cfg.line.single) {
+      // Inline: tracks per-char counts to stop at the first repeat.
+      const bm = cfg.line.charsBitmap
+      const rbm = cfg.line.rowCharsBitmap
+      const chars = cfg.line.chars
+      const rowChars = cfg.line.rowChars
+      let sI = pnt.sI
+      let rI = pnt.rI
+      let cc
+      const counts: Record<string, number> = {}
+      while ((cc = src.charCodeAt(sI)) < 256 ? bm[cc] : chars[src[sI]]) {
+        const c = src[sI]
+        const n = (counts[c] || 0) + 1
+        counts[c] = n
+        if (n > 1) break
+        if (cc < 256 ? rbm[cc] : rowChars[src[sI]]) rI++
+        sI++
       }
-    }
-
-    let { chars, rowChars } = cfg.line
-    let { pnt, src } = lex
-    let { sI, rI } = pnt
-
-    let single = cfg.line.single
-    let counts: Record<string, number> | undefined = undefined
-
-    if (single) {
-      counts = {}
-    }
-
-    while (chars[src[sI]]) {
-      if (counts) {
-        counts[src[sI]] = (counts[src[sI]] || 0) + 1
-
-        if (single) {
-          if (1 < counts[src[sI]]) {
-            break
-          }
-        }
+      if (pnt.sI < sI) {
+        const msrc = src.substring(pnt.sI, sI)
+        const tkn = lex.token('#LN', undefined, msrc, pnt)
+        pnt.sI = sI
+        pnt.rI = rI
+        pnt.cI = 1
+        return tkn
       }
-      rI += rowChars[src[sI]] ? 1 : 0
-      sI++
+      return
     }
 
-    if (pnt.sI < sI) {
-      let msrc = src.substring(pnt.sI, sI)
+    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+      const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#LN', undefined, msrc, pnt)
-      pnt.sI += msrc.length
-      pnt.rI = rI
+      pnt.sI = out.sI
+      pnt.rI = out.rI
       pnt.cI = 1
-
       return tkn
     }
-  }
+  })
 }
 
 // Space matcher.
-let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
-  return function spaceMatcher(lex: Lex) {
-    if (!cfg.space.lex) return undefined
+//
+// Spec: walk a run of `cfg.space.chars`. Class 0 = not a space,
+// class 1 = a space. The driver does the rest.
+let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
+  const spec = buildCharRunSpec(cfg.space.charsBitmap, cfg.space.chars)
+  const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
-    if (cfg.space.check) {
-      let check = cfg.space.check(lex)
-      if (check && check.done) {
-        return check.token
-      }
-    }
-
-    let { chars } = cfg.space
-    let { pnt, src } = lex
-    let { sI, cI } = pnt
-
-    while (chars[src[sI]]) {
-      sI++
-      cI++
-    }
-
-    if (pnt.sI < sI) {
-      let msrc = src.substring(pnt.sI, sI)
+  return guardedMatcher(cfg.space, function spaceBody(lex) {
+    const { pnt, src } = lex
+    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+      const msrc = src.substring(pnt.sI, out.sI)
       const tkn = lex.token('#SP', undefined, msrc, pnt)
-      pnt.sI += msrc.length
-      pnt.cI = cI
+      pnt.sI = out.sI
+      pnt.rI = out.rI
+      pnt.cI = out.cI
       return tkn
     }
-  }
+  })
 }
 
 function subMatchFixed(
@@ -1244,4 +1426,18 @@ export {
   makeCommentMatcher,
   makeNumberMatcher,
   makeTextMatcher,
+  // Lex scan primitives — exposed so plugin authors can build their
+  // own matchers on the same state-machine driver.
+  guardedMatcher,
+  scan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 }
+
+export type { ScanSpec, ScanOut }

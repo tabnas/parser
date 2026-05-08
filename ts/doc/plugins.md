@@ -1,6 +1,6 @@
 # Writing Plugins
 
-Plugins extend amagama by adding a grammar, registering custom
+Plugins extend tabnas by adding a grammar, registering custom
 matchers, modifying rules, or subscribing to parse events. The bundled
 plugins are `bnf` and `Debug`, both under `src/plugins/<name>/`. The
 test fixture at `test/json-plugin.ts` is a worked example of a
@@ -8,24 +8,24 @@ non-trivial grammar plugin (strict JSON).
 
 ## Plugin Structure
 
-A plugin is a function that receives an `Amagama` instance and an
+A plugin is a function that receives an `Tabnas` instance and an
 optional options object. The function does whatever work it wants
 against the instance:
 
 ```js
-function myPlugin(amagama, options) {
+function myPlugin(tabnas, options) {
   // Modify the parser here
 }
 
-const { Amagama } = require('amagama')
-const am = new Amagama()
+const { Tabnas } = require('tabnas')
+const am = new Tabnas()
 am.use(myPlugin, { key: 'value' })
 ```
 
 You can pass plugins at construction time too, in order:
 
 ```js
-const am = new Amagama({ plugins: [myPlugin, anotherPlugin] })
+const am = new Tabnas({ plugins: [myPlugin, anotherPlugin] })
 ```
 
 Plugins should be idempotent (or guard against re-application) because
@@ -38,9 +38,9 @@ parent's.
 ### TypeScript signature
 
 ```ts
-import type { Plugin, Amagama } from 'amagama'
+import type { Plugin, Tabnas } from 'tabnas'
 
-const myPlugin: Plugin = function myPlugin(am: Amagama, options?: any) {
+const myPlugin: Plugin = function myPlugin(am: Tabnas, options?: any) {
   // …
 }
 // Optionally attach plugin-author defaults; they merge with any options
@@ -55,7 +55,7 @@ the instance. This lets plugins wrap or proxy the instance:
 
 ```js
 function wrapping(am) {
-  // Amagama uses ES #private state; the wrapper Proxy must bind
+  // Tabnas uses ES #private state; the wrapper Proxy must bind
   // methods to the underlying target so private-field access resolves
   // to the real instance.
   return new Proxy(am, {
@@ -176,7 +176,7 @@ For syntax that doesn't fit the built-in matchers, add a custom lexer
 matcher via the `match` option:
 
 ```js
-const am = new Amagama({
+const am = new Tabnas({
   plugins: [myGrammarPlugin],
   match: {
     lex: true,
@@ -235,13 +235,13 @@ src/plugins/
 ├── bnf/
 │   ├── index.ts                     # Plugin entry — adds am.bnf
 │   ├── converter.ts                 # BNF → GrammarSpec conversion
-│   └── bin/amagama-bnf-cli.ts       # CLI entry
+│   └── bin/tabnas-bnf-cli.ts       # CLI entry
 └── debug/index.ts                   # Tracing + describe()
 ```
 
 If you ship a plugin as its own npm package, the convention is
-`amagama-<name>` or `@<scope>/amagama-<name>`. The CLI's `--plugin`
-flag understands both raw module names and the `@amagama/<name>`
+`tabnas-<name>` or `@<scope>/tabnas-<name>`. The CLI's `--plugin`
+flag understands both raw module names and the `@tabnas/<name>`
 shorthand.
 
 ## Example: a tiny CSV plugin
@@ -286,5 +286,5 @@ function csvPlugin(am, opts) {
 }
 ```
 
-Apply with `am.use(csvPlugin)` on a bare instance (`new Amagama()`,
+Apply with `am.use(csvPlugin)` on a bare instance (`new Tabnas()`,
 no `json` plugin), or in the `plugins` array at construction time.

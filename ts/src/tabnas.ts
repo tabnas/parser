@@ -1,7 +1,7 @@
 /* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
-/*  amagama.ts
- *  The Amagama class — core parsing engine. The package ships no
+/*  tabnas.ts
+ *  The Tabnas class — core parsing engine. The package ships no
  *  grammar of its own: every grammar arrives via a plugin (the BNF
  *  plugin in this repo, plus whatever a consumer brings).
  */
@@ -26,7 +26,7 @@ import type {
   LexSub,
   MakeLexMatcher,
   NormAltSpec,
-  AmagamaOptions,
+  TabnasOptions,
   Parser,
   Plugin,
   Point,
@@ -71,7 +71,7 @@ import {
 } from './utility'
 
 import {
-  AmagamaError,
+  TabnasError,
   errdesc,
   errinject,
   errmsg,
@@ -94,12 +94,23 @@ import {
   makeStringMatcher,
   makeTextMatcher,
   makeToken,
+  // Lex scan primitives — re-exposed via util for plugin authors.
+  guardedMatcher,
+  scan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 } from './lexer'
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
 
 
-// Utility bag re-exported on Amagama.util for plugin convenience.
+// Utility bag re-exported on Tabnas.util for plugin convenience.
 const util: Record<string, any> = {
   badlex,
   charset,
@@ -126,10 +137,24 @@ const util: Record<string, any> = {
   tokenize,
   trimstk,
   values,
+
+  // Lex scan primitives. Plugin authors writing custom matchers can
+  // reuse the same state-machine driver and spec builders the core
+  // matchers use. See the matchers in src/lexer.ts for examples.
+  guardedMatcher,
+  scan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 }
 
 
-// Internal state held by every Amagama instance.
+// Internal state held by every Tabnas instance.
 type Internal = {
   parser: Parser
   config: Config
@@ -140,11 +165,11 @@ type Internal = {
 }
 
 
-// Construction options now live in types.ts as AmagamaOptions —
+// Construction options now live in types.ts as TabnasOptions —
 // including the optional `plugins` array. Nothing extra is added here.
 
 
-class Amagama {
+class Tabnas {
   // Methods like parse/use/rule are declared with the class. Plugins may
   // attach extra properties; the index signature exposes that to TS.
   [key: string]: any
@@ -158,7 +183,7 @@ class Amagama {
   // `am.options.<name>` and apply changes via `am.options({ ... })`.
   options!: ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
   id!: string
-  parent?: Amagama
+  parent?: Tabnas
 
   // Truly-private (ECMAScript hash-private) internal state. Inaccessible
   // outside the class — for...in, Object.keys, JSON.stringify, and
@@ -177,9 +202,9 @@ class Amagama {
   static SKIP = SKIP
 
 
-  constructor(options?: AmagamaOptions, parent?: Amagama) {
+  constructor(options?: TabnasOptions, parent?: Tabnas) {
     let plugins: Plugin[] = []
-    let opts: AmagamaOptions = {}
+    let opts: TabnasOptions = {}
 
     if (options) {
       if (Array.isArray((options as any).plugins)) {
@@ -216,7 +241,7 @@ class Amagama {
 
     // Stamped identifier (carries through child instances via tag).
     this.id =
-      'Amagama/' +
+      'Tabnas/' +
       Date.now() +
       '/' +
       ('' + Math.random()).substring(2, 8).padEnd(6, '0') +
@@ -272,7 +297,7 @@ class Amagama {
       // After plugins re-register their rules with the child's
       // options, apply rule.include / rule.exclude filtering. The
       // alts we re-evaluated may include groups the user wanted to
-      // strip (e.g. `make({ rule: { exclude: 'amagama' } })`).
+      // strip (e.g. `make({ rule: { exclude: 'tabnas' } })`).
       const rsm: RuleSpecMap = internal.parser.rule() as RuleSpecMap
       const filtered: RuleSpecMap = {}
       for (const rn of Object.keys(rsm)) {
@@ -331,13 +356,13 @@ class Amagama {
 
 
   // Register and apply a plugin. Plugin is `(am, opts) => void | am`.
-  // If the plugin returns an Amagama-like value (e.g. a Proxy wrapping
+  // If the plugin returns an Tabnas-like value (e.g. a Proxy wrapping
   // the instance), that's what `use()` returns — matches the upstream
   // contract and lets plugins decorate or wrap the instance.
-  use(plugin: Plugin, plugin_options?: Record<string, any>): Amagama {
+  use(plugin: Plugin, plugin_options?: Record<string, any>): Tabnas {
     if (S.function !== typeof plugin) {
       throw new Error(
-        'Amagama.use: the first argument must be a function ' +
+        'Tabnas.use: the first argument must be a function ' +
           'defining a plugin.',
       )
     }
@@ -360,7 +385,7 @@ class Amagama {
     this.#internal.plugins.push(plugin)
     plugin.options = merged_plugin_options
 
-    return (plugin(this, merged_plugin_options) || this) as Amagama
+    return (plugin(this, merged_plugin_options) || this) as Tabnas
   }
 
 
@@ -378,21 +403,21 @@ class Amagama {
   // Create a child instance that inherits config, plugins, and rules
   // from this instance. Use to fork and customize without touching the
   // parent.
-  make(options?: AmagamaOptions): Amagama {
-    return new Amagama(options, this)
+  make(options?: TabnasOptions): Tabnas {
+    return new Tabnas(options, this)
   }
 
 
   // Create a sibling instance with no defaults, no standard tokens, and
   // no grammar — for tests and for plugins that build everything from
   // scratch.
-  empty(options?: AmagamaOptions): Amagama {
-    return new Amagama({
+  empty(options?: TabnasOptions): Tabnas {
+    return new Tabnas({
       defaults$: false,
       standard$: false,
       grammar$: false,
       ...(options || {}),
-    } as AmagamaOptions)
+    } as TabnasOptions)
   }
 
 
@@ -516,7 +541,7 @@ export type {
   LexSub,
   MakeLexMatcher,
   NormAltSpec,
-  AmagamaOptions,
+  TabnasOptions,
   Parser,
   Plugin,
   Point,
@@ -531,9 +556,11 @@ export type {
   Token,
 }
 
+export type { ScanSpec, ScanOut } from './lexer'
+
 export {
-  Amagama,
-  AmagamaError,
+  Tabnas,
+  TabnasError,
   OPEN,
   CLOSE,
   BEFORE,
@@ -558,6 +585,6 @@ export {
 }
 
 // Re-export the bundled plugins so callers can do
-// `const { Amagama, bnf, Debug } = require('amagama')`.
+// `const { Tabnas, bnf, Debug } = require('tabnas')`.
 export { bnf } from './plugins/bnf'
 export { Debug } from './plugins/debug'

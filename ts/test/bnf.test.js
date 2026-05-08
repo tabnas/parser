@@ -6,11 +6,11 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama, bnf: bnfPlugin } = require('..')
+const { Tabnas, bnf: bnfPlugin } = require('..')
 // No grammar plugin: BNF supplies its own grammar via j.bnf(...).
 // json's restrictive lex options would block unquoted text and the
 // BNF inputs.
-const am = new Amagama({ plugins: [bnfPlugin] })
+const am = new Tabnas({ plugins: [bnfPlugin] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 const {
   bnfConvert: bnf,
@@ -18,7 +18,7 @@ const {
   eliminateLeftRecursion,
   BnfParseError,
 } = require('../dist/plugins/bnf')
-const BnfCli = require('../dist/plugins/bnf/bin/amagama-bnf-cli')
+const BnfCli = require('../dist/plugins/bnf/bin/tabnas-bnf-cli')
 
 
 const FIXTURES = Path.join(__dirname, 'grammar')
@@ -151,7 +151,7 @@ describe('bnf', () => {
   })
 
 
-  describe('parseBnf (amagama-based)', () => {
+  describe('parseBnf (tabnas-based)', () => {
 
     it('parses a single terminal', () => {
       const g = parseBnf('g = "x"')
@@ -826,7 +826,7 @@ describe('bnf', () => {
   })
 
 
-  describe('amagama.bnf()', () => {
+  describe('tabnas.bnf()', () => {
 
     it('installs grammar and parses matching input', () => {
       const j = am.make()

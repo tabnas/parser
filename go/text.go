@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 // Text represents a string value with metadata about how it was quoted
 // in the source. When the TextInfo option is enabled, string and text

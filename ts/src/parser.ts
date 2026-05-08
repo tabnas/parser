@@ -6,13 +6,13 @@
 
 import type {
   Config,
-  AmagamaOptions,
+  TabnasOptions,
   ParsePrepare,
   Rule,
   RuleDefiner,
   RuleSpec,
   RuleSpecMap,
-  Amagama,
+  Tabnas,
 } from './types'
 
 import { EMPTY } from './types'
@@ -31,7 +31,7 @@ import {
   values,
 } from './utility'
 
-import { AmagamaError } from './error'
+import { TabnasError } from './error'
 
 import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 
@@ -39,16 +39,16 @@ import { makeRule, makeNoRule, makeRuleSpec } from './rules'
 
 
 // Top-level rule-driven parser. Holds the rule map, the current
-// config, and the Amagama instance the rules belong to. `start()`
+// config, and the Tabnas instance the rules belong to. `start()`
 // runs a parse from scratch; `clone()` produces a sibling for child
-// instances (Amagama#make).
+// instances (Tabnas#make).
 class Parser {
-  options: AmagamaOptions
+  options: TabnasOptions
   cfg: Config
   rsm: RuleSpecMap = {}
-  ji: Amagama
+  ji: Tabnas
 
-  constructor(options: AmagamaOptions, cfg: Config, j: Amagama) {
+  constructor(options: TabnasOptions, cfg: Config, j: Tabnas) {
     this.options = options
     this.cfg = cfg
     this.ji = j
@@ -79,14 +79,14 @@ class Parser {
       rs.name = name
       rs = this.rsm[name] = define(this.rsm[name], this) || this.rsm[name]
 
-      // Ensures amagama.rule can chain
+      // Ensures tabnas.rule can chain
       return undefined
     }
 
     return rs
   }
 
-  start(src: string, amagama: Amagama, meta?: any, parent_ctx?: any): any {
+  start(src: string, tabnas: Tabnas, meta?: any, parent_ctx?: any): any {
     let root: Rule
 
     let endtkn = makeToken(
@@ -108,9 +108,9 @@ class Parser {
       meta: meta || {},
       src: () => src, // Avoid printing src
       root: () => root,
-      plgn: () => amagama.internal().plugins,
-      inst: () => amagama,
-      sub: amagama.internal().sub,
+      plgn: () => tabnas.internal().plugins,
+      inst: () => tabnas,
+      sub: tabnas.internal().sub,
       rsm: this.rsm,
       F: srcfmt(this.cfg),
       NOTOKEN: notoken,
@@ -132,7 +132,7 @@ class Parser {
     }
 
     this.cfg.parse.prepare.forEach((prep: ParsePrepare) =>
-      prep(amagama, ctx, meta),
+      prep(tabnas, ctx, meta),
     )
 
     // Special case - avoids extra per-token tests in main parser rules.
@@ -140,7 +140,7 @@ class Parser {
       if (this.cfg.lex.empty) {
         return this.cfg.lex.emptyResult
       } else {
-        throw new AmagamaError(S.unexpected, { src }, ctx.t0, norule, ctx)
+        throw new TabnasError(S.unexpected, { src }, ctx.t0, norule, ctx)
       }
     }
 
@@ -191,20 +191,20 @@ class Parser {
 
     // TODO: option to allow trailing content
     if (endtkn.tin !== lex.next(rule).tin) {
-      throw new AmagamaError(S.unexpected, {}, ctx.t0, norule, ctx)
+      throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)
     }
 
     // NOTE: by returning root, we get implicit closing of maps and lists.
     const result = ctx.root().node
 
     if (this.cfg.result.fail.includes(result)) {
-      throw new AmagamaError(S.unexpected, {}, ctx.t0, norule, ctx)
+      throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)
     }
 
     return result
   }
 
-  clone(options: AmagamaOptions, config: Config, j: Amagama) {
+  clone(options: TabnasOptions, config: Config, j: Tabnas) {
     let parser = new Parser(options, config, j)
 
     // Inherit rules from parent, filtered by config.rule

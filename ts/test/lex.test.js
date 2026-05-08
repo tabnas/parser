@@ -4,8 +4,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama, makeLex, AmagamaError } = require('..')
-const am = new Amagama()
+const { Tabnas, makeLex, TabnasError } = require('..')
+const am = new Tabnas()
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 describe('lex', function () {
@@ -37,7 +37,7 @@ describe('lex', function () {
     return lex.next.bind(lex)
   }
 
-  it('amagama-token', () => {
+  it('tabnas-token', () => {
     lexstart('')
     assert.ok(j.token.OB != null)
     assert.ok(t.CB != null)

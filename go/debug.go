@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"fmt"
@@ -11,10 +11,10 @@ import (
 //
 // Usage:
 //
-//	j := amagama.Make()
-//	j.Use(amagama.Debug, map[string]any{"trace": true})
-//	fmt.Println(amagama.Describe(j))
-var Debug Plugin = func(j *Amagama, opts map[string]any) error {
+//	j := tabnas.Make()
+//	j.Use(tabnas.Debug, map[string]any{"trace": true})
+//	fmt.Println(tabnas.Describe(j))
+var Debug Plugin = func(j *Tabnas, opts map[string]any) error {
 	if opts != nil {
 		if trace, ok := opts["trace"]; ok {
 			if traceBool, ok := trace.(bool); ok && traceBool {
@@ -26,7 +26,7 @@ var Debug Plugin = func(j *Amagama, opts map[string]any) error {
 }
 
 // addTrace installs lex and rule subscribers that log each step.
-func addTrace(j *Amagama) {
+func addTrace(j *Tabnas) {
 	j.Sub(
 		func(tkn *Token, rule *Rule, ctx *Context) {
 			fmt.Printf("[lex] %s tin=%d src=%q val=%v at %d:%d\n",
@@ -39,12 +39,12 @@ func addTrace(j *Amagama) {
 	)
 }
 
-// Describe returns a human-readable description of a Amagama instance's configuration.
+// Describe returns a human-readable description of a Tabnas instance's configuration.
 // It lists tokens, fixed tokens, rules, matchers, plugins, and key config settings.
-func Describe(j *Amagama) string {
+func Describe(j *Tabnas) string {
 	var b strings.Builder
 
-	b.WriteString("=== Amagama Instance ===\n")
+	b.WriteString("=== Tabnas Instance ===\n")
 	if j.options != nil && j.options.Tag != "" {
 		b.WriteString(fmt.Sprintf("Tag: %s\n", j.options.Tag))
 	}

@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"sort"
@@ -11,7 +11,7 @@ import (
 // altGTags returns, for the named rule and state ("open"/"close"), a slice
 // of sorted tag slices — one per alt. Simplifies assertions that don't
 // care about tag ordering.
-func altGTags(t *testing.T, j *Amagama, rulename, state string) [][]string {
+func altGTags(t *testing.T, j *Tabnas, rulename, state string) [][]string {
 	t.Helper()
 	rs, ok := j.RSM()[rulename]
 	if !ok {
@@ -358,7 +358,7 @@ func TestSetOptionsTextMergesWithSetOptions(t *testing.T) {
 }
 
 func TestSetOptionsTextInvalidSource(t *testing.T) {
-	// Amagama is lenient about missing closing braces, so the error must
+	// Tabnas is lenient about missing closing braces, so the error must
 	// come from a lexer-level failure — here, an unterminated string.
 	j := Make()
 	if _, err := j.SetOptionsText(`number: { sep: "`); err == nil {

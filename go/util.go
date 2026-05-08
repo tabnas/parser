@@ -1,9 +1,9 @@
-package amagama
+package tabnas
 
 import "sort"
 
 // Util exposes helper functions that plugins commonly need, mirroring
-// TS amagama.util (src/amagama.ts:109). The fields point at package-level
+// TS tabnas.util (src/tabnas.ts:109). The fields point at package-level
 // functions so plugin authors porting from TS can keep calls shaped like
 // `j.Util().Deep(a, b)` instead of re-importing each helper.
 type UtilBag struct {
@@ -95,10 +95,10 @@ func Omap(m map[string]any, fn func(Entry) []any) map[string]any {
 	return out
 }
 
-// Util returns a UtilBag of helper functions. Matches TS amagama.util.
+// Util returns a UtilBag of helper functions. Matches TS tabnas.util.
 // The returned bag is a thin pointer wrapper over the package-level
 // helpers — safe to cache and call from any goroutine.
-func (j *Amagama) Util() UtilBag {
+func (j *Tabnas) Util() UtilBag {
 	return UtilBag{
 		Deep:      Deep,
 		Keys:      Keys,

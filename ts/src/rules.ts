@@ -15,7 +15,7 @@ import type {
   Counters,
   FuncRef,
   FuncRefMap,
-  Amagama,
+  Tabnas,
   Lex,
   ListMods,
   NormAltCond,
@@ -39,7 +39,7 @@ import {
   tokenize,
 } from './utility'
 
-import { AmagamaError } from './error'
+import { TabnasError } from './error'
 
 // Represents the application of a parsing rule. An instance is created
 // for each attempt to match tokens based on the RuleSpec, and pushed
@@ -159,7 +159,7 @@ class Rule {
 const makeRule = (...params: ConstructorParameters<typeof Rule>) =>
   new Rule(...params)
 
-const makeNoRule = (j: Amagama, ctx: Context) => makeRule(makeRuleSpec(j, ctx.cfg, {}), ctx)
+const makeNoRule = (j: Tabnas, ctx: Context) => makeRule(makeRuleSpec(j, ctx.cfg, {}), ctx)
 
 // Parse-alternate match (built from current tokens and AltSpec).
 // The string/number fields default to falsy sentinels so the parser
@@ -198,10 +198,10 @@ class RuleSpec {
     fnref: {} as FuncRefMap<Function>,
   }
   cfg: Config
-  ji: Amagama
+  ji: Tabnas
 
 
-  constructor(j: Amagama, cfg: Config, def: any) {
+  constructor(j: Tabnas, cfg: Config, def: any) {
     this.ji = j
     this.cfg = cfg
     this.def = Object.assign(this.def, def)
@@ -621,7 +621,7 @@ class RuleSpec {
   }
 
   bad(tkn: Token, rule: Rule, ctx: Context, parse: { is_open: boolean }): Rule {
-    throw new AmagamaError(
+    throw new TabnasError(
       tkn.err || S.unexpected,
       {
         ...tkn.use,

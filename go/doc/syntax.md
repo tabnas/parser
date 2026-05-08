@@ -1,6 +1,6 @@
 # Syntax Reference (Go)
 
-The Go version of amagama supports the same core syntax as the TypeScript
+The Go version of tabnas supports the same core syntax as the TypeScript
 version. See the [top-level syntax reference](../../doc/syntax.md) for the
 full specification.
 
@@ -9,7 +9,7 @@ This page notes Go-specific behavior. For a complete list of differences, see
 
 ## Return Types
 
-amagama maps parsed values to Go types:
+tabnas maps parsed values to Go types:
 
 | JSON Type | Go Type |
 |---|---|
@@ -25,11 +25,11 @@ amagama maps parsed values to Go types:
 
 With options enabled, richer types are returned:
 
-- **`TextInfo: true`** -- string values become `amagama.Text{Quote rune, Str string}`,
+- **`TextInfo: true`** -- string values become `tabnas.Text{Quote rune, Str string}`,
   preserving which quote character was used.
-- **`ListRef: true`** -- arrays become `amagama.ListRef{Val []any, Implicit bool, ...}`,
+- **`ListRef: true`** -- arrays become `tabnas.ListRef{Val []any, Implicit bool, ...}`,
   indicating whether the array was implicit (no brackets).
-- **`MapRef: true`** -- objects become `amagama.MapRef{Val map[string]any, Implicit bool}`,
+- **`MapRef: true`** -- objects become `tabnas.MapRef{Val map[string]any, Implicit bool}`,
   indicating whether the object was implicit (no braces).
 
 ## Number Handling

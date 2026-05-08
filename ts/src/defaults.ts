@@ -4,7 +4,7 @@
  *  Default option values.
  */
 
-import { AmagamaOptions } from './amagama'
+import { TabnasOptions } from './tabnas'
 
 // Functions that create token matching lexers.
 // The `make*Matcher` functions may optionally initialise
@@ -21,7 +21,7 @@ import {
 } from './lexer'
 
 
-const defaults: AmagamaOptions = {
+const defaults: TabnasOptions = {
   // Prevent prototype pollution
   safe: {
     key: true,
@@ -267,47 +267,30 @@ const defaults: AmagamaOptions = {
   },
 
   errmsg: {
-    name: 'amagama',
+    name: 'tabnas',
     suffix: true
   },
 
   // Error hints: {error-code: hint-text}.
   hint: {
     unknown: `
-Since the error is unknown, this is probably a bug inside amagama
-itself, or a plugin. Please consider posting a github issue - thanks!
-
-Code: {code}, Details: 
+Unknown error code: {code}
+Details:
 {details}`,
 
     unexpected: `
-The character(s) {src} were not expected at this point as they do not
-match the expected syntax, even under the relaxed amagama rules. If it
-is not obviously wrong, the actual syntax error may be elsewhere. Try
-commenting out larger areas around this point until you get no errors,
-then remove the comments in small sections until you find the
-offending syntax. NOTE: Also check if any plugins you are using
-expect different syntax in this case.`,
+The character(s) {src} do not match any rule alternative active at
+this position.`,
 
     invalid_unicode: `
-The escape sequence {src} does not encode a valid unicode code point
-number. You may need to validate your string data manually using test
-code to see how JavaScript will interpret it. Also consider that your
-data may have become corrupted, or the escape sequence has not been
-generated correctly.`,
+The escape sequence {src} does not encode a valid unicode code point.`,
 
     invalid_ascii: `
-The escape sequence {src} does not encode a valid ASCII character. You
-may need to validate your string data manually using test code to see
-how JavaScript will interpret it. Also consider that your data may
-have become corrupted, or the escape sequence has not been generated
-correctly.`,
+The escape sequence {src} does not encode a valid ASCII character.`,
 
     unprintable: `
-String values cannot contain unprintable characters (character codes
-below 32). The character {src} is unprintable. You may need to remove
-these characters from your source data. Also check that it has not
-become corrupted.`,
+The character {src} (code point below 32) is not allowed inside a
+string literal.`,
 
     unterminated_string: `
 This string has no end quote.`,
@@ -316,8 +299,7 @@ This string has no end quote.`,
 This comment is never closed.`,
 
     unknown_rule: `
-No rule named $rulename is defined. This is probably an error in the
-grammar of a plugin.`,
+No rule named $rulename is defined.`,
 
     end_of_source: `
 Unexpected end of source.`,

@@ -1,6 +1,6 @@
 # Writing Plugins (Go)
 
-Plugins extend amagama by modifying the grammar, adding token types,
+Plugins extend tabnas by modifying the grammar, adding token types,
 registering custom matchers, or subscribing to parse events.
 
 ## Plugin Structure
@@ -8,17 +8,17 @@ registering custom matchers, or subscribing to parse events.
 A plugin is a function with signature `Plugin`:
 
 ```go
-type Plugin func(j *Amagama, opts map[string]any)
+type Plugin func(j *Tabnas, opts map[string]any)
 ```
 
 Register a plugin with `Use`:
 
 ```go
-func myPlugin(j *amagama.Amagama, opts map[string]any) {
+func myPlugin(j *tabnas.Tabnas, opts map[string]any) {
     // modify the parser
 }
 
-j := amagama.Make()
+j := tabnas.Make()
 j.Use(myPlugin, map[string]any{"key": "value"})
 ```
 
@@ -29,7 +29,7 @@ Plugins are re-applied when `Derive()` creates a child instance.
 Register a new fixed token:
 
 ```go
-func tildePlugin(j *amagama.Amagama, opts map[string]any) {
+func tildePlugin(j *tabnas.Tabnas, opts map[string]any) {
     TL := j.Token("#TL", "~")
     _ = TL
 }
@@ -60,14 +60,14 @@ Token names use `#XX` format by convention. Built-in tokens:
 The parser has named rules, each with `Open` and `Close` alternate lists.
 
 ```go
-func myPlugin(j *amagama.Amagama, opts map[string]any) {
+func myPlugin(j *tabnas.Tabnas, opts map[string]any) {
     TL := j.Token("#TL", "~")
 
-    j.Rule("val", func(rs *amagama.RuleSpec, p *amagama.Parser) {
+    j.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
         // Prepend a new alternate to the open phase
-        rs.Open = append([]*amagama.AltSpec{{
-            S: [][]amagama.Tin{{TL}},
-            A: func(r *amagama.Rule, ctx *amagama.Context) {
+        rs.Open = append([]*tabnas.AltSpec{{
+            S: [][]tabnas.Tin{{TL}},
+            A: func(r *tabnas.Rule, ctx *tabnas.Context) {
                 r.Node = 42
             },
         }}, rs.Open...)
@@ -84,7 +84,7 @@ func myPlugin(j *amagama.Amagama, opts map[string]any) {
 | `P` | `string` | Push a new rule by name |
 | `R` | `string` | Replace current rule |
 | `B` | `int` | Backtrack: tokens to put back |
-| `G` | `string` | Group tag (e.g., `"json"`, `"amagama,map"`) |
+| `G` | `string` | Group tag (e.g., `"json"`, `"tabnas,map"`) |
 | `H` | `AltModifier` | Custom handler: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
 | `E` | `func(r *Rule, ctx *Context) *Token` | Error function |
 | `PF` | `func(r *Rule, ctx *Context) string` | Dynamic push |
@@ -103,9 +103,9 @@ Each `RuleSpec` has four hook points:
 | `AC` | After a close alternate matches |
 
 ```go
-j.Rule("map", func(rs *amagama.RuleSpec, p *amagama.Parser) {
+j.Rule("map", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
     originalAO := rs.AO
-    rs.AO = func(r *amagama.Rule, ctx *amagama.Context) {
+    rs.AO = func(r *tabnas.Rule, ctx *tabnas.Context) {
         if originalAO != nil {
             originalAO(r, ctx)
         }
@@ -117,13 +117,13 @@ j.Rule("map", func(rs *amagama.RuleSpec, p *amagama.Parser) {
 ## Custom Matchers
 
 For syntax beyond the built-in matchers, register a matcher via
-`options.lex.match` (mirrors TS `amagama.options({ lex: { match: ... } })`):
+`options.lex.match` (mirrors TS `tabnas.options({ lex: { match: ... } })`):
 
 ```go
-j.SetOptions(amagama.Options{Lex: &amagama.LexOptions{
-    Match: map[string]*amagama.MatchSpec{
-        "date": {Order: 1_000_000, Make: func(_ *amagama.LexConfig, _ *amagama.Options) amagama.LexMatcher {
-            return func(lex *amagama.Lex, rule *amagama.Rule) *amagama.Token {
+j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{
+    Match: map[string]*tabnas.MatchSpec{
+        "date": {Order: 1_000_000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+            return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
                 // Read from lex.Cursor(), advance if matched, return *Token or nil
                 return nil
             }
@@ -140,10 +140,10 @@ Setting a spec under an existing name replaces it.
 
 ```go
 j.Sub(
-    func(tkn *amagama.Token, rule *amagama.Rule, ctx *amagama.Context) {
+    func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
         fmt.Println("lexed:", tkn)
     },
-    func(rule *amagama.Rule, ctx *amagama.Context) {
+    func(rule *tabnas.Rule, ctx *tabnas.Context) {
         fmt.Println("rule:", rule.Name)
     },
 )

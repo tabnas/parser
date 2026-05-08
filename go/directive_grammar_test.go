@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"fmt"
@@ -10,10 +10,10 @@ import (
 // Minimal directive-style plugin defined inline for the test. A directive
 // binds a fixed OPEN token to a named rule that reads the following val
 // and replaces it with the result of an action callback. Mirrors the
-// essential shape of the JS @amagama/directive plugin — token + rule +
+// essential shape of the JS @tabnas/directive plugin — token + rule +
 // transform — without the close-token, rule-filtering, or error-plumbing
 // surface area. Kept in-test so the core repo carries no plugin dependency.
-func defineDirective(j *Amagama, name, open string, action func(any) any) {
+func defineDirective(j *Tabnas, name, open string, action func(any) any) {
 	OPEN := j.Token("#OD_"+name, open)
 
 	j.Rule(name, func(rs *RuleSpec, _ *Parser) {
@@ -40,7 +40,7 @@ func defineDirective(j *Amagama, name, open string, action func(any) any) {
 	})
 }
 
-func makeDirectiveJ() *Amagama {
+func makeDirectiveJ() *Tabnas {
 	j := Make()
 	defineDirective(j, "upper", "@up", func(val any) any {
 		return strings.ToUpper(fmt.Sprintf("%v", val))

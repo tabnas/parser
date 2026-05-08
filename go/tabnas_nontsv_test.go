@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 // Non-TSV tests ported from the TypeScript test suite.
 // Tests that rely on TS-specific features (plugins, regex-based custom values,
@@ -40,7 +40,7 @@ func expectParseNil(t *testing.T, input string) {
 	}
 }
 
-// expectParseError asserts Parse(input) returns a *AmagamaError.
+// expectParseError asserts Parse(input) returns a *TabnasError.
 func expectParseError(t *testing.T, input string) {
 	t.Helper()
 	_, err := Parse(input)
@@ -48,8 +48,8 @@ func expectParseError(t *testing.T, input string) {
 		t.Errorf("Parse(%q) should have returned an error but did not", input)
 		return
 	}
-	if _, ok := err.(*AmagamaError); !ok {
-		t.Errorf("Parse(%q) error should be *AmagamaError, got %T: %v", input, err, err)
+	if _, ok := err.(*TabnasError); !ok {
+		t.Errorf("Parse(%q) error should be *TabnasError, got %T: %v", input, err, err)
 	}
 }
 
@@ -577,7 +577,7 @@ func TestPropertyDive(t *testing.T) {
 		m("a", m("b", m("c", m("x", 1.0, "y", 2.0, "z", 3.0)))))
 }
 
-// --- Syntax error tests (from amagama.test.js) ---
+// --- Syntax error tests (from tabnas.test.js) ---
 
 func TestSyntaxErrors(t *testing.T) {
 	// Bad close
@@ -591,7 +591,7 @@ func TestSyntaxErrors(t *testing.T) {
 	expectParseError(t, "x:{1,2}")
 }
 
-// --- Process-comment tests (from amagama.test.js) ---
+// --- Process-comment tests (from tabnas.test.js) ---
 
 func TestProcessComment(t *testing.T) {
 	expectParse(t, "a:q\nb:w #X\nc:r \n\nd:t\n\n#",
@@ -680,7 +680,7 @@ func TestPlatformMismatch_UndefinedVsNull(t *testing.T) {
 func TestPlatformMismatch_NonStringInput(t *testing.T) {
 	// PLATFORM MISMATCH: Non-string input
 	//
-	// In TypeScript: Amagama({}) returns {}, Amagama([]) returns [], etc.
+	// In TypeScript: Tabnas({}) returns {}, Tabnas([]) returns [], etc.
 	// Non-string inputs are passed through.
 	//
 	// In Go: Parse() only accepts strings. Non-string inputs require
@@ -689,18 +689,18 @@ func TestPlatformMismatch_NonStringInput(t *testing.T) {
 	// Parse(string) any.
 
 	t.Logf("MISMATCH NOTE: Go Parse() only accepts strings. " +
-		"TS Amagama() passes through non-string inputs ({}, [], true, etc.)")
+		"TS Tabnas() passes through non-string inputs ({}, [], true, etc.)")
 }
 
 func TestErrorFormat(t *testing.T) {
-	// Verify error format matches TypeScript AmagamaError output.
+	// Verify error format matches TypeScript TabnasError output.
 
 	t.Run("unterminated_string", func(t *testing.T) {
 		_, err := Parse(`"unterminated`)
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		if je.Code != "unterminated_string" {
 			t.Errorf("Code: got %q, want %q", je.Code, "unterminated_string")
 		}
@@ -711,10 +711,10 @@ func TestErrorFormat(t *testing.T) {
 		if !strings.Contains(je.Detail, "unterminated string:") {
 			t.Errorf("Detail should contain 'unterminated string:', got %q", je.Detail)
 		}
-		// Error() should contain [amagama/<code>] header
+		// Error() should contain [tabnas/<code>] header
 		msg := je.Error()
-		if !strings.Contains(msg, "[amagama/unterminated_string]:") {
-			t.Errorf("Error() should contain '[amagama/unterminated_string]:', got:\n%s", msg)
+		if !strings.Contains(msg, "[tabnas/unterminated_string]:") {
+			t.Errorf("Error() should contain '[tabnas/unterminated_string]:', got:\n%s", msg)
 		}
 		// Error() should contain --> row:col
 		if !strings.Contains(msg, "--> 1:1") {
@@ -727,7 +727,7 @@ func TestErrorFormat(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		if je.Code != "unterminated_comment" {
 			t.Errorf("Code: got %q, want %q", je.Code, "unterminated_comment")
 		}
@@ -735,7 +735,7 @@ func TestErrorFormat(t *testing.T) {
 			t.Errorf("Detail should contain 'unterminated comment:', got %q", je.Detail)
 		}
 		msg := je.Error()
-		if !strings.Contains(msg, "[amagama/unterminated_comment]:") {
+		if !strings.Contains(msg, "[tabnas/unterminated_comment]:") {
 			t.Errorf("Error() missing code header, got:\n%s", msg)
 		}
 	})
@@ -745,7 +745,7 @@ func TestErrorFormat(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		if je.Code != "unexpected" {
 			t.Errorf("Code: got %q, want %q", je.Code, "unexpected")
 		}
@@ -753,7 +753,7 @@ func TestErrorFormat(t *testing.T) {
 			t.Errorf("Detail should contain 'unexpected character(s):', got %q", je.Detail)
 		}
 		msg := je.Error()
-		if !strings.Contains(msg, "[amagama/unexpected]:") {
+		if !strings.Contains(msg, "[tabnas/unexpected]:") {
 			t.Errorf("Error() missing code header, got:\n%s", msg)
 		}
 	})
@@ -765,7 +765,7 @@ func TestErrorFormat(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		msg := je.Error()
 		// Should show --> row:col
 		if !strings.Contains(msg, "--> 11:4") {
@@ -788,7 +788,7 @@ func TestErrorFormat(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		msg := je.Error()
 		// Should show context lines
 		if !strings.Contains(msg, "|") {
@@ -801,12 +801,12 @@ func TestErrorFormat(t *testing.T) {
 	})
 
 	t.Run("error_fields_match_ts", func(t *testing.T) {
-		// Verify all structured fields are present (matching TS AmagamaError)
+		// Verify all structured fields are present (matching TS TabnasError)
 		_, err := Parse(`"abc`)
 		if err == nil {
 			t.Fatal("Expected error")
 		}
-		je := err.(*AmagamaError)
+		je := err.(*TabnasError)
 		// Code matches TS error code
 		if je.Code == "" {
 			t.Error("Code should not be empty")

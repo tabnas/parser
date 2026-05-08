@@ -1,8 +1,8 @@
-# Feasibility Report: Language Server Protocol Support for Amagama
+# Feasibility Report: Language Server Protocol Support for Tabnas
 
 ## Summary
 
-Adding a Language Server Protocol (LSP) implementation for amagama is
+Adding a Language Server Protocol (LSP) implementation for tabnas is
 **feasible and well-matched to the existing parser architecture**, but it
 requires one non-trivial extension: the parser must be able to **collect
 multiple errors** and **keep going after a parse error**. Today it throws on
@@ -10,10 +10,10 @@ the first failure and unwinds.
 
 This report covers two design questions that block a useful LSP:
 
-1. Can the amagama parser be extended to collect multiple errors and recover
+1. Can the tabnas parser be extended to collect multiple errors and recover
    from parse errors?
 2. What sync-point mechanism should error recovery use — and how do we make it
-   general enough to survive amagama's plugin model?
+   general enough to survive tabnas's plugin model?
 
 The short answer: **moderate difficulty**, with a clean design available by
 reusing existing parser concepts (rule stack, alternate group tags) rather
@@ -30,7 +30,7 @@ Rust-analyzer, tree-sitter-based servers, tolerant-php-parser) solves this
 the same way: collect errors into a list, and after each error skip to a
 *sync point* where parsing can safely resume.
 
-Amagama is additionally extensible — plugins add rules, tokens, and
+Tabnas is additionally extensible — plugins add rules, tokens, and
 bracket-like structures (HJSON, JSONL, CSV, TOML-style, custom DSLs). A
 hard-coded sync set like `{',', '}', ']'}` breaks as soon as a plugin
 introduces a new terminator. The recovery mechanism has to be driven by the
@@ -40,13 +40,13 @@ grammar itself.
 
 ## 2. Current Error Model (Single-Shot, Fail-Fast)
 
-Errors are raised as `AmagamaError` exceptions and immediately unwind the
+Errors are raised as `TabnasError` exceptions and immediately unwind the
 parser.
 
 | Location | Behaviour |
 |---|---|
-| `src/error.ts:32-44` | `AmagamaError extends SyntaxError`; has `code`, `lineNumber`, `columnNumber`, `why` — already LSP-shaped. |
-| `src/parser.ts:145,191,198` | Three explicit `throw new AmagamaError()` sites inside the main loop. |
+| `src/error.ts:32-44` | `TabnasError extends SyntaxError`; has `code`, `lineNumber`, `columnNumber`, `why` — already LSP-shaped. |
+| `src/parser.ts:145,191,198` | Three explicit `throw new TabnasError()` sites inside the main loop. |
 | `src/rules.ts:533` | `RuleSpec.bad()` throws when no alternate matches. |
 | `src/utility.ts:572-596` | `badlex()` wraps the lexer; converts `#BD` (bad) tokens into throws. |
 | `src/lexer.ts:1137-1159` | Lexer itself does **not** throw — it emits a `#BD` token. The throw is imposed by `badlex`. |
@@ -73,7 +73,7 @@ body, no notion of "after an error, where do I resume?".
 
 ## 3. Parsing Model and Why It Can Resume
 
-Amagama is a **stack-based rule engine with 2-token lookahead**, not
+Tabnas is a **stack-based rule engine with 2-token lookahead**, not
 recursive descent.
 
 - `RuleSpec` (`src/rules.ts:161-205`, `src/types.ts:300-336`) has two
@@ -94,7 +94,7 @@ recursive descent.
   its `spec`, `state` (`OPEN`/`CLOSE`), and counters.
 
 The rule stack **is** the parser's structural context. It is walkable,
-inspectable, and already tracks exactly what amagama thinks the legal
+inspectable, and already tracks exactly what tabnas thinks the legal
 continuations are. This is the ideal substrate for error recovery.
 
 ---
@@ -105,11 +105,11 @@ Minimum viable set of changes:
 
 | # | Change | Where |
 |---|---|---|
-| 1 | Add `errs: AmagamaError[]` to `Context`. | `src/types.ts:387-417` |
+| 1 | Add `errs: TabnasError[]` to `Context`. | `src/types.ts:387-417` |
 | 2 | In `badlex`, on `#BD`, push to `ctx.errs` and return a synthetic token instead of throwing. | `src/utility.ts:572-596` |
 | 3 | In `RuleSpec.bad()`, collect instead of throw; hand off to a recovery routine. | `src/rules.ts:533` |
 | 4 | Wrap the iteration body in `src/parser.ts:172-187` in try/catch; on catch, record the error and attempt recovery. | `src/parser.ts` |
-| 5 | Expose errors on the parse result: `{ value, errors }`, or leave errors on `ctx` for callers (LSP) to read. | `src/amagama.ts` |
+| 5 | Expose errors on the parse result: `{ value, errors }`, or leave errors on `ctx` for callers (LSP) to read. | `src/tabnas.ts` |
 | 6 | Make the new behaviour opt-in via a config flag. | `src/defaults.ts` / `src/types.ts` |
 
 The opt-in flag matters: changing the default would break every existing
@@ -131,7 +131,7 @@ implementation has fought this. Mitigations:
 ## 5. Sync Points — The Design Question
 
 A naïve recovery says "skip until `,` or `}` or `]`". This is wrong for
-amagama because:
+tabnas because:
 
 - Plugins add new terminators (e.g. newline in JSONL, `;` in some dialects).
 - The correct sync set depends on *where* in the rule stack we are —
@@ -149,8 +149,8 @@ resume?**
 | Hard-coded token set | Skip until next `,` `}` `]`. | Too brittle; breaks under plugins. |
 | New `sync` field on `AltSpec` | Each alternate declares whether it is a sync edge. | Works, but duplicates information already present in `g` (group tags). |
 | Token-insertion (Roslyn-style) | On error, synthesise the missing token and continue. | Powerful but scope-creep; defer. |
-| Tree-sitter error nodes | GLR-style parallel branches wrap skipped regions. | Architecturally alien to amagama's single-pass engine. |
-| tolerant-php-parser skip-tokens | Skip until a sync point, record the skipped span. | Closest fit; amagama's engine is already panic-mode friendly. |
+| Tree-sitter error nodes | GLR-style parallel branches wrap skipped regions. | Architecturally alien to tabnas's single-pass engine. |
+| tolerant-php-parser skip-tokens | Skip until a sync point, record the skipped span. | Closest fit; tabnas's engine is already panic-mode friendly. |
 | **Dynamic sync derived from rule stack + group tags** | Walk the live `ctx.rs` at error time; collect `Tin`s from close-state alternates whose `g` intersects a configured group set. | **Recommended.** |
 
 ### 5.2 Why the group-tag approach wins
@@ -240,7 +240,7 @@ feasibility.
 
 1. **Token insertion.** Should recovery also synthesise a missing token
    (e.g. an absent `,`) and keep the current rule running? This is
-   Roslyn-style and pairs well with amagama's 2-token lookahead but
+   Roslyn-style and pairs well with tabnas's 2-token lookahead but
    meaningfully enlarges the design. Recommend **deferring** to a second
    iteration.
 2. **Structural sync fallback.** When `syncSet` is empty (deep stack, no
@@ -248,9 +248,9 @@ feasibility.
    Useful for pathological inputs.
 3. **Additive vs replacing `syncGroups`.** Plugins should almost certainly
    *add* groups rather than replace the defaults. The options merge layer
-   (`src/amagama.ts:172-220`) already supports this pattern via array
+   (`src/tabnas.ts:172-220`) already supports this pattern via array
    concat; confirm and document.
-4. **Error result shape.** Should `amagama(src)` in recovery mode return
+4. **Error result shape.** Should `tabnas(src)` in recovery mode return
    `{value, errors}`, or mutate the passed `meta`/`ctx`, or a third option?
    An LSP only needs the errors — the value may be partial and is often
    discarded.
@@ -284,7 +284,7 @@ Stage the work so every step leaves the repo shippable.
 
 ## 8. Conclusion
 
-The amagama parser was not designed for error recovery, but its core data
+The tabnas parser was not designed for error recovery, but its core data
 structures — stack-based rules, group-tagged alternates, non-throwing
 lexer, iterative main loop — align with a panic-mode recovery scheme
 almost exactly. The recommended design adds one option subtree and one

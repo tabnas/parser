@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"strings"
@@ -37,9 +37,9 @@ func TestColorActiveWrapsHeader(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 	msg := err.Error()
-	// Header "[amagama/unterminated_string]:" should be wrapped by the Hi
+	// Header "[tabnas/unterminated_string]:" should be wrapped by the Hi
 	// code before and Reset after.
-	want := "\x1b[91m[amagama/unterminated_string]:\x1b[0m"
+	want := "\x1b[91m[tabnas/unterminated_string]:\x1b[0m"
 	if !strings.Contains(msg, want) {
 		t.Errorf("expected header to be colour-wrapped, got:\n%q", msg)
 	}
@@ -89,7 +89,7 @@ func TestColorDisabledSuppressesAll(t *testing.T) {
 		t.Errorf("expected no ANSI escapes, got:\n%q", msg)
 	}
 	// Plain text still reaches the caller.
-	if !strings.Contains(msg, "[amagama/unterminated_string]:") {
+	if !strings.Contains(msg, "[tabnas/unterminated_string]:") {
 		t.Errorf("expected plain header, got:\n%q", msg)
 	}
 	if !strings.Contains(msg, "-->") {
@@ -112,7 +112,7 @@ func TestColorCustomOverrides(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "<HI>[amagama/") {
+	if !strings.Contains(msg, "<HI>[tabnas/") {
 		t.Errorf("expected custom Hi, got:\n%q", msg)
 	}
 	if !strings.Contains(msg, "<LN>-->") {
@@ -176,7 +176,7 @@ func TestColorFromTextCustomCodes(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 	msg := perr.Error()
-	if !strings.Contains(msg, "<HI>[amagama/") || !strings.Contains(msg, "]:<R>") {
+	if !strings.Contains(msg, "<HI>[tabnas/") || !strings.Contains(msg, "]:<R>") {
 		t.Errorf("custom codes not applied, got:\n%q", msg)
 	}
 	if !strings.Contains(msg, "<LN>-->") {
@@ -195,7 +195,7 @@ func TestColorAppliesToLexerError(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "\x1b[91m[amagama/unterminated_string]:\x1b[0m") {
+	if !strings.Contains(msg, "\x1b[91m[tabnas/unterminated_string]:\x1b[0m") {
 		t.Errorf("lex-path error missing ANSI, got:\n%q", msg)
 	}
 }
