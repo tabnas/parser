@@ -94,6 +94,17 @@ import {
   makeStringMatcher,
   makeTextMatcher,
   makeToken,
+  // Lex scan primitives — re-exposed via util for plugin authors.
+  guardedMatcher,
+  runScan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 } from './lexer'
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
@@ -126,6 +137,20 @@ const util: Record<string, any> = {
   tokenize,
   trimstk,
   values,
+
+  // Lex scan primitives. Plugin authors writing custom matchers can
+  // reuse the same state-machine driver and spec builders the core
+  // matchers use. See the matchers in src/lexer.ts for examples.
+  guardedMatcher,
+  runScan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 }
 
 
@@ -530,6 +555,8 @@ export type {
   Tin,
   Token,
 }
+
+export type { ScanSpec, ScanOut } from './lexer'
 
 export {
   Amagama,

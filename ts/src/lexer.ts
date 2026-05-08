@@ -1426,4 +1426,18 @@ export {
   makeCommentMatcher,
   makeNumberMatcher,
   makeTextMatcher,
+  // Lex scan primitives — exposed so plugin authors can build their
+  // own matchers on the same state-machine driver.
+  guardedMatcher,
+  runScan,
+  buildCharRunSpec,
+  buildLineRunSpec,
+  buildStringBodySpec,
+  CONSUME,
+  IS_ROW,
+  CI_RESET,
+  STOP,
+  STATE_MASK,
 }
+
+export type { ScanSpec, ScanOut }
