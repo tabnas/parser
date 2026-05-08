@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"encoding/json"
@@ -49,7 +49,7 @@ func stripRefs(v any) any {
 // --- Standard parser TSV runner with custom options ---
 
 // runParserTSV runs a standard 2-column TSV (input, expected) with a custom parser.
-func runParserTSV(t *testing.T, file string, j *Amagama) {
+func runParserTSV(t *testing.T, file string, j *Tabnas) {
 	t.Helper()
 	path := filepath.Join(specDir(), file)
 	rows, err := loadTSV(path)
@@ -88,7 +88,7 @@ func runParserTSV(t *testing.T, file string, j *Amagama) {
 // --- List-child TSV runner (3-column: input, expected_array, expected_child) ---
 
 // runListChildTSV runs a list-child TSV file.
-func runListChildTSV(t *testing.T, file string, j *Amagama) {
+func runListChildTSV(t *testing.T, file string, j *Tabnas) {
 	t.Helper()
 	path := filepath.Join(specDir(), file)
 	rows, err := loadTSV(path)

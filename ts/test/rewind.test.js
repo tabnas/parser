@@ -11,8 +11,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
-const { Amagama } = require('..')
-const am = new Amagama()
+const { Tabnas } = require('..')
+const am = new Tabnas()
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 

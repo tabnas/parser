@@ -1,28 +1,28 @@
 /* Copyright (c) 2025 Richard Rodger and other contributors, MIT License */
 
 /*  bnf.ts
- *  BNF -> amagama grammar spec converter.
+ *  BNF -> tabnas grammar spec converter.
  *
  *  Accepts a small BNF dialect: productions of the form
  *  `<name> ::= rhs`, where `rhs` is an alternation (`|`) of sequences
  *  of terminal literals (`"foo"`, `'foo'`) and nonterminal references
  *  (`<name>` or a bare `name`).
  *
- *  The BNF source is itself parsed by a amagama instance whose grammar
+ *  The BNF source is itself parsed by a tabnas instance whose grammar
  *  is defined below in `bnfRules`. That grammar is declarative — a
  *  table of `open`/`close` alt specs per rule, with small `bo`/`bc`
  *  state hooks for AST assembly. See `getBnfParser` for how those
- *  rules are installed on a fresh amagama instance.
+ *  rules are installed on a fresh tabnas instance.
  *
- *  The emitter turns each alternative into one or more amagama rule
+ *  The emitter turns each alternative into one or more tabnas rule
  *  alts. A "single-segment" alternative (at most one rule reference,
- *  trailing) collapses to a single amagama alt; any alternative with
+ *  trailing) collapses to a single tabnas alt; any alternative with
  *  two or more ref boundaries is chained through synthetic
  *  continuation rules named `<prodname>$stepN`.
  *
  *  Larger BNF features — repetition, optionality, grouping, left
  *  recursion, precedence — are still out of scope; see
- *  doc/bnf-to-amagama-feasibility.md for the full plan.
+ *  doc/bnf-to-tabnas-feasibility.md for the full plan.
  */
 
 import type { BnfConvertOptions, GrammarSpec, Rule } from '../../types'
@@ -116,7 +116,7 @@ type AmbiguityReport = {
 
 
 // Declarative definition of the BNF grammar itself, expressed as
-// amagama rules. Each rule names its `open`/`close` alt list and, where
+// tabnas rules. Each rule names its `open`/`close` alt list and, where
 // necessary, a `bo`/`bc` state hook for AST assembly.
 //
 // Stage 8: incremental alternatives via `name =/ alt` now fold
@@ -138,8 +138,8 @@ type AmbiguityReport = {
 //   #RP    `)`
 //   #OB    `[` (optional-group open)
 //   #CB    `]` (optional-group close)
-//   #TX    bare identifier (amagama default text token)
-//   #ST    quoted string literal (amagama default string token)
+//   #TX    bare identifier (tabnas default text token)
+//   #ST    quoted string literal (tabnas default string token)
 //   #ZZ    end-of-source
 //
 // Grammar:
@@ -462,18 +462,18 @@ const bnfRules: Record<
 }
 
 
-// Lazily built amagama instance that parses BNF source. Deferred
+// Lazily built tabnas instance that parses BNF source. Deferred
 // construction avoids a circular-import failure at module load time.
 let _bnfParser: ((src: string) => BnfProduction[]) | null = null
 
 function getBnfParser(): (src: string) => BnfProduction[] {
   if (_bnfParser) return _bnfParser
 
-  const { Amagama } = require('../../amagama')
+  const { Tabnas } = require('../../tabnas')
 
   // BNF defines its own grammar from scratch, so we don't load any
   // grammar plugin — just use the bare engine with default tokens.
-  const j = new Amagama({
+  const j = new Tabnas({
     rule: { start: 'bnf' },
     fixed: {
       token: {
@@ -489,7 +489,7 @@ function getBnfParser(): (src: string) => BnfProduction[] {
         '#CB': ']',
         '#DEF': '=',
         // `=/` — ABNF's incremental-alternatives operator. Longer
-        // than `=`, so amagama's longest-match-wins fixed matcher
+        // than `=`, so tabnas's longest-match-wins fixed matcher
         // tries it first.
         '#DEFA': '=/',
         '#ALT': '/',
@@ -527,7 +527,7 @@ function getBnfParser(): (src: string) => BnfProduction[] {
       ATOM: ['#ST', '#NV', '#TX', '#LP', '#OB', '#SS', '#SI'],
     },
     comment: {
-      // ABNF uses `;` to start a line comment. Override amagama's
+      // ABNF uses `;` to start a line comment. Override tabnas's
       // default `hash` definition (which used `#`) and disable the
       // other comment styles so `//` and `/* */` aren't confused
       // with the alternation operator.
@@ -573,7 +573,7 @@ function getBnfParser(): (src: string) => BnfProduction[] {
 // only remaining leading self-reference on A_i is direct, rewrite to
 // the iterative form
 //   P → (β_1 | … | β_m) (α_1 | … | α_n)*
-// which amagama's push-down parser can execute without re-entering P
+// which tabnas's push-down parser can execute without re-entering P
 // at the same source position.
 //
 // The substitution step can duplicate alternatives, so pathological
@@ -945,7 +945,7 @@ function desugar(grammar: BnfGrammar): BnfGrammar {
 
 
 // Error raised when the BNF source itself can't be parsed.  Surfaces
-// line and column from the underlying amagama error so the caller can
+// line and column from the underlying tabnas error so the caller can
 // report them directly. The original error is kept on `.cause`.
 class BnfParseError extends Error {
   readonly line?: number
@@ -961,14 +961,14 @@ class BnfParseError extends Error {
 }
 
 
-// Parse BNF source into a grammar AST via the amagama-based parser.
+// Parse BNF source into a grammar AST via the tabnas-based parser.
 function parseBnf(src: string): BnfGrammar {
   const parser = getBnfParser()
   let productions: BnfProduction[]
   try {
     productions = parser(src) ?? []
   } catch (e: any) {
-    // AmagamaError carries `lineNumber` / `columnNumber`; fall back to
+    // TabnasError carries `lineNumber` / `columnNumber`; fall back to
     // ad-hoc extraction from the error message otherwise.
     const line = e?.lineNumber ?? e?.row
     const column = e?.columnNumber ?? e?.col
@@ -1134,7 +1134,7 @@ function mergeIncrementals(prods: BnfProduction[]): BnfProduction[] {
 //
 // The primitives used (`r:`, `k:`, `c:`, `ctx.mark`, `ctx.rewind`,
 // `ctx.t`) are the same building blocks rules/parser already exposes
-// — no new amagama machinery is needed.
+// — no new tabnas machinery is needed.
 
 
 // Predicate: element is `[ X D ]` where X is one or more elements
@@ -1377,7 +1377,7 @@ function emitProbeHelper(
 
 
 // Emit a probe-dispatch production. Encodes the three-phase retry
-// pattern; uses only standard amagama primitives (r:, p:, c:, k:,
+// pattern; uses only standard tabnas primitives (r:, p:, c:, k:,
 // ctx.mark/rewind/t).
 function emitProbeDispatch(
   prod: BnfProduction,
@@ -1456,7 +1456,7 @@ function emitProbeDispatch(
 }
 
 
-// Convert a BNF grammar AST into a amagama GrammarSpec.
+// Convert a BNF grammar AST into a tabnas GrammarSpec.
 function emitGrammarSpec(
   grammar: BnfGrammar,
   opts?: BnfConvertOptions,
@@ -1495,7 +1495,7 @@ function emitGrammarSpec(
             } else {
               // Insensitive literal with at least one letter — emit
               // as an anchored regex with the `i` flag. Mark the
-              // matcher `eager$` so amagama's lexer fires it even
+              // matcher `eager$` so tabnas's lexer fires it even
               // when the current rule's tcol doesn't list its tin.
               const re = new RegExp(
                 '^' + escapeRegExp(el.literal),
@@ -1563,7 +1563,7 @@ function emitGrammarSpec(
       continue
     }
     // Standard path: a (possibly single-segment) set of alternatives
-    // compiled to amagama alts. Simple alts collapse into `open` alts
+    // compiled to tabnas alts. Simple alts collapse into `open` alts
     // directly; multi-segment alts emit a chain of aux rules.
     emitProduction(
       prod, grammar, literals, regexTokens, knownRules, tag, ruleSpec,
@@ -1574,7 +1574,7 @@ function emitGrammarSpec(
   // Wrap the user-visible start rule in a synthetic rule that
   // explicitly consumes #ZZ. Without this, a user rule that pops
   // without matching the end-of-source token lets trailing content
-  // slip past amagama's post-loop endtkn check (the lookahead buffer
+  // slip past tabnas's post-loop endtkn check (the lookahead buffer
   // outlives the parse loop).
   const startWrapper = '__start__'
   ruleSpec[startWrapper] = {
@@ -1586,7 +1586,7 @@ function emitGrammarSpec(
       s: '#ZZ',
       // Return the start rule's AST node directly — the `__start__`
       // wrapper exists only to ensure end-of-source gets consumed.
-      // The caller of `amagama(src)` receives the tagged user-rule
+      // The caller of `tabnas(src)` receives the tagged user-rule
       // node (e.g. `{rule: 'URI', src, kids: [...]}`) unadorned.
       a: refs.register((r: Rule) => {
         if (r.child && r.child.node !== undefined) {
@@ -1807,10 +1807,10 @@ function emitProduction(
   const allSimple = prod.alts.every(isSingleSegment)
 
   if (allSimple) {
-    // Every alternative collapses to one amagama alt — emit them
+    // Every alternative collapses to one tabnas alt — emit them
     // directly into the production's open state. This is a head
     // rule, so each alt initialises its own node array. Empty alts
-    // are sorted to the end so amagama's first-match-wins doesn't let
+    // are sorted to the end so tabnas's first-match-wins doesn't let
     // them short-circuit non-empty alternatives.
     const ordered = [
       ...prod.alts.filter((alt) => alt.length > 0),
@@ -1818,7 +1818,7 @@ function emitProduction(
     ]
 
     // Ref-only alternatives have no terminal to discriminate on, so
-    // amagama's first-match-wins would silently let them shadow any
+    // tabnas's first-match-wins would silently let them shadow any
     // later alternative. Guard them with FIRST-set peeks when the
     // production has more than one alt.
     const needsPeek = ordered.length > 1
@@ -2347,7 +2347,7 @@ function allocTokenName(literal: string, used: Set<string>): string {
 }
 
 
-// Public entry point: take BNF source and return a amagama GrammarSpec.
+// Public entry point: take BNF source and return a tabnas GrammarSpec.
 function bnf(src: string, opts?: BnfConvertOptions): GrammarSpec {
   const grammar = parseBnf(src)
   return emitGrammarSpec(grammar, opts)

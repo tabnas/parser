@@ -9,7 +9,7 @@ import type {
   NormAltSpec,
   Config,
   AltMatch,
-  Amagama,
+  Tabnas,
   Plugin,
   RuleSpec,
   Rule,
@@ -17,9 +17,9 @@ import type {
   Point,
   LexMatcher,
   Token,
-} from '../../amagama'
+} from '../../tabnas'
 
-import { S, util, EMPTY } from '../../amagama'
+import { S, util, EMPTY } from '../../tabnas'
 
 
 // TODO: custom stringify for nodes
@@ -50,17 +50,17 @@ const DEFAULTS: DebugOptions = {
 
 const { entries, tokenize } = util
 
-const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
+const Debug: Plugin = (tabnas: Tabnas, options: DebugOptions) => {
   options.trace =
     true === (options.trace as any) ? { ...DEFAULTS.trace } : options.trace
 
-  const { keys, values, entries } = amagama.util
+  const { keys, values, entries } = tabnas.util
 
-  amagama.debug = {
+  tabnas.debug = {
     describe: function(): string {
-      let cfg = amagama.internal().config
+      let cfg = tabnas.internal().config
       let match = cfg.lex.match
-      let rules = amagama.rule()
+      let rules = tabnas.rule()
 
       return [
         '========= TOKENS ========',
@@ -96,7 +96,7 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
         ,
 
         '========= RULES =========',
-        ruleTree(amagama, keys(rules), rules),
+        ruleTree(tabnas, keys(rules), rules),
         '\n',
 
         '========= ALTS =========',
@@ -106,8 +106,8 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
               '  ' +
               rs.name +
               ':\n' +
-              descAlt(amagama, rs, 'open') +
-              descAlt(amagama, rs, 'close'),
+              descAlt(tabnas, rs, 'open') +
+              descAlt(tabnas, rs, 'close'),
           )
           .join('\n\n'),
 
@@ -127,7 +127,7 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
         '\n',
         '========= PLUGIN =========',
         '  ' +
-        amagama
+        tabnas
           .internal()
           .plugins.map(
             (p: Plugin) =>
@@ -146,9 +146,9 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
     },
   }
 
-  const origUse = amagama.use.bind(amagama)
+  const origUse = tabnas.use.bind(tabnas)
 
-  amagama.use = (...args) => {
+  tabnas.use = (...args) => {
     let self = origUse(...args)
     if (options.print) {
       self
@@ -161,10 +161,10 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
 
 
   if (options.trace) {
-    amagama.options({
+    tabnas.options({
       parse: {
         prepare: {
-          debug: (_amagama: Amagama, ctx: Context, _meta: any) => {
+          debug: (_tabnas: Tabnas, ctx: Context, _meta: any) => {
             const console_log = ctx.cfg.debug.get_console().log
             console_log('\n========= TRACE ==========')
             ctx.log =
@@ -188,8 +188,8 @@ const Debug: Plugin = (amagama: Amagama, options: DebugOptions) => {
   }
 }
 
-function descAlt(amagama: Amagama, rs: RuleSpec, kind: 'open' | 'close') {
-  const { entries } = amagama.util
+function descAlt(tabnas: Tabnas, rs: RuleSpec, kind: 'open' | 'close') {
+  const { entries } = tabnas.util
 
   return 0 === rs.def[kind].length
     ? ''
@@ -209,8 +209,8 @@ function descAlt(amagama: Amagama, rs: RuleSpec, kind: 'open' | 'close') {
                 null == tin
                   ? '***INVALID***'
                   : 'number' === typeof tin
-                    ? amagama.token[tin]
-                    : Array.isArray(tin) ? '[' + tin.map((t: any) => amagama.token[t]) + ']'
+                    ? tabnas.token[tin]
+                    : Array.isArray(tin) ? '[' + tin.map((t: any) => tabnas.token[t]) + ']'
                       : ('' + tin),
               )
               .join(' ') +
@@ -242,8 +242,8 @@ function descAlt(amagama: Amagama, rs: RuleSpec, kind: 'open' | 'close') {
     '\n'
 }
 
-function ruleTree(amagama: Amagama, rn: string[], rsm: any) {
-  const { values, omap } = amagama.util
+function ruleTree(tabnas: Tabnas, rn: string[], rsm: any) {
+  const { values, omap } = tabnas.util
 
   return rn.reduce(
     (a: any, n: string) => (

@@ -6,8 +6,8 @@
 
 import type {
   AltSpec,
-  Amagama,
-  AmagamaOptions,
+  Tabnas,
+  TabnasOptions,
   Chars,
   Config,
   Context,
@@ -25,7 +25,7 @@ import type {
 import { EMPTY, SKIP, STRING } from './types'
 
 import { makeToken, makePoint } from './lexer'
-import { AmagamaError } from './error'
+import { TabnasError } from './error'
 
 // Null-safe object and array utilities
 // TODO: should use proper types:
@@ -112,9 +112,9 @@ const S = {
 // Idempotent normalization of options.
 // See Config type for commentary.
 function configure(
-  amagama: Amagama,
+  tabnas: Tabnas,
   incfg: Config | undefined,
-  opts: AmagamaOptions,
+  opts: TabnasOptions,
 ): Config {
   const cfg = incfg || ({} as Config)
 
@@ -461,10 +461,10 @@ function configure(
   cfg.color.lo = optscolor.lo ?? cfg.color.lo ?? '\x1b[2m'
   cfg.color.line = optscolor.line ?? cfg.color.line ?? '\x1b[34m'
 
-  assign(amagama.options, opts)
-  assign(amagama.token, cfg.t)
-  assign(amagama.tokenSet, cfg.tokenSet)
-  assign(amagama.fixed, cfg.fixed.ref)
+  assign(tabnas.options, opts)
+  assign(tabnas.token, cfg.t)
+  assign(tabnas.tokenSet, cfg.tokenSet)
+  assign(tabnas.fixed, cfg.fixed.ref)
 
   return cfg
 }
@@ -474,7 +474,7 @@ function configure(
 function tokenize<
   R extends string | Tin,
   T extends R extends Tin ? string : Tin,
->(ref: R, cfg: Config, amagama?: any): T {
+>(ref: R, cfg: Config, tabnas?: any): T {
   let tokenmap: any = cfg.t
   let token: string | Tin = tokenmap[ref]
 
@@ -486,8 +486,8 @@ function tokenize<
     tokenmap[ref] = token
     tokenmap[(ref as string).substring(1)] = token
 
-    if (null != amagama) {
-      assign(amagama.token, cfg.t)
+    if (null != tabnas) {
+      assign(tabnas.token, cfg.t)
     }
   }
 
@@ -592,7 +592,7 @@ function badlex(lex: Lex, BD: Tin, ctx: Context) {
       if (null != token.use) {
         details.use = token.use
       }
-      throw new AmagamaError(
+      throw new TabnasError(
         token.why || S.unexpected,
         details,
         token,
@@ -607,7 +607,7 @@ function badlex(lex: Lex, BD: Tin, ctx: Context) {
   return lex
 }
 
-// Special debug logging to console (use Amagama('...', {log:N})).
+// Special debug logging to console (use Tabnas('...', {log:N})).
 // log:N -> console.dir to depth N
 // log:-1 -> console.dir to depth 1, omitting objects (good summary!)
 function makelog(ctx: Context, meta: any) {
@@ -863,12 +863,12 @@ function parserwrap(parser: any) {
   return {
     start: function(
       src: string,
-      amagama: Amagama,
+      tabnas: Tabnas,
       meta?: any,
       parent_ctx?: any,
     ) {
       try {
-        return parser.start(src, amagama, meta, parent_ctx)
+        return parser.start(src, tabnas, meta, parent_ctx)
       } catch (ex: any) {
         if ('SyntaxError' === ex.name) {
           let loc = 0
@@ -891,7 +891,7 @@ function parserwrap(parser: any) {
             ex.token ||
             makeToken(
               '#UK',
-              tokenize('#UK', amagama.internal().config),
+              tokenize('#UK', tabnas.internal().config),
               undefined,
               tsrc,
               makePoint(
@@ -902,7 +902,7 @@ function parserwrap(parser: any) {
               ),
             )
 
-          throw new AmagamaError(
+          throw new TabnasError(
             ex.code || 'json',
             ex.details || {
               msg: ex.message,
@@ -914,14 +914,14 @@ function parserwrap(parser: any) {
             ex.ctx ||
             ({
               uI: -1,
-              opts: amagama.options,
-              cfg: amagama.internal().config,
+              opts: tabnas.options,
+              cfg: tabnas.internal().config,
               token: token,
               meta,
               src: () => src,
               root: () => undefined,
-              plgn: () => amagama.internal().plugins,
-              inst: () => amagama,
+              plgn: () => tabnas.internal().plugins,
+              inst: () => tabnas,
               rule: { name: 'no-rule' } as Rule,
               sub: {},
               xs: -1,
@@ -935,7 +935,7 @@ function parserwrap(parser: any) {
               rsm: {},
               n: {},
               log: meta ? meta.log : undefined,
-              F: srcfmt(amagama.internal().config),
+              F: srcfmt(tabnas.internal().config),
               u: {},
               NORULE: { name: 'no-rule' } as Rule,
               NOTOKEN: { name: 'no-token' } as Token,

@@ -17,7 +17,7 @@ import type {
 
 import { EMPTY, INSPECT } from './types'
 
-import type { AmagamaOptions } from './amagama'
+import type { TabnasOptions } from './tabnas'
 
 import {
   S,
@@ -405,7 +405,7 @@ const STRING_BODY_TABLE = new Int32Array([
 
 
 
-let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
 
   return guardedMatcher(cfg.fixed, function fixedBody(lex) {
@@ -434,7 +434,7 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
   })
 }
 
-let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   // Pre-sort both matcher lists at configure time so lexing iterates in
   // a deterministic order regardless of how the config object was built.
   // Value matchers: sort by user-supplied name (ascending).
@@ -545,7 +545,7 @@ type CommentDef = Config['comment']['def'] extends { [_: string]: infer T }
   ? T
   : never
 
-let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   let oc = opts.comment
 
   cfg.comment = {
@@ -794,7 +794,7 @@ function commentSuffixFnMatch(lex: Lex, fI: number, fn?: LexMatcher): number {
 
 // Match text, checking for literal values, optionally followed by a fixed token.
 // Text strings are terminated by end markers.
-let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   let ender = regexp(cfg.line.lex ? null : 's', '^(.*?)', ...cfg.rePart.ender)
 
   return function textMatcher(lex: Lex) {
@@ -888,7 +888,7 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
   }
 }
 
-let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let mcfg = cfg.number
 
   let ender = regexp(
@@ -971,7 +971,7 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => 
   })
 }
 
-let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
+let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   // TODO: does `clean` make sense here?
 
   let os = opts.string || {}
@@ -1168,7 +1168,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: AmagamaOptions) => {
 // (LINE_RUN_TABLE). `single` mode tracks "has this exact char been
 // seen yet" — that's not bounded by a small state count so it stays
 // inline.
-let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   const spec = buildLineRunSpec(cfg.line)
   const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
@@ -1219,7 +1219,7 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
 //
 // Spec: walk a run of `cfg.space.chars`. Class 0 = not a space,
 // class 1 = a space. The driver does the rest.
-let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: AmagamaOptions) => {
+let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   const spec = buildCharRunSpec(cfg.space.charsBitmap, cfg.space.chars)
   const out: ScanOut = { sI: 0, rI: 0, cI: 0 }
 

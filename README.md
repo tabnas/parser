@@ -1,4 +1,4 @@
-# amagama
+# tabnas
 
 A pluggable parsing engine — a configurable rule-based parser over a
 configurable matcher-based lexer. Grammar comes from plugins; the

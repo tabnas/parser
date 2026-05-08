@@ -47,9 +47,9 @@ Wraps string and text values in a `Text` struct that preserves the quote
 character used:
 
 ```go
-j := amagama.Make(amagama.Options{TextInfo: boolp(true)})
+j := tabnas.Make(tabnas.Options{TextInfo: boolp(true)})
 result, _ := j.Parse(`'hello'`)
-// result: amagama.Text{Quote: '\'', Str: "hello"}
+// result: tabnas.Text{Quote: '\'', Str: "hello"}
 ```
 
 ### `ListRef` Option
@@ -57,9 +57,9 @@ result, _ := j.Parse(`'hello'`)
 Wraps arrays in a `ListRef` struct with metadata:
 
 ```go
-j := amagama.Make(amagama.Options{ListRef: boolp(true)})
+j := tabnas.Make(tabnas.Options{ListRef: boolp(true)})
 result, _ := j.Parse("a, b, c")
-// result: amagama.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
+// result: tabnas.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
 ```
 
 ### `MapRef` Option
@@ -67,16 +67,16 @@ result, _ := j.Parse("a, b, c")
 Wraps objects in a `MapRef` struct with metadata:
 
 ```go
-j := amagama.Make(amagama.Options{MapRef: boolp(true)})
+j := tabnas.Make(tabnas.Options{MapRef: boolp(true)})
 result, _ := j.Parse("a:1")
-// result: amagama.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
+// result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
 ```
 
 ## Plugin Differences
 
 | Area | TypeScript | Go |
 |---|---|---|
-| Plugin signature | `(amagama, opts?) => void` | `func(j *Amagama, opts map[string]any)` |
+| Plugin signature | `(tabnas, opts?) => void` | `func(j *Tabnas, opts map[string]any)` |
 | Rule definer | Receives `RuleSpec` + `Parser` | Receives `*RuleSpec` only |
 | State actions | Can return error tokens | No return value |
 | Option namespacing | Plugin options merged by name | No namespacing |

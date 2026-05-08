@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"regexp"
@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// Options configures a Amagama parser instance.
+// Options configures a Tabnas parser instance.
 // All fields use pointer types so that nil means "use default".
 // This matches the TypeScript pattern where unset options fall back to defaults.
 type Options struct {
@@ -96,7 +96,7 @@ type Options struct {
 }
 
 // ColorOptions configures the ANSI escape codes used when formatting a
-// AmagamaError. When Active is nil or *Active is true, the non-empty
+// TabnasError. When Active is nil or *Active is true, the non-empty
 // codes are wrapped around the appropriate parts of the error output.
 // Setting *Active to false disables colour output entirely regardless
 // of the other fields. Mirrors TS `options.color`.
@@ -123,7 +123,7 @@ type ColorOptions struct {
 // Matches the TypeScript errmsg option.
 type ErrMsgOptions struct {
 	// Name sets the error tag in formatted messages.
-	// Default: "amagama". E.g. Name="bar" → "[bar/unexpected]: ..."
+	// Default: "tabnas". E.g. Name="bar" → "[bar/unexpected]: ..."
 	Name string
 
 	// Suffix controls the optional trailing text after an error message.
@@ -199,7 +199,7 @@ type FixedOptions struct {
 	// Keys are token names (e.g. "#CA"). Values:
 	//   - non-nil string pointer: set that name's fixed source, removing any
 	//     previous source for the same name ("#CA" → ";" swaps the comma).
-	//     Unknown names are allocated a new Tin (matches (*Amagama).Token).
+	//     Unknown names are allocated a new Tin (matches (*Tabnas).Token).
 	//   - nil pointer: remove the name's fixed mapping(s) from the lexer.
 	Token map[string]*string
 
@@ -378,13 +378,13 @@ type LexOptions struct {
 	EmptyResult any   // Result for empty source. Default: nil.
 
 	// Match defines custom lexer matchers, keyed by name.
-	// Matches the TypeScript pattern: amagama.options({ lex: { match: { name: { order, make } } } })
+	// Matches the TypeScript pattern: tabnas.options({ lex: { match: { name: { order, make } } } })
 	Match map[string]*MatchSpec
 }
 
 // ParserOptions allows custom parser overrides.
 type ParserOptions struct {
-	Start func(src string, j *Amagama, meta map[string]any) (any, error)
+	Start func(src string, j *Tabnas, meta map[string]any) (any, error)
 }
 
 // ParseOptions holds parse-time hooks. Mirrors TS `options.parse`.
@@ -407,12 +407,12 @@ type ResultOptions struct {
 // ConfigModifier is a function that modifies the LexConfig after construction.
 type ConfigModifier func(cfg *LexConfig, opts *Options)
 
-// idCounter is used to generate unique Amagama instance IDs.
+// idCounter is used to generate unique Tabnas instance IDs.
 var idCounter int
 
-// Amagama is a configured parser instance, equivalent to TypeScript's Amagama.make().
-type Amagama struct {
-	id           string             // Unique instance identifier (TS: amagama.id)
+// Tabnas is a configured parser instance, equivalent to TypeScript's Tabnas.make().
+type Tabnas struct {
+	id           string             // Unique instance identifier (TS: tabnas.id)
 	options      *Options
 	parser       *Parser
 	plugins      []pluginEntry      // Registered plugins
@@ -424,17 +424,17 @@ type Amagama struct {
 	hints        map[string]string  // Error hints per error code
 	emptyAllow   bool               // Allow empty source
 	emptyResult  any                // Result for empty source
-	parserStart  func(src string, j *Amagama, meta map[string]any) (any, error)
+	parserStart  func(src string, j *Tabnas, meta map[string]any) (any, error)
 	inSetOptions bool               // Re-entrancy guard for SetOptions
-	decorations     map[string]any     // Plugin decorations (TS: amagama.foo = value)
+	decorations     map[string]any     // Plugin decorations (TS: tabnas.foo = value)
 	pluginOpts      map[string]map[string]any // Plugin options namespace (TS: options.plugin)
 	customTokenSets map[string][]Tin  // Custom token sets (TS: options.tokenSet)
 }
 
 // Decorate sets a named value on this instance. This is the Go equivalent of
-// the TypeScript pattern where plugins add properties to the amagama instance
-// (e.g. amagama.foo = () => 'FOO'). Decorations are inherited by Derive.
-func (j *Amagama) Decorate(name string, value any) *Amagama {
+// the TypeScript pattern where plugins add properties to the tabnas instance
+// (e.g. tabnas.foo = () => 'FOO'). Decorations are inherited by Derive.
+func (j *Tabnas) Decorate(name string, value any) *Tabnas {
 	if j.decorations == nil {
 		j.decorations = make(map[string]any)
 	}
@@ -444,22 +444,22 @@ func (j *Amagama) Decorate(name string, value any) *Amagama {
 
 // Decoration returns a named value previously set by Decorate.
 // Returns nil if the name has not been set.
-func (j *Amagama) Decoration(name string) any {
+func (j *Tabnas) Decoration(name string) any {
 	if j.decorations == nil {
 		return nil
 	}
 	return j.decorations[name]
 }
 
-// Id returns the unique instance identifier for this Amagama instance.
-// Matches TS amagama.id.
-func (j *Amagama) Id() string {
+// Id returns the unique instance identifier for this Tabnas instance.
+// Matches TS tabnas.id.
+func (j *Tabnas) Id() string {
 	return j.id
 }
 
 // PluginOptions returns the options stored for a named plugin.
-// Matches TS `amagama.options.plugin[name]`.
-func (j *Amagama) PluginOptions(name string) map[string]any {
+// Matches TS `tabnas.options.plugin[name]`.
+func (j *Tabnas) PluginOptions(name string) map[string]any {
 	if j.pluginOpts == nil {
 		return nil
 	}
@@ -467,8 +467,8 @@ func (j *Amagama) PluginOptions(name string) map[string]any {
 }
 
 // SetPluginOptions stores options for a named plugin.
-// Matches TS `amagama.options({ plugin: { name: opts } })`.
-func (j *Amagama) SetPluginOptions(name string, opts map[string]any) {
+// Matches TS `tabnas.options({ plugin: { name: opts } })`.
+func (j *Tabnas) SetPluginOptions(name string, opts map[string]any) {
 	if j.pluginOpts == nil {
 		j.pluginOpts = make(map[string]map[string]any)
 	}
@@ -482,9 +482,9 @@ func (j *Amagama) SetPluginOptions(name string, opts map[string]any) {
 	}
 }
 
-// Make creates a new Amagama parser instance with the given options.
-// Unset option fields fall back to defaults, matching TypeScript Amagama.make().
-func Make(opts ...Options) *Amagama {
+// Make creates a new Tabnas parser instance with the given options.
+// Unset option fields fall back to defaults, matching TypeScript Tabnas.make().
+func Make(opts ...Options) *Tabnas {
 	var o Options
 	if len(opts) > 0 {
 		o = opts[0]
@@ -532,9 +532,9 @@ func Make(opts ...Options) *Amagama {
 	if o.Tag != "" {
 		tag = "/" + o.Tag
 	}
-	instanceId := "Amagama/" + strconv.Itoa(idCounter) + tag
+	instanceId := "Tabnas/" + strconv.Itoa(idCounter) + tag
 
-	j := &Amagama{
+	j := &Tabnas{
 		id:          instanceId,
 		options:     &o,
 		parser:      p,
@@ -596,9 +596,9 @@ func Make(opts ...Options) *Amagama {
 	return j
 }
 
-// Empty creates a Amagama instance with no built-in grammar rules.
-// Matches TS amagama.empty(). Useful for building a parser from scratch.
-func Empty(opts ...Options) *Amagama {
+// Empty creates a Tabnas instance with no built-in grammar rules.
+// Matches TS tabnas.empty(). Useful for building a parser from scratch.
+func Empty(opts ...Options) *Tabnas {
 	j := Make(opts...)
 	// Clear all grammar rules.
 	for _, rs := range j.parser.RSM {
@@ -607,12 +607,12 @@ func Empty(opts ...Options) *Amagama {
 	return j
 }
 
-// MakeJSON creates a Amagama instance configured to accept strict JSON only.
-// Mirrors TS Amagama.make('json') (src/grammar.ts:980). Rejects amagama
+// MakeJSON creates a Tabnas instance configured to accept strict JSON only.
+// Mirrors TS Tabnas.make('json') (src/grammar.ts:980). Rejects tabnas
 // relaxations: unquoted keys/values, comments, hex/octal/binary numbers,
 // trailing commas, leading-zero numbers, single-quoted or backtick
 // strings, and empty input.
-func MakeJSON() *Amagama {
+func MakeJSON() *Tabnas {
 	f := false
 	return Make(Options{
 		Text: &TextOptions{Lex: &f},
@@ -638,13 +638,13 @@ func MakeJSON() *Amagama {
 	})
 }
 
-// Parse parses a amagama string using this instance's configuration.
-func (j *Amagama) Parse(src string) (any, error) {
+// Parse parses a tabnas string using this instance's configuration.
+func (j *Tabnas) Parse(src string) (any, error) {
 	return j.parseInternal(src, nil)
 }
 
 // parseInternal handles empty source, custom parser.start, and delegation.
-func (j *Amagama) parseInternal(src string, meta map[string]any) (any, error) {
+func (j *Tabnas) parseInternal(src string, meta map[string]any) (any, error) {
 	// Handle empty source.
 	if src == "" {
 		if !j.emptyAllow {
@@ -663,12 +663,12 @@ func (j *Amagama) parseInternal(src string, meta map[string]any) (any, error) {
 	return result, j.attachHint(err)
 }
 
-// attachHint adds hint text to a AmagamaError if hints are configured.
-func (j *Amagama) attachHint(err error) error {
+// attachHint adds hint text to a TabnasError if hints are configured.
+func (j *Tabnas) attachHint(err error) error {
 	if err == nil || j.hints == nil {
 		return err
 	}
-	if je, ok := err.(*AmagamaError); ok && je.Hint == "" {
+	if je, ok := err.(*TabnasError); ok && je.Hint == "" {
 		if hint, ok := j.hints[je.Code]; ok {
 			je.Hint = hint
 		}
@@ -677,7 +677,7 @@ func (j *Amagama) attachHint(err error) error {
 }
 
 // Options returns a copy of this instance's options.
-func (j *Amagama) Options() Options {
+func (j *Tabnas) Options() Options {
 	if j.options != nil {
 		return *j.options
 	}

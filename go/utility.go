@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"encoding/json"
@@ -458,7 +458,7 @@ func formatInjectValue(val any) string {
 }
 
 // formatCompactValue formats maps/arrays in a compact non-JSON format
-// similar to amagama's output: {key:value} instead of {"key":"value"}.
+// similar to tabnas's output: {key:value} instead of {"key":"value"}.
 func formatCompactValue(val any) string {
 	switch v := val.(type) {
 	case map[string]any:
@@ -925,7 +925,7 @@ func MapToOptions(m map[string]any) Options {
 		}
 		if suffix, ok := em["suffix"]; ok {
 			// TS accepts bool | string | function; only the JSON-serialisable
-			// subset round-trips through a amagama text source, so we only
+			// subset round-trips through a tabnas text source, so we only
 			// pass those along. Functions need the typed API.
 			switch v := suffix.(type) {
 			case bool, string:

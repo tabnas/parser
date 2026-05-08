@@ -1,13 +1,13 @@
-# amagama
+# tabnas
 
-A pluggable parsing engine. The runtime is a class — `Amagama` — that
+A pluggable parsing engine. The runtime is a class — `Tabnas` — that
 runs a rule-based parser over a configurable matcher-based lexer.
 The package itself ships **no grammar**; every grammar is a plugin
 that you (or another package) supply.
 
 This package ships:
 
-- The `Amagama` class — engine, lexer, parser, rule machinery.
+- The `Tabnas` class — engine, lexer, parser, rule machinery.
 - A `bnf` plugin that compiles ABNF / BNF source into the engine's
   rule format and installs it on the instance.
 - A `Debug` plugin for tracing.
@@ -22,13 +22,13 @@ trailing commas, etc.), see the [Go port](../go/).
 ## Install
 
 ```bash
-npm install amagama
+npm install tabnas
 ```
 
 ## Quick example — define your own grammar
 
 ```js
-const { Amagama } = require('amagama')
+const { Tabnas } = require('tabnas')
 
 // A useless-but-real grammar: parse the literal token `hello`.
 function helloPlugin(am) {
@@ -38,7 +38,7 @@ function helloPlugin(am) {
   ]))
 }
 
-const am = new Amagama({ plugins: [helloPlugin] })
+const am = new Tabnas({ plugins: [helloPlugin] })
 am.parse('hello')                     // 'world'
 ```
 
@@ -48,9 +48,9 @@ The bundled `bnf` plugin compiles ABNF / BNF into the engine's rule
 format:
 
 ```js
-const { Amagama, bnf } = require('amagama')
+const { Tabnas, bnf } = require('tabnas')
 
-const am = new Amagama({ plugins: [bnf] })
+const am = new Tabnas({ plugins: [bnf] })
 am.bnf('greet = "hi" / "hello"')
 
 am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
@@ -61,7 +61,7 @@ for inspecting or saving for later.
 
 ## Plugins
 
-A plugin is a function `(amagama, options?) => void | Amagama`. Plugins
+A plugin is a function `(tabnas, options?) => void | Tabnas`. Plugins
 add tokens, register matchers, modify rules, hook events, or expose
 new methods on the instance:
 
@@ -77,7 +77,7 @@ function tildePlugin(am, options) {
   })
 }
 
-const am = new Amagama({ plugins: [tildePlugin] })
+const am = new Tabnas({ plugins: [tildePlugin] })
 ```
 
 `am.make()` derives a child instance with overridden options. The child
@@ -88,7 +88,7 @@ option-conditional alternates get re-evaluated.
 
 The engine is intentionally split:
 
-- **`Amagama` core** — lexer, parser, rule machinery. No grammar of
+- **`Tabnas` core** — lexer, parser, rule machinery. No grammar of
   its own.
 - **Plugins** in `src/plugins/<name>/` — each contributes a piece of
   the runtime: a converter (`bnf`), developer tooling (`debug`).
@@ -102,7 +102,7 @@ See [doc/api.md](doc/api.md) for the full API. The essentials:
 
 | Construct | Description |
 |---|---|
-| `new Amagama(options?)` | Create a parser instance. Pass `{ plugins: [...] }` for grammar / tooling. |
+| `new Tabnas(options?)` | Create a parser instance. Pass `{ plugins: [...] }` for grammar / tooling. |
 | `am.parse(src, meta?, parent_ctx?)` | Parse a string. |
 | `am.make(options?)` | Derive a child instance with overridden options (inherits parent plugins). |
 | `am.empty(options?)` | Bare instance: no defaults, no standard tokens, no grammar. |
@@ -129,9 +129,9 @@ architecture, same [test specs](../test/spec/) for behaviours that
 overlap.
 
 ```go
-import "github.com/amagamajs/amagama/go"
+import "github.com/amagamajs/tabnas/go"
 
-result, err := amagama.Parse("a:1, b:2")
+result, err := tabnas.Parse("a:1, b:2")
 ```
 
 ## License

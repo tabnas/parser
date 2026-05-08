@@ -3,7 +3,7 @@
 /*  test/json-plugin.ts
  *  Strict JSON grammar plugin — kept here as a test fixture.
  *
- *  This used to ship in src/plugins/json/. The amagama package itself
+ *  This used to ship in src/plugins/json/. The tabnas package itself
  *  is now grammar-free; consumers bring their own grammar plugin. This
  *  file exists so the engine still has a non-trivial grammar to test
  *  against (variant.test.js exercises JSON.parse-equivalence).
@@ -12,7 +12,7 @@
  */
 
 import type {
-  Amagama,
+  Tabnas,
   Context,
   FuncRef,
   Plugin,
@@ -58,9 +58,9 @@ const JSON_OPTIONS = {
 
 
 // Install the pure JSON rule set (val / map / list / pair / elem) on
-// the given Amagama instance. Exposed so other grammar plugins can layer
+// the given Tabnas instance. Exposed so other grammar plugins can layer
 // its extensions on top without re-declaring the JSON core.
-export function registerJsonGrammar(am: Amagama): void {
+export function registerJsonGrammar(am: Tabnas): void {
   const {
     // Complex tokens
     TX, // Text (unquoted character sequence)
@@ -243,7 +243,7 @@ export function registerJsonGrammar(am: Amagama): void {
 }
 
 
-export const json: Plugin = function json(am: Amagama, _options?: any) {
+export const json: Plugin = function json(am: Tabnas, _options?: any) {
   am.options(JSON_OPTIONS)
   registerJsonGrammar(am)
 }

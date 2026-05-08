@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"strings"
@@ -20,7 +20,7 @@ func hasExactTag(tagStr, tag string) bool {
 func TestUseInvokesPlugin(t *testing.T) {
 	invoked := false
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		invoked = true
 		return nil
 	})
@@ -32,7 +32,7 @@ func TestUseInvokesPlugin(t *testing.T) {
 func TestUsePassesOptions(t *testing.T) {
 	var got map[string]any
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		got = opts
 		return nil
 	}, map[string]any{"key": "value"})
@@ -44,11 +44,11 @@ func TestUsePassesOptions(t *testing.T) {
 func TestUseChaining(t *testing.T) {
 	order := []string{}
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		order = append(order, "first")
 		return nil
 	})
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		order = append(order, "second")
 		return nil
 	})
@@ -59,8 +59,8 @@ func TestUseChaining(t *testing.T) {
 
 func TestPlugins(t *testing.T) {
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error { return nil })
-	j.Use(func(j *Amagama, opts map[string]any) error { return nil })
+	j.Use(func(j *Tabnas, opts map[string]any) error { return nil })
+	j.Use(func(j *Tabnas, opts map[string]any) error { return nil })
 	if len(j.Plugins()) != 2 {
 		t.Errorf("expected 2 plugins, got %d", len(j.Plugins()))
 	}
@@ -128,7 +128,7 @@ func TestTinName(t *testing.T) {
 
 func TestPluginCustomFixedToken(t *testing.T) {
 	// Plugin that makes '~' a separator (like comma).
-	tildeSep := func(j *Amagama, opts map[string]any) error {
+	tildeSep := func(j *Tabnas, opts map[string]any) error {
 		// Register ~ as the comma token (replacing comma behavior).
 		j.Token("#CA", "~")
 		return nil
@@ -158,7 +158,7 @@ func TestPluginCustomFixedToken(t *testing.T) {
 
 func TestPluginRuleModification(t *testing.T) {
 	// Plugin that makes all string values uppercase.
-	upperPlugin := func(j *Amagama, opts map[string]any) error {
+	upperPlugin := func(j *Tabnas, opts map[string]any) error {
 		j.Rule("val", func(rs *RuleSpec, _ *Parser) {
 			// Add an after-close action that uppercases string nodes.
 			rs.AC = append(rs.AC, func(r *Rule, ctx *Context) {
@@ -184,7 +184,7 @@ func TestPluginRuleModification(t *testing.T) {
 
 func TestPluginRuleAddAlternate(t *testing.T) {
 	// Plugin that adds a custom "hundred" rule.
-	hundredPlugin := func(j *Amagama, opts map[string]any) error {
+	hundredPlugin := func(j *Tabnas, opts map[string]any) error {
 		// Register a custom fixed token 'H'.
 		TH := j.Token("#TH", "H")
 
@@ -234,7 +234,7 @@ func TestPluginRuleNewRule(t *testing.T) {
 
 func TestPluginCustomMatcher(t *testing.T) {
 	// Plugin that matches "$$" as a special value.
-	dollarPlugin := func(j *Amagama, opts map[string]any) error {
+	dollarPlugin := func(j *Tabnas, opts map[string]any) error {
 		j.SetOptions(Options{Lex: &LexOptions{Match: map[string]*MatchSpec{
 			"dollar": {Order: 1500000, Make: func(_ *LexConfig, _ *Options) LexMatcher {
 				return func(lex *Lex, rule *Rule) *Token {
@@ -266,7 +266,7 @@ func TestPluginCustomMatcher(t *testing.T) {
 
 func TestPluginCustomMatcherInObject(t *testing.T) {
 	// Custom matcher that matches "@" as a special value.
-	atPlugin := func(j *Amagama, opts map[string]any) error {
+	atPlugin := func(j *Tabnas, opts map[string]any) error {
 		j.SetOptions(Options{Lex: &LexOptions{Match: map[string]*MatchSpec{
 			"at": {Order: 1500000, Make: func(_ *LexConfig, _ *Options) LexMatcher {
 				return func(lex *Lex, rule *Rule) *Token {
@@ -397,7 +397,7 @@ func TestPluginComposite(t *testing.T) {
 	// 1. Registers a custom token ';' as separator (replacing comma)
 	// 2. Adds a before-open action to list rule
 
-	semiPlugin := func(j *Amagama, opts map[string]any) error {
+	semiPlugin := func(j *Tabnas, opts map[string]any) error {
 		j.Token("#CA", ";")
 		return nil
 	}
@@ -437,7 +437,7 @@ func TestPluginComposite(t *testing.T) {
 func TestUseNilOptions(t *testing.T) {
 	invoked := false
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		invoked = true
 		if opts != nil {
 			t.Errorf("expected nil opts, got %v", opts)
@@ -730,7 +730,7 @@ func TestDeriveIsolation(t *testing.T) {
 func TestDeriveInheritsPlugins(t *testing.T) {
 	count := 0
 	parent := Make()
-	parent.Use(func(j *Amagama, opts map[string]any) error {
+	parent.Use(func(j *Tabnas, opts map[string]any) error {
 		count++
 		return nil
 	})
@@ -1020,7 +1020,7 @@ func TestEmptySourceCustomResult(t *testing.T) {
 func TestCustomParserStart(t *testing.T) {
 	j := Make(Options{
 		Parser: &ParserOptions{
-			Start: func(src string, j *Amagama, meta map[string]any) (any, error) {
+			Start: func(src string, j *Tabnas, meta map[string]any) (any, error) {
 				return "CUSTOM:" + src, nil
 			},
 		},
@@ -1037,7 +1037,7 @@ func TestCustomParserStart(t *testing.T) {
 func TestCustomParserStartWithMeta(t *testing.T) {
 	j := Make(Options{
 		Parser: &ParserOptions{
-			Start: func(src string, j *Amagama, meta map[string]any) (any, error) {
+			Start: func(src string, j *Tabnas, meta map[string]any) (any, error) {
 				prefix := ""
 				if meta != nil {
 					if p, ok := meta["prefix"].(string); ok {
@@ -1071,9 +1071,9 @@ func TestErrorHints(t *testing.T) {
 		// Use an input that's guaranteed to fail.
 		return
 	}
-	je, ok := err.(*AmagamaError)
+	je, ok := err.(*TabnasError)
 	if !ok {
-		t.Fatalf("expected *AmagamaError, got %T", err)
+		t.Fatalf("expected *TabnasError, got %T", err)
 	}
 	if je.Hint != "Check your syntax for typos." {
 		t.Errorf("expected hint text, got %q", je.Hint)
@@ -1095,9 +1095,9 @@ func TestErrorHintsInOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unterminated string")
 	}
-	je, ok := err.(*AmagamaError)
+	je, ok := err.(*TabnasError)
 	if !ok {
-		t.Fatalf("expected *AmagamaError, got %T", err)
+		t.Fatalf("expected *TabnasError, got %T", err)
 	}
 	if je.Hint != "Did you forget a closing quote?" {
 		t.Errorf("expected hint for unterminated_string, got %q", je.Hint)
@@ -1609,7 +1609,7 @@ func TestDeriveTokenInheritance(t *testing.T) {
 // and a val rule alternate that produces `val` when that token is seen.
 // This mirrors the TS make_token_plugin helper.
 func makeTokenPlugin(char, val string) Plugin {
-	return func(j *Amagama, opts map[string]any) error {
+	return func(j *Tabnas, opts map[string]any) error {
 		tn := "#T<" + char + ">"
 		j.Token(tn, char)
 		TT := j.Token(tn, "")
@@ -1722,9 +1722,9 @@ func expectMap(t *testing.T, label string, result any, expected map[string]any) 
 func TestCustomParserStartError(t *testing.T) {
 	j := Make(Options{
 		Parser: &ParserOptions{
-			Start: func(src string, j *Amagama, meta map[string]any) (any, error) {
+			Start: func(src string, j *Tabnas, meta map[string]any) (any, error) {
 				if src == "e:0" {
-					return nil, &AmagamaError{
+					return nil, &TabnasError{
 						Code:   "custom",
 						Detail: "bad-parser:e:0",
 					}
@@ -1748,9 +1748,9 @@ func TestCustomParserStartError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 'e:0'")
 	}
-	je, ok := err.(*AmagamaError)
+	je, ok := err.(*TabnasError)
 	if !ok {
-		t.Fatalf("expected *AmagamaError, got %T: %v", err, err)
+		t.Fatalf("expected *TabnasError, got %T: %v", err, err)
 	}
 	if je.Code != "custom" {
 		t.Errorf("expected code 'custom', got %q", je.Code)
@@ -1764,7 +1764,7 @@ func TestCustomParserStartError(t *testing.T) {
 
 func TestPluginErrorHints(t *testing.T) {
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.SetOptions(Options{
 			Hint: map[string]string{
 				"unexpected": "FOO",
@@ -1777,9 +1777,9 @@ func TestPluginErrorHints(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 'x::1'")
 	}
-	je, ok := err.(*AmagamaError)
+	je, ok := err.(*TabnasError)
 	if !ok {
-		t.Fatalf("expected *AmagamaError, got %T", err)
+		t.Fatalf("expected *TabnasError, got %T", err)
 	}
 	errStr := je.Error()
 	if !strings.Contains(errStr, "unexpected") {
@@ -1790,14 +1790,14 @@ func TestPluginErrorHints(t *testing.T) {
 	}
 }
 
-// --- Decorate: dynamic string-keyed properties (TS: amagama.foo = value) ---
+// --- Decorate: dynamic string-keyed properties (TS: tabnas.foo = value) ---
 
 func TestDecorate(t *testing.T) {
 	// TS equivalent:
-	//   let jp0 = j.use(function foo(amagama) { amagama.foo = () => 'FOO' })
+	//   let jp0 = j.use(function foo(tabnas) { tabnas.foo = () => 'FOO' })
 	//   expect(jp0.foo()).equal('FOO')
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.Decorate("foo", "FOO")
 		return nil
 	})
@@ -1809,11 +1809,11 @@ func TestDecorate(t *testing.T) {
 func TestDecorateChaining(t *testing.T) {
 	// TS: jp0 adds foo, jp1 adds bar, both accessible on jp1, foo still on jp0.
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.Decorate("foo", "FOO")
 		return nil
 	})
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.Decorate("bar", "BAR")
 		return nil
 	})
@@ -1858,7 +1858,7 @@ func TestDecorateUnset(t *testing.T) {
 }
 
 func TestDecorateFunction(t *testing.T) {
-	// Decorations can hold functions, matching TS amagama.foo = () => 'FOO'.
+	// Decorations can hold functions, matching TS tabnas.foo = () => 'FOO'.
 	j := Make()
 	j.Decorate("greet", func(name string) string {
 		return "hello " + name
@@ -1873,9 +1873,9 @@ func TestDecorateFunction(t *testing.T) {
 // --- Context: fields match TS Context ---
 
 func TestContextInst(t *testing.T) {
-	// TS: ctx.inst() returns the amagama instance.
+	// TS: ctx.inst() returns the tabnas instance.
 	j := Make()
-	var capturedInst *Amagama
+	var capturedInst *Tabnas
 
 	j.Rule("val", func(rs *RuleSpec, _ *Parser) {
 		rs.AO = append(rs.AO, func(r *Rule, ctx *Context) {
@@ -1886,7 +1886,7 @@ func TestContextInst(t *testing.T) {
 	j.Parse("42")
 
 	if capturedInst != j {
-		t.Error("ctx.Inst should be the Amagama instance")
+		t.Error("ctx.Inst should be the Tabnas instance")
 	}
 }
 
@@ -1981,10 +1981,10 @@ func TestContextMeta(t *testing.T) {
 		})
 	})
 
-	j.ParseMeta("42", map[string]any{"file": "test.amagama"})
+	j.ParseMeta("42", map[string]any{"file": "test.tabnas"})
 
-	if capturedMeta == nil || capturedMeta["file"] != "test.amagama" {
-		t.Errorf("expected ctx.Meta['file']='test.amagama', got %v", capturedMeta)
+	if capturedMeta == nil || capturedMeta["file"] != "test.tabnas" {
+		t.Errorf("expected ctx.Meta['file']='test.tabnas', got %v", capturedMeta)
 	}
 }
 
@@ -1992,7 +1992,7 @@ func TestContextMeta(t *testing.T) {
 
 func TestPluginOptions(t *testing.T) {
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.SetPluginOptions("foo", map[string]any{"x": 1})
 		return nil
 	})
@@ -2037,14 +2037,14 @@ func TestErrMsgName(t *testing.T) {
 	if !strings.Contains(errStr, "[bar/") {
 		t.Errorf("error should use custom tag 'bar', got:\n%s", errStr)
 	}
-	if strings.Contains(errStr, "[amagama/") {
-		t.Errorf("error should NOT use default 'amagama' tag, got:\n%s", errStr)
+	if strings.Contains(errStr, "[tabnas/") {
+		t.Errorf("error should NOT use default 'tabnas' tag, got:\n%s", errStr)
 	}
 }
 
 func TestErrMsgNameViaPlugin(t *testing.T) {
 	j := Make()
-	j.Use(func(j *Amagama, opts map[string]any) error {
+	j.Use(func(j *Tabnas, opts map[string]any) error {
 		j.SetOptions(Options{
 			ErrMsg: &ErrMsgOptions{Name: "myplugin"},
 		})
@@ -2059,7 +2059,7 @@ func TestErrMsgNameViaPlugin(t *testing.T) {
 	}
 }
 
-// --- Fixed: fixed token lookup (TS: amagama.fixed(ref)) ---
+// --- Fixed: fixed token lookup (TS: tabnas.fixed(ref)) ---
 
 func TestFixedLookup(t *testing.T) {
 	j := Make()
@@ -2323,26 +2323,26 @@ func TestLexBad(t *testing.T) {
 	}
 }
 
-// --- amagama.Id ---
+// --- tabnas.Id ---
 
-func TestAmagamaId(t *testing.T) {
+func TestTabnasId(t *testing.T) {
 	j := Make()
 	if j.Id() == "" {
 		t.Error("Id() should not be empty")
 	}
-	if !strings.HasPrefix(j.Id(), "Amagama/") {
-		t.Errorf("Id() should start with 'Amagama/', got %q", j.Id())
+	if !strings.HasPrefix(j.Id(), "Tabnas/") {
+		t.Errorf("Id() should start with 'Tabnas/', got %q", j.Id())
 	}
 }
 
-func TestAmagamaIdWithTag(t *testing.T) {
+func TestTabnasIdWithTag(t *testing.T) {
 	j := Make(Options{Tag: "test"})
 	if !strings.Contains(j.Id(), "/test") {
 		t.Errorf("Id() with tag should contain '/test', got %q", j.Id())
 	}
 }
 
-func TestAmagamaIdUnique(t *testing.T) {
+func TestTabnasIdUnique(t *testing.T) {
 	j1 := Make()
 	j2 := Make()
 	if j1.Id() == j2.Id() {
@@ -2350,7 +2350,7 @@ func TestAmagamaIdUnique(t *testing.T) {
 	}
 }
 
-// --- amagama.Empty() ---
+// --- tabnas.Empty() ---
 
 func TestEmpty(t *testing.T) {
 	j := Empty()

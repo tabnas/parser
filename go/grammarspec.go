@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ type GrammarSpec struct {
 	// Ref maps FuncRef strings (like "@finish") to Go functions.
 	Ref map[FuncRef]any
 
-	// Options to merge into the Amagama instance before processing rules.
+	// Options to merge into the Tabnas instance before processing rules.
 	// Applied via SetOptions.
 	Options *Options
 
@@ -92,12 +92,12 @@ type GrammarAltSpec struct {
 	G string          // Group tags (comma-separated)
 }
 
-// Grammar applies a declarative grammar specification to this Amagama instance.
+// Grammar applies a declarative grammar specification to this Tabnas instance.
 // Options are applied first, then rules are processed.
 // An optional *GrammarSetting may be supplied to append a tag (or tags) to
 // every rule-alt G property in the spec.
 // Returns an error if any FuncRef is missing or has the wrong type.
-func (j *Amagama) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) error {
+func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) error {
 	// Apply typed Options directly.
 	if gs.Options != nil {
 		j.SetOptions(*gs.Options)
@@ -203,17 +203,17 @@ func mergeG(existing string, extra []string) string {
 	return strings.Join(tags, ",")
 }
 
-// GrammarText parses a amagama grammar text string into a GrammarSpec
-// and applies it. The text is parsed using a default Amagama instance,
+// GrammarText parses a tabnas grammar text string into a GrammarSpec
+// and applies it. The text is parsed using a default Tabnas instance,
 // and the resulting map is used as the OptionsMap of a GrammarSpec.
 // An optional *GrammarSetting may be supplied to append a tag (or tags)
 // to every rule-alt G property in the spec.
 // This is a convenience that replaces:
 //
-//	gs := amagama.Make()
+//	gs := tabnas.Make()
 //	parsed, _ := gs.Parse(text)
 //	j.Grammar(&GrammarSpec{OptionsMap: parsed.(map[string]any)})
-func (j *Amagama) GrammarText(text string, setting ...*GrammarSetting) error {
+func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) error {
 	parsed, err := Make().Parse(text)
 	if err != nil {
 		return err
@@ -367,7 +367,7 @@ func mapToGrammarAltSpec(m map[string]any) *GrammarAltSpec {
 // applyGrammarAlts resolves and applies grammar alts to a rule spec.
 // Handles both plain []*GrammarAltSpec and *GrammarAltListSpec with inject.
 // When extraG is non-empty, those tags are appended to every alt's G field.
-func applyGrammarAlts(j *Amagama, rs *RuleSpec, spec any, ref map[FuncRef]any, isOpen bool, extraG []string) error {
+func applyGrammarAlts(j *Tabnas, rs *RuleSpec, spec any, ref map[FuncRef]any, isOpen bool, extraG []string) error {
 	var gas []*GrammarAltSpec
 	var inject *GrammarInjectSpec
 
@@ -425,7 +425,7 @@ func applyGrammarAlts(j *Amagama, rs *RuleSpec, spec any, ref map[FuncRef]any, i
 }
 
 // resolveGrammarAlts converts a slice of GrammarAltSpec to concrete AltSpec.
-func (j *Amagama) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) ([]*AltSpec, error) {
+func (j *Tabnas) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) ([]*AltSpec, error) {
 	alts := make([]*AltSpec, 0, len(gas))
 	for _, ga := range gas {
 		alt, err := j.resolveGrammarAlt(ga, ref)
@@ -438,7 +438,7 @@ func (j *Amagama) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any)
 }
 
 // resolveGrammarAlt converts a single GrammarAltSpec to a concrete AltSpec.
-func (j *Amagama) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*AltSpec, error) {
+func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*AltSpec, error) {
 	alt := &AltSpec{}
 
 	// Resolve S (token spec: string or []string → [][]Tin)
@@ -588,7 +588,7 @@ func (j *Amagama) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*A
 //	string:     "#KEY #CL" — each space-separated name is a separate slot.
 //	[]string:   ["#CB #CS"] — each element is a slot; within an element,
 //	            space-separated names are alternatives for that slot.
-func (j *Amagama) resolveTokenField(s any) [][]Tin {
+func (j *Tabnas) resolveTokenField(s any) [][]Tin {
 	switch v := s.(type) {
 	case string:
 		if v == "" {
@@ -611,7 +611,7 @@ func (j *Amagama) resolveTokenField(s any) [][]Tin {
 
 // resolveTokenSpec resolves a token spec string into [][]Tin.
 // Each space-separated name becomes a separate slot.
-func (j *Amagama) resolveTokenSpec(s string) [][]Tin {
+func (j *Tabnas) resolveTokenSpec(s string) [][]Tin {
 	parts := strings.Fields(s)
 	if len(parts) == 0 {
 		return nil
@@ -624,7 +624,7 @@ func (j *Amagama) resolveTokenSpec(s string) [][]Tin {
 }
 
 // resolveTokenName resolves a single token name (like "#OB" or "#KEY") to a []Tin.
-func (j *Amagama) resolveTokenName(name string) []Tin {
+func (j *Tabnas) resolveTokenName(name string) []Tin {
 	setName := strings.TrimPrefix(name, "#")
 	if tins := j.TokenSet(setName); tins != nil {
 		return tins

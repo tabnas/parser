@@ -9,10 +9,10 @@
  */
 
 import type {
-  Amagama,
+  Tabnas,
   Config,
   LexSub,
-  AmagamaOptions,
+  TabnasOptions,
   Plugin,
   Rule,
   RuleSpec,
@@ -26,13 +26,13 @@ import type {
 // remaining Context fields (rule, NORULE, log, lex …) get filled in
 // after construction.
 export type ContextInit = {
-  opts: AmagamaOptions
+  opts: TabnasOptions
   cfg: Config
   meta: Record<string, any>
   src: () => string
   root: () => any
   plgn: () => Plugin[]
-  inst: () => Amagama
+  inst: () => Tabnas
   sub: { lex?: LexSub[]; rule?: RuleSub[] }
   rsm: { [name: string]: RuleSpec }
   F: (s: any) => string
@@ -47,13 +47,13 @@ export class Context {
   [key: string]: any
 
   uI = 0           // Rule index.
-  opts!: AmagamaOptions   // Amagama instance options.
-  cfg!: Config     // Amagama instance config.
+  opts!: TabnasOptions   // Tabnas instance options.
+  cfg!: Config     // Tabnas instance config.
   meta!: Record<string, any>       // Parse meta parameters.
   src!: () => string
   root!: () => any
   plgn!: () => Plugin[]
-  inst!: () => Amagama
+  inst!: () => Tabnas
 
   rule!: Rule      // Current rule instance — set by parser.start().
   sub!: { lex?: LexSub[]; rule?: RuleSub[] }
@@ -164,7 +164,7 @@ export class Context {
     if (k <= 0) return
     if (k > this.v.length) {
       throw new Error(
-        `amagama: ctx.rewind target ${mark} is outside the retained ` +
+        `tabnas: ctx.rewind target ${mark} is outside the retained ` +
         `history window (oldest mark available is ${this.vAbs - this.v.length}, ` +
         `current is ${this.vAbs}); increase options.rewind.history.`,
       )

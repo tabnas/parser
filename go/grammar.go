@@ -1,8 +1,8 @@
-package amagama
+package tabnas
 
-// buildGrammar populates the default amagama grammar rules using declarative GrammarAltSpec.
+// buildGrammar populates the default tabnas grammar rules using declarative GrammarAltSpec.
 // This is a faithful port of grammar.ts, matching the exact alternate orderings
-// produced by the JSON phase followed by the Amagama extension phase.
+// produced by the JSON phase followed by the Tabnas extension phase.
 func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 	// Named function references for the grammar.
 	// These closures capture cfg for runtime configuration access.
@@ -103,7 +103,7 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 			}
 		}),
 
-		"@map-bo-amagama": StateAction(func(r *Rule, ctx *Context) {
+		"@map-bo-tabnas": StateAction(func(r *Rule, ctx *Context) {
 			_ = ctx
 			if v, ok := r.N["dmap"]; ok {
 				r.N["dmap"] = v + 1
@@ -136,7 +136,7 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 			}
 		}),
 
-		"@list-bo-amagama": StateAction(func(r *Rule, ctx *Context) {
+		"@list-bo-tabnas": StateAction(func(r *Rule, ctx *Context) {
 			_ = ctx
 			if v, ok := r.N["dlist"]; ok {
 				r.N["dlist"] = v + 1
@@ -185,7 +185,7 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 			}
 		}),
 
-		"@pair-bc-amagama": StateAction(func(r *Rule, ctx *Context) {
+		"@pair-bc-tabnas": StateAction(func(r *Rule, ctx *Context) {
 			if _, ok := r.U["pair"]; ok {
 				key, _ := r.U["key"].(string)
 				val := r.Child.Node
@@ -377,17 +377,17 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 	valOpen := resolve([]*GrammarAltSpec{
 		{S: "#OB", P: "map", B: 1, G: "map,json"},
 		{S: "#OS", P: "list", B: 1, G: "list,json"},
-		{S: "#KEY #CL", C: map[string]any{"d": 0}, P: "map", B: 2, G: "pair,amagama,top"},
-		{S: "#KEY #CL", P: "map", B: 2, N: map[string]int{"pk": 1}, G: "pair,amagama"},
+		{S: "#KEY #CL", C: map[string]any{"d": 0}, P: "map", B: 2, G: "pair,tabnas,top"},
+		{S: "#KEY #CL", P: "map", B: 2, N: map[string]int{"pk": 1}, G: "pair,tabnas"},
 		{S: "#VAL", G: "val,json"},
 	})
 	// CB|CS in single slot:
 	valOpen = append(valOpen, resolveGrammarAltStatic(
-		&GrammarAltSpec{S: []string{"#CB #CS"}, C: map[string]any{"d": CGt(0)}, B: 1, G: "val,imp,null,amagama"}, ref))
+		&GrammarAltSpec{S: []string{"#CB #CS"}, C: map[string]any{"d": CGt(0)}, B: 1, G: "val,imp,null,tabnas"}, ref))
 	valOpen = append(valOpen, resolve([]*GrammarAltSpec{
-		{S: "#CA", C: map[string]any{"d": 0}, P: "list", B: 1, G: "list,imp,amagama"},
-		{S: "#CA", B: 1, G: "list,val,imp,null,amagama"},
-		{S: "#ZZ", G: "amagama"},
+		{S: "#CA", C: map[string]any{"d": 0}, P: "list", B: 1, G: "list,imp,tabnas"},
+		{S: "#CA", B: 1, G: "list,val,imp,null,tabnas"},
+		{S: "#ZZ", G: "tabnas"},
 	})...)
 	valSpec.Open = valOpen
 
@@ -399,10 +399,10 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 		&GrammarAltSpec{S: []string{"#CB #CS"}, B: 1, E: "@val-close-err", G: "val,json,close"}, ref))
 	valClose = append(valClose, resolve([]*GrammarAltSpec{
 		{S: "#CA", C: map[string]any{"n.dlist": CLte(0), "n.dmap": CLte(0)},
-			R: "list", U: map[string]any{"implist": true}, G: "list,val,imp,comma,amagama"},
+			R: "list", U: map[string]any{"implist": true}, G: "list,val,imp,comma,tabnas"},
 		{C: map[string]any{"n.dlist": CLte(0), "n.dmap": CLte(0)},
-			R: "list", U: map[string]any{"implist": true}, B: 1, G: "list,val,imp,space,amagama"},
-		{S: "#ZZ", G: "amagama"},
+			R: "list", U: map[string]any{"implist": true}, B: 1, G: "list,val,imp,space,tabnas"},
+		{S: "#ZZ", G: "tabnas"},
 		{B: 1, G: "more,json"},
 	})...)
 	valSpec.Close = valClose
@@ -412,29 +412,29 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	mapSpec.BO = []StateAction{
 		ref["@map-bo"].(StateAction),
-		ref["@map-bo-amagama"].(StateAction),
+		ref["@map-bo-tabnas"].(StateAction),
 	}
 	mapSpec.BC = []StateAction{ref["@map-bc"].(StateAction)}
 
 	mapSpec.Open = resolve([]*GrammarAltSpec{
-		{S: "#OB #ZZ", B: 1, E: "@finish", G: "end,amagama"},
+		{S: "#OB #ZZ", B: 1, E: "@finish", G: "end,tabnas"},
 		{S: "#OB #CB", B: 1, N: map[string]int{"pk": 0}, G: "map,json"},
 		{S: "#OB", P: "pair", N: map[string]int{"pk": 0}, G: "map,json,pair"},
-		{S: "#KEY #CL", P: "pair", B: 2, G: "pair,list,val,imp,amagama"},
+		{S: "#KEY #CL", P: "pair", B: 2, G: "pair,list,val,imp,tabnas"},
 	})
 
 	// For map.Close, we need to merge token sets for the third alt.
 	// "#CA #CS" + VAL tokens in a single slot → need raw AltSpec for that one.
 	mapClose := resolve([]*GrammarAltSpec{
 		{S: "#CB", C: map[string]any{"n.pk": CLte(0)}, G: "end,json"},
-		{S: "#CB", B: 1, G: "path,amagama"},
+		{S: "#CB", B: 1, G: "path,tabnas"},
 		// slot 0 = merge(CA, CS, VAL) — handled below
 	})
 	// Third alt: CA|CS|VAL tokens in single slot
 	mapClose = append(mapClose, resolveGrammarAltStatic(
-		&GrammarAltSpec{S: []string{"#CA #CS #VAL"}, B: 1, G: "end,path,amagama"}, ref))
+		&GrammarAltSpec{S: []string{"#CA #CS #VAL"}, B: 1, G: "end,path,tabnas"}, ref))
 	mapClose = append(mapClose, resolveGrammarAltStatic(
-		&GrammarAltSpec{S: "#ZZ", E: "@finish", G: "end,amagama"}, ref))
+		&GrammarAltSpec{S: "#ZZ", E: "@finish", G: "end,tabnas"}, ref))
 	mapSpec.Close = mapClose
 
 	// ====== LIST rule ======
@@ -442,7 +442,7 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	listSpec.BO = []StateAction{
 		ref["@list-bo"].(StateAction),
-		ref["@list-bo-amagama"].(StateAction),
+		ref["@list-bo-tabnas"].(StateAction),
 	}
 	listSpec.BC = []StateAction{ref["@list-bc"].(StateAction)}
 
@@ -453,14 +453,14 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 	listOpen = append(listOpen, resolve([]*GrammarAltSpec{
 		{S: "#OS #CS", B: 1, G: "list,json"},
 		{S: "#OS", P: "elem", G: "list,elem,json"},
-		{S: "#CA", P: "elem", B: 1, G: "list,elem,val,imp,amagama"},
-		{P: "elem", G: "list,elem,amagama"},
+		{S: "#CA", P: "elem", B: 1, G: "list,elem,val,imp,tabnas"},
+		{P: "elem", G: "list,elem,tabnas"},
 	})...)
 	listSpec.Open = listOpen
 
 	listSpec.Close = resolve([]*GrammarAltSpec{
 		{S: "#CS", G: "end,json"},
-		{S: "#ZZ", E: "@finish", G: "end,amagama"},
+		{S: "#ZZ", E: "@finish", G: "end,tabnas"},
 	})
 
 	// ====== PAIR rule ======
@@ -468,13 +468,13 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	pairSpec.BC = []StateAction{
 		ref["@pair-bc-json"].(StateAction),
-		ref["@pair-bc-amagama"].(StateAction),
+		ref["@pair-bc-tabnas"].(StateAction),
 		ref["@pair-bc-child"].(StateAction),
 	}
 
 	pairOpen := resolve([]*GrammarAltSpec{
 		{S: "#KEY #CL", P: "val", U: map[string]any{"pair": true}, A: "@pairkey", G: "map,pair,key,json"},
-		{S: "#CA", G: "map,pair,comma,amagama"},
+		{S: "#CA", G: "map,pair,comma,tabnas"},
 	})
 	if cfg.MapChild {
 		pairOpen = append(pairOpen, resolveGrammarAltStatic(
@@ -485,22 +485,22 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	pairSpec.Close = resolve([]*GrammarAltSpec{
 		{S: "#CB", C: map[string]any{"n.pk": CLte(0)}, B: 1, G: "map,pair,json"},
-		{S: "#CA #CB", C: map[string]any{"n.pk": CLte(0)}, B: 1, G: "map,pair,comma,amagama"},
-		{S: "#CA #ZZ", G: "end,amagama"},
+		{S: "#CA #CB", C: map[string]any{"n.pk": CLte(0)}, B: 1, G: "map,pair,comma,tabnas"},
+		{S: "#CA #ZZ", G: "end,tabnas"},
 		{S: "#CA", C: map[string]any{"n.pk": CLte(0)}, R: "pair", G: "map,pair,json"},
-		{S: "#CA", C: map[string]any{"n.dmap": CLte(1)}, R: "pair", G: "map,pair,amagama"},
-		{S: "#KEY", C: map[string]any{"n.dmap": CLte(1)}, R: "pair", B: 1, G: "map,pair,imp,amagama"},
+		{S: "#CA", C: map[string]any{"n.dmap": CLte(1)}, R: "pair", G: "map,pair,tabnas"},
+		{S: "#KEY", C: map[string]any{"n.dmap": CLte(1)}, R: "pair", B: 1, G: "map,pair,imp,tabnas"},
 	})
 
 	// CB|CA|CS|KEY in single slot
 	pairSpec.Close = append(pairSpec.Close, resolveGrammarAltStatic(
 		&GrammarAltSpec{S: []string{"#CB #CA #CS #KEY"}, C: map[string]any{"n.pk": CGt(0)},
-			B: 1, G: "map,pair,imp,path,amagama"}, ref))
+			B: 1, G: "map,pair,imp,path,tabnas"}, ref))
 	// Remaining pair close alts.
 	pairSpec.Close = append(pairSpec.Close, resolve([]*GrammarAltSpec{
-		{S: "#CS", E: "@elem-close-err", G: "end,amagama"},
+		{S: "#CS", E: "@elem-close-err", G: "end,tabnas"},
 		{S: "#ZZ", E: "@finish", G: "map,pair,json"},
-		{R: "pair", B: 1, G: "map,pair,imp,amagama"},
+		{R: "pair", B: 1, G: "map,pair,imp,tabnas"},
 	})...)
 
 	// ====== ELEM rule ======
@@ -514,19 +514,19 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	elemOpen := resolve([]*GrammarAltSpec{
 		{S: "#CA #CA", B: 2, U: map[string]any{"done": true}, A: "@elem-double-comma",
-			G: "list,elem,imp,null,amagama"},
+			G: "list,elem,imp,null,tabnas"},
 		{S: "#CA", U: map[string]any{"done": true}, A: "@elem-single-comma",
-			G: "list,elem,imp,null,amagama"},
+			G: "list,elem,imp,null,tabnas"},
 		{S: "#KEY #CL", P: "val",
 			N: map[string]int{"pk": 1, "dmap": 1},
 			U: map[string]any{"done": true, "pair": true, "list": true},
-			A: "@pairkey", E: "@elem-pair-err", G: "elem,pair,amagama"},
+			A: "@pairkey", E: "@elem-pair-err", G: "elem,pair,tabnas"},
 	})
 	if cfg.ListChild {
 		elemOpen = append(elemOpen, resolveGrammarAltStatic(
 			&GrammarAltSpec{S: "#CL", P: "val",
 				U: map[string]any{"done": true, "child": true, "list": true},
-				G: "elem,child,amagama"}, ref))
+				G: "elem,child,tabnas"}, ref))
 	}
 	elemOpen = append(elemOpen, resolveGrammarAltStatic(
 		&GrammarAltSpec{P: "val", G: "list,elem,val,json"}, ref))
@@ -534,14 +534,14 @@ func buildGrammar(rsm map[string]*RuleSpec, cfg *LexConfig) {
 
 	elemClose := []*AltSpec{
 		// CA in slot 0, CS|ZZ in slot 1:
-		resolveGrammarAltStatic(&GrammarAltSpec{S: []string{"#CA", "#CS #ZZ"}, B: 1, G: "list,elem,comma,amagama"}, ref),
+		resolveGrammarAltStatic(&GrammarAltSpec{S: []string{"#CA", "#CS #ZZ"}, B: 1, G: "list,elem,comma,tabnas"}, ref),
 	}
 	elemClose = append(elemClose, resolve([]*GrammarAltSpec{
 		{S: "#CA", R: "elem", G: "list,elem,json"},
 		{S: "#CS", B: 1, G: "list,elem,json"},
 		{S: "#ZZ", E: "@finish", G: "list,elem,json"},
-		{S: "#CB", E: "@elem-close-err", G: "end,amagama"},
-		{R: "elem", B: 1, G: "list,elem,imp,amagama"},
+		{S: "#CB", E: "@elem-close-err", G: "end,tabnas"},
+		{R: "elem", B: 1, G: "list,elem,imp,tabnas"},
 	})...)
 	elemSpec.Close = elemClose
 

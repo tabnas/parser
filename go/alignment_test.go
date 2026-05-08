@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 // Alignment tests validate that Go behavior matches the authoritative TypeScript
 // implementation. Tests are split into two categories:
@@ -112,9 +112,9 @@ func TestAlignmentErrors(t *testing.T) {
 				row.lineNo, input, expectedCode)
 			continue
 		}
-		je, ok := parseErr.(*AmagamaError)
+		je, ok := parseErr.(*TabnasError)
 		if !ok {
-			t.Errorf("line %d: Parse(%q) error should be *AmagamaError, got %T: %v",
+			t.Errorf("line %d: Parse(%q) error should be *TabnasError, got %T: %v",
 				row.lineNo, input, parseErr, parseErr)
 			continue
 		}
@@ -127,7 +127,7 @@ func TestAlignmentErrors(t *testing.T) {
 
 // --- Error TSV runner (2-column: input, ERROR:<code>) ---
 
-func runErrorTSV(t *testing.T, file string, j *Amagama) {
+func runErrorTSV(t *testing.T, file string, j *Tabnas) {
 	t.Helper()
 	path := filepath.Join(specDir(), file)
 	rows, err := loadTSV(path)
@@ -153,9 +153,9 @@ func runErrorTSV(t *testing.T, file string, j *Amagama) {
 			t.Errorf("line %d: Parse(%q) should error (want %s), got nil", row.lineNo, input, expectedCode)
 			continue
 		}
-		je, ok := parseErr.(*AmagamaError)
+		je, ok := parseErr.(*TabnasError)
 		if !ok {
-			t.Errorf("line %d: Parse(%q) error should be *AmagamaError, got %T", row.lineNo, input, parseErr)
+			t.Errorf("line %d: Parse(%q) error should be *TabnasError, got %T", row.lineNo, input, parseErr)
 			continue
 		}
 		if je.Code != expectedCode {
@@ -172,25 +172,25 @@ func TestLexErrorsDefault(t *testing.T) {
 	runErrorTSV(t, "lex-errors.tsv", Make())
 }
 
-func TestLexErrorsExcludeAmagamaImp(t *testing.T) {
-	j := Make(Options{Rule: &RuleOptions{Exclude: "amagama,imp"}})
+func TestLexErrorsExcludeTabnasImp(t *testing.T) {
+	j := Make(Options{Rule: &RuleOptions{Exclude: "tabnas,imp"}})
 	runErrorTSV(t, "lex-errors.tsv", j)
 }
 
-func TestLexErrorsExcludeAmagamaImpComma(t *testing.T) {
-	j := Make(Options{Rule: &RuleOptions{Exclude: "amagama,imp,comma"}})
+func TestLexErrorsExcludeTabnasImpComma(t *testing.T) {
+	j := Make(Options{Rule: &RuleOptions{Exclude: "tabnas,imp,comma"}})
 	runErrorTSV(t, "lex-errors.tsv", j)
 }
 
 // --- Exclude group TSV tests ---
 
 func TestExcludeStrictJSON(t *testing.T) {
-	j := Make(Options{Rule: &RuleOptions{Exclude: "amagama,imp"}})
+	j := Make(Options{Rule: &RuleOptions{Exclude: "tabnas,imp"}})
 	runParserTSV(t, "exclude-strict-json.tsv", j)
 }
 
 func TestExcludeStrictJSONErrors(t *testing.T) {
-	j := Make(Options{Rule: &RuleOptions{Exclude: "amagama,imp"}})
+	j := Make(Options{Rule: &RuleOptions{Exclude: "tabnas,imp"}})
 	runErrorTSV(t, "exclude-strict-json-errors.tsv", j)
 }
 
@@ -363,7 +363,7 @@ func TestAlignmentStringAbandon(t *testing.T) {
 		// With abandon, the string matcher falls through. The quote char
 		// may still cause an error depending on what other matchers do,
 		// but it should NOT be "unterminated_string".
-		if je, ok := err.(*AmagamaError); ok && je.Code == "unterminated_string" {
+		if je, ok := err.(*TabnasError); ok && je.Code == "unterminated_string" {
 			t.Errorf("string.abandon=true should not produce unterminated_string error, got: %v", err)
 		}
 	}
@@ -518,14 +518,14 @@ func TestAlignmentListPropertyGuard(t *testing.T) {
 
 // TestAlignmentGrammarGTags validates that every grammar alt G-tag in Go
 // matches the authoritative TypeScript grammar (dist/grammar.js).
-// The TS grammar builds rules in two phases (JSON base + amagama extensions)
+// The TS grammar builds rules in two phases (JSON base + tabnas extensions)
 // with append/prepend/delete/move operations. The final alt order and tags
 // must be identical.
 func TestAlignmentGrammarGTags(t *testing.T) {
 	j := Make()
 
 	// Expected G-tags per rule, per state, in order.
-	// Source of truth: TS dist/grammar.js after JSON + amagama extension phases.
+	// Source of truth: TS dist/grammar.js after JSON + tabnas extension phases.
 	type ruleGTags struct {
 		name  string
 		open  []string
@@ -538,36 +538,36 @@ func TestAlignmentGrammarGTags(t *testing.T) {
 			open: []string{
 				"map,json",                  // #OB -> map
 				"list,json",                 // #OS -> list
-				"pair,amagama,top",           // #KEY #CL d=0 -> map
-				"pair,amagama",               // #KEY #CL -> map (dive)
+				"pair,tabnas,top",           // #KEY #CL d=0 -> map
+				"pair,tabnas",               // #KEY #CL -> map (dive)
 				"val,json",                  // #VAL
-				"val,imp,null,amagama",       // #CB|#CS impl null
-				"list,imp,amagama",           // #CA d=0 -> list
-				"list,val,imp,null,amagama",  // #CA impl null
-				"amagama",                    // #ZZ
+				"val,imp,null,tabnas",       // #CB|#CS impl null
+				"list,imp,tabnas",           // #CA d=0 -> list
+				"list,val,imp,null,tabnas",  // #CA impl null
+				"tabnas",                    // #ZZ
 			},
 			close: []string{
 				"end,json",                  // #ZZ end
 				"val,json,close",            // #CB|#CS close error
-				"list,val,imp,comma,amagama", // #CA -> list (comma)
-				"list,val,imp,space,amagama", // imp list (space)
-				"amagama",                    // #ZZ amagama
+				"list,val,imp,comma,tabnas", // #CA -> list (comma)
+				"list,val,imp,space,tabnas", // imp list (space)
+				"tabnas",                    // #ZZ tabnas
 				"more,json",                 // b:1 more
 			},
 		},
 		{
 			name: "map",
 			open: []string{
-				"end,amagama",              // #OB #ZZ autoclose
+				"end,tabnas",              // #OB #ZZ autoclose
 				"map,json",                // #OB #CB empty
 				"map,json,pair",           // #OB -> pair
-				"pair,list,val,imp,amagama", // #KEY #CL -> pair (imp)
+				"pair,list,val,imp,tabnas", // #KEY #CL -> pair (imp)
 			},
 			close: []string{
 				"end,json",        // #CB n.pk<=0
-				"path,amagama",     // #CB path dive
-				"end,path,amagama", // #CA|#CS|#VAL end path
-				"end,amagama",      // #ZZ autoclose
+				"path,tabnas",     // #CB path dive
+				"end,path,tabnas", // #CA|#CS|#VAL end path
+				"end,tabnas",      // #ZZ autoclose
 			},
 		},
 		{
@@ -576,49 +576,49 @@ func TestAlignmentGrammarGTags(t *testing.T) {
 				"",                          // implist cond (no tag)
 				"list,json",                 // #OS #CS empty
 				"list,elem,json",            // #OS -> elem
-				"list,elem,val,imp,amagama",  // #CA -> elem (imp)
-				"list,elem,amagama",          // -> elem default
+				"list,elem,val,imp,tabnas",  // #CA -> elem (imp)
+				"list,elem,tabnas",          // -> elem default
 			},
 			close: []string{
 				"end,json",   // #CS end
-				"end,amagama", // #ZZ autoclose
+				"end,tabnas", // #ZZ autoclose
 			},
 		},
 		{
 			name: "pair",
 			open: []string{
 				"map,pair,key,json",    // #KEY #CL -> val
-				"map,pair,comma,amagama", // #CA comma
+				"map,pair,comma,tabnas", // #CA comma
 			},
 			close: []string{
 				"map,pair,json",             // #CB n.pk<=0
-				"map,pair,comma,amagama",     // #CA #CB trailing comma
-				"end,amagama",                // #CA #ZZ end
+				"map,pair,comma,tabnas",     // #CA #CB trailing comma
+				"end,tabnas",                // #CA #ZZ end
 				"map,pair,json",             // #CA n.pk<=0 -> pair
-				"map,pair,amagama",           // #CA n.dmap<=1 -> pair
-				"map,pair,imp,amagama",       // #KEY n.dmap<=1 -> pair
-				"map,pair,imp,path,amagama",  // #CB|#CA|#CS|#KEY n.pk>0 path
-				"end,amagama",                // #CS error
+				"map,pair,tabnas",           // #CA n.dmap<=1 -> pair
+				"map,pair,imp,tabnas",       // #KEY n.dmap<=1 -> pair
+				"map,pair,imp,path,tabnas",  // #CB|#CA|#CS|#KEY n.pk>0 path
+				"end,tabnas",                // #CS error
 				"map,pair,json",             // #ZZ @finish
-				"map,pair,imp,amagama",       // -> pair (catchall)
+				"map,pair,imp,tabnas",       // -> pair (catchall)
 			},
 		},
 		{
 			name: "elem",
 			open: []string{
-				"list,elem,imp,null,amagama", // #CA #CA double comma
-				"list,elem,imp,null,amagama", // #CA single comma
-				"elem,pair,amagama",          // #KEY #CL -> val (pair)
-				// Note: ListChild alt ("elem,child,amagama") only present when cfg.ListChild is true.
+				"list,elem,imp,null,tabnas", // #CA #CA double comma
+				"list,elem,imp,null,tabnas", // #CA single comma
+				"elem,pair,tabnas",          // #KEY #CL -> val (pair)
+				// Note: ListChild alt ("elem,child,tabnas") only present when cfg.ListChild is true.
 				"list,elem,val,json",        // -> val default
 			},
 			close: []string{
-				"list,elem,comma,amagama", // #CA, #CS|#ZZ trailing comma
+				"list,elem,comma,tabnas", // #CA, #CS|#ZZ trailing comma
 				"list,elem,json",         // #CA -> elem
 				"list,elem,json",         // #CS end
 				"list,elem,json",         // #ZZ @finish
-				"end,amagama",             // #CB error
-				"list,elem,imp,amagama",   // -> elem (catchall)
+				"end,tabnas",             // #CB error
+				"list,elem,imp,tabnas",   // -> elem (catchall)
 			},
 		},
 	}
@@ -664,12 +664,12 @@ func TestAlignmentExclude(t *testing.T) {
 	openBefore := len(valSpec.Open)
 	closeBefore := len(valSpec.Close)
 
-	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "amagama"}})
+	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "tabnas"}})
 
 	openAfter := len(valSpec.Open)
 	closeAfter := len(valSpec.Close)
 
-	// After excluding "amagama", there should be fewer alternates.
+	// After excluding "tabnas", there should be fewer alternates.
 	if openAfter >= openBefore {
 		t.Errorf("exclude: val.Open should have fewer alts after exclude, got %d >= %d",
 			openAfter, openBefore)
@@ -679,18 +679,18 @@ func TestAlignmentExclude(t *testing.T) {
 			closeAfter, closeBefore)
 	}
 
-	// Remaining alts should not contain the "amagama" tag.
+	// Remaining alts should not contain the "tabnas" tag.
 	for _, alt := range valSpec.Open {
 		for _, tag := range strings.Split(alt.G, ",") {
-			if strings.TrimSpace(tag) == "amagama" {
-				t.Errorf("exclude: val.Open alt still has amagama tag in %q", alt.G)
+			if strings.TrimSpace(tag) == "tabnas" {
+				t.Errorf("exclude: val.Open alt still has tabnas tag in %q", alt.G)
 			}
 		}
 	}
 	for _, alt := range valSpec.Close {
 		for _, tag := range strings.Split(alt.G, ",") {
-			if strings.TrimSpace(tag) == "amagama" {
-				t.Errorf("exclude: val.Close alt still has amagama tag in %q", alt.G)
+			if strings.TrimSpace(tag) == "tabnas" {
+				t.Errorf("exclude: val.Close alt still has tabnas tag in %q", alt.G)
 			}
 		}
 	}
@@ -994,9 +994,9 @@ func TestAlignmentErrorPropagation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse(\"}\") should return error")
 	}
-	je, ok := err.(*AmagamaError)
+	je, ok := err.(*TabnasError)
 	if !ok {
-		t.Fatalf("error should be *AmagamaError, got %T", err)
+		t.Fatalf("error should be *TabnasError, got %T", err)
 	}
 	if je.Code != "unexpected" {
 		t.Errorf("error code: got %q, want \"unexpected\"", je.Code)
@@ -1006,9 +1006,9 @@ func TestAlignmentErrorPropagation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse(\"]\") should return error")
 	}
-	je, ok = err.(*AmagamaError)
+	je, ok = err.(*TabnasError)
 	if !ok {
-		t.Fatalf("error should be *AmagamaError, got %T", err)
+		t.Fatalf("error should be *TabnasError, got %T", err)
 	}
 	if je.Code != "unexpected" {
 		t.Errorf("error code: got %q, want \"unexpected\"", je.Code)

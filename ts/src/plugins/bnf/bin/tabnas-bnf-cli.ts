@@ -1,13 +1,13 @@
 /* Copyright (c) 2025 Richard Rodger and other contributors, MIT License */
 
-/*  amagama-bnf-cli.ts
- *  CLI wrapper for the BNF -> amagama grammar spec converter.
+/*  tabnas-bnf-cli.ts
+ *  CLI wrapper for the BNF -> tabnas grammar spec converter.
  */
 
 import Fs from 'node:fs'
 
 import { bnfConvert } from '..'
-import { Amagama } from '../../../amagama'
+import { Tabnas } from '../../../tabnas'
 
 
 export async function run(argv: string[], console: Console) {
@@ -84,7 +84,7 @@ export async function run(argv: string[], console: Console) {
 
     // Bare engine: the BNF spec we're about to install supplies the
     // grammar, so we don't need any other plugin.
-    const j = new Amagama()
+    const j = new Tabnas()
     j.grammar(spec)
 
     let failed = 0
@@ -124,9 +124,9 @@ async function readStdin(console: Console): Promise<string> {
 
 function help(console: Console) {
   console.log(`
-amagama-bnf: convert a BNF grammar into a amagama grammar spec.
+tabnas-bnf: convert a BNF grammar into a tabnas grammar spec.
 
-Usage: amagama-bnf <args> [<bnf-source>]*
+Usage: tabnas-bnf <args> [<bnf-source>]*
 
 Arguments:
   -                      Read BNF source from stdin.
@@ -153,9 +153,9 @@ Arguments:
   -h
 
 Examples:
-  > amagama-bnf '<greet> ::= "hi" | "hello"'
-  > amagama-bnf -f grammar.bnf
-  > echo '<g> ::= "a"' | amagama-bnf -
-  > amagama-bnf -f grammar.bnf --parse 'hi'
+  > tabnas-bnf '<greet> ::= "hi" | "hello"'
+  > tabnas-bnf -f grammar.bnf
+  > echo '<g> ::= "a"' | tabnas-bnf -
+  > tabnas-bnf -f grammar.bnf --parse 'hi'
 `)
 }

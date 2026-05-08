@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"strings"
@@ -173,7 +173,7 @@ func TestRuleIncludeThenExclude(t *testing.T) {
 // --- text + grammar-text paths ---
 
 func TestGrammarTextAppliesInclude(t *testing.T) {
-	// rule.include declared in a amagama grammar text string is honoured.
+	// rule.include declared in a tabnas grammar text string is honoured.
 	j := Make()
 	err := j.Grammar(&GrammarSpec{
 		Rule: map[string]*GrammarRuleSpec{
@@ -211,7 +211,7 @@ func TestGrammarTextAppliesInclude(t *testing.T) {
 }
 
 func TestSetOptionsTextInclude(t *testing.T) {
-	// SetOptionsText can flip the include filter via a amagama snippet.
+	// SetOptionsText can flip the include filter via a tabnas snippet.
 	j := Make()
 	err := j.Grammar(&GrammarSpec{
 		Rule: map[string]*GrammarRuleSpec{

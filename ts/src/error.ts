@@ -27,8 +27,8 @@ const S = {
 }
 
 
-// Amagama errors with nice formatting.
-class AmagamaError extends SyntaxError {
+// Tabnas errors with nice formatting.
+class TabnasError extends SyntaxError {
   constructor(
     code: string,
     details: Record<string, any>,
@@ -45,7 +45,7 @@ class AmagamaError extends SyntaxError {
 
 
 // Inject value text into an error message. The value is taken from
-// the `details` parameter to AmagamaError. If not defined, the value is
+// the `details` parameter to TabnasError. If not defined, the value is
 // determined heuristically from the Token and Context.
 function errinject<T extends string | string[] | { [key: string]: string }>(
   s: T,
@@ -68,12 +68,12 @@ function errinject<T extends string | string[] | { [key: string]: string }>(
   return strinject(s, ref, { indent: '  ' })
 }
 
-// Remove Amagama internal lines as spurious for caller.
+// Remove Tabnas internal lines as spurious for caller.
 function trimstk(err: Error) {
   if (err.stack) {
     err.stack = err.stack
       .split('\n')
-      .filter((s) => !s.includes('amagama/amagama'))
+      .filter((s) => !s.includes('tabnas/tabnas'))
       .map((s) => s.replace(/    at /, 'at '))
       .join('\n')
   }
@@ -329,7 +329,7 @@ function errdesc(
 
     let message = errmsg({
       code,
-      // name: 'amagama',
+      // name: 'tabnas',
       name: cfg.errmsg.name,
       txts,
       src,
@@ -480,7 +480,7 @@ function snip(s: any, len: number = 5) {
 }
 
 export {
-  AmagamaError,
+  TabnasError,
   errdesc,
   errinject,
   errsite,

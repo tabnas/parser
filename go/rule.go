@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"fmt"

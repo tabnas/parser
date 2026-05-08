@@ -13,7 +13,7 @@ export const INSPECT = Symbol.for('nodejs.util.inspect.custom')
 
 // Sentinel value that acts as `undefined` in deep merge — the base value
 // is preserved.  Represented as "@SKIP" in grammar options.
-export const SKIP: unique symbol = Symbol.for('amagama.SKIP')
+export const SKIP: unique symbol = Symbol.for('tabnas.SKIP')
 
 // Empty rule used as a no-value placeholder.
 // export const NONE = ({ name: 'none', state: OPEN } as Rule)
@@ -22,7 +22,7 @@ export const STRING = 'string'
 
 // Parse function signature. Plugins occasionally type a parse callback
 // without holding a class instance; export the shape for them.
-export type AmagamaParse = (src: any, meta?: any, parent_ctx?: any) => any
+export type TabnasParse = (src: any, meta?: any, parent_ctx?: any) => any
 
 // BNF converter options. Re-declared here rather than imported to keep
 // types.ts free of circular cross-file references.
@@ -44,9 +44,9 @@ export type GrammarSetting = {
 }
 
 
-// Internal state held by every Amagama instance. Exposed via
+// Internal state held by every Tabnas instance. Exposed via
 // `instance.internal()` for parser, plugins, and debug code.
-export type AmagamaInternal = {
+export type TabnasInternal = {
   parser: Parser
   config: Config
   plugins: Plugin[]
@@ -56,30 +56,30 @@ export type AmagamaInternal = {
 }
 
 
-// Amagama is a runtime class defined in src/amagama.ts. The type-only
+// Tabnas is a runtime class defined in src/tabnas.ts. The type-only
 // re-export here lets every other type definition in this file (and
 // the rest of the codebase that imports from `./types`) reference
-// `Amagama` as a type without pulling the class file in directly.
-import type { Amagama } from './amagama'
-export type { Amagama }
+// `Tabnas` as a type without pulling the class file in directly.
+import type { Tabnas } from './tabnas'
+export type { Tabnas }
 
 
-// Define a plugin to extend the provided Amagama instance.
+// Define a plugin to extend the provided Tabnas instance.
 export type Plugin = ((
-  amagama: Amagama,
+  tabnas: Tabnas,
   plugin_options?: any,
-) => void | Amagama) & {
+) => void | Tabnas) & {
   defaults?: Record<string, any>
   options?: Record<string, any> // TODO: InstalledPlugin.options is always defined ?
 }
 
 // Parsing options. See defaults.ts for commentary on individual fields.
 //
-// This is the canonical option shape passed to `new Amagama(...)` and
+// This is the canonical option shape passed to `new Tabnas(...)` and
 // `am.make(...)`. It also covers the result of `am.options()` and the
 // argument to `am.options(change)`.
-export type AmagamaOptions = {
-  // Plugins to apply at construction time. `new Amagama({ plugins:
+export type TabnasOptions = {
+  // Plugins to apply at construction time. `new Tabnas({ plugins:
   // [bnf] })` is sugar for `am.use(bnf)` after construction —
   // children inherit the parent's plugin list and re-run them with
   // the merged options.
@@ -247,14 +247,14 @@ export type AmagamaOptions = {
   }
   config?: {
     modify?: {
-      [plugin_name: string]: (config: Config, options: AmagamaOptions) => void
+      [plugin_name: string]: (config: Config, options: TabnasOptions) => void
     }
   }
   parser?: {
     start?: (
       lexer: any,
       src: string,
-      amagama: Amagama,
+      tabnas: Tabnas,
       meta?: any,
       parent_ctx?: any,
     ) => any
@@ -618,14 +618,14 @@ export type LexMatcher = (
 // Construct a lexing function based on configuration.
 export type MakeLexMatcher = (
   cfg: Config,
-  opts: AmagamaOptions,
+  opts: TabnasOptions,
 ) => LexMatcher | null | undefined | false
 
 export type LexCheck = (
   lex: Lex,
 ) => void | undefined | { done: boolean; token: Token | undefined }
 
-export type ParsePrepare = (amagama: Amagama, ctx: Context, meta?: any) => void
+export type ParsePrepare = (tabnas: Tabnas, ctx: Context, meta?: any) => void
 
 export type RuleSpecMap = { [name: string]: RuleSpec }
 
@@ -705,7 +705,7 @@ export type ValModifier = (
   val: any,
   lex: Lex,
   cfg: Config,
-  opts: AmagamaOptions,
+  opts: TabnasOptions,
 ) => string
 
 export type LexSub = (tkn: Token, rule: Rule, ctx: Context) => void

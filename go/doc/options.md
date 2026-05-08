@@ -4,9 +4,9 @@ Options are passed to `Make()` to configure a parser instance. All fields use
 pointer types -- `nil` means "use default".
 
 ```go
-j := amagama.Make(amagama.Options{
-    Comment: &amagama.CommentOptions{Lex: boolp(false)},
-    Number:  &amagama.NumberOptions{Hex: boolp(false)},
+j := tabnas.Make(tabnas.Options{
+    Comment: &tabnas.CommentOptions{Lex: boolp(false)},
+    Number:  &tabnas.NumberOptions{Hex: boolp(false)},
 })
 ```
 
@@ -179,7 +179,7 @@ Custom parser override.
 
 | Field | Type | Description |
 |---|---|---|
-| `Start` | `func(src string, j *Amagama, meta map[string]any) (any, error)` | Replace the entire parse |
+| `Start` | `func(src string, j *Tabnas, meta map[string]any) (any, error)` | Replace the entire parse |
 
 ## `Safe`
 

@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"reflect"
@@ -6,7 +6,7 @@ import (
 )
 
 // Port of test/variant.test.js `just-json-happy`. Uses MakeJSON(),
-// Go's equivalent of TS Amagama.make('json').
+// Go's equivalent of TS Tabnas.make('json').
 
 func TestVariant_StrictJSON_Happy(t *testing.T) {
 	j := MakeJSON()
@@ -48,7 +48,7 @@ func TestVariant_StrictJSON_Happy(t *testing.T) {
 func TestVariant_StrictJSON_Rejects(t *testing.T) {
 	j := MakeJSON()
 
-	// Inputs that are valid amagama but not strict JSON — must fail under
+	// Inputs that are valid tabnas but not strict JSON — must fail under
 	// the approximation. Matches the `assert.throws` cases in TS.
 	bad := []string{
 		`{a:1}`,          // unquoted key

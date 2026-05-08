@@ -1,20 +1,20 @@
 # Options Reference
 
-Options are passed to `new Amagama(options)` (or to `am.make(options)`
+Options are passed to `new Tabnas(options)` (or to `am.make(options)`
 to derive a child) to configure a parser instance. All fields are
 optional — unset fields use defaults.
 
 ```js
-const { Amagama, bnf } = require('amagama')
+const { Tabnas, bnf } = require('tabnas')
 
-const am = new Amagama({
+const am = new Tabnas({
   plugins: [bnf],
   comment: { lex: false },
   number: { hex: false },
 })
 ```
 
-The complete option type is `AmagamaOptions` (see `src/types.ts`).
+The complete option type is `TabnasOptions` (see `src/types.ts`).
 
 ## `plugins`
 
@@ -24,7 +24,7 @@ instance (`am.make({ … })`) re-run every plugin in this list against
 their own merged options.
 
 ```js
-new Amagama({ plugins: [bnf, Debug, myGrammarPlugin] })
+new Tabnas({ plugins: [bnf, Debug, myGrammarPlugin] })
 ```
 
 `plugins` is consumed by the constructor — it's not stored back into
@@ -231,7 +231,7 @@ Controls security features.
 Custom error message templates, keyed by error code.
 
 ```js
-new Amagama({
+new Tabnas({
   error: { unexpected: 'bad character: ' },
 })
 ```
@@ -261,5 +261,5 @@ instance exists, changing them has no effect.
 | `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (`#NR`, `#ST`, `#TX`, …). |
 | `grammar$` | boolean | -- | Reserved for plugins. Read by some plugins to opt out of registering grammar. |
 
-`am.empty(opts)` is shorthand for `new Amagama({ defaults$: false,
+`am.empty(opts)` is shorthand for `new Tabnas({ defaults$: false,
 standard$: false, grammar$: false, ...opts })`.

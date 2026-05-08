@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"regexp"
@@ -222,7 +222,7 @@ type LexCheckResult struct {
 	Token *Token // The token to return (nil means "no match").
 }
 
-// DefaultLexConfig returns the default lexer configuration matching amagama defaults.
+// DefaultLexConfig returns the default lexer configuration matching tabnas defaults.
 func DefaultLexConfig() *LexConfig {
 	return &LexConfig{
 		FixedLex:     true,
@@ -368,7 +368,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			if l.pnt.SI < len(l.Src) {
 				src = string(l.Src[l.pnt.SI])
 			}
-			je := makeAmagamaError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI)
+			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI)
 			if l.Config != nil {
 				je.color = l.Config.Color
 			}
@@ -377,7 +377,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
-			je := makeAmagamaError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI)
+			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI)
 			if l.Config != nil {
 				je.color = l.Config.Color
 			}
@@ -658,7 +658,7 @@ func (l *Lex) matchFixed() *Token {
 	remaining := l.Src[l.pnt.SI:]
 
 	// Use sorted list for longest-match-first. Fall back to single-char lookup
-	// if no sorted list (e.g. standalone lexer without Amagama).
+	// if no sorted list (e.g. standalone lexer without Tabnas).
 	if len(l.Config.FixedSorted) > 0 {
 		for _, fs := range l.Config.FixedSorted {
 			if strings.HasPrefix(remaining, fs) {

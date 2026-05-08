@@ -30,8 +30,8 @@ const assert = require('node:assert')
 const Fs = require('node:fs')
 const Path = require('node:path')
 
-const { Amagama, bnf: bnfPlugin } = require('..')
-const am = new Amagama({ plugins: [bnfPlugin] })
+const { Tabnas, bnf: bnfPlugin } = require('..')
+const am = new Tabnas({ plugins: [bnfPlugin] })
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
 
 const GRAMMAR = Fs.readFileSync(
@@ -44,7 +44,7 @@ describe('rfc3986', () => {
   describe('grammar compilation', () => {
 
     it('compiles the full RFC 3986 grammar without error', () => {
-      // Just building the amagama rule set is already a non-trivial
+      // Just building the tabnas rule set is already a non-trivial
       // test — 30 productions, bounded repetition, numeric ranges,
       // nullable alternatives, transitive core-rule inclusion, and
       // the ABNF-wide case-insensitive string default all have to

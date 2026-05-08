@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"reflect"
@@ -8,7 +8,7 @@ import (
 )
 
 // mustGrammar calls Grammar and fails the test on error.
-func mustGrammar(t *testing.T, j *Amagama, gs *GrammarSpec) {
+func mustGrammar(t *testing.T, j *Tabnas, gs *GrammarSpec) {
 	t.Helper()
 	if err := j.Grammar(gs); err != nil {
 		t.Fatal(err)
@@ -1468,7 +1468,7 @@ func TestGrammarTextOptionsAndRules(t *testing.T) {
 		rule: {
 			val: {
 				close: [
-					{ s: "#ZZ", g: "test,amagama" }
+					{ s: "#ZZ", g: "test,tabnas" }
 				]
 			}
 		}
@@ -1531,7 +1531,7 @@ func TestGrammarTextWithInjectAndExclude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "amagama,imp"}})
+	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "tabnas,imp"}})
 
 	// Complete string should parse.
 	result, err := j.Parse(`"test"`)
@@ -1547,7 +1547,7 @@ func TestGrammarTextWithInjectAndExclude(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unterminated string")
 	}
-	if je, ok := err.(*AmagamaError); ok {
+	if je, ok := err.(*TabnasError); ok {
 		if je.Code != "unterminated_string" {
 			t.Errorf("expected unterminated_string, got %s", je.Code)
 		}
@@ -1644,7 +1644,7 @@ func TestGrammarTextThenSetOptionsPreserved(t *testing.T) {
 
 func TestGrammarTextInvalidSource(t *testing.T) {
 	j := Make()
-	// Empty string should not error (amagama allows empty source by default).
+	// Empty string should not error (tabnas allows empty source by default).
 	err := j.GrammarText("")
 	if err != nil {
 		t.Fatal(err)
@@ -1655,7 +1655,7 @@ func TestGrammarTextInvalidSource(t *testing.T) {
 
 func TestGrammarTextRuleExclude(t *testing.T) {
 	j := Make()
-	err := j.GrammarText(`options: { rule: { exclude: "amagama" } }`)
+	err := j.GrammarText(`options: { rule: { exclude: "tabnas" } }`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,10 +1668,10 @@ func TestGrammarTextRuleExclude(t *testing.T) {
 	if m["a"] != float64(1) {
 		t.Errorf("expected a:1, got %v", m["a"])
 	}
-	// Implicit map (amagama extension) should fail.
+	// Implicit map (tabnas extension) should fail.
 	_, err = j.Parse("a:1")
 	if err == nil {
-		t.Fatal("expected error for implicit map after excluding amagama via GrammarText")
+		t.Fatal("expected error for implicit map after excluding tabnas via GrammarText")
 	}
 }
 
@@ -1841,7 +1841,7 @@ func TestTextLexFalseCustomValueDef(t *testing.T) {
 func TestGroupTagsValidFormat(t *testing.T) {
 	// All group tags (G fields) in grammar alts must be comma-separated
 	// lowercase identifiers [a-z] only. No dots, spaces, or other chars.
-	// Regression guard for the "elem.amagama" typo (TS grammar.ts:737).
+	// Regression guard for the "elem.tabnas" typo (TS grammar.ts:737).
 	j := Make()
 	tagRe := regexp.MustCompile(`^[a-z]+$`)
 	for name, rs := range j.RSM() {
@@ -1874,7 +1874,7 @@ func TestSetOptionsRuleExclude(t *testing.T) {
 	// rule.exclude can be set via SetOptions after Make().
 	j := Make()
 
-	// Before exclude: amagama extensions are active (implicit maps work).
+	// Before exclude: tabnas extensions are active (implicit maps work).
 	result, err := j.Parse("a:1")
 	if err != nil {
 		t.Fatal(err)
@@ -1884,8 +1884,8 @@ func TestSetOptionsRuleExclude(t *testing.T) {
 		t.Errorf("expected a:1, got %v", m["a"])
 	}
 
-	// Exclude amagama extensions: only strict JSON syntax works.
-	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "amagama"}})
+	// Exclude tabnas extensions: only strict JSON syntax works.
+	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "tabnas"}})
 
 	// Strict JSON should still work.
 	result, err = j.Parse(`{"a":1}`)
@@ -1897,10 +1897,10 @@ func TestSetOptionsRuleExclude(t *testing.T) {
 		t.Errorf("expected a:1, got %v", m["a"])
 	}
 
-	// Implicit map (amagama extension) should now fail.
+	// Implicit map (tabnas extension) should now fail.
 	_, err = j.Parse("a:1")
 	if err == nil {
-		t.Fatal("expected error for implicit map after excluding amagama")
+		t.Fatal("expected error for implicit map after excluding tabnas")
 	}
 }
 

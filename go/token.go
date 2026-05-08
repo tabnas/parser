@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 // Tin is a token identification number.
 type Tin = int

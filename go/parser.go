@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"math"
@@ -32,10 +32,10 @@ type Context struct {
 	ParseErr *Token            // Error token, halts parse
 
 	// Fields matching TS Context:
-	Opts     *Options          // Amagama instance options (TS: opts)
-	Cfg      *LexConfig        // Amagama instance config (TS: cfg)
+	Opts     *Options          // Tabnas instance options (TS: opts)
+	Cfg      *LexConfig        // Tabnas instance config (TS: cfg)
 	Src      string            // Source text being parsed (TS: src)
-	Inst     *Amagama           // Current Amagama instance (TS: inst)
+	Inst     *Tabnas           // Current Tabnas instance (TS: inst)
 	U        map[string]any    // Custom plugin data bag (TS: u)
 	Root     *Rule             // Root rule (TS: root)
 	TC       int               // Token count (TS: tC)
@@ -52,7 +52,7 @@ type Parser struct {
 	MaxMul        int               // Max rule occurrence multiplier. Default: 3.
 	ErrorMessages map[string]string  // Custom error message templates.
 	Hints         map[string]string  // Explanatory hints per error code.
-	ErrTag        string             // Custom error tag (TS: errmsg.name). Default: "amagama".
+	ErrTag        string             // Custom error tag (TS: errmsg.name). Default: "tabnas".
 }
 
 // NewParser creates a parser with default configuration.
@@ -69,19 +69,19 @@ func NewParser() *Parser {
 }
 
 // Start parses the source string and returns the result.
-// Returns a *AmagamaError if parsing fails.
+// Returns a *TabnasError if parsing fails.
 func (p *Parser) Start(src string) (any, error) {
 	return p.startParse(src, nil, nil, nil, nil)
 }
 
 // StartMeta parses the source string with metadata, subscriptions, and
-// an optional Amagama instance reference (for Context.Inst).
+// an optional Tabnas instance reference (for Context.Inst).
 func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub) (any, error) {
 	return p.startParse(src, meta, lexSubs, ruleSubs, nil)
 }
 
 // startParse is the internal entry point that populates the full Context.
-func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Amagama) (any, error) {
+func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (any, error) {
 	if src == "" {
 		return nil, nil
 	}
@@ -229,8 +229,8 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	return result.Node, nil
 }
 
-// makeError creates a AmagamaError using this parser's error messages.
-func (p *Parser) makeError(code, src, fullSource string, pos, row, col int) *AmagamaError {
+// makeError creates a TabnasError using this parser's error messages.
+func (p *Parser) makeError(code, src, fullSource string, pos, row, col int) *TabnasError {
 	msgs := p.ErrorMessages
 	if msgs == nil {
 		msgs = errorMessages
@@ -249,7 +249,7 @@ func (p *Parser) makeError(code, src, fullSource string, pos, row, col int) *Ama
 		hint = p.Hints[code]
 	}
 
-	je := &AmagamaError{
+	je := &TabnasError{
 		Code:       code,
 		Detail:     detail,
 		Pos:        pos,

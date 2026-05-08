@@ -1,21 +1,21 @@
-# Feasibility Report: Converting BNF Grammars into Amagama Grammars
+# Feasibility Report: Converting BNF Grammars into Tabnas Grammars
 
 ## Summary
 
-A converter from Backus–Naur Form (BNF) grammars to amagama grammar specs is
+A converter from Backus–Naur Form (BNF) grammars to tabnas grammar specs is
 **feasible for the LL(2)-friendly subset of BNF** after standard grammar
-rewrites. Amagama's `grammar()` JSON spec is a clean emission target; the hard
-part is the grammar *normaliser* that has to fit BNF into amagama's two-token
+rewrites. Tabnas's `grammar()` JSON spec is a clean emission target; the hard
+part is the grammar *normaliser* that has to fit BNF into tabnas's two-token
 lookahead and strictly deterministic alternate model.
 
-This document describes amagama's grammar model, maps BNF primitives onto it,
+This document describes tabnas's grammar model, maps BNF primitives onto it,
 identifies where the mapping breaks down, and sketches a conversion pipeline.
 
 ---
 
-## 1. What a Amagama Grammar Actually Is
+## 1. What a Tabnas Grammar Actually Is
 
-Amagama is not a classical CFG engine. It is a rule-driven push-down state
+Tabnas is not a classical CFG engine. It is a rule-driven push-down state
 machine with an explicit two-token lookahead. The moving parts live under
 `src/`:
 
@@ -24,9 +24,9 @@ machine with an explicit two-token lookahead. The moving parts live under
 | `src/types.ts` | `Rule`, `RuleSpec`, `AltSpec`, `Token`, `Context` — the shape of a grammar. |
 | `src/rules.ts` | Rule state machine: `process()` tries each alternate, does push / replace / backtrack, runs state actions. |
 | `src/parser.ts` | Drives the rule stack in a single parse loop. |
-| `src/grammar.ts` | The built-in JSON + Amagama grammar, authored with `amagama.grammar({...})`. |
+| `src/grammar.ts` | The built-in JSON + Tabnas grammar, authored with `tabnas.grammar({...})`. |
 | `src/lexer.ts` | Token matchers: fixed, text, number, string, comment, regex. |
-| `src/amagama.ts` | Public API: `rule()`, `grammar()`, `token()`, `tokenSet()`, `use()`. |
+| `src/tabnas.ts` | Public API: `rule()`, `grammar()`, `token()`, `tokenSet()`, `use()`. |
 | `src/defaults.ts` | Built-in tokens (`#OB`, `#CB`, `#VAL`, `#ZZ`, …) and matcher config. |
 
 Each rule has two states: **Open** (`o`) and **Close** (`c`). Each state has
@@ -60,17 +60,17 @@ Relevant `AltSpec` fields:
 State-level hooks on `RuleSpec` — `bo` (before open), `ao` (after open),
 `bc` (before close), `ac` (after close) — are used to assemble `rule.node`.
 
-Tokens are first-class: fixed tokens (`amagama.token('#NAME', 'literal')`),
+Tokens are first-class: fixed tokens (`tabnas.token('#NAME', 'literal')`),
 regex matchers (`options.match.token`), and token sets grouped by tag
 (`IGNORE`, `VAL`, `KEY`).
 
 ---
 
-## 2. Mapping BNF Primitives to Amagama
+## 2. Mapping BNF Primitives to Tabnas
 
-| BNF construct | Amagama encoding | Fit |
+| BNF construct | Tabnas encoding | Fit |
 |---|---|---|
-| Terminal `"foo"` | Fixed token via `amagama.token('#FOO','foo')` or regex matcher | Good |
+| Terminal `"foo"` | Fixed token via `tabnas.token('#FOO','foo')` or regex matcher | Good |
 | Non-terminal `<X>` | Rule name pushed with `p:'X'` or replaced with `r:'X'` | Good |
 | Sequence `A B` (≤2 tokens) | `s: '#A #B'` | Good |
 | Sequence `A B C …` (>2 tokens) | Chain of auxiliary rules | Works, but verbose |
@@ -100,7 +100,7 @@ Canonical shapes already present in the codebase:
    requires looking at the 3rd+ token must be refactored into a chain of
    auxiliary rules. A mechanical converter can do this, but the output
    grows with the number of "split points".
-2. **Left recursion.** Amagama's stack model cannot execute `E → E op T`
+2. **Left recursion.** Tabnas's stack model cannot execute `E → E op T`
    naively — a `p: 'E'` at the same token position as the current `E`
    would infinite-loop. Two options:
    - **Static rewrite** to `E → T (op T)*` before emission.
@@ -109,7 +109,7 @@ Canonical shapes already present in the codebase:
      direct and many indirect left-recursive cycles but does not give
      full packrat seed-and-grow semantics.
 3. **Ambiguity resolution.** BNF routinely relies on external precedence
-   and associativity tables (e.g. Yacc `%left`). Amagama has no such
+   and associativity tables (e.g. Yacc `%left`). Tabnas has no such
    mechanism; ambiguity must be resolved at rewrite time, typically by
    stratifying `expr / term / factor`.
 4. **Semantic actions.** BNF/YACC-style `{ $$ = $1 + $3 }` has no direct
@@ -119,7 +119,7 @@ Canonical shapes already present in the codebase:
 5. **Inherited/synthesized attributes.** Must be hand-mapped to
    `rule.u` (use), `rule.k` (keep), `rule.n` (counters), or to the node
    assembly performed by `bo`/`ao`/`bc`/`ac`.
-6. **Per-alternate state hooks.** Amagama's `bo/ao/bc/ac` are *rule*-scoped,
+6. **Per-alternate state hooks.** Tabnas's `bo/ao/bc/ac` are *rule*-scoped,
    not alternate-scoped. Per-alternate behaviour must be pushed into `a:`
    functions on individual alternates.
 
@@ -127,7 +127,7 @@ Canonical shapes already present in the codebase:
 
 ## 4. Runtime Left-Recursion Handling via `k` + Token `sI`
 
-Static left-recursion elimination is the textbook fix, but amagama
+Static left-recursion elimination is the textbook fix, but tabnas
 exposes enough metadata to handle many left-recursive grammars
 **without** rewriting them — useful for indirect cycles where the
 rewrite is noisy, or for converter output that should stay close to
@@ -184,7 +184,7 @@ expr: {
 - **Full packrat seed-and-grow semantics.** Real seed-and-grow
   iteratively re-parses the same rule at the same position with a
   progressively richer memoized seed, producing matches that require
-  more than one "grow" pass to discover. Amagama's parse loop
+  more than one "grow" pass to discover. Tabnas's parse loop
   (`src/parser.ts:172`) is a single forward pass; there is no
   primitive to rewind `ctx.t0` and re-enter a completed rule with a
   seeded result. `k` flows forward only and does not outlive a rule
@@ -212,14 +212,14 @@ rewrite or fall outside the tractable subset.
 ## 5. Remaining Issues After Metadata-Based Workarounds
 
 Once the runtime left-recursion guard from §4 is available, the
-residual list of BNF constructs that amagama cannot cleanly absorb
+residual list of BNF constructs that tabnas cannot cleanly absorb
 shrinks. This section enumerates what is left, grouped by how much
 each costs a converter.
 
 ### 5.1 Hard / still blocking
 
 **Lookahead beyond 2 tokens.** `s:` matches `s0, s1` only. Conditions
-(`c:`) can inspect `ctx.t0` and `ctx.t1` but amagama does not lex
+(`c:`) can inspect `ctx.t0` and `ctx.t1` but tabnas does not lex
 tokens 3+ ahead eagerly — `src/lexer.ts` produces tokens on demand.
 Productions whose decisive prefix exceeds two tokens must be split
 into auxiliary rules, one per decision point. No metadata trick
@@ -227,7 +227,7 @@ circumvents this because the data has not yet been computed.
 *Cost:* linear blow-up in rule count; unavoidable.
 
 **Ambiguity with external precedence/associativity tables.** Yacc-style
-`%left`, `%right`, `%nonassoc` declarations have no direct amagama
+`%left`, `%right`, `%nonassoc` declarations have no direct tabnas
 equivalent. `n:` counters plus `c:` conditions can encode precedence
 climbing (track `n.prec`, guard alternates with
 `c: { 'n.prec': { $lte: X } }`), but this is a grammar rewrite, not a
@@ -236,10 +236,10 @@ one-to-one mapping. The converter must either stratify
 *Cost:* a precedence planner is its own subsystem.
 
 **Context-sensitive grammars.** Python-style INDENT/DEDENT, heredocs,
-C typedef-sensitive parsing. Amagama's lexer is regular; custom
+C typedef-sensitive parsing. Tabnas's lexer is regular; custom
 matchers can be registered via `src/lexer.ts:216`, but that is
 per-language lexer work, not a grammar transformation.
-*Cost:* out of scope for a pure BNF → amagama converter.
+*Cost:* out of scope for a pure BNF → tabnas converter.
 
 ### 5.2 Partially resolved, with caveats
 
@@ -267,13 +267,13 @@ synthesises and routes rather than emitting a clean rule-level hook.
 multiplies the alternate count and is the main source of lookahead
 conflicts inside recursive sequences.
 
-**Keywords vs identifiers.** Amagama's fixed tokens outrank `#TX` text
+**Keywords vs identifiers.** Tabnas's fixed tokens outrank `#TX` text
 matching, so `if`/`while`/etc. can be declared as fixed tokens and
 will win over identifier matching. The converter must decide which
 BNF terminals become fixed tokens and which become regex-matched.
 
 **Error messages / error recovery.** BNF does not specify these.
-Amagama has per-alternate `e:` error functions and `bad()` in
+Tabnas has per-alternate `e:` error functions and `bad()` in
 `src/rules.ts:440`, but no panic-mode recovery or error productions.
 Generated output will have generic "unexpected token" errors unless
 the source BNF is annotated.
@@ -307,7 +307,7 @@ sugar, parameterised rules, empty productions).
 
 ## 6. Suggested Conversion Pipeline
 
-A BNF → amagama converter is realistic for the subset of BNF that is
+A BNF → tabnas converter is realistic for the subset of BNF that is
 LL(2)-compatible after standard rewrites. A workable pipeline:
 
 1. **Parse BNF input** (supporting `|`, `?`, `*`, `+`, `( )`, and terminal
@@ -318,10 +318,10 @@ LL(2)-compatible after standard rewrites. A workable pipeline:
    - Split any alternate whose decisive prefix is >2 tokens into
      auxiliary rules so each decision fits `s0,s1`.
 3. **Allocate tokens:**
-   - Literal terminals → fixed tokens via `amagama.token('#X','literal')`.
+   - Literal terminals → fixed tokens via `tabnas.token('#X','literal')`.
    - Regex terminals → match tokens via `options.match.token`.
    - Group related tokens into token sets where reused.
-4. **Emit rules** using the `amagama.grammar({ rule: { ... } })` spec form
+4. **Emit rules** using the `tabnas.grammar({ rule: { ... } })` spec form
    — it is JSON-serialisable and matches the style of `src/grammar.ts`:
    - Map each BNF production to `open` alternates.
    - For recursive productions, emit a `close` alternate with `r:` on
@@ -345,9 +345,9 @@ LL(2)-compatible after standard rewrites. A workable pipeline:
   unbounded lookahead, or grammars depending on a GLR/Earley-style
   ambiguous parse.
 
-The hard part of this project is not code generation — amagama's
+The hard part of this project is not code generation — tabnas's
 `grammar()` spec is already a clean emission target — but the **grammar
-rewriter** that normalises BNF into the LL(2) shape amagama can execute.
+rewriter** that normalises BNF into the LL(2) shape tabnas can execute.
 
 ---
 
@@ -355,10 +355,10 @@ rewriter** that normalises BNF into the LL(2) shape amagama can execute.
 
 1. Pick a BNF dialect to accept (classic BNF, ISO EBNF, or ANTLR-lite).
 2. Build the grammar-AST and normaliser first; test it on small grammars
-   (arithmetic expressions, JSON itself) before wiring to amagama.
+   (arithmetic expressions, JSON itself) before wiring to tabnas.
 3. Emit to the `grammar()` JSON form rather than the chained `rule()`
    API — it is easier to diff and easier to snapshot-test.
-4. Validate by round-tripping: feed the generated amagama grammar a
+4. Validate by round-tripping: feed the generated tabnas grammar a
    corpus that the original BNF accepts, and compare parse outcomes.
 5. For actions, start with "no actions → tree of raw tokens" and layer
    action support on top once the structural conversion is solid.
@@ -369,8 +369,8 @@ rewriter** that normalises BNF into the LL(2) shape amagama can execute.
   tiny Lisp) and compare normalised output to hand-written LL(2)
   versions.
 - Snapshot-test emitted `grammar()` specs.
-- End-to-end: load the emitted spec via `amagama.grammar(spec)` in a
+- End-to-end: load the emitted spec via `tabnas.grammar(spec)` in a
   test and parse known-good inputs, asserting the produced tree.
 - Cross-check against `test/grammar.test.js` patterns — the existing
-  examples there are the most reliable reference for what amagama will
+  examples there are the most reliable reference for what tabnas will
   accept.

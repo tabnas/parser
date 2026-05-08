@@ -1,4 +1,4 @@
-package amagama
+package tabnas
 
 import (
 	"encoding/json"
@@ -21,7 +21,7 @@ func toJSON(t *testing.T, v any) string {
 
 func TestReadmeQuickExample(t *testing.T) {
 	// The main README shows:
-	//   result, err := amagama.Parse("a:1, b:2")
+	//   result, err := tabnas.Parse("a:1, b:2")
 	result, err := Parse("a:1, b:2")
 	if err != nil {
 		t.Fatal(err)

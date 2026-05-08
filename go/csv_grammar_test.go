@@ -1,16 +1,16 @@
-package amagama
+package tabnas
 
 import (
 	"reflect"
 	"testing"
 )
 
-// Minimal CSV grammar built directly on the amagama parser API.
+// Minimal CSV grammar built directly on the tabnas parser API.
 // Mirrors test/csv-grammar.test.js — the grammar treats comma-separated
 // values as cells, newline-separated rows as records, and single tokens
 // (text, number, string, keyword) as cell values. Empty cells become "";
 // empty rows are dropped.
-func makeCSV() *Amagama {
+func makeCSV() *Tabnas {
 	j := Make()
 
 	// pushBack keeps the replaced-rule chain in sync so the parent rule
@@ -121,10 +121,10 @@ func makeCSV() *Amagama {
 		}
 	})
 
-	// Select the custom start rule and drop amagama-only extensions.
+	// Select the custom start rule and drop tabnas-only extensions.
 	// Keep #SP and #CM in IGNORE but let #LN reach the parser.
 	j.SetOptions(Options{
-		Rule: &RuleOptions{Start: "csv", Exclude: "amagama,imp"},
+		Rule: &RuleOptions{Start: "csv", Exclude: "tabnas,imp"},
 		Lex:  &LexOptions{EmptyResult: []any{}},
 		TokenSet: map[string][]string{
 			"IGNORE": {"#SP", "#CM"},
