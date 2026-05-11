@@ -7,7 +7,6 @@ const assert = require('node:assert')
 const { Tabnas } = require('..')
 const am = new Tabnas()
 const J = (src, meta, ctx) => am.parse(src, meta, ctx)
-const { Debug } = require('../dist/plugins/debug')
 
 describe('api', function () {
   it('standard', () => {
@@ -36,7 +35,5 @@ describe('api', function () {
       'token',
       'tokenSet',
     ])
-
-    assert.ok(Debug != null)
   })
 })

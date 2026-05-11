@@ -24,13 +24,6 @@ export const STRING = 'string'
 // without holding a class instance; export the shape for them.
 export type TabnasParse = (src: any, meta?: any, parent_ctx?: any) => any
 
-// BNF converter options. Re-declared here rather than imported to keep
-// types.ts free of circular cross-file references.
-export type BnfConvertOptions = {
-  start?: string
-  tag?: string
-}
-
 
 // Additional settings applied when processing a grammar spec.
 // If `rule.alt.g` is defined, its value(s) are appended to every

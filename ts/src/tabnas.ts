@@ -13,7 +13,6 @@ import type {
   AltMatch,
   AltModifier,
   AltSpec,
-  BnfConvertOptions,
   Config,
   Context,
   Counters,
@@ -528,7 +527,6 @@ export type {
   AltMatch,
   AltModifier,
   AltSpec,
-  BnfConvertOptions,
   Config,
   Context,
   Counters,
@@ -583,8 +581,3 @@ export {
   makeTextMatcher,
   makeToken,
 }
-
-// Re-export the bundled plugins so callers can do
-// `const { Tabnas, bnf, Debug } = require('tabnas')`.
-export { bnf } from './plugins/bnf'
-export { Debug } from './plugins/debug'

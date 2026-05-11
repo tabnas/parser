@@ -1,2 +1,0 @@
-#!/usr/bin/env node
-require('../dist/plugins/bnf/bin/amagama-bnf-cli').run(process.argv, console).catch((e) => console.error(e.message))

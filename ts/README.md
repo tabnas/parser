@@ -8,13 +8,15 @@ that you (or another package) supply.
 This package ships:
 
 - The `Tabnas` class — engine, lexer, parser, rule machinery.
-- A `bnf` plugin that compiles ABNF / BNF source into the engine's
-  rule format and installs it on the instance.
-- A `Debug` plugin for tracing.
 
 A strict-JSON grammar lives as a test fixture under `test/json-plugin.ts`
 — useful as a worked example, and the engine's own conformance tests
 exercise it.
+
+Companion plugins live in their own packages:
+
+- [`@tabnas/bnf`](../../bnf/) — ABNF / BNF grammar compiler.
+- [`@tabnas/debug`](../../debug/) — tracing and `describe()` helpers.
 
 For lenient-JSON parsing (unquoted keys, implicit objects, comments,
 trailing commas, etc.), see the [Go port](../go/).
@@ -44,20 +46,18 @@ am.parse('hello')                     // 'world'
 
 ## Quick example — BNF
 
-The bundled `bnf` plugin compiles ABNF / BNF into the engine's rule
-format:
+The companion [`@tabnas/bnf`](../../bnf/) package compiles ABNF / BNF
+into the engine's rule format:
 
 ```js
-const { Tabnas, bnf } = require('tabnas')
+const { Tabnas } = require('tabnas')
+const { bnf } = require('@tabnas/bnf')
 
 const am = new Tabnas({ plugins: [bnf] })
 am.bnf('greet = "hi" / "hello"')
 
 am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
 ```
-
-`am.bnf.toSpec(source)` returns the GrammarSpec without installing — useful
-for inspecting or saving for later.
 
 ## Plugins
 
@@ -88,10 +88,10 @@ option-conditional alternates get re-evaluated.
 
 The engine is intentionally split:
 
-- **`Tabnas` core** — lexer, parser, rule machinery. No grammar of
-  its own.
-- **Plugins** in `src/plugins/<name>/` — each contributes a piece of
-  the runtime: a converter (`bnf`), developer tooling (`debug`).
+- **`Tabnas` core** (this package) — lexer, parser, rule machinery.
+  No grammar of its own.
+- **Plugins** — separate packages that contribute grammar
+  (`@tabnas/bnf`) or developer tooling (`@tabnas/debug`).
 
 The class never carries grammar by default; grammar is opt-in via the
 `plugins` option.
@@ -112,12 +112,12 @@ See [doc/api.md](doc/api.md) for the full API. The essentials:
 | `am.token(ref)` | Look up a token name ↔ Tin. |
 | `am.sub({lex?, rule?})` | Subscribe to parse events. |
 
-Plugins shipped in this package:
+Companion plugin packages:
 
 | Plugin | Purpose |
 |---|---|
-| `bnf` | Adds `am.bnf(src)` — installs a grammar from a BNF string. |
-| `Debug` | Adds `am.debug.describe()` and parser tracing. |
+| [`@tabnas/bnf`](../../bnf/) | Adds `am.bnf(src)` — installs a grammar from a BNF / ABNF string. |
+| [`@tabnas/debug`](../../debug/) | Adds `am.debug.describe()` and parser tracing. |
 
 The `test/json-plugin.ts` test fixture is a worked example of a
 non-trivial grammar plugin (strict JSON).
