@@ -304,6 +304,11 @@ function errdesc(
       true === cfg.errmsg.suffix ? (color: any) =>
         [
           '',
+          // Optional "see also" line (e.g. a docs URL). Purely
+          // cosmetic; consumers opt in via `errmsg.link`.
+          ...(cfg.errmsg.link
+            ? ['  ' + color.lo + cfg.errmsg.link + color.reset]
+            : []),
           '  ' +
           color.lo +
           '--internal: tag=' +

@@ -206,6 +206,9 @@ export type TabnasOptions = {
   errmsg?: {
     name?: string
     suffix?: boolean | string | ((color?: any, spec?: any) => string)
+    // Optional "see also" line appended above the internal-diagnostics
+    // line when `suffix` is `true` (e.g. a docs URL).
+    link?: string
   }
   hint?: any
   lex?: {
@@ -483,6 +486,7 @@ export type Config = {
   errmsg: {
     name: string
     suffix: boolean | string | ((color?: any, spec?: any) => string)
+    link?: string
   }
 
   hint: any

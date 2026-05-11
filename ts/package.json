@@ -40,7 +40,10 @@
     "LICENSE"
   ],
   "exports": {
-    ".": "./dist/tabnas.js"
+    ".": "./dist/tabnas.js",
+    "./lexer": "./dist/lexer.js",
+    "./utility": "./dist/utility.js",
+    "./error": "./dist/error.js"
   },
   "devDependencies": {
     "@types/node": "25.6.0",
