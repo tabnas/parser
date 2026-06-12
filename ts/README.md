@@ -129,7 +129,7 @@ architecture, same [test specs](../test/spec/) for behaviours that
 overlap.
 
 ```go
-import "github.com/amagamajs/tabnas/go"
+import "github.com/tabnas/parser/go"
 
 result, err := tabnas.Parse("a:1, b:2")
 ```

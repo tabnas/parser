@@ -932,6 +932,9 @@ func MapToOptions(m map[string]any) Options {
 				opts.ErrMsg.Suffix = v
 			}
 		}
+		if link, ok := em["link"].(string); ok {
+			opts.ErrMsg.Link = link
+		}
 	}
 
 	// match

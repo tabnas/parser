@@ -14,6 +14,7 @@ type MatchValueEntry struct {
 	Name  string
 	Match *regexp.Regexp
 	Val   func([]string) any
+	Fn    LexMatcher // Function-form matcher (TS LexMatcher branch); takes precedence over Match.
 }
 
 // ValueDefEntry is a name-tagged wrapper around *ValueDef used to sort
@@ -24,11 +25,13 @@ type ValueDefEntry struct {
 	Def  *ValueDef
 }
 
-// MatchTokenEntry pairs a Tin with its match regexp, pre-sorted by Tin at
-// configure time so MatchTokens iteration during lexing is deterministic.
+// MatchTokenEntry pairs a Tin with its matcher — regexp or function form
+// (TS match.token: RegExp | LexMatcher) — pre-sorted by Tin at configure
+// time so MatchTokens iteration during lexing is deterministic.
 type MatchTokenEntry struct {
 	Tin   Tin
 	Match *regexp.Regexp
+	Fn    LexMatcher // Function-form matcher; takes precedence over Match.
 }
 
 // Lex is the lexer that produces tokens from source text.
@@ -82,6 +85,7 @@ type LexConfig struct {
 	// Match options (TS: cfg.match)
 	MatchLex          bool                          // Enable custom matching. Default: false.
 	MatchTokens       map[Tin]*regexp.Regexp         // Custom token tin → regexp (storage).
+	MatchTokenFns     map[Tin]LexMatcher             // Custom token tin → function matcher (storage).
 	MatchTokensSorted []*MatchTokenEntry             // Sorted-by-tin view for deterministic iteration.
 	MatchValues       []*MatchValueEntry             // Custom value matchers, sorted by name.
 
@@ -113,6 +117,30 @@ type LexConfig struct {
 	// Color carries the resolved ANSI escape codes for error formatting.
 	// Populated from Options.Color by buildConfig.
 	Color ColorConfig
+
+	// ErrorMessages holds error message templates by code (TS: cfg.error).
+	// Options.Error entries are merged over the package defaults by
+	// buildConfig. Templates may use {key} placeholders (code, src, ...).
+	ErrorMessages map[string]string
+
+	// Hints holds explanatory hint templates by code (TS: cfg.hint).
+	// Options.Hint entries are merged over the package defaults.
+	Hints map[string]string
+
+	// ErrTag is the error header name (TS: errmsg.name). "" → "tabnas".
+	ErrTag string
+
+	// ErrSuffix mirrors TS errmsg.suffix: nil/true renders the standard
+	// internal suffix block, false suppresses it, string/func replace it.
+	ErrSuffix any
+
+	// ErrLink is an optional "see also" line (TS: errmsg.link) rendered
+	// inside the standard suffix block.
+	ErrLink string
+
+	// Tag is the instance tag (TS: options.tag), shown in the internal
+	// error suffix.
+	Tag string
 
 	// Map/List options
 	MapExtend    bool         // Deep-merge duplicate keys. Default: true.
@@ -284,14 +312,21 @@ func (cfg *LexConfig) SortFixedTokens() {
 	cfg.FixedSorted = sorted
 }
 
-// RebuildMatchTokensSorted projects MatchTokens (map[Tin]*regexp.Regexp) into
+// RebuildMatchTokensSorted projects MatchTokens and MatchTokenFns into
 // MatchTokensSorted ([]*MatchTokenEntry) in ascending Tin order. Call this
-// after any mutation of MatchTokens so the lexer can iterate deterministically
-// without sorting during parse.
+// after any mutation of either map so the lexer can iterate deterministically
+// without sorting during parse. A function matcher takes precedence over a
+// regexp registered for the same tin.
 func (cfg *LexConfig) RebuildMatchTokensSorted() {
-	sorted := make([]*MatchTokenEntry, 0, len(cfg.MatchTokens))
+	sorted := make([]*MatchTokenEntry, 0, len(cfg.MatchTokens)+len(cfg.MatchTokenFns))
 	for tin, re := range cfg.MatchTokens {
+		if cfg.MatchTokenFns != nil && cfg.MatchTokenFns[tin] != nil {
+			continue
+		}
 		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Match: re})
+	}
+	for tin, fn := range cfg.MatchTokenFns {
+		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Fn: fn})
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].Tin < sorted[j].Tin
@@ -343,6 +378,17 @@ func (l *Lex) Bad(why string) *Token {
 	return tkn
 }
 
+// attachErrContext records the active rule and token on an error for the
+// standard "--internal: ..." suffix block (TS errdesc suffix).
+func (l *Lex) attachErrContext(je *TabnasError, r *Rule, tokenName, why string) {
+	if r != nil {
+		je.ruleName = r.Name
+		je.ruleState = r.State
+	}
+	je.tokenName = tokenName
+	je.why = why
+}
+
 // Next returns the next non-IGNORE token, passing the current parsing rule
 // to custom matchers for context-sensitive lexing.
 // On error (unterminated string, unterminated comment, unexpected character),
@@ -368,19 +414,15 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			if l.pnt.SI < len(l.Src) {
 				src = string(l.Src[l.pnt.SI])
 			}
-			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI)
-			if l.Config != nil {
-				je.color = l.Config.Color
-			}
+			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config)
+			l.attachErrContext(je, r, "#UK", "")
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
-			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI)
-			if l.Config != nil {
-				je.color = l.Config.Color
-			}
+			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
+			l.attachErrContext(je, r, tkn.Name, tkn.Why)
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: tkn.SI, RI: tkn.RI, CI: tkn.CI}
 		}
@@ -577,6 +619,13 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 
 	// Match values first (TS: valueMatchers loop).
 	for _, vm := range l.Config.MatchValues {
+		// Function-form matcher (TS: LexMatcher branch).
+		if vm.Fn != nil {
+			if tkn := vm.Fn(l, rule); tkn != nil {
+				return tkn
+			}
+			continue
+		}
 		if vm.Match != nil {
 			res := vm.Match.FindStringSubmatch(fwd)
 			if res != nil && len(res[0]) > 0 {
@@ -608,7 +657,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 
 		for _, mt := range l.Config.MatchTokensSorted {
 			tin, re := mt.Tin, mt.Match
-			if re == nil {
+			if re == nil && mt.Fn == nil {
 				continue
 			}
 			// Check if this Tin is expected at position 0 in any alt.
@@ -620,6 +669,14 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				}
 			}
 			if !expected {
+				continue
+			}
+
+			// Function-form matcher (TS: LexMatcher branch).
+			if mt.Fn != nil {
+				if tkn := mt.Fn(l, rule); tkn != nil {
+					return tkn
+				}
 				continue
 			}
 

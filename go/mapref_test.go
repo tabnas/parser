@@ -281,3 +281,46 @@ func TestMapRefSingleKey(t *testing.T) {
 	// Single key explicit map.
 	expectMapRef(t, "{a:1}", mr(false, "a", 1.0))
 }
+
+func TestInfoAllThreeCombined(t *testing.T) {
+	// MapRef + ListRef + TextInfo together — the full Go-client metadata
+	// surface. The wrappers nest: MapRef holds a ListRef whose elements
+	// are Text values.
+	j := Make(Options{Info: &InfoOptions{
+		Map:  boolPtr(true),
+		List: boolPtr(true),
+		Text: boolPtr(true),
+	}})
+	got, err := j.Parse(`a: ['x', "y"], b: 1`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := got.(MapRef)
+	if !ok {
+		t.Fatalf("expected MapRef, got %T: %#v", got, got)
+	}
+	if !m.Implicit {
+		t.Errorf("expected Implicit=true for braceless top map")
+	}
+	l, ok := m.Val["a"].(ListRef)
+	if !ok {
+		t.Fatalf("expected ListRef for a, got %T: %#v", m.Val["a"], m.Val["a"])
+	}
+	if l.Implicit {
+		t.Errorf("expected Implicit=false for bracketed list")
+	}
+	if len(l.Val) != 2 {
+		t.Fatalf("expected 2 list elements, got %#v", l.Val)
+	}
+	tx, ok := l.Val[0].(Text)
+	if !ok || tx.Str != "x" || tx.Quote != "'" {
+		t.Errorf("expected Text{', x} for first element, got %#v", l.Val[0])
+	}
+	ty, ok := l.Val[1].(Text)
+	if !ok || ty.Str != "y" || ty.Quote != `"` {
+		t.Errorf("expected Text{\", y} for second element, got %#v", l.Val[1])
+	}
+	if m.Val["b"] != float64(1) {
+		t.Errorf("expected b:1 untouched, got %#v", m.Val["b"])
+	}
+}

@@ -1,9 +1,12 @@
 package tabnas
 
 import (
+	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Options configures a Tabnas parser instance.
@@ -134,6 +137,11 @@ type ErrMsgOptions struct {
 	//   func(code, src string) string — dynamic suffix computation.
 	// Stored as any because the TS field is also polymorphic.
 	Suffix any
+
+	// Link is an optional "see also" line (e.g. a docs URL) rendered
+	// inside the standard error suffix. Mirrors TS `options.errmsg.link`.
+	// Only shown when Suffix is unset or true.
+	Link string
 }
 
 // InfoOptions controls metadata attachment to parsed output nodes.
@@ -166,23 +174,34 @@ type PropertyOptions struct {
 	ConfigModify map[string]ConfigModifier
 }
 
-// MatchOptions controls custom regexp-based matching.
-// Matches TS options.match.
+// MatchOptions controls custom token and value matching.
+// Matches TS options.match, where each entry is RegExp | LexMatcher.
+// Go splits the union across two fields: Token/Value hold the regexp
+// forms, TokenFn and MatchValueSpec.Fn hold the function forms.
 type MatchOptions struct {
 	Lex   *bool                     // Enable custom matching. Default: true.
 	Token map[string]*regexp.Regexp // "#NAME" → regexp pattern for custom tokens.
 	Value map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
+
+	// TokenFn registers function-form token matchers ("#NAME" → matcher),
+	// the LexMatcher branch of TS `match.token`. The matcher is invoked
+	// (lex, rule) and its non-nil Token returned as the match.
+	TokenFn map[string]LexMatcher
 
 	// Check is a LexCheck hook invoked before the match matcher runs.
 	// Mirrors TS `options.match.check`.
 	Check LexCheck
 }
 
-// MatchValueSpec defines a regexp-based value matcher.
-// Matches TS options.match.value[name].
+// MatchValueSpec defines a custom value matcher.
+// Matches TS options.match.value[name] (RegExp | LexMatcher).
 type MatchValueSpec struct {
 	Match *regexp.Regexp       // Regexp pattern to match against.
 	Val   func([]string) any   // Optional value transformer, receives match groups.
+
+	// Fn is the function-form matcher (TS LexMatcher branch). When set,
+	// Match/Val are ignored and the function's non-nil Token is the match.
+	Fn LexMatcher
 }
 
 // SafeOptions controls key safety.
@@ -506,13 +525,10 @@ func Make(opts ...Options) *Tabnas {
 	}
 	cfg.SortFixedTokens()
 
-	// Copy global error messages as defaults.
-	msgs := make(map[string]string, len(errorMessages))
-	for k, v := range errorMessages {
-		msgs[k] = v
-	}
-
-	p := &Parser{Config: cfg, RSM: rsm, MaxMul: maxmul, ErrorMessages: msgs}
+	// Parser error fields alias the config-resolved maps (defaults merged
+	// with Options.Error / Options.Hint by buildConfig).
+	p := &Parser{Config: cfg, RSM: rsm, MaxMul: maxmul,
+		ErrorMessages: cfg.ErrorMessages, Hints: cfg.Hints, ErrTag: cfg.ErrTag}
 
 	// Initialize built-in token name mappings.
 	tinByName := map[string]Tin{
@@ -544,27 +560,10 @@ func Make(opts ...Options) *Tabnas {
 		emptyAllow:  true, // default: allow empty source
 	}
 
-	// Apply custom error messages.
-	if o.Error != nil {
-		for k, v := range o.Error {
-			j.parser.ErrorMessages[k] = v
-		}
-	}
-
-	// Apply error hints.
-	if o.Hint != nil {
-		j.hints = make(map[string]string, len(o.Hint))
-		j.parser.Hints = make(map[string]string, len(o.Hint))
-		for k, v := range o.Hint {
-			j.hints[k] = v
-			j.parser.Hints[k] = v
-		}
-	}
-
-	// Apply errmsg options.
-	if o.ErrMsg != nil && o.ErrMsg.Name != "" {
-		j.parser.ErrTag = o.ErrMsg.Name
-	}
+	// Error messages, hints, and errmsg formatting are resolved into the
+	// config by buildConfig; the instance hint map aliases it so
+	// attachHint stays consistent with config-created errors.
+	j.hints = cfg.Hints
 
 	// Apply lex options (empty source handling).
 	if o.Lex != nil {
@@ -592,6 +591,9 @@ func Make(opts ...Options) *Tabnas {
 
 	// Apply fixed.token overrides passed at construction.
 	j.applyFixedTokens(&o)
+
+	// Apply match.token / match.tokenFn matchers passed at construction.
+	j.applyMatchTokens(&o)
 
 	return j
 }
@@ -663,17 +665,48 @@ func (j *Tabnas) parseInternal(src string, meta map[string]any) (any, error) {
 	return result, j.attachHint(err)
 }
 
-// attachHint adds hint text to a TabnasError if hints are configured.
+// attachHint enriches a TabnasError with instance-level context: hint
+// text (when not already set) and the registered plugin names for the
+// "--internal: ..." error suffix (TS errdesc reads ctx.plgn()).
 func (j *Tabnas) attachHint(err error) error {
-	if err == nil || j.hints == nil {
+	if err == nil {
 		return err
 	}
-	if je, ok := err.(*TabnasError); ok && je.Hint == "" {
+	je, ok := err.(*TabnasError)
+	if !ok {
+		return err
+	}
+	if je.Hint == "" && j.hints != nil {
 		if hint, ok := j.hints[je.Code]; ok {
 			je.Hint = hint
 		}
 	}
+	if je.plugins == nil && len(j.plugins) > 0 {
+		names := make([]string, 0, len(j.plugins))
+		for _, pe := range j.plugins {
+			names = append(names, funcName(pe.plugin))
+		}
+		je.plugins = names
+	}
 	return err
+}
+
+// funcName returns the bare name of a function value (e.g. "MyPlugin"),
+// for diagnostic output only.
+func funcName(fn any) string {
+	pc := reflect.ValueOf(fn).Pointer()
+	f := runtime.FuncForPC(pc)
+	if f == nil {
+		return "?"
+	}
+	name := f.Name()
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.Index(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	return name
 }
 
 // Options returns a copy of this instance's options.
@@ -712,9 +745,33 @@ func buildConfig(o *Options) *LexConfig {
 		cfg.FixedCheck = o.Fixed.Check
 	}
 
+	// Error messages, hints, and errmsg formatting (TS: options.error /
+	// options.hint / options.errmsg). User entries merge over defaults.
+	cfg.ErrorMessages = make(map[string]string, len(errorMessages))
+	for k, v := range errorMessages {
+		cfg.ErrorMessages[k] = v
+	}
+	for k, v := range o.Error {
+		cfg.ErrorMessages[k] = v
+	}
+	cfg.Hints = make(map[string]string, len(defaultHints))
+	for k, v := range defaultHints {
+		cfg.Hints[k] = v
+	}
+	for k, v := range o.Hint {
+		cfg.Hints[k] = v
+	}
+	if o.ErrMsg != nil {
+		cfg.ErrTag = o.ErrMsg.Name
+		cfg.ErrSuffix = o.ErrMsg.Suffix
+		cfg.ErrLink = o.ErrMsg.Link
+	}
+	cfg.Tag = o.Tag
+
 	// Match (custom regexp matchers - TS: options.match)
 	// Always initialize maps so SetOptions can add entries later.
 	cfg.MatchTokens = make(map[Tin]*regexp.Regexp)
+	cfg.MatchTokenFns = make(map[Tin]LexMatcher)
 	if o.Match != nil {
 		cfg.MatchLex = boolVal(o.Match.Lex, true)
 		if o.Match.Value != nil {
@@ -727,6 +784,7 @@ func buildConfig(o *Options) *LexConfig {
 					Name:  name,
 					Match: spec.Match,
 					Val:   spec.Val,
+					Fn:    spec.Fn,
 				})
 			}
 			// Sort by name for deterministic iteration at lex time.

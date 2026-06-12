@@ -2,24 +2,27 @@
 
 Version: 0.1.22
 
-A Go port of [tabnas](https://github.com/amagamajs/tabnas) — the
-lenient JSON parser. The TypeScript reference implementation lives at
-[`../ts/`](../ts/) in this repo; both runtimes share the spec fixtures
-under [`../test/spec/`](../test/spec/) so they stay in lockstep.
-
-Same architecture, same syntax, same results. If you already use
-tabnas in TypeScript, you know what this does. If you don't, read
-on.
+A Go port of [tabnas](https://github.com/tabnas/parser) — the
+lenient JSON parser in the jsonic tradition. The TypeScript reference
+engine lives at [`../ts/`](../ts/) in this repo; both runtimes share
+the spec fixtures under [`../test/spec/`](../test/spec/), which keep
+the engine behavior aligned.
 
 tabnas accepts all standard JSON -- and then goes further. Unquoted
 keys, implicit objects, comments, trailing commas, single-quoted
 strings, multiline strings, path diving, and more. It parses what you
 meant, not just what you typed.
 
+One packaging difference from TypeScript: the TS package is a
+grammar-free engine (grammar arrives via plugins), while this Go
+module keeps the relaxed-JSON grammar built in so `tabnas.Parse`
+works out of the box. See
+[Differences from TypeScript](doc/differences.md) for the details.
+
 ## Install
 
 ```bash
-go get github.com/amagamajs/tabnas/go@latest
+go get github.com/tabnas/parser/go@latest
 ```
 
 ## Quick Example
@@ -29,7 +32,7 @@ package main
 
 import (
     "fmt"
-    "github.com/amagamajs/tabnas/go"
+    "github.com/tabnas/parser/go"
 )
 
 func main() {

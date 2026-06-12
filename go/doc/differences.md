@@ -1,8 +1,24 @@
 # Differences from TypeScript
 
 The TypeScript version is the authoritative implementation. The Go version is
-a faithful port but has some differences in behavior, missing features, and
-Go-specific additions.
+a faithful port of the engine behavior, with deliberate Go-only additions for
+Go client code, and one deliberate packaging difference described first.
+
+## Packaging: Grammar Bundling
+
+The TypeScript package is a grammar-free engine: it ships no grammar at all,
+and every grammar (including strict JSON) arrives via a plugin. The strict
+JSON grammar lives as a TS test fixture (`ts/test/json-plugin.ts`).
+
+The Go module deliberately keeps the original tabnas (jsonic-style) relaxed
+JSON grammar built in: `tabnas.Parse("a:1")` works out of the box, which is
+the primary Go client use case. Use `Empty()` for a grammar-free instance, or
+`MakeJSON()` / `Rule.Include: "json"` for the strict-JSON subset.
+
+Both runtimes run the shared fixtures under `test/spec/`: Go runs all of
+them against its bundled grammar; TypeScript runs the strict-JSON and
+utility fixtures (`include-json*.tsv`, `utility-*.tsv`) via the json-plugin
+fixture.
 
 ## Behavioral Differences
 
@@ -10,12 +26,13 @@ These affect parse output for the same input.
 
 ### Number + Text Tokenization
 
-Input like `123abc` produces separate number and text tokens in TypeScript
-but is rejected as not-a-number in Go (treated as text).
+Input like `123abc` produces separate number and text tokens in the
+TypeScript lexer but is rejected as not-a-number in Go (treated as text).
+This keeps the original jsonic behavior of `a:123abc` → `{"a": "123abc"}`.
 
 ```
-// TypeScript: 123abc → number(123) + text("abc")
-// Go:         123abc → text("123abc")
+// TypeScript lexer: 123abc → number(123) + text("abc")
+// Go:               123abc → text("123abc")
 ```
 
 ### Empty / Whitespace Input
@@ -26,70 +43,105 @@ implementations and resolves to `null`/`nil` by grammar behavior.
 
 ### Token Consumption
 
-When no grammar alternate matches, both implementations now raise an immediate
+When no grammar alternate matches, both implementations raise an immediate
 parse error. Token consumption behavior is aligned.
 
-## Missing Features
+## Aligned Error Handling
 
-The following TypeScript features are not yet available in Go:
+Both implementations now share the same error model:
 
-| Feature | TS Option | Notes |
+| Feature | TypeScript | Go |
 |---|---|---|
-| Custom match matchers | `match.token`, `match.value` | Use `options.lex.match` instead |
+| Message templates with `{key}` injection | `options.error` | `Options.Error` |
+| Hint templates with `{key}` injection | `options.hint` | `Options.Hint` |
+| Default per-code hints | yes | yes |
+| Header name | `errmsg.name` | `ErrMsg.Name` |
+| Suffix (bool / string / function) | `errmsg.suffix` | `ErrMsg.Suffix` |
+| "See also" link line | `errmsg.link` | `ErrMsg.Link` |
+| `--internal: tag=...; rule=...; token=...; plugins=...--` block | yes | yes |
+| Source file name in `--> file:row:col` | `meta.fileName` | `ParseMeta` meta `"fileName"` |
+| ANSI colors | `options.color` | `Options.Color` |
+| Source site extract with caret | yes | yes |
 
-## Go-Specific Features
+The remaining difference is delivery: TypeScript throws `TabnasError` as an
+exception; Go returns `*TabnasError` as an `error` value.
 
-These are available only in the Go version:
+## Custom Matchers
 
-### `TextInfo` Option
+TS `match.token` / `match.value` accept `RegExp | LexMatcher`. Go splits the
+union across fields:
 
-Wraps string and text values in a `Text` struct that preserves the quote
-character used:
+| TS | Go |
+|---|---|
+| `match.token[name] = RegExp` | `Match.Token[name] = *regexp.Regexp` |
+| `match.token[name] = LexMatcher` | `Match.TokenFn[name] = LexMatcher` |
+| `match.value[name].match = RegExp` | `Match.Value[name].Match` |
+| `match.value[name].match = LexMatcher` | `Match.Value[name].Fn` |
 
-```go
-j := tabnas.Make(tabnas.Options{TextInfo: boolp(true)})
-result, _ := j.Parse(`'hello'`)
-// result: tabnas.Text{Quote: '\'', Str: "hello"}
-```
-
-### `ListRef` Option
-
-Wraps arrays in a `ListRef` struct with metadata:
-
-```go
-j := tabnas.Make(tabnas.Options{ListRef: boolp(true)})
-result, _ := j.Parse("a, b, c")
-// result: tabnas.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
-```
-
-### `MapRef` Option
-
-Wraps objects in a `MapRef` struct with metadata:
-
-```go
-j := tabnas.Make(tabnas.Options{MapRef: boolp(true)})
-result, _ := j.Parse("a:1")
-// result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
-```
+Full custom matchers (with lexer ordering control) are available in both via
+`lex.match` / `Options.Lex.Match`.
 
 ## Plugin Differences
 
 | Area | TypeScript | Go |
 |---|---|---|
-| Plugin signature | `(tabnas, opts?) => void` | `func(j *Tabnas, opts map[string]any)` |
-| Rule definer | Receives `RuleSpec` + `Parser` | Receives `*RuleSpec` only |
+| Plugin signature | `(tabnas, opts?) => void \| Tabnas` | `func(j *Tabnas, opts map[string]any) error` |
+| Plugin failure | throw | returned `error` |
+| Rule definer | `(rs: RuleSpec, p: Parser) => void \| RuleSpec` | `func(rs *RuleSpec, p *Parser)` (no replacement return) |
 | State actions | Can return error tokens | No return value |
-| Option namespacing | Plugin options merged by name | No namespacing |
-| Custom matchers | Via `match` option | Via `options.lex.match` (keyed by name, same shape) |
+| Plugin defaults | `.defaults` property on the function | `UseDefaults(plugin, defaults)` |
+| Option namespacing | Plugin options merged by name | `PluginOptions` / `SetPluginOptions` |
 
-## Error Handling Differences
+## Go-Specific Features
 
-| Area | TypeScript | Go |
-|---|---|---|
-| Parse errors | Thrown as exceptions | Returned as `error` |
-| Error messages | Template variable injection | Static messages |
-| ANSI colors | Supported | Not supported |
-| Error hints | Rich suffix with source context | Simple `Hint` string field |
+These are available only in the Go version. They exist for Go client code
+(typed access to parse metadata) and are intentionally kept.
+
+### `Info.Text` Option (`TextInfo`)
+
+Wraps string and text values in a `Text` struct that preserves the quote
+character used:
+
+```go
+j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{Text: boolp(true)}})
+result, _ := j.Parse(`'hello'`)
+// result: tabnas.Text{Quote: "'", Str: "hello"}
+```
+
+### `Info.List` Option (`ListRef`)
+
+Wraps arrays in a `ListRef` struct with metadata:
+
+```go
+j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{List: boolp(true)}})
+result, _ := j.Parse("a, b, c")
+// result: tabnas.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
+```
+
+### `Info.Map` Option (`MapRef`)
+
+Wraps objects in a `MapRef` struct with metadata:
+
+```go
+j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{Map: boolp(true)}})
+result, _ := j.Parse("a:1")
+// result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
+```
+
+### `MakeJSON()`
+
+Constructs an instance restricted to strict JSON (rejects all tabnas
+relaxations). Mirrors what the TS json-plugin test fixture provides.
+
+## Internal Structure
+
+The TypeScript lexer was refactored into a declarative scan-spec design
+(`ScanSpec`, `scan()` state-machine driver, `guardedMatcher`, char-class
+bitmaps, scan primitives exposed via the util bag). The Go lexer predates
+this refactor and keeps the direct per-matcher structure. This is
+behavior-neutral — both lexers produce the same tokens — but means the two
+lexer sources no longer correspond function-for-function. Port the scan-spec
+design if/when matcher-level extension parity is needed in Go.
 
 ## Type System
 

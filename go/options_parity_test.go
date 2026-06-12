@@ -210,6 +210,17 @@ func TestErrMsgSuffixRoundTripString(t *testing.T) {
 	}
 }
 
+func TestErrMsgLinkRoundTrip(t *testing.T) {
+	j, err := Make().SetOptionsText(`errmsg: { link: "https://example.org/err" }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := j.Options()
+	if opts.ErrMsg == nil || opts.ErrMsg.Link != "https://example.org/err" {
+		t.Errorf("expected errmsg.link round-trip, got %#v", opts.ErrMsg)
+	}
+}
+
 func TestErrMsgSuffixRoundTripBool(t *testing.T) {
 	j, err := Make().SetOptionsText(`errmsg: { suffix: false }`)
 	if err != nil {

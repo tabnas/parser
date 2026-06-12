@@ -1065,11 +1065,9 @@ func TestErrorHints(t *testing.T) {
 			"unexpected": "Check your syntax for typos.",
 		},
 	})
-	_, err := j.Parse("{a: @}")
+	_, err := j.Parse("}")
 	if err == nil {
-		// This input might actually parse in some configs.
-		// Use an input that's guaranteed to fail.
-		return
+		t.Fatal("expected error for stray close brace")
 	}
 	je, ok := err.(*TabnasError)
 	if !ok {
@@ -1078,10 +1076,10 @@ func TestErrorHints(t *testing.T) {
 	if je.Hint != "Check your syntax for typos." {
 		t.Errorf("expected hint text, got %q", je.Hint)
 	}
-	// Hint should appear in error string.
+	// Hint should appear in the error string, indented (TS errdesc format).
 	errStr := je.Error()
-	if !strings.Contains(errStr, "Hint: Check your syntax for typos.") {
-		t.Errorf("error string should contain hint, got:\n%s", errStr)
+	if !strings.Contains(errStr, "\n\n  Check your syntax for typos.") {
+		t.Errorf("error string should contain indented hint, got:\n%s", errStr)
 	}
 }
 

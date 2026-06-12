@@ -189,36 +189,47 @@ Controls security features.
 |---|---|---|---|
 | `Key` | `*bool` | `true` | Block `__proto__` and `constructor` keys |
 
-## Go-Only Options
+## Go-Only Options (`Info`)
 
-These options are specific to the Go version:
+These options are specific to the Go version, under `Options.Info`
+(`InfoOptions`). They give Go clients typed access to parse metadata.
 
-### `TextInfo`
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Info.Text` | `*bool` | `false` | Wrap string/text values in `Text{Quote, Str}` structs |
+| `Info.List` | `*bool` | `false` | Wrap arrays in `ListRef{Val, Implicit, ...}` structs (auto-enabled when `List.Child` is true) |
+| `Info.Map` | `*bool` | `false` | Wrap objects in `MapRef{Val, Implicit}` structs |
+| `Info.Marker` | `string` | `"__info__"` | Key under which info metadata is stored |
 
-| Type | Default | Description |
+## `ErrMsg`
+
+Controls error message formatting (TS: `options.errmsg`).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Name` | `string` | `"tabnas"` | Header tag: `[name/code]: ...` |
+| `Suffix` | `any` | `true` | `bool` (standard internal block on/off), `string` (literal), or `func(code, src string) string` |
+| `Link` | `string` | `""` | Optional "see also" line (e.g. docs URL) in the standard suffix |
+
+## `Match`
+
+Custom token and value matchers (TS: `options.match`, where each entry
+is `RegExp | LexMatcher`).
+
+| Field | Type | Description |
 |---|---|---|
-| `*bool` | `false` | Wrap string/text values in `Text{Quote, Str}` structs |
-
-### `ListRef`
-
-| Type | Default | Description |
-|---|---|---|
-| `*bool` | `false` | Wrap arrays in `ListRef{Val, Implicit, ...}` structs |
-
-Automatically enabled when `List.Child` is true.
-
-### `MapRef`
-
-| Type | Default | Description |
-|---|---|---|
-| `*bool` | `false` | Wrap objects in `MapRef{Val, Implicit}` structs |
+| `Lex` | `*bool` | Enable custom matching. Default: `true` |
+| `Token` | `map[string]*regexp.Regexp` | `"#NAME"` → regexp token matcher |
+| `TokenFn` | `map[string]LexMatcher` | `"#NAME"` → function token matcher |
+| `Value` | `map[string]*MatchValueSpec` | name → `{Match, Val}` or `{Fn}` value matcher |
+| `Check` | `LexCheck` | Hook before the match matcher runs |
 
 ## Other Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `Ender` | `[]string` | Additional characters that end text tokens |
-| `Error` | `map[string]string` | Custom error message templates |
-| `Hint` | `map[string]string` | Additional error explanations |
+| `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
+| `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
 | `ConfigModify` | `map[string]ConfigModifier` | Post-config callbacks |
-| `Tag` | `string` | Instance identifier tag |
+| `Tag` | `string` | Instance identifier tag (shown in the error suffix internal line) |

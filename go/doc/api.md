@@ -1,7 +1,7 @@
 # API Reference (Go)
 
 ```go
-import "github.com/amagamajs/tabnas/go"
+import "github.com/tabnas/parser/go"
 ```
 
 ## Parsing
@@ -245,13 +245,13 @@ Parse errors are returned as `*TabnasError`:
 
 ```go
 type TabnasError struct {
-    Code   string // "unexpected", "unterminated_string", "unterminated_comment"
-    Detail string // Human-readable message
+    Code   string // "unexpected", "unterminated_string", "unterminated_comment", ...
+    Detail string // Human-readable message ({key} template-injected)
     Pos    int    // 0-based character position
     Row    int    // 1-based line number
     Col    int    // 1-based column number
     Src    string // Source fragment at error
-    Hint   string // Additional context (if configured)
+    Hint   string // Explanatory text (per-code defaults; override via Options.Hint)
 }
 ```
 

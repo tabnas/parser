@@ -14,12 +14,40 @@ import (
 // Version is the current version of the tabnas Go module.
 const Version = "0.1.22"
 
-// Error message templates matching TypeScript defaults.
+// Error message templates matching TypeScript defaults (ts/src/defaults.ts).
+// Values are injected with StrInject using {key} placeholders.
 var errorMessages = map[string]string{
-	"unexpected":           "unexpected character(s): ",
-	"unterminated_string":  "unterminated string: ",
-	"unterminated_comment": "unterminated comment: ",
-	"unknown":              "unknown error: ",
+	"unknown":              "unknown error: {code}",
+	"unexpected":           "unexpected character(s): {src}",
+	"invalid_unicode":      "invalid unicode escape: {src}",
+	"invalid_ascii":        "invalid ascii escape: {src}",
+	"unprintable":          "unprintable character: {src}",
+	"unterminated_string":  "unterminated string: {src}",
+	"unterminated_comment": "unterminated comment: {src}",
+	"unknown_rule":         "unknown rule: {rulename}",
+	"end_of_source":        "unexpected end of source",
+}
+
+// Error hint templates matching TypeScript defaults (ts/src/defaults.ts).
+// Injected with StrInject like errorMessages.
+var defaultHints = map[string]string{
+	"unknown": "Unknown error code: {code}",
+
+	"unexpected": "The character(s) {src} do not match any rule alternative active at\nthis position.",
+
+	"invalid_unicode": "The escape sequence {src} does not encode a valid unicode code point.",
+
+	"invalid_ascii": "The escape sequence {src} does not encode a valid ASCII character.",
+
+	"unprintable": "The character {src} (code point below 32) is not allowed inside a\nstring literal.",
+
+	"unterminated_string": "This string has no end quote.",
+
+	"unterminated_comment": "This comment is never closed.",
+
+	"unknown_rule": "No rule named {rulename} is defined.",
+
+	"end_of_source": "Unexpected end of source.",
 }
 
 // TabnasError is the error type returned by Parse when parsing fails.
@@ -35,13 +63,22 @@ type TabnasError struct {
 
 	fullSource string      // Complete input source (for generating site extract)
 	tag        string      // Custom error tag name (TS: errmsg.name), defaults to "tabnas"
+	instTag    string      // Instance tag (TS: options.tag) shown in the internal suffix
 	color      ColorConfig // ANSI palette applied by Error(); zero value disables colour
+	fileName   string      // Source file name (TS: meta.fileName); "" → "<no-file>"
+	suffix     any         // errmsg.suffix: nil/true → standard internal block, false → none, string/func → custom
+	link       string      // errmsg.link: optional "see also" line in the standard suffix
+	ruleName   string      // Rule active when the error was raised (for the internal suffix)
+	ruleState  string      // Rule state ("o"/"c") when the error was raised
+	tokenName  string      // Token name (e.g. "#BD") at the error
+	why        string      // Token why annotation, if any
+	plugins    []string    // Registered plugin names (for the internal suffix)
 }
 
 // Error returns a formatted error message matching the TypeScript TabnasError format:
 //
 //	[tabnas/<code>]: <message>
-//	  --> <row>:<col>
+//	  --> <file>:<row>:<col>
 //	 <line-2> | <source>
 //	 <line-1> | <source>
 //	    <line> | <source with error>
@@ -49,12 +86,20 @@ type TabnasError struct {
 //	 <line+1> | <source>
 //	 <line+2> | <source>
 //
-// When e.color.Active is true the header, arrow, caret, and line-number
-// gutter are wrapped in ANSI escapes — matching TS error.ts output.
+//	  <hint, indented>
+//
+//	  <errmsg.link, when configured>
+//	  --internal: tag=...; rule=...; token=...; plugins=...--
+//
+// When e.color.Active is true the header, arrow, caret, line-number
+// gutter, and suffix are wrapped in ANSI escapes — matching TS error.ts
+// output. The trailing suffix block follows TS `errmsg.suffix`: rendered
+// by default (or when true), suppressed when false, and replaced when a
+// string or func(code, src string) string is configured.
 func (e *TabnasError) Error() string {
 	msg := e.Detail
 
-	hi, _, line, reset := e.color.Codes()
+	hi, lo, line, reset := e.color.Codes()
 
 	var b strings.Builder
 
@@ -73,12 +118,18 @@ func (e *TabnasError) Error() string {
 	b.WriteString(" ")
 	b.WriteString(msg)
 
-	// Line 2: --> <row>:<col>
+	// Line 2: --> <file>:<row>:<col> (TS prints "<no-file>" when unnamed)
+	file := e.fileName
+	if file == "" {
+		file = "<no-file>"
+	}
 	b.WriteString("\n  ")
 	b.WriteString(line)
 	b.WriteString("-->")
 	b.WriteString(reset)
 	b.WriteString(" ")
+	b.WriteString(file)
+	b.WriteString(":")
 	b.WriteString(strconv.Itoa(e.Row))
 	b.WriteString(":")
 	b.WriteString(strconv.Itoa(e.Col))
@@ -92,10 +143,55 @@ func (e *TabnasError) Error() string {
 		}
 	}
 
-	// Hint
+	// Hint: blank line, then hint indented two spaces per line (TS errdesc).
 	if e.Hint != "" {
-		b.WriteString("\n  Hint: ")
-		b.WriteString(e.Hint)
+		b.WriteString("\n\n")
+		for i, hline := range strings.Split(strings.TrimSpace(e.Hint), "\n") {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("  ")
+			b.WriteString(hline)
+		}
+	}
+
+	// Suffix (TS errmsg.suffix). nil defaults to true.
+	switch sfx := e.suffix.(type) {
+	case nil, bool:
+		if v, isBool := sfx.(bool); isBool && !v {
+			break
+		}
+		b.WriteString("\n")
+		if e.link != "" {
+			b.WriteString("\n  ")
+			b.WriteString(lo)
+			b.WriteString(e.link)
+			b.WriteString(reset)
+		}
+		b.WriteString("\n  ")
+		b.WriteString(lo)
+		b.WriteString("--internal: tag=")
+		b.WriteString(e.instTag)
+		b.WriteString("; rule=")
+		b.WriteString(e.ruleName)
+		b.WriteString("~")
+		b.WriteString(e.ruleState)
+		b.WriteString("; token=")
+		b.WriteString(e.tokenName)
+		if e.why != "" {
+			b.WriteString("~")
+			b.WriteString(e.why)
+		}
+		b.WriteString("; plugins=")
+		b.WriteString(strings.Join(e.plugins, ","))
+		b.WriteString("--")
+		b.WriteString(reset)
+	case string:
+		b.WriteString("\n")
+		b.WriteString(sfx)
+	case func(code, src string) string:
+		b.WriteString("\n")
+		b.WriteString(sfx(e.Code, e.Src))
 	}
 
 	return b.String()
@@ -168,25 +264,61 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 }
 
 // makeTabnasError creates a TabnasError with the proper Detail message.
-// The colour palette defaults to disabled (zero-value ColorConfig); for
-// parser-path errors use (*Parser).makeError instead, which injects the
-// resolved palette from config.
-func makeTabnasError(code, src, fullSource string, pos, row, col int) *TabnasError {
-	tmpl, ok := errorMessages[code]
-	if !ok {
-		tmpl = errorMessages["unknown"]
-	}
-	detail := tmpl + src
-
-	return &TabnasError{
+// Message and hint templates come from cfg (which merges Options.Error /
+// Options.Hint over the package defaults); cfg also supplies the colour
+// palette, errmsg name/suffix/link, and instance tag. A nil cfg uses the
+// package defaults with colour disabled. Template {key} placeholders are
+// injected with StrInject, matching TS errinject (ts/src/error.ts).
+func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexConfig) *TabnasError {
+	msgs := errorMessages
+	hints := defaultHints
+	je := &TabnasError{
 		Code:       code,
-		Detail:     detail,
 		Pos:        pos,
 		Row:        row,
 		Col:        col,
 		Src:        src,
 		fullSource: fullSource,
 	}
+
+	if cfg != nil {
+		if cfg.ErrorMessages != nil {
+			msgs = cfg.ErrorMessages
+		}
+		if cfg.Hints != nil {
+			hints = cfg.Hints
+		}
+		je.color = cfg.Color
+		je.tag = cfg.ErrTag
+		je.instTag = cfg.Tag
+		je.suffix = cfg.ErrSuffix
+		je.link = cfg.ErrLink
+	}
+
+	tmpl, ok := msgs[code]
+	if !ok {
+		tmpl = msgs["unknown"]
+		if tmpl == "" {
+			tmpl = errorMessages["unknown"]
+		}
+	}
+
+	// Injection reference bag, matching the heuristic spirit of TS
+	// errinject: code, src, and location details.
+	ref := map[string]any{
+		"code": code,
+		"src":  src,
+		"pos":  pos,
+		"row":  row,
+		"col":  col,
+	}
+
+	je.Detail = StrInject(tmpl, ref)
+	if hint, ok := hints[code]; ok {
+		je.Hint = StrInject(hint, ref)
+	}
+
+	return je
 }
 
 // Parse parses a tabnas string and returns the resulting Go value.

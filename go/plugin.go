@@ -233,6 +233,29 @@ func (j *Tabnas) registerMatchSpecs(opts *Options) {
 	})
 }
 
+// applyMatchTokens resolves match.token / match.tokenFn names to Tins and
+// registers the matchers (TS match.token: RegExp | LexMatcher). Called at
+// construction (Make) and on SetOptions.
+func (j *Tabnas) applyMatchTokens(opts *Options) {
+	if opts.Match == nil || (opts.Match.Token == nil && opts.Match.TokenFn == nil) {
+		return
+	}
+	cfg := j.parser.Config
+	for name, re := range opts.Match.Token {
+		tin := j.Token(name)
+		cfg.MatchTokens[tin] = re
+	}
+	for name, fn := range opts.Match.TokenFn {
+		tin := j.Token(name)
+		if cfg.MatchTokenFns == nil {
+			cfg.MatchTokenFns = make(map[Tin]LexMatcher)
+		}
+		cfg.MatchTokenFns[tin] = fn
+	}
+	// Project maps → sorted slice so lex-time iteration is deterministic.
+	cfg.RebuildMatchTokensSorted()
+}
+
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
 //   - non-nil: remove any existing src→tin mapping for that name, then set
@@ -547,6 +570,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 			cfg.MatchTokens[k] = v
 		}
 	}
+	if len(j.parser.Config.MatchTokenFns) > 0 {
+		for k, v := range j.parser.Config.MatchTokenFns {
+			cfg.MatchTokenFns[k] = v
+		}
+	}
 	if len(j.parser.Config.MatchValues) > 0 {
 		cfg.MatchValues = append(cfg.MatchValues, j.parser.Config.MatchValues...)
 		// Re-sort: the preserved entries may break the name-ascending order
@@ -587,15 +615,9 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// Apply fixed.token overrides (add, swap, or delete fixed-token mappings).
 	j.applyFixedTokens(&opts)
 
-	// Apply match.token: resolve token names to Tins and register regexp matchers.
-	if opts.Match != nil && opts.Match.Token != nil {
-		for name, re := range opts.Match.Token {
-			tin := j.Token(name)
-			j.parser.Config.MatchTokens[tin] = re
-		}
-		// Project map → sorted slice so lex-time iteration is deterministic.
-		j.parser.Config.RebuildMatchTokensSorted()
-	}
+	// Apply match.token / match.tokenFn: resolve token names to Tins and
+	// register regexp or function matchers.
+	j.applyMatchTokens(&opts)
 
 	// Apply tokenSet: resolve token names and update per-instance sets.
 	if opts.TokenSet != nil {
@@ -612,31 +634,12 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 		}
 	}
 
-	// Apply error messages.
-	if j.options.Error != nil {
-		for k, v := range j.options.Error {
-			j.parser.ErrorMessages[k] = v
-		}
-	}
-
-	// Apply hints.
-	if j.options.Hint != nil {
-		if j.hints == nil {
-			j.hints = make(map[string]string)
-		}
-		if j.parser.Hints == nil {
-			j.parser.Hints = make(map[string]string)
-		}
-		for k, v := range j.options.Hint {
-			j.hints[k] = v
-			j.parser.Hints[k] = v
-		}
-	}
-
-	// Apply errmsg options.
-	if j.options.ErrMsg != nil && j.options.ErrMsg.Name != "" {
-		j.parser.ErrTag = j.options.ErrMsg.Name
-	}
+	// Re-alias the parser error fields to the rebuilt config maps.
+	// buildConfig resolved Error/Hint/ErrMsg from the merged options.
+	j.parser.ErrorMessages = j.parser.Config.ErrorMessages
+	j.parser.Hints = j.parser.Config.Hints
+	j.parser.ErrTag = j.parser.Config.ErrTag
+	j.hints = j.parser.Config.Hints
 
 	// Apply lex options (empty source handling).
 	// Uses merged options so that values set at Make() or via prior

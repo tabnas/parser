@@ -716,9 +716,9 @@ func TestErrorFormat(t *testing.T) {
 		if !strings.Contains(msg, "[tabnas/unterminated_string]:") {
 			t.Errorf("Error() should contain '[tabnas/unterminated_string]:', got:\n%s", msg)
 		}
-		// Error() should contain --> row:col
-		if !strings.Contains(msg, "--> 1:1") {
-			t.Errorf("Error() should contain '--> 1:1', got:\n%s", msg)
+		// Error() should contain --> <file>:row:col (TS: "<no-file>" when unnamed)
+		if !strings.Contains(msg, "--> <no-file>:1:1") {
+			t.Errorf("Error() should contain '--> <no-file>:1:1', got:\n%s", msg)
 		}
 	})
 
@@ -767,9 +767,9 @@ func TestErrorFormat(t *testing.T) {
 		}
 		je := err.(*TabnasError)
 		msg := je.Error()
-		// Should show --> row:col
-		if !strings.Contains(msg, "--> 11:4") {
-			t.Errorf("Error() should show '--> 11:4', got:\n%s", msg)
+		// Should show --> <file>:row:col
+		if !strings.Contains(msg, "--> <no-file>:11:4") {
+			t.Errorf("Error() should show '--> <no-file>:11:4', got:\n%s", msg)
 		}
 		// Should contain line numbers in the source extract
 		if !strings.Contains(msg, "11 |") {
