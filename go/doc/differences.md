@@ -26,14 +26,10 @@ These affect parse output for the same input.
 
 ### Number + Text Tokenization
 
-Input like `123abc` produces separate number and text tokens in the
-TypeScript lexer but is rejected as not-a-number in Go (treated as text).
-This keeps the original jsonic behavior of `a:123abc` → `{"a": "123abc"}`.
-
-```
-// TypeScript lexer: 123abc → number(123) + text("abc")
-// Go:               123abc → text("123abc")
-```
+Aligned. Both lexers require an ender character after a number, so
+`123abc` lexes as a single text token in both (TS via the ender-anchored
+number regexp, Go via its not-a-number check). The shared fixture
+`alignment-number-text.tsv` pins this behavior.
 
 ### Empty / Whitespace Input
 

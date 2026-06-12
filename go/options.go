@@ -722,11 +722,6 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-// intPtr is a helper to create a *int.
-func intPtr(i int) *int {
-	return &i
-}
-
 // boolVal returns the value of a *bool, or the default if nil.
 func boolVal(p *bool, def bool) bool {
 	if p != nil {

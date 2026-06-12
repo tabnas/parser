@@ -575,15 +575,6 @@ func nodeListVal(node any) ([]any, bool) {
 	return nil, false
 }
 
-// nodeListSetVal updates the []any inside a list node.
-func nodeListSetVal(node any, arr []any) any {
-	if lr, ok := node.(ListRef); ok {
-		lr.Val = arr
-		return lr
-	}
-	return arr
-}
-
 // nodeMapSet sets a key on a map node.
 func nodeMapSet(node any, key any, val any) {
 	k, _ := key.(string)
