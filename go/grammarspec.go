@@ -214,7 +214,7 @@ func mergeG(existing string, extra []string) string {
 //	parsed, _ := gs.Parse(text)
 //	j.Grammar(&GrammarSpec{OptionsMap: parsed.(map[string]any)})
 func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) error {
-	parsed, err := Make().Parse(text)
+	parsed, err := parseText("GrammarText", text)
 	if err != nil {
 		return err
 	}
@@ -764,10 +764,10 @@ func resolveTokenNameStatic(name string) []Tin {
 	return nil
 }
 
-// resolveGrammarAltStatic converts a GrammarAltSpec to a concrete AltSpec
+// ResolveGrammarAltStatic converts a GrammarAltSpec to a concrete AltSpec
 // using only built-in token resolution. Used by the internal Grammar().
 // Errors cause the returned alt to have nil fields (best-effort).
-func resolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
+func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 	alt := &AltSpec{}
 
 	if ga.S != nil {

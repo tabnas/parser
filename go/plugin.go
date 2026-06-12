@@ -295,7 +295,6 @@ func (j *Tabnas) applyFixedTokens(opts *Options) {
 	}
 }
 
-
 // Plugins returns the list of installed plugins (for introspection).
 func (j *Tabnas) Plugins() []Plugin {
 	out := make([]Plugin, len(j.plugins))
@@ -669,16 +668,41 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	return j
 }
 
+// textParser parses tabnas-format text for the text-form convenience
+// APIs (SetOptionsText, GrammarText). The engine ships no grammar
+// (matching the TS package), so a grammar package must register a
+// parser — importing the jsonic package does this in its init, in the
+// manner of database/sql drivers.
+var textParser func(src string) (any, error)
+
+// RegisterTextParser sets the parser used by SetOptionsText and
+// GrammarText. Grammar packages call this from init(); the last
+// registration wins.
+func RegisterTextParser(p func(src string) (any, error)) {
+	textParser = p
+}
+
+// parseText runs the registered text parser, or errors when none is
+// registered (e.g. the engine is used without a grammar package).
+func parseText(api, text string) (any, error) {
+	if textParser == nil {
+		return nil, fmt.Errorf(
+			"%s: no text parser registered — import a grammar package (e.g. jsonic) or call RegisterTextParser", api)
+	}
+	return textParser(text)
+}
+
 // SetOptionsText parses a tabnas-format options string, converts it to an
 // Options struct via MapToOptions, and applies it via SetOptions.
 // Returns the instance for chaining and any parse error encountered.
 // Complement to SetOptions that accepts a textual specification of the
-// desired options tree.
+// desired options tree. Requires a registered text parser (see
+// RegisterTextParser).
 func (j *Tabnas) SetOptionsText(text string) (*Tabnas, error) {
 	if text == "" {
 		return j, nil
 	}
-	parsed, err := Make().Parse(text)
+	parsed, err := parseText("SetOptionsText", text)
 	if err != nil {
 		return j, err
 	}

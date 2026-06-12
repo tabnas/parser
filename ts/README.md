@@ -124,14 +124,16 @@ non-trivial grammar plugin (strict JSON).
 
 ## Go Version
 
-A [Go port](../go/) ships a relaxed-JSON grammar. Same engine
+A [Go port](../go/) mirrors this package's layout: a grammar-free
+engine (`github.com/tabnas/parser/go`) plus the relaxed-JSON grammar
+as a separate plugin package (`.../go/jsonic`). Same engine
 architecture, same [test specs](../test/spec/) for behaviours that
 overlap.
 
 ```go
-import "github.com/tabnas/parser/go"
+import "github.com/tabnas/parser/go/jsonic"
 
-result, err := tabnas.Parse("a:1, b:2")
+result, err := jsonic.Parse("a:1, b:2")
 ```
 
 ## License

@@ -18,8 +18,9 @@ lexer. Grammar is contributed by plugins.
 | Path | What it is |
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. A grammar-free engine package (`tabnas` on npm). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
-| `go/` | Go port of the engine **plus** the built-in relaxed-JSON (jsonic-style) grammar, kept bundled deliberately so `tabnas.Parse` works out of the box for Go clients. Module: `github.com/tabnas/parser/go`. |
-| `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). Go runs all of them; TS runs the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones. |
+| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`. |
+| `go/jsonic/` | The relaxed-JSON (jsonic-style) grammar as a plugin package plus convenience API (`jsonic.Parse`, `jsonic.Make`, `jsonic.MakeJSON`). What most Go clients import. |
+| `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). The Go jsonic package runs all of them; TS runs the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones. |
 
 ## Authority and alignment rules
 
@@ -28,10 +29,11 @@ lexer. Grammar is contributed by plugins.
    the behavior is expressible as input → output).
 2. **Go-only features are intentional** and must be kept and tested:
    `Info.Map` (`MapRef`), `Info.List` (`ListRef`), `Info.Text`
-   (`Text`), `MakeJSON()`, and the introspection API. They exist for
+   (`Text`), `jsonic.MakeJSON()`, and the introspection API. They exist for
    typed Go client code.
-3. The Go module bundling the relaxed-JSON grammar is a deliberate
-   packaging difference, not drift. Don't remove it.
+3. The Go layout mirrors TS: the engine package ships no grammar; the
+   relaxed-JSON grammar is the `go/jsonic` plugin package. Don't fold
+   the grammar back into the engine.
 4. Known, accepted behavior differences are documented in
    `go/doc/differences.md`. Update that file whenever you change
    either side's behavior or feature surface.
@@ -52,8 +54,8 @@ From `go/`:
 
 ```bash
 go build ./... && go vet ./...
-go test ./...                  # includes all shared fixtures
-go test -cover ./...
+go test ./...                  # engine + jsonic; includes all shared fixtures
+go test -coverpkg=./... -cover ./...
 ```
 
 `make -C ts test` runs both suites.

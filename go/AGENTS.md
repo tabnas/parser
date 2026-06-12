@@ -1,13 +1,14 @@
 # Agents Guide — tabnas (Go)
 
 Go port of the tabnas engine, serving the original **jsonic use
-case** directly: lenient JSON for humans — `tabnas.Parse("a:1, b:2")`
-just works. Unlike the canonical TypeScript package (a grammar-free
-engine), this module deliberately bundles the relaxed-JSON grammar
-(`grammar.go`, `grammarspec.go`) so Go clients need no plugin setup.
-That bundling is a feature, not drift — see `doc/differences.md`.
+case**: lenient JSON for humans — `jsonic.Parse("a:1, b:2")` just
+works. The layout mirrors the canonical TypeScript package: this
+engine package ships **no grammar**; the relaxed-JSON grammar is the
+plugin sub-package `jsonic/` (`jsonic.Plugin`, plus `Make`/`Parse`/
+`MakeJSON` conveniences). `tabnas.Make()` returns a bare engine.
 
-Module path: `github.com/tabnas/parser/go`. Single Go package.
+Module path: `github.com/tabnas/parser/go`. Two packages:
+`tabnas` (engine, this directory) and `jsonic` (grammar, `jsonic/`).
 
 ## Authority
 
@@ -23,7 +24,7 @@ mirror it. Accepted differences are documented in
 - `Info.Map` → `MapRef`, `Info.List` → `ListRef`, `Info.Text` →
   `Text` wrappers (typed metadata for Go clients); tests in
   `mapref_test.go`, `listref_test.go`, `textinfo_test.go`.
-- `MakeJSON()` strict-JSON constructor; tests in `variant_test.go`.
+- `jsonic.MakeJSON()` strict-JSON constructor; tests in `jsonic/variant_test.go`.
 - Introspection API (`RSM()`, `Plugins()`, `Decorate()`, ...).
 
 ## Layout
@@ -31,28 +32,33 @@ mirror it. Accepted differences are documented in
 - `tabnas.go` — `TabnasError`, error/hint templates (mirrors TS
   defaults), `Error()` formatting (mirrors TS `errmsg`/`errsite`).
 - `lexer.go` — matchers and `LexConfig` (the resolved option tree;
-  TS `cfg`). Note: predates the TS scan-spec lexer refactor;
-  behavior-aligned but not structure-aligned.
+  TS `cfg`). Simple matchers run on the scan-spec driver (scan.go),
+  matching the TS lexer structure.
 - `parser.go`, `rule.go` — rule machinery.
-- `options.go` — `Options` tree, `Make`/`Empty`/`MakeJSON`,
+- `options.go` — `Options` tree, `Make`/`Empty`,
   `buildConfig` (Options → LexConfig, merging defaults).
 - `plugin.go` — `Use`, `SetOptions`, `Grammar`, match registration.
-- `grammar.go`, `grammarspec.go` — the bundled relaxed-JSON grammar.
+- `grammarspec.go` — declarative grammar-spec machinery (engine).
+- `scan.go` — scan-spec driver and builders (mirrors TS lexer scan).
+- `jsonic/grammar.go`, `jsonic/jsonic.go` — the relaxed-JSON grammar
+  plugin and its convenience API.
 - `utility.go` — `Deep`, `StrInject`, text-form option parsing.
 
 ## Commands
 
 ```bash
 go build ./... && go vet ./...
-go test ./...            # includes all ../test/spec fixtures
-go test -cover ./...
+go test ./...            # engine + jsonic (../test/spec fixtures run in jsonic)
+go test -coverpkg=./... -cover ./...
 go test -run TestName -v ./...
 ```
 
 ## Testing conventions
 
 - Shared behavior: add a fixture under `../test/spec/` and run it via
-  `runParserTSV` / `runErrorTSV` (`alignment_test.go`).
+  `runParserTSV` / `runErrorTSV` (`jsonic/alignment_test.go`).
+- Engine tests must not import jsonic (cycle); drive the lexer
+  standalone or install a small inline grammar.
 - Go-specific API: plain `_test.go` files; mirror the TS test name in
   a comment when porting a TS test.
 - Error-output assertions: ANSI color is on by default — disable via

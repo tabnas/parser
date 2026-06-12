@@ -1,7 +1,10 @@
 # API Reference (Go)
 
 ```go
-import "github.com/tabnas/parser/go"
+import (
+    tabnas "github.com/tabnas/parser/go"          // engine (no grammar)
+    "github.com/tabnas/parser/go/jsonic"          // relaxed-JSON grammar + convenience API
+)
 ```
 
 ## Parsing
@@ -12,7 +15,7 @@ Parse a string using default settings. Convenience function that creates a
 fresh parser for each call.
 
 ```go
-result, err := tabnas.Parse("a:1, b:2")
+result, err := jsonic.Parse("a:1, b:2")
 // result: map[string]any{"a": float64(1), "b": float64(2)}
 ```
 
@@ -256,7 +259,7 @@ type TabnasError struct {
 ```
 
 ```go
-result, err := tabnas.Parse("{a:")
+result, err := jsonic.Parse("{a:")
 if err != nil {
     if je, ok := err.(*tabnas.TabnasError); ok {
         fmt.Println(je.Code, "at line", je.Row)

@@ -4,20 +4,29 @@ The TypeScript version is the authoritative implementation. The Go version is
 a faithful port of the engine behavior, with deliberate Go-only additions for
 Go client code, and one deliberate packaging difference described first.
 
-## Packaging: Grammar Bundling
+## Packaging: Aligned (Grammar-Free Engine)
 
-The TypeScript package is a grammar-free engine: it ships no grammar at all,
-and every grammar (including strict JSON) arrives via a plugin. The strict
-JSON grammar lives as a TS test fixture (`ts/test/json-plugin.ts`).
+Both packages are grammar-free engines. In TypeScript every grammar
+(including strict JSON) arrives via a plugin, and the strict-JSON grammar
+lives as a test fixture (`ts/test/json-plugin.ts`). In Go the engine is
+`github.com/tabnas/parser/go` and the relaxed-JSON (jsonic-style) grammar
+is the separate plugin package `github.com/tabnas/parser/go/jsonic`:
 
-The Go module deliberately keeps the original tabnas (jsonic-style) relaxed
-JSON grammar built in: `tabnas.Parse("a:1")` works out of the box, which is
-the primary Go client use case. Use `Empty()` for a grammar-free instance, or
-`MakeJSON()` / `Rule.Include: "json"` for the strict-JSON subset.
+| Need | Use |
+|---|---|
+| Relaxed JSON out of the box | `jsonic.Parse(src)` / `jsonic.Make(opts...)` |
+| Strict JSON | `jsonic.MakeJSON()` or `Rule.Include: "json"` |
+| Bare engine, own grammar | `tabnas.Make()` + `Rule`/`Grammar` |
+| Grammar as a plugin | `j.Use(jsonic.Plugin)` |
 
-Both runtimes run the shared fixtures under `test/spec/`: Go runs all of
-them against its bundled grammar; TypeScript runs the strict-JSON and
-utility fixtures (`include-json*.tsv`, `utility-*.tsv`) via the json-plugin
+The engine's text-form convenience APIs (`SetOptionsText`, `GrammarText`)
+need a parser for their text argument; grammar packages register one via
+`tabnas.RegisterTextParser` (importing `jsonic` does this automatically,
+in the manner of database/sql drivers).
+
+Both runtimes run the shared fixtures under `test/spec/`: the Go jsonic
+package runs all of them; TypeScript runs the strict-JSON and utility
+fixtures (`include-json*.tsv`, `utility-*.tsv`) via the json-plugin
 fixture.
 
 ## Behavioral Differences
@@ -124,20 +133,23 @@ result, _ := j.Parse("a:1")
 // result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
 ```
 
-### `MakeJSON()`
+### `jsonic.MakeJSON()`
 
 Constructs an instance restricted to strict JSON (rejects all tabnas
 relaxations). Mirrors what the TS json-plugin test fixture provides.
 
-## Internal Structure
+## Internal Structure: Scan-Spec Lexer (Aligned)
 
-The TypeScript lexer was refactored into a declarative scan-spec design
-(`ScanSpec`, `scan()` state-machine driver, `guardedMatcher`, char-class
-bitmaps, scan primitives exposed via the util bag). The Go lexer predates
-this refactor and keeps the direct per-matcher structure. This is
-behavior-neutral — both lexers produce the same tokens — but means the two
-lexer sources no longer correspond function-for-function. Port the scan-spec
-design if/when matcher-level extension parity is needed in Go.
+Both lexers use the declarative scan-spec design: a packed-action state
+machine driver (`Scan` / TS `scan()`), per-byte class tables built by
+`BuildCharRunSpec` / `BuildLineRunSpec` / `BuildStringBodySpec`, and a
+shared matcher entry guard (`guardedMatch` / TS `guardedMatcher`). The
+space, line, comment-eatline, and string-body walks all run on the driver,
+and the scan primitives are exposed via the util bag in both runtimes so
+plugin authors can build their own matchers on it. One mechanical
+difference: TS scans UTF-16 code units (and needs a fallback class
+function for char codes ≥ 256), while Go scans bytes, so the Go
+`ScanSpec.ClassOf` table covers every input directly.
 
 ## Type System
 

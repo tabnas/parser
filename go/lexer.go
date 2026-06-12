@@ -142,6 +142,12 @@ type LexConfig struct {
 	// error suffix.
 	Tag string
 
+	// Lazily built scan specs (see scan.go). Cleared whenever SetOptions
+	// replaces the config contents.
+	spaceSpec   *ScanSpec
+	lineSpec    *ScanSpec
+	stringSpecs map[byte]*ScanSpec
+
 	// Map/List options
 	MapExtend    bool         // Deep-merge duplicate keys. Default: true.
 	MapMerge     MapMergeFunc // Custom merge function for duplicate keys.
@@ -434,6 +440,22 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 	}
 }
 
+// guardedMatch wraps a matcher body in the standard entry guards
+// (TS: guardedMatcher): skip when the matcher's lex flag is off, and
+// consult the optional check hook, which may short-circuit by returning
+// {Done: true, Token: t} — a nil hook token suppresses the matcher.
+func (l *Lex) guardedMatch(enabled bool, check LexCheck, body func() *Token) *Token {
+	if !enabled {
+		return nil
+	}
+	if check != nil {
+		if cr := check(l); cr != nil && cr.Done {
+			return cr.Token
+		}
+	}
+	return body()
+}
+
 // nextRaw returns the next raw token (including IGNORE tokens).
 // The rule parameter is passed to custom matchers for context-sensitive lexing.
 func (l *Lex) nextRaw(rule *Rule) *Token {
@@ -470,18 +492,9 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 	}
 
 	// Match matcher (priority 1e6) — regexp-based token and value matching.
-	if l.Config.MatchLex {
-		if l.Config.MatchCheck != nil {
-			if cr := l.Config.MatchCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil {
-					return cr.Token
-				}
-			} else if tkn := l.matchMatch(rule); tkn != nil {
-				return tkn
-			}
-		} else if tkn := l.matchMatch(rule); tkn != nil {
-			return tkn
-		}
+	if tkn := l.guardedMatch(l.Config.MatchLex, l.Config.MatchCheck,
+		func() *Token { return l.matchMatch(rule) }); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before fixed (< 2e6).
@@ -492,12 +505,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.FixedLex {
-		if l.Config.FixedCheck != nil {
-			if cr := l.Config.FixedCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchFixed(); tkn != nil { return tkn }
-		} else if tkn := l.matchFixed(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.FixedLex, l.Config.FixedCheck, l.matchFixed); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before space (< 3e6).
@@ -508,12 +517,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.SpaceLex {
-		if l.Config.SpaceCheck != nil {
-			if cr := l.Config.SpaceCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchSpace(); tkn != nil { return tkn }
-		} else if tkn := l.matchSpace(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.SpaceLex, l.Config.SpaceCheck, l.matchSpace); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before line (< 4e6).
@@ -524,12 +529,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.LineLex {
-		if l.Config.LineCheck != nil {
-			if cr := l.Config.LineCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchLine(); tkn != nil { return tkn }
-		} else if tkn := l.matchLine(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.LineLex, l.Config.LineCheck, l.matchLine); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before string (< 5e6).
@@ -540,12 +541,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.StringLex {
-		if l.Config.StringCheck != nil {
-			if cr := l.Config.StringCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchString(); tkn != nil { return tkn }
-		} else if tkn := l.matchString(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.StringLex, l.Config.StringCheck, l.matchString); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before comment (< 6e6).
@@ -556,12 +553,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.CommentLex {
-		if l.Config.CommentCheck != nil {
-			if cr := l.Config.CommentCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchComment(); tkn != nil { return tkn }
-		} else if tkn := l.matchComment(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.CommentLex, l.Config.CommentCheck, l.matchComment); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before number (< 7e6).
@@ -572,12 +565,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.NumberLex {
-		if l.Config.NumberCheck != nil {
-			if cr := l.Config.NumberCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchNumber(); tkn != nil { return tkn }
-		} else if tkn := l.matchNumber(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.NumberLex, l.Config.NumberCheck, l.matchNumber); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before text (< 8e6).
@@ -588,12 +577,9 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.TextLex || l.Config.ValueLex {
-		if l.Config.TextCheck != nil {
-			if cr := l.Config.TextCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchText(); tkn != nil { return tkn }
-		} else if tkn := l.matchText(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.TextLex || l.Config.ValueLex,
+		l.Config.TextCheck, l.matchText); tkn != nil {
+		return tkn
 	}
 
 	// Run remaining custom matchers (priority >= 8e6).
@@ -743,20 +729,15 @@ func (l *Lex) matchFixed() *Token {
 
 // matchSpace matches space and tab characters.
 func (l *Lex) matchSpace() *Token {
-	sI := l.pnt.SI
-	cI := l.pnt.CI
-	for sI < l.pnt.Len && l.Config.SpaceChars[rune(l.Src[sI])] {
-		sI++
-		cI++
+	var out ScanOut
+	if !Scan(l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config.spaceRunSpec(), &out) {
+		return nil
 	}
-	if sI > l.pnt.SI {
-		src := l.Src[l.pnt.SI:sI]
-		tkn := l.Token("#SP", TinSP, nil, src)
-		l.pnt.SI = sI
-		l.pnt.CI = cI
-		return tkn
-	}
-	return nil
+	src := l.Src[l.pnt.SI:out.SI]
+	tkn := l.Token("#SP", TinSP, nil, src)
+	l.pnt.SI = out.SI
+	l.pnt.CI = out.CI
+	return tkn
 }
 
 // matchLine matches line ending characters (\r, \n).
@@ -792,16 +773,12 @@ func (l *Lex) matchLine() *Token {
 	}
 
 	// Default: consume all consecutive line characters into one token
-	for sI < l.pnt.Len && l.Config.LineChars[rune(l.Src[sI])] {
-		if l.Config.RowChars[rune(l.Src[sI])] {
-			rI++
-		}
-		sI++
-	}
-	src := l.Src[l.pnt.SI:sI]
+	var out ScanOut
+	Scan(l.Src, sI, rI, l.pnt.CI, l.Config.lineRunSpec(), &out)
+	src := l.Src[l.pnt.SI:out.SI]
 	tkn := l.Token("#LN", TinLN, nil, src)
-	l.pnt.SI = sI
-	l.pnt.RI = rI
+	l.pnt.SI = out.SI
+	l.pnt.RI = out.RI
 	l.pnt.CI = 1
 	return tkn
 }
@@ -844,13 +821,10 @@ func (l *Lex) matchComment() *Token {
 			// the comment terminated at a line-char (not via suffix).
 			atLineChar := fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])]
 			if atLineChar && l.Config.CommentLineEatLine[start] {
-				rI := l.pnt.RI
-				for fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])] {
-					if l.Config.RowChars[rune(fwd[fI])] {
-						rI++
-					}
-					fI++
-				}
+				var out ScanOut
+				Scan(fwd, fI, l.pnt.RI, 1, l.Config.lineRunSpec(), &out)
+				fI = out.SI
+				rI := out.RI
 				src := fwd[:fI]
 				tkn := l.Token("#CM", TinCM, nil, src)
 				l.pnt.SI += len(src)
@@ -914,12 +888,10 @@ func (l *Lex) matchComment() *Token {
 				fI += len(end)
 				// EatLine: also consume trailing line characters
 				if l.Config.CommentBlockEatLine[start] {
-					for fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])] {
-						if l.Config.RowChars[rune(fwd[fI])] {
-							rI++
-						}
-						fI++
-					}
+					var out ScanOut
+					Scan(fwd, fI, rI, 1, l.Config.lineRunSpec(), &out)
+					fI = out.SI
+					rI = out.RI
 					cI = 1
 				}
 				src := fwd[:fI]
@@ -984,7 +956,6 @@ func (l *Lex) matchString() *Token {
 		return nil
 	}
 
-	isMultiLine := l.Config.MultiChars[q]
 	src := l.Src
 	sI := l.pnt.SI + 1
 	rI := l.pnt.RI
@@ -994,7 +965,22 @@ func (l *Lex) matchString() *Token {
 	srclen := len(src)
 	foundClose := false
 
+	// Per-quote body spec (TS buildStringBodySpec): consumes plain body
+	// chars and, for multi-line quotes, line chars (advancing rI and
+	// resetting cI). Stops on the quote, the escape char, replace chars,
+	// and disallowed control chars — dispatched below.
+	bodySpec := l.Config.stringBodySpec(byte(q))
+	var out ScanOut
+
 	for sI < srclen {
+		if Scan(src, sI, rI, cI, bodySpec, &out) {
+			sb.WriteString(src[sI:out.SI])
+			sI, rI, cI = out.SI, out.RI, out.CI
+			if sI >= srclen {
+				break
+			}
+		}
+
 		cI++
 		c := rune(src[sI])
 
@@ -1123,63 +1109,24 @@ func (l *Lex) matchString() *Token {
 			continue
 		}
 
-		// Check for unprintable / multiline
+		// Disallowed control char (multi-line line chars are consumed
+		// by the body spec, so any control char reaching here is bad).
 		if c < 32 {
-			if isMultiLine && l.Config.LineChars[c] {
-				if l.Config.RowChars[c] {
-					rI++
-				}
-				cI = 1
-				sb.WriteByte(src[sI])
-				sI++
-				continue
-			}
-			// Non-multiline unprintable - bad
 			if l.Config.StringAbandon {
 				return nil
 			}
 			break
 		}
 
-		// Normal body - fast scan
-		bI := sI
-		if len(l.Config.StringReplace) > 0 {
-			// Char-by-char with replacement support
-			for sI < srclen {
-				cc := rune(src[sI])
-				if cc < 32 || cc == q || cc == rune(l.Config.EscapeChar) {
-					break
-				}
-				if rep, ok := l.Config.StringReplace[cc]; ok {
-					// Flush pending plain chars
-					if sI > bI {
-						sb.WriteString(src[bI:sI])
-					}
-					sb.WriteString(rep)
-					sI++
-					cI++
-					bI = sI
-					continue
-				}
-				sI++
-				cI++
-			}
-			if sI > bI {
-				sb.WriteString(src[bI:sI])
-			}
-		} else {
-			for sI < srclen {
-				cc := rune(src[sI])
-				if cc < 32 || cc == q || cc == rune(l.Config.EscapeChar) {
-					break
-				}
-				sI++
-				cI++
-			}
-			sb.WriteString(src[bI:sI])
+		// Replace chars stop the body run; emit the replacement.
+		if rep, ok := l.Config.StringReplace[c]; ok {
+			sb.WriteString(rep)
+			sI++
+			continue
 		}
-		cI-- // loop will re-increment
-		continue
+
+		// Unreachable: every stop class is dispatched above.
+		break
 	}
 
 	// Check for unterminated string

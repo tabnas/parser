@@ -14,6 +14,15 @@ type UtilBag struct {
 	Omap       func(m map[string]any, fn func(Entry) []any) map[string]any
 	Str        func(val any, maxlen int) string
 	StrInject  func(template string, vals any) string
+
+	// Lex scan primitives — exposed so plugin authors can build their
+	// own matchers on the same state-machine driver (TS exposes scan,
+	// guardedMatcher, and the spec builders via the util bag; see
+	// scan.go for the action flag constants ScanConsume etc.).
+	Scan                func(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOut) bool
+	BuildCharRunSpec    func(chars map[rune]bool) *ScanSpec
+	BuildLineRunSpec    func(lineChars, rowChars map[rune]bool) *ScanSpec
+	BuildStringBodySpec func(cfg *LexConfig, q byte) *ScanSpec
 }
 
 // Entry is a (key, value) pair returned by Entries. Matches the 2-tuple
@@ -107,5 +116,10 @@ func (j *Tabnas) Util() UtilBag {
 		Omap:      Omap,
 		Str:       Str,
 		StrInject: StrInject,
+
+		Scan:                Scan,
+		BuildCharRunSpec:    BuildCharRunSpec,
+		BuildLineRunSpec:    BuildLineRunSpec,
+		BuildStringBodySpec: BuildStringBodySpec,
 	}
 }

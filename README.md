@@ -11,7 +11,7 @@ This monorepo contains:
 | Path | Description |
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation. The canonical engine — bring your own grammar (companion BNF and Debug plugins live in separate repos). A strict-JSON grammar lives as a test fixture under `ts/test/json-plugin.ts`. |
-| [`go/`](go/) | Go port. Ships the engine plus the relaxed-JSON (jsonic-style) grammar built in, so `tabnas.Parse` works out of the box. |
+| [`go/`](go/) | Go port, same layout: grammar-free engine plus the relaxed-JSON grammar as the [`go/jsonic`](go/jsonic/) plugin package (`jsonic.Parse` works out of the box). |
 | [`test/spec/`](test/spec/) | Shared `.tsv` parser-spec fixtures, exercised by both runtimes. |
 
 Start with [`ts/README.md`](ts/README.md) for the JS API or

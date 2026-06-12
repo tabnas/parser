@@ -59,7 +59,6 @@ type Parser struct {
 func NewParser() *Parser {
 	cfg := DefaultLexConfig()
 	rsm := make(map[string]*RuleSpec)
-	buildGrammar(rsm, cfg)
 	// Copy global error messages and hints as defaults; parser fields
 	// alias the config maps (see makeError / makeTabnasError).
 	cfg.ErrorMessages = make(map[string]string, len(errorMessages))

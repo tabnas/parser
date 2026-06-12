@@ -2,43 +2,12 @@ package tabnas
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
 
 // --- Parser.StartMeta (public API entry with meta + subscriptions) ---
-
-func TestParserStartMeta(t *testing.T) {
-	p := NewParser()
-	meta := map[string]any{"k": "v"}
-
-	lexCount := 0
-	ruleCount := 0
-	lexSubs := []LexSub{func(tkn *Token, r *Rule, ctx *Context) {
-		lexCount++
-		if ctx.Meta["k"] != "v" {
-			t.Error("meta should be available in lex sub context")
-		}
-	}}
-	ruleSubs := []RuleSub{func(r *Rule, ctx *Context) {
-		ruleCount++
-	}}
-
-	out, err := p.StartMeta("a:1", meta, lexSubs, ruleSubs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := out.(map[string]any)
-	if !ok || m["a"] != float64(1) {
-		t.Errorf("expected {a:1}, got %v", out)
-	}
-	if lexCount == 0 {
-		t.Error("lex subscriber should have fired")
-	}
-	if ruleCount == 0 {
-		t.Error("rule subscriber should have fired")
-	}
-}
 
 func TestParserStartMetaEmptySource(t *testing.T) {
 	p := NewParser()
@@ -98,36 +67,6 @@ func TestUseDefaultsNoUserOptions(t *testing.T) {
 }
 
 // --- Debug plugin trace (addTrace via opts.trace) ---
-
-func TestDebugPluginTrace(t *testing.T) {
-	j := Make()
-	if err := j.Use(Debug, map[string]any{"trace": true}); err != nil {
-		t.Fatal(err)
-	}
-	// Subscribers installed by addTrace must not break parsing.
-	out, err := j.Parse("a:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := out.(map[string]any)
-	if m["a"] != float64(1) {
-		t.Errorf("expected a:1, got %v", m)
-	}
-}
-
-func TestDebugPluginNoTrace(t *testing.T) {
-	j := Make()
-	// trace=false and nil opts should not install subscribers.
-	if err := j.Use(Debug, map[string]any{"trace": false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := j.Use(Debug); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := j.Parse("a:1"); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestDescribeWithTag(t *testing.T) {
 	j := Make(Options{Tag: "mytag"})
@@ -215,52 +154,60 @@ func TestAttachHintPassThrough(t *testing.T) {
 	}
 }
 
-func TestAttachHintPluginNames(t *testing.T) {
-	// Errors from a Tabnas instance with plugins include the plugin names
-	// in the --internal suffix (TS errdesc ctx.plgn()).
-	j := Make()
-	noop := Plugin(func(j *Tabnas, opts map[string]any) error { return nil })
-	if err := j.Use(noop); err != nil {
-		t.Fatal(err)
-	}
-	_, err := j.Parse(`"unterminated`)
-	if err == nil {
-		t.Fatal("expected error for unterminated string")
-	}
-	if _, ok := err.(*TabnasError); !ok {
-		t.Fatalf("expected *TabnasError, got %T", err)
-	}
+// --- SetOptionsText error paths ---
+//
+// The engine ships no grammar, so SetOptionsText/GrammarText require a
+// registered text parser (RegisterTextParser; the jsonic package
+// registers one in its init). These tests register a stub parser to
+// exercise every path, restoring the unregistered state on cleanup.
+
+// withStubTextParser registers p for the duration of the test.
+func withStubTextParser(t *testing.T, p func(string) (any, error)) {
+	t.Helper()
+	RegisterTextParser(p)
+	t.Cleanup(func() { RegisterTextParser(nil) })
 }
 
-// --- SetOptionsText error paths ---
-
 func TestSetOptionsTextEmpty(t *testing.T) {
+	// Empty text short-circuits before the parser lookup.
 	j := Make()
 	if _, err := j.SetOptionsText(""); err != nil {
 		t.Errorf("empty text should be a no-op: %v", err)
 	}
 }
 
-func TestSetOptionsTextParseError(t *testing.T) {
+func TestSetOptionsTextUnregistered(t *testing.T) {
 	j := Make()
-	if _, err := j.SetOptionsText(`"unterminated`); err == nil {
-		t.Error("expected parse error for malformed options text")
+	if _, err := j.SetOptionsText(`tag: "x"`); err == nil ||
+		!strings.Contains(err.Error(), "no text parser registered") {
+		t.Errorf("expected no-parser error, got: %v", err)
+	}
+}
+
+func TestSetOptionsTextParseError(t *testing.T) {
+	withStubTextParser(t, func(string) (any, error) {
+		return nil, fmt.Errorf("boom")
+	})
+	j := Make()
+	if _, err := j.SetOptionsText(`"unterminated`); err == nil || err.Error() != "boom" {
+		t.Errorf("parser error should propagate, got: %v", err)
 	}
 }
 
 func TestSetOptionsTextNotMap(t *testing.T) {
+	withStubTextParser(t, func(string) (any, error) {
+		return []any{1.0, 2.0}, nil
+	})
 	j := Make()
-	_, err := j.SetOptionsText(`[1,2,3]`)
-	if err == nil {
-		t.Fatal("expected error for non-map options text")
-	}
-	if !strings.Contains(err.Error(), "expected map") {
-		t.Errorf("error should mention expected map, got: %s", err)
+	if _, err := j.SetOptionsText(`[1,2]`); err == nil ||
+		!strings.Contains(err.Error(), "expected map") {
+		t.Errorf("expected not-a-map error, got: %v", err)
 	}
 }
 
 func TestSetOptionsTextNilParse(t *testing.T) {
-	// Comment-only source parses to nil — SetOptionsText should be a no-op.
+	// Comment-only source parses to nil — SetOptionsText is a no-op.
+	withStubTextParser(t, func(string) (any, error) { return nil, nil })
 	j := Make()
 	if _, err := j.SetOptionsText("# just a comment"); err != nil {
 		t.Errorf("comment-only text should be a no-op: %v", err)
@@ -268,35 +215,17 @@ func TestSetOptionsTextNilParse(t *testing.T) {
 }
 
 func TestSetOptionsTextApplies(t *testing.T) {
+	withStubTextParser(t, func(string) (any, error) {
+		return map[string]any{"number": map[string]any{"sep": "_"}}, nil
+	})
 	j := Make()
+	before := j.Options()
 	if _, err := j.SetOptionsText(`number: { sep: "_" }`); err != nil {
 		t.Fatal(err)
 	}
-	out, err := j.Parse("a:1_000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1000) {
-		t.Errorf("expected 1000, got %v", out)
-	}
-}
-
-// --- Token: existing token with new fixed src ---
-
-func TestTokenUpdateExistingFixedSrc(t *testing.T) {
-	j := Make()
-	// "#CL" already exists; provide a second source string for it.
-	tin := j.Token("#CL", ";")
-	if tin != TinCL {
-		t.Errorf("expected TinCL, got %d", tin)
-	}
-	// Both ":" and ";" now lex as colon.
-	out, err := j.Parse("a;1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1) {
-		t.Errorf("expected a:1 via ';' colon alias, got %v", out)
+	after := j.Options()
+	if after.Number == nil || after.Number.Sep != "_" {
+		t.Errorf("SetOptionsText should apply parsed options (before %+v), got %+v", before.Number, after.Number)
 	}
 }
 
@@ -320,32 +249,6 @@ func TestApplyFixedTokensDeleteKnownName(t *testing.T) {
 	}}})
 	if j.FixedSrc(",") != 0 {
 		t.Error("expected ',' mapping removed")
-	}
-}
-
-func TestApplyFixedTokensSwapAndAllocate(t *testing.T) {
-	semi := ";"
-	tilde := "~"
-	j := Make(Options{Fixed: &FixedOptions{Token: map[string]*string{
-		"#CA":  &semi,  // swap comma → semicolon
-		"#NEW": &tilde, // allocate a new token
-	}}})
-	if j.FixedSrc(";") != TinCA {
-		t.Error("expected ';' to map to TinCA")
-	}
-	if j.FixedSrc(",") != 0 {
-		t.Error("expected ',' mapping removed after swap")
-	}
-	if j.FixedSrc("~") == 0 {
-		t.Error("expected '~' to map to newly allocated token")
-	}
-	out, err := j.Parse("a:1;b:2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := out.(map[string]any)
-	if m["a"] != float64(1) || m["b"] != float64(2) {
-		t.Errorf("expected {a:1 b:2}, got %v", m)
 	}
 }
 
@@ -511,24 +414,6 @@ func TestSetOptionsTokenSet(t *testing.T) {
 	}
 }
 
-func TestSetOptionsRuleInclude(t *testing.T) {
-	// rule.include via SetOptions keeps only tagged alts (json strict mode).
-	j := Make()
-	j.SetOptions(Options{Rule: &RuleOptions{Include: "json"}})
-	// Strict JSON should still parse.
-	out, err := j.Parse(`{"a":1}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1) {
-		t.Errorf("expected a:1, got %v", out)
-	}
-	// tabnas implicit map should fail (those alts were dropped).
-	if _, err := j.Parse("a:1"); err == nil {
-		t.Error("expected error for implicit map with include=json")
-	}
-}
-
 func TestSetOptionsParserStart(t *testing.T) {
 	j := Make()
 	j.SetOptions(Options{Parser: &ParserOptions{
@@ -542,33 +427,5 @@ func TestSetOptionsParserStart(t *testing.T) {
 	}
 	if out != "custom:xyz" {
 		t.Errorf("expected custom:xyz, got %v", out)
-	}
-}
-
-func TestSetOptionsPreservesMatchValues(t *testing.T) {
-	// Match.Value entries registered earlier survive a later SetOptions call
-	// (preserved + re-sorted branch).
-	j := Make()
-	mustGrammar(t, j, &GrammarSpec{
-		Ref: map[FuncRef]any{
-			"@valOn": func(match []string) any { return true },
-		},
-		OptionsMap: map[string]any{
-			"match": map[string]any{
-				"value": map[string]any{
-					"on": map[string]any{"match": "@/^on/i", "val": "@valOn"},
-				},
-			},
-		},
-	})
-	sep := "_"
-	j.SetOptions(Options{Number: &NumberOptions{Sep: sep}})
-
-	out, err := j.Parse("a:ON")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != true {
-		t.Errorf("expected a:true preserved after SetOptions, got %v", out)
 	}
 }

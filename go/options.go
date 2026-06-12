@@ -511,7 +511,6 @@ func Make(opts ...Options) *Tabnas {
 
 	cfg := buildConfig(&o)
 	rsm := make(map[string]*RuleSpec)
-	buildGrammar(rsm, cfg)
 
 	maxmul := 3
 	if o.Rule != nil && o.Rule.MaxMul != nil {
@@ -598,8 +597,10 @@ func Make(opts ...Options) *Tabnas {
 	return j
 }
 
-// Empty creates a Tabnas instance with no built-in grammar rules.
-// Matches TS tabnas.empty(). Useful for building a parser from scratch.
+// Empty creates a Tabnas instance with no grammar rules.
+// Matches TS tabnas.empty(). Since the engine ships no grammar (matching
+// the TS package), this is equivalent to Make for a fresh instance, but
+// also clears any rules contributed by plugins in the passed options.
 func Empty(opts ...Options) *Tabnas {
 	j := Make(opts...)
 	// Clear all grammar rules.
@@ -607,37 +608,6 @@ func Empty(opts ...Options) *Tabnas {
 		rs.Clear()
 	}
 	return j
-}
-
-// MakeJSON creates a Tabnas instance configured to accept strict JSON only.
-// Mirrors TS Tabnas.make('json') (src/grammar.ts:980). Rejects tabnas
-// relaxations: unquoted keys/values, comments, hex/octal/binary numbers,
-// trailing commas, leading-zero numbers, single-quoted or backtick
-// strings, and empty input.
-func MakeJSON() *Tabnas {
-	f := false
-	return Make(Options{
-		Text: &TextOptions{Lex: &f},
-		Number: &NumberOptions{
-			Hex: &f, Oct: &f, Bin: &f,
-			Sep: "",
-			Exclude: func(s string) bool {
-				return len(s) >= 2 && s[0] == '0' && s[1] == '0'
-			},
-		},
-		String: &StringOptions{
-			Chars:        `"`,
-			MultiChars:   "",
-			AllowUnknown: &f,
-		},
-		Comment: &CommentOptions{Lex: &f},
-		Map:     &MapOptions{Extend: &f},
-		Lex:     &LexOptions{Empty: &f},
-		Rule: &RuleOptions{
-			Finish:  &f,
-			Include: "json",
-		},
-	})
 }
 
 // Parse parses a tabnas string using this instance's configuration.

@@ -2,85 +2,15 @@ package tabnas
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
 )
 
 // --- list.pair mode (TS list.pair: pairs in lists become {key:val} objects) ---
 
-func TestListPairMode(t *testing.T) {
-	lp := true
-	j := Make(Options{List: &ListOptions{Pair: &lp}})
-	out, err := j.Parse("[a:1]")
-	if err != nil {
-		t.Fatal(err)
-	}
-	arr := out.([]any)
-	if len(arr) != 1 {
-		t.Fatalf("expected one element, got %v", arr)
-	}
-	pair := arr[0].(map[string]any)
-	if pair["a"] != float64(1) {
-		t.Errorf("expected [{a:1}], got %v", out)
-	}
-}
-
 // --- map.child merging across multiple child entries ---
 
-func TestMapChildMultipleEntries(t *testing.T) {
-	mc := true
-	j := Make(Options{Map: &MapOptions{Child: &mc}})
-	out, err := j.Parse("{:1,:2,a:3}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := out.(map[string]any)
-	// Scalar children: later overrides (Deep merge of scalars).
-	if m["child$"] != float64(2) || m["a"] != float64(3) {
-		t.Errorf("expected child$=2 a=3, got %v", m)
-	}
-}
-
-func TestMapChildWithMerge(t *testing.T) {
-	mc := true
-	j := Make(Options{
-		Map: &MapOptions{
-			Child: &mc,
-			Merge: func(prev, curr any, r *Rule, ctx *Context) any {
-				pf, _ := prev.(float64)
-				cf, _ := curr.(float64)
-				return pf + cf
-			},
-		},
-	})
-	out, err := j.Parse("{:1,:2}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := out.(map[string]any)
-	if m["child$"] != float64(3) {
-		t.Errorf("expected merged child$=3, got %v", m)
-	}
-}
-
 // --- duplicate keys: extend off and custom merge in pair/list contexts ---
-
-func TestMapExtendFalseLastWins(t *testing.T) {
-	no := false
-	j := Make(Options{Map: &MapOptions{Extend: &no}})
-	out, err := j.Parse("a:{x:1},a:{y:2}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	inner := out.(map[string]any)["a"].(map[string]any)
-	if inner["y"] != float64(2) {
-		t.Errorf("expected last value to win, got %v", inner)
-	}
-	if _, exists := inner["x"]; exists {
-		t.Errorf("extend=false should not merge, got %v", inner)
-	}
-}
 
 func TestListPropertyDuplicateKeys(t *testing.T) {
 	// Pairs inside a list (list.property) with duplicate keys exercise
@@ -117,161 +47,13 @@ func TestListProtoKeySafe(t *testing.T) {
 
 // --- comment block suffix terminators (string, fn) and eatline ---
 
-func TestCommentBlockSuffixString(t *testing.T) {
-	// A "\n" suffix terminates the block comment early (and covers the
-	// row-advance inside the suffix consumption).
-	j := Make(Options{Comment: &CommentOptions{Def: map[string]*CommentDef{
-		"blk":  {Start: "/*", End: "*/", Suffix: "\n"},
-		"blk2": {Start: "/+", End: "+/"},
-		"ln":   {Line: true, Start: "#"},
-		"ln2":  {Line: true, Start: "//"},
-	}}})
-	out, err := j.Parse("/*comment\n8")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != float64(8) {
-		t.Errorf("expected 8 after suffix-terminated comment, got %v", out)
-	}
-}
-
-func TestCommentBlockSuffixFn(t *testing.T) {
-	// LexMatcher-form suffix probe on a block comment.
-	fn := LexMatcher(func(lex *Lex, rule *Rule) *Token {
-		if strings.HasPrefix(lex.Fwd(1), "!") {
-			return lex.Token("#CM", TinCM, nil, "!")
-		}
-		return nil
-	})
-	j := Make(Options{Comment: &CommentOptions{Def: map[string]*CommentDef{
-		"blk": {Start: "/*", End: "*/", Suffix: fn},
-	}}})
-	out, err := j.Parse("/*c! 7")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != float64(7) {
-		t.Errorf("expected 7 after fn-suffix comment, got %v", out)
-	}
-}
-
-func TestCommentBlockEatLine(t *testing.T) {
-	el := true
-	j := Make(Options{Comment: &CommentOptions{Def: map[string]*CommentDef{
-		"blk": {Start: "/*", End: "*/", EatLine: &el},
-	}}})
-	out, err := j.Parse("/*c*/\n\n9")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != float64(9) {
-		t.Errorf("expected 9 after eatline comment, got %v", out)
-	}
-}
-
 // --- custom space / line characters ---
-
-func TestCustomSpaceChars(t *testing.T) {
-	j := Make(Options{Space: &SpaceOptions{Chars: "~ "}})
-	out, err := j.Parse("a:~1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1) {
-		t.Errorf("expected ~ treated as space, got %v", out)
-	}
-}
-
-func TestCustomLineChars(t *testing.T) {
-	j := Make(Options{Line: &LineOptions{Chars: "\r\n;", RowChars: "\n;"}})
-	out, err := j.Parse("a:1;b:2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := out.(map[string]any)
-	if m["a"] != float64(1) || m["b"] != float64(2) {
-		t.Errorf("expected {a:1 b:2} via ; as line char, got %v", m)
-	}
-}
 
 // --- custom string multiChars and escapeChar ---
 
-func TestCustomStringMultiChars(t *testing.T) {
-	j := Make(Options{String: &StringOptions{MultiChars: `"`}})
-	out, err := j.Parse("\"a\nb\"")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "a\nb" {
-		t.Errorf("expected multiline double-quoted string, got %v", out)
-	}
-}
-
-func TestCustomEscapeChar(t *testing.T) {
-	j := Make(Options{String: &StringOptions{EscapeChar: "/"}})
-	out, err := j.Parse(`"a/nb"`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "a\nb" {
-		t.Errorf("expected / as escape char, got %q", out)
-	}
-}
-
 // --- value.def: consume mode and val fallback ---
 
-func TestValueDefConsume(t *testing.T) {
-	lex := true
-	j := Make(Options{Value: &ValueOptions{
-		Lex: &lex,
-		Def: map[string]*ValueDef{
-			// No Val / ValFunc: the matched source is the value.
-			"w":    {Match: regexp.MustCompile(`^win+`), Consume: true},
-			"gone": nil, // nil defs are skipped by buildConfig
-		},
-	}})
-	out, err := j.Parse("a:winnn")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != "winnn" {
-		t.Errorf("expected consumed value winnn, got %v", out)
-	}
-}
-
 // --- match.token regexp success and match.value without Val ---
-
-func TestMatchTokenRegexpSuccess(t *testing.T) {
-	// Register the regexp under #ST so it is expected in KEY/VAL positions.
-	j := Make(Options{Match: &MatchOptions{
-		Token: map[string]*regexp.Regexp{
-			"#ST": regexp.MustCompile(`^@[a-z]+`),
-		},
-	}})
-	out, err := j.Parse("a:@abc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != "@abc" {
-		t.Errorf("expected a:@abc via match.token, got %v", out)
-	}
-}
-
-func TestMatchValueNoValFn(t *testing.T) {
-	// match.value without a Val transformer uses the matched source.
-	j := Make(Options{Match: &MatchOptions{
-		Value: map[string]*MatchValueSpec{
-			"pct": {Match: regexp.MustCompile(`^%[a-z]+`)},
-		},
-	}})
-	out, err := j.Parse("a:%foo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != "%foo" {
-		t.Errorf("expected a:%%foo, got %v", out)
-	}
-}
 
 // --- matcher end-of-source guards (defensive, called directly) ---
 
@@ -345,8 +127,23 @@ func TestCustomMatcherReturnsPerBand(t *testing.T) {
 // --- include: empty group set is a no-op ---
 
 func TestIncludeEmptyGroups(t *testing.T) {
+	// The engine is grammar-free now, so seed a small tagged rule
+	// inline (previously this relied on the bundled grammar's "val").
 	j := Make()
+	if err := j.Grammar(&GrammarSpec{
+		Rule: map[string]*GrammarRuleSpec{
+			"val": {Open: []*GrammarAltSpec{
+				{S: "#NR", G: "one"},
+				{S: "#TX", G: "two"},
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	before := len(j.RSM()["val"].Open)
+	if before == 0 {
+		t.Fatal("expected seeded alts")
+	}
 	j.include("")
 	j.include(" , ")
 	if len(j.RSM()["val"].Open) != before {
@@ -361,30 +158,6 @@ func TestMakeRuleMaxMulOption(t *testing.T) {
 	j := Make(Options{Rule: &RuleOptions{MaxMul: &mm}})
 	if _, err := j.Parse("a:1"); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestParserMaxMulNonPositive(t *testing.T) {
-	p := NewParser()
-	p.MaxMul = 0 // falls back to 3 in startParse
-	out, err := p.Start("a:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1) {
-		t.Errorf("expected a:1, got %v", out)
-	}
-}
-
-func TestParserRuleStartEmptyFallback(t *testing.T) {
-	p := NewParser()
-	p.Config.RuleStart = "" // falls back to "val"
-	out, err := p.Start("a:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != float64(1) {
-		t.Errorf("expected a:1, got %v", out)
 	}
 }
 
@@ -439,18 +212,6 @@ func TestMakeTabnasErrorUnknownCode(t *testing.T) {
 	je = makeTabnasError("no_such_code", "x", "x", 0, 1, 1, cfg)
 	if je.Detail == "" {
 		t.Error("expected fallback to package-level unknown template")
-	}
-}
-
-// --- preprocessEscapes ---
-
-func TestPreprocessEscapes(t *testing.T) {
-	if preprocessEscapes("") != "" {
-		t.Error("empty passthrough")
-	}
-	got := preprocessEscapes(`a\nb\rc\td\qe\`)
-	if got != "a\nb\rc\td\\qe\\" {
-		t.Errorf("escape processing failed: %q", got)
 	}
 }
 
@@ -509,35 +270,6 @@ func TestResolveFuncRefsCorners(t *testing.T) {
 
 // --- wireStateActions: /prepend variant and non-StateAction refs ---
 
-func TestWireStateActionsPrependAndWrongType(t *testing.T) {
-	j := Make()
-	order := []string{}
-	mustGrammar(t, j, &GrammarSpec{
-		Ref: map[FuncRef]any{
-			"@val-bo": StateAction(func(r *Rule, ctx *Context) {
-				order = append(order, "appended")
-			}),
-		},
-		Rule: map[string]*GrammarRuleSpec{"val": {}},
-	})
-	mustGrammar(t, j, &GrammarSpec{
-		Ref: map[FuncRef]any{
-			"@val-bo/prepend": StateAction(func(r *Rule, ctx *Context) {
-				order = append(order, "prepended")
-			}),
-			"@val-ac": "not-a-state-action", // wrong type: silently ignored
-		},
-		Rule: map[string]*GrammarRuleSpec{"val": {}},
-	})
-
-	if _, err := j.Parse("1"); err != nil {
-		t.Fatal(err)
-	}
-	if len(order) < 2 || order[0] != "prepended" || order[1] != "appended" {
-		t.Errorf("expected prepended before appended, got %v", order)
-	}
-}
-
 // --- mapToGrammarRules: non-map rule values skipped ---
 
 func TestMapToGrammarRulesNonMapSkipped(t *testing.T) {
@@ -588,27 +320,6 @@ func TestDeriveCopiesCustomMatchers(t *testing.T) {
 
 // --- SetOptions preserves match token regexps and fns ---
 
-func TestSetOptionsPreservesMatchTokens(t *testing.T) {
-	j := Make(Options{Match: &MatchOptions{
-		Token: map[string]*regexp.Regexp{
-			"#ST": regexp.MustCompile(`^@[a-z]+`),
-		},
-		TokenFn: map[string]LexMatcher{
-			"#VL": func(lex *Lex, rule *Rule) *Token { return nil },
-		},
-	}})
-	sep := "_"
-	j.SetOptions(Options{Number: &NumberOptions{Sep: sep}})
-
-	out, err := j.Parse("a:@abc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.(map[string]any)["a"] != "@abc" {
-		t.Errorf("match.token lost after SetOptions: %v", out)
-	}
-}
-
 // --- registerMatchSpecs: multiple matchers sorted by priority ---
 
 func TestRegisterMatchSpecsSorted(t *testing.T) {
@@ -648,36 +359,4 @@ func TestTokenNilFixedTokens(t *testing.T) {
 
 // --- trailing token error at depth 0 (val-close-err) ---
 
-func TestTrailingTokenError(t *testing.T) {
-	j := Make()
-	_, err := j.Parse("a:1 b")
-	if err == nil {
-		t.Fatal("expected error for trailing token after map pair")
-	}
-	if je, ok := err.(*TabnasError); ok && je.Code != "unexpected" {
-		t.Errorf("expected unexpected, got %s", je.Code)
-	}
-}
-
 // --- implicit list with leading comma (undefined first element) ---
-
-func TestImplicitListLeadingComma(t *testing.T) {
-	j := Make()
-	out, err := j.Parse(",1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	arr := out.([]any)
-	if len(arr) != 2 || arr[0] != nil || arr[1] != float64(1) {
-		t.Errorf("expected [nil 1], got %v", arr)
-	}
-	// Lone comma → [nil].
-	out, err = j.Parse(",")
-	if err != nil {
-		t.Fatal(err)
-	}
-	arr = out.([]any)
-	if len(arr) != 1 || arr[0] != nil {
-		t.Errorf("expected [nil], got %v", arr)
-	}
-}
