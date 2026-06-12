@@ -1,0 +1,3 @@
+input	expected
+a\r\nb	x\ny
+c\rd	e\r\nf

@@ -84,7 +84,7 @@ Full custom matchers (with lexer ordering control) are available in both via
 | Plugin signature | `(tabnas, opts?) => void \| Tabnas` | `func(j *Tabnas, opts map[string]any) error` |
 | Plugin failure | throw | returned `error` |
 | Rule definer | `(rs: RuleSpec, p: Parser) => void \| RuleSpec` | `func(rs *RuleSpec, p *Parser)` (no replacement return) |
-| State actions | Can return error tokens | No return value |
+| State actions raising errors | Return an error `Token` | Set `ctx.ParseErr` (same effect: parse halts with the error) |
 | Plugin defaults | `.defaults` property on the function | `UseDefaults(plugin, defaults)` |
 | Option namespacing | Plugin options merged by name | `PluginOptions` / `SetPluginOptions` |
 
