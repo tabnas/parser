@@ -157,9 +157,9 @@ func TestAttachHintPassThrough(t *testing.T) {
 // --- SetOptionsText error paths ---
 //
 // The engine ships no grammar, so SetOptionsText/GrammarText require a
-// registered text parser (RegisterTextParser; the jsonic package
-// registers one in its init). These tests register a stub parser to
-// exercise every path, restoring the unregistered state on cleanup.
+// registered text parser (via RegisterTextParser). These tests register
+// a stub parser to exercise every path, restoring the unregistered state
+// on cleanup.
 
 // withStubTextParser registers p for the duration of the test.
 func withStubTextParser(t *testing.T, p func(string) (any, error)) {

@@ -102,13 +102,13 @@ func registerJSONGrammar(j *Tabnas) {
 			r.Node = val
 		}}
 		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOB}}, P: "map", B: 1},
-			{S: [][]Tin{{TinOS}}, P: "list", B: 1},
-			{S: [][]Tin{TinSetVAL}},
+			{S: [][]Tin{{TinOB}}, P: "map", B: 1, G: "map,json"},
+			{S: [][]Tin{{TinOS}}, P: "list", B: 1, G: "list,json"},
+			{S: [][]Tin{TinSetVAL}, G: "val,json"},
 		}
 		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinZZ}}},
-			{B: 1},
+			{S: [][]Tin{{TinZZ}}, G: "end,json"},
+			{B: 1, G: "more,json"},
 		}
 	})
 
@@ -131,11 +131,11 @@ func registerJSONGrammar(j *Tabnas) {
 			}
 		}}
 		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOB}, {TinCB}}, B: 1, N: map[string]int{"pk": 0}},
-			{S: [][]Tin{{TinOB}}, P: "pair", N: map[string]int{"pk": 0}},
+			{S: [][]Tin{{TinOB}, {TinCB}}, B: 1, N: map[string]int{"pk": 0}, G: "map,json"},
+			{S: [][]Tin{{TinOB}}, P: "pair", N: map[string]int{"pk": 0}, G: "map,json,pair"},
 		}
 		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCB}}},
+			{S: [][]Tin{{TinCB}}, G: "end,json"},
 		}
 	})
 
@@ -157,11 +157,11 @@ func registerJSONGrammar(j *Tabnas) {
 			}
 		}}
 		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOS}, {TinCS}}, B: 1},
-			{S: [][]Tin{{TinOS}}, P: "elem"},
+			{S: [][]Tin{{TinOS}, {TinCS}}, B: 1, G: "list,json"},
+			{S: [][]Tin{{TinOS}}, P: "elem", G: "list,elem,json"},
 		}
 		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCS}}},
+			{S: [][]Tin{{TinCS}}, G: "end,json"},
 		}
 	})
 
@@ -183,6 +183,7 @@ func registerJSONGrammar(j *Tabnas) {
 				S: [][]Tin{{TinST}, {TinCL}},
 				P: "val",
 				U: map[string]any{"pair": true},
+				G: "map,pair,key,json",
 				A: func(r *Rule, ctx *Context) {
 					keyToken := r.O0
 					if keyToken.Tin == TinST || keyToken.Tin == TinTX {
@@ -194,8 +195,8 @@ func registerJSONGrammar(j *Tabnas) {
 			},
 		}
 		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCA}}, R: "pair"},
-			{S: [][]Tin{{TinCB}}, B: 1},
+			{S: [][]Tin{{TinCA}}, R: "pair", G: "map,pair,json"},
+			{S: [][]Tin{{TinCB}}, B: 1, G: "map,pair,json"},
 		}
 	})
 
@@ -211,11 +212,11 @@ func registerJSONGrammar(j *Tabnas) {
 			}
 		}}
 		rs.Open = []*AltSpec{
-			{P: "val"},
+			{P: "val", G: "list,elem,val,json"},
 		}
 		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCA}}, R: "elem"},
-			{S: [][]Tin{{TinCS}}, B: 1},
+			{S: [][]Tin{{TinCA}}, R: "elem", G: "list,elem,json"},
+			{S: [][]Tin{{TinCS}}, B: 1, G: "list,elem,json"},
 		}
 	})
 }
@@ -233,10 +234,13 @@ func jsonPlugin(j *Tabnas, opts map[string]any) error {
 // strict configuration.
 func makeJSON(extra ...Options) *Tabnas {
 	j := Make(jsonOptions())
+	registerJSONGrammar(j)
+	// Extra options are applied after the grammar exists so that rule
+	// include/exclude filters operate on the installed alternates (and
+	// info options reach the config the grammar closures captured).
 	for _, o := range extra {
 		j.SetOptions(o)
 	}
-	registerJSONGrammar(j)
 	return j
 }
 
