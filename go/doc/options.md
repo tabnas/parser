@@ -109,8 +109,9 @@ Controls quoted string parsing.
 | `Chars` | `string` | `"'\"\`` | Quote characters |
 | `MultiChars` | `string` | `` "`" `` | Multiline quote characters |
 | `EscapeChar` | `string` | `"\\"` | Escape character |
-| `Escape` | `map[string]string` | (standard) | Escape sequence mappings |
+| `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |
+| `EscapeStrict` | `*bool` | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `AllowUnknown: false`, yields JSON-conformant escapes |
 | `Abandon` | `*bool` | `false` | On error, return nil to let next matcher try |
 | `Replace` | `map[rune]string` | `nil` | Character replacements during scanning |
 

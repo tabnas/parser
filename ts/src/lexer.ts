@@ -1009,11 +1009,21 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     escCharCode:
       null == os.escapeChar ? undefined : os.escapeChar.charCodeAt(0),
     allowUnknown: !!os.allowUnknown,
+    // Strict escapes: disable the non-standard structural escapes \xHH
+    // and \u{...} (plain \uXXXX stays). Combined with escape-map removals
+    // and allowUnknown:false this yields JSON.parse-conformant handling.
+    escapeStrict: !!os.escapeStrict,
     hasReplace: false,
     abandon: !!os.abandon,
   })
 
   cfg.string.escMap = clean(cfg.string.escMap)
+  // An escape mapped to '' (or null/undefined, removed by clean above)
+  // is treated as removed, so a built-in escape such as \v can be
+  // dropped via `string.escape: { v: '' }` — parity with the Go runtime.
+  for (const k of keys(cfg.string.escMap)) {
+    if ('' === cfg.string.escMap[k]) delete cfg.string.escMap[k]
+  }
   cfg.string.escBitmap = charsBitmap(cfg.string.escMap)
   cfg.string.hasReplace = 0 < keys(cfg.string.replaceCodeMap).length
 
@@ -1033,7 +1043,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     const {
       quoteMap, quoteBitmap, escMap, escCharCode,
       multiChars, multiBitmap,
-      allowUnknown, replaceCodeMap, hasReplace,
+      allowUnknown, replaceCodeMap, hasReplace, escapeStrict,
     } = mcfg
 
     const { pnt, src } = lex
@@ -1109,7 +1119,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           buf.push(es)
           sI++
           cI++
-        } else if ('x' === ec) {
+        } else if ('x' === ec && !escapeStrict) {
           sI++ // past 'x'
           const xx = parseInt(src.substring(sI, sI + 2), 16)
           if (isNaN(xx)) {
@@ -1125,7 +1135,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI += 3
         } else if ('u' === ec) {
           sI++ // past 'u'
-          if ('{' === src[sI]) {
+          if ('{' === src[sI] && !escapeStrict) {
             // Braced form \u{H...H}: 1-6 hex digits, any code point.
             const endI = src.indexOf('}', sI + 1)
             const digits = -1 === endI ? '' : src.substring(sI + 1, endI)
