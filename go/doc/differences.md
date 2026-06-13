@@ -7,28 +7,34 @@ additions for Go client code, listed below.
 
 ## Packaging: Aligned (Grammar-Free Engine)
 
-Both packages are grammar-free engines. In TypeScript every grammar
-(including strict JSON) arrives via a plugin, and the strict-JSON grammar
-lives as a test fixture (`ts/test/json-plugin.ts`). In Go the engine is
-`github.com/tabnas/parser/go` and the relaxed-JSON (jsonic-style) grammar
-is the separate plugin package `github.com/tabnas/parser/go/jsonic`:
+Both runtimes are grammar-free engines that ship no grammar. In each, a
+grammar (including strict JSON) arrives via a plugin, and the
+strict-JSON grammar lives only as a test fixture — `ts/test/json-plugin.ts`
+in TypeScript, `go/jsonplugin_test.go` (`package tabnas`, test-only) in
+Go. The Go engine is `github.com/tabnas/parser/go` (package `tabnas`):
 
 | Need | Use |
 |---|---|
-| Relaxed JSON out of the box | `jsonic.Parse(src)` / `jsonic.Make(opts...)` |
-| Strict JSON | `jsonic.MakeJSON()` or `Rule.Include: "json"` |
-| Bare engine, own grammar | `tabnas.Make()` + `Rule`/`Grammar` |
-| Grammar as a plugin | `j.Use(jsonic.Plugin)` |
+| Parse anything | `tabnas.Make()` + `j.Use(grammarPlugin)` |
+| Bare engine, own grammar | `tabnas.Make()` + `Token`/`Rule`/`Grammar` |
+| Grammar as a plugin | `j.Use(myPlugin)` |
+| Restrict to a rule group | `Rule: &RuleOptions{Include: "json"}` |
+
+A grammar plugin is a `func(j *Tabnas, opts map[string]any) error`. The
+strict-JSON test fixture (`makeJSON` / `jsonPlugin` in
+`go/jsonplugin_test.go`) is a worked example, but those helpers are
+test-only and not importable by client code.
 
 The engine's text-form convenience APIs (`SetOptionsText`, `GrammarText`)
-need a parser for their text argument; grammar packages register one via
-`tabnas.RegisterTextParser` (importing `jsonic` does this automatically,
-in the manner of database/sql drivers).
+need a parser for their text argument. The engine registers none; a
+grammar package registers one via `tabnas.RegisterTextParser` (in the
+manner of database/sql drivers), and until one is registered the
+text-form APIs return an error.
 
-Both runtimes run the shared fixtures under `test/spec/`: the Go jsonic
-package runs all of them; TypeScript runs the strict-JSON and utility
-fixtures (`include-json*.tsv`, `utility-*.tsv`) via the json-plugin
-fixture.
+Both runtimes run the shared fixtures under `test/spec/` through their
+strict-JSON test fixtures: TypeScript runs the strict-JSON and utility
+fixtures (`include-json*.tsv`, `utility-*.tsv`) via `json-plugin.ts`, and
+Go runs them via `jsonplugin_test.go`.
 
 ## Behavioral Differences
 
@@ -102,7 +108,11 @@ Full custom matchers (with lexer ordering control) are available in both via
 ## Go-Specific Features
 
 These are available only in the Go version. They exist for Go client code
-(typed access to parse metadata) and are intentionally kept.
+(typed access to parse metadata) and are intentionally kept. The examples
+below install a grammar (`myGrammar`) that honours the `Info` options and
+parse strict JSON; `Implicit` is `false` for braces/brackets and would be
+`true` only for a grammar that creates containers implicitly (e.g. a
+relaxed `a:1` → map).
 
 ### `Info.Text` Option (`TextInfo`)
 
@@ -111,8 +121,9 @@ character used:
 
 ```go
 j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{Text: boolp(true)}})
-result, _ := j.Parse(`'hello'`)
-// result: tabnas.Text{Quote: "'", Str: "hello"}
+_ = j.Use(myGrammar)
+result, _ := j.Parse(`"hello"`)
+// result: tabnas.Text{Quote: `"`, Str: "hello"}
 ```
 
 ### `Info.List` Option (`ListRef`)
@@ -121,8 +132,9 @@ Wraps arrays in a `ListRef` struct with metadata:
 
 ```go
 j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{List: boolp(true)}})
-result, _ := j.Parse("a, b, c")
-// result: tabnas.ListRef{Val: []any{"a", "b", "c"}, Implicit: true}
+_ = j.Use(myGrammar)
+result, _ := j.Parse(`["a","b","c"]`)
+// result: tabnas.ListRef{Val: []any{"a", "b", "c"}, Implicit: false}
 ```
 
 ### `Info.Map` Option (`MapRef`)
@@ -131,14 +143,10 @@ Wraps objects in a `MapRef` struct with metadata:
 
 ```go
 j := tabnas.Make(tabnas.Options{Info: &tabnas.InfoOptions{Map: boolp(true)}})
-result, _ := j.Parse("a:1")
-// result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: true}
+_ = j.Use(myGrammar)
+result, _ := j.Parse(`{"a":1}`)
+// result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: false}
 ```
-
-### `jsonic.MakeJSON()`
-
-Constructs an instance restricted to strict JSON (rejects all tabnas
-relaxations). Mirrors what the TS json-plugin test fixture provides.
 
 ## Internal Structure: Scan-Spec Lexer (Aligned)
 
@@ -187,7 +195,7 @@ guarantees it **never panics**:
   `(*Tabnas, error)` (a failing plugin during child derivation mirrors
   TS `make()` throwing), and `MakeRuleCond` returns
   `(AltCond, error)` for unknown operators.
-- `go test -fuzz=FuzzParse ./jsonic/` exercises the guarantee against
+- `go test -fuzz=FuzzParse .` exercises the guarantee against
   arbitrary byte input.
 
 ## Type System

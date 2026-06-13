@@ -8,48 +8,26 @@ the [tutorial](tutorial.md); for task recipes see the
 ```go
 import (
 	tabnas "github.com/tabnas/parser/go" // engine (ships no grammar)
-	"github.com/tabnas/parser/go/jsonic" // relaxed-JSON grammar + conveniences
 )
 ```
 
-The engine package is grammar-free: it has no package-level `Parse`.
-Top-level parsing convenience lives in `jsonic`. `(*Tabnas).Parse` and
-`ParseMeta` are instance methods on a configured instance.
-
-## Package `jsonic`
-
-### `Parse(src string) (any, error)`
-
-Parse a relaxed-JSON string with default settings. Builds a fresh
-parser per call. Returns `*tabnas.TabnasError` on a syntax error.
-
-```go
-result, err := jsonic.Parse("a:1, b:2")
-// result: map[string]any{"a": float64(1), "b": float64(2)}
-```
-
-### `Make(opts ...tabnas.Options) *tabnas.Tabnas`
-
-Create a reusable instance with the relaxed-JSON grammar installed.
-Options are applied as in `tabnas.Make`; `Rule.Include` / `Rule.Exclude`
-group filters are applied after the grammar exists, so they operate on
-its group tags (`"json"`, `"tabnas"`).
-
-### `MakeJSON() *tabnas.Tabnas`
-
-Create an instance restricted to strict JSON. Rejects unquoted
-keys/values, comments, hex/octal/binary numbers, trailing commas,
-leading-zero numbers, single/backtick strings, and empty input.
-
-### `Plugin(j *tabnas.Tabnas, opts map[string]any) error`
-
-The relaxed-JSON grammar as a standard plugin, usable with
-`(*Tabnas).Use`. Always returns `nil`.
+The engine package is grammar-free: it has no package-level `Parse`, and
+there is no convenience top-level parser. You `Make()` an engine,
+`Use()` a grammar plugin to teach it a language, then call the instance
+methods `(*Tabnas).Parse` / `ParseMeta`:
 
 ```go
 j := tabnas.Make()
-_ = j.Use(jsonic.Plugin)
+if err := j.Use(myGrammar); err != nil {
+	// plugin reported a failure
+}
+result, err := j.Parse("hello")
 ```
+
+A grammar plugin is any `func(j *tabnas.Tabnas, opts map[string]any) error`
+that registers tokens and rules (see the [plugin guide](plugins.md)).
+For a complete, non-trivial grammar example, see the strict-JSON test
+fixture at [`jsonplugin_test.go`](../jsonplugin_test.go).
 
 ## Parsing (instance methods)
 
@@ -65,11 +43,12 @@ Parse with metadata accessible in rule actions/conditions via
 
 ## Result types
 
-For relaxed-JSON input the concrete types behind the returned `any`
-are: `map[string]any` (objects), `[]any` (arrays), `float64`
-(numbers), `string` (strings), `bool` (booleans), `nil` (null / empty
-input). With `Info` options enabled, values are wrapped in `Text`,
-`ListRef`, and `MapRef`. See the [syntax reference](syntax.md).
+A JSON-style grammar maps the returned `any` to these concrete types:
+`map[string]any` (objects), `[]any` (arrays), `float64` (numbers),
+`string` (strings), `bool` (booleans), `nil` (null / empty input) — the
+exact mapping is the grammar's choice. With `Info` options enabled,
+those values are wrapped in `Text`, `ListRef`, and `MapRef`. See the
+[syntax reference](syntax.md).
 
 ## Instance management
 
@@ -107,7 +86,15 @@ instance for chaining.
 ### `(*Tabnas) SetOptionsText(text string) (*Tabnas, error)`
 
 As `SetOptions`, but parses a tabnas-format options string. Requires a
-registered text parser (importing `jsonic` registers one).
+text parser registered via `tabnas.RegisterTextParser`; the engine
+ships none, so this returns an error until you register one (typically
+your own grammar package does so in its `init`).
+
+### `RegisterTextParser(p func(src string) (any, error))`
+
+Package-level. Register the parser used by the text-form APIs
+(`SetOptionsText`, `GrammarText`) to parse their string argument. The
+grammar-free engine registers none by default.
 
 ### `(*Tabnas) Options() Options`
 
@@ -148,7 +135,8 @@ produce an error, never a panic. See the [plugin guide](plugins.md).
 ### `(*Tabnas) GrammarText(text string, setting ...*GrammarSetting) error`
 
 As `Grammar`, but parses a tabnas-format grammar string. Requires a
-registered text parser.
+text parser registered via `RegisterTextParser` (the engine ships
+none).
 
 ### `(*Tabnas) RSM() map[string]*RuleSpec`
 
@@ -320,7 +308,9 @@ hint, and an internal-diagnostics suffix. ANSI color is on by default;
 disable via `Options.Color`.
 
 ```go
-_, err := jsonic.Parse(`"abc`)
+j := tabnas.Make()
+_ = j.Use(myGrammar)
+_, err := j.Parse(`"abc`)
 if te, ok := err.(*tabnas.TabnasError); ok {
 	fmt.Println(te.Code, "at", te.Row, te.Col) // unterminated_string at 1 1
 }
