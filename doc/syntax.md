@@ -1,9 +1,10 @@
 # Syntax Reference
 
-This is the canonical description of the relaxed-JSON syntax that the
-jsonic-style grammar accepts. It is language-neutral: the TypeScript
-strict-JSON test grammar, and the Go [`jsonic`](../go/jsonic/) package,
-both implement subsets or supersets of what is described here.
+This is the canonical description of the relaxed-JSON syntax that a
+jsonic-style grammar accepts. It is language-neutral: the strict-JSON
+test grammars shipped as fixtures in each runtime, and relaxed-JSON
+grammar packages, implement subsets or supersets of what is described
+here.
 
 For how a given runtime represents the parsed result as native values,
 see its own syntax notes ([Go types](../go/doc/syntax.md)).
@@ -125,8 +126,9 @@ options reference.
 ## Turning relaxations off
 
 Each relaxation is controlled by an option, so the same engine can be
-configured anywhere from strict JSON to maximally lenient. The Go
-`jsonic.MakeJSON()` constructor and the `rule.include: "json"` option
-both produce a strict-JSON parser that rejects every relaxation above.
-See the [options reference](../go/doc/options.md) for the full list of
-toggles.
+configured anywhere from strict JSON to maximally lenient. Restricting a
+grammar to the `json` group (the `rule.include: "json"` option) together
+with the strict number/string/comment options produces a strict-JSON
+parser that rejects every relaxation above — see the strict-JSON test
+fixtures for a worked example. The [options reference](../go/doc/options.md)
+lists the full set of toggles.

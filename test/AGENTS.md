@@ -1,8 +1,9 @@
 # Agents Guide — shared spec fixtures
 
-`spec/*.tsv` holds the cross-runtime conformance fixtures. Both the Go
-`jsonic` package and the TypeScript strict-JSON tests run these, so a
-change here affects both languages — edit with that in mind.
+`spec/*.tsv` holds the cross-runtime conformance fixtures. Both runtimes
+run the strict-JSON subset against their strict-JSON test grammars, so a
+change to those fixtures affects both languages — edit with that in mind.
+The relaxed-grammar fixtures are retained for downstream grammar packages.
 
 ## Format
 
@@ -15,9 +16,9 @@ or, for list-child fixtures, a third column). Loaders unescape `\n`,
 
 ## Who runs what
 
-- Go: `go/jsonic/feature_tsv_test.go` + `helpers_test.go`
-  (`loadTSV` / `runParserTSV` / `runErrorTSV`; `specDir` → `../../test/spec`).
-  The jsonic package runs essentially all fixtures.
+- Go: `go/spec_test.go` (`loadTSV` / `runParserTSV` / `runErrorTSV`;
+  `specDir` → `../test/spec`) runs the `include-json*` fixtures through
+  the strict-JSON test fixture (`go/jsonplugin_test.go`).
 - TypeScript: `ts/test/utility.js` (`loadTSV`); `ts/test/json-spec.test.js`
   runs the `include-json*` fixtures through the strict-JSON test grammar,
   and `ts/test/utility.test.js` runs the `utility-*` fixtures.

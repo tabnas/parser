@@ -1,14 +1,15 @@
 # Agents Guide — tabnas (Go)
 
-Go port of the tabnas engine, serving the original **jsonic use
-case**: lenient JSON for humans — `jsonic.Parse("a:1, b:2")` just
-works. The layout mirrors the canonical TypeScript package: this
-engine package ships **no grammar**; the relaxed-JSON grammar is the
-plugin sub-package `jsonic/` (`jsonic.Plugin`, plus `Make`/`Parse`/
-`MakeJSON` conveniences). `tabnas.Make()` returns a bare engine.
+Go port of the tabnas engine. The layout mirrors the canonical
+TypeScript package: this engine package ships **no grammar**.
+`tabnas.Make()` returns a bare engine; callers bring their own grammar
+plugin via `Use`. A strict-JSON grammar is kept as a test fixture
+(`jsonplugin_test.go` — `makeJSON`, `registerJSONGrammar`, `jsonPlugin`),
+mirroring `ts/test/json-plugin.ts`, so the engine always has a
+non-trivial grammar to test against.
 
-Module path: `github.com/tabnas/parser/go`. Two packages:
-`tabnas` (engine, this directory) and `jsonic` (grammar, `jsonic/`).
+Module path: `github.com/tabnas/parser/go`. One package: `tabnas`
+(engine, this directory).
 
 ## Authority
 
@@ -23,8 +24,7 @@ mirror it. Accepted differences are documented in
 
 - `Info.Map` → `MapRef`, `Info.List` → `ListRef`, `Info.Text` →
   `Text` wrappers (typed metadata for Go clients); tests in
-  `mapref_test.go`, `listref_test.go`, `textinfo_test.go`.
-- `jsonic.MakeJSON()` strict-JSON constructor; tests in `jsonic/variant_test.go`.
+  `feature_info_test.go`.
 - Introspection API (`RSM()`, `Plugins()`, `Decorate()`, ...).
 
 ## Layout
@@ -40,8 +40,9 @@ mirror it. Accepted differences are documented in
 - `plugin.go` — `Use`, `SetOptions`, `Grammar`, match registration.
 - `grammarspec.go` — declarative grammar-spec machinery (engine).
 - `scan.go` — scan-spec driver and builders (mirrors TS lexer scan).
-- `jsonic/grammar.go`, `jsonic/jsonic.go` — the relaxed-JSON grammar
-  plugin and its convenience API.
+- `jsonplugin_test.go` — strict-JSON grammar test fixture
+  (`makeJSON`/`registerJSONGrammar`/`jsonPlugin`); `spec_test.go` runs
+  the shared `include-json*` fixtures against it.
 - `utility.go` — `Deep`, `StrInject`, text-form option parsing.
 
 ## Documentation
@@ -66,7 +67,7 @@ the reference into a tutorial.
 
 ```bash
 go build ./... && go vet ./...
-go test ./...            # engine + jsonic (../test/spec fixtures run in jsonic)
+go test ./...            # engine + strict-JSON fixture (../test/spec fixtures)
 go test -coverpkg=./... -cover ./...
 go test -run TestName -v ./...
 ```
@@ -74,17 +75,16 @@ go test -run TestName -v ./...
 ## Testing conventions
 
 - Shared behavior: add a fixture under `../test/spec/` and run it via
-  `runParserTSV` / `runErrorTSV` (`jsonic/alignment_test.go`).
-- Engine tests must not import jsonic (cycle); drive the lexer
-  standalone or install a small inline grammar.
+  `runParserTSV` / `runErrorTSV` (`spec_test.go`).
+- Engine tests drive the lexer standalone, install a small inline
+  grammar, or build on the strict-JSON fixture (`makeJSON`).
 - Go-specific API: plain `_test.go` files; mirror the TS test name in
   a comment when porting a TS test.
 - Error-output assertions: ANSI color is on by default — disable via
   `Options{Color: &ColorOptions{Active: &off}}` or assert on
   substrings that avoid escape-code boundaries.
 - **No panics**: public APIs return errors, never panic — parsing has
-  a recover guard (panics become `"internal"` TabnasErrors), and
-  `jsonic/utf8_test.go` carries a `FuzzParse` fuzz target. Don't add
+  a recover guard (panics become `"internal"` TabnasErrors). Don't add
   `panic(...)` to production code; thread an error instead.
 - Unicode: any UTF-8 char works in data and as configured matcher
   chars; columns count runes. See `doc/differences.md` ("Unicode").

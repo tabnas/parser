@@ -18,9 +18,8 @@ lexer. Grammar is contributed by plugins.
 | Path | What it is |
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. A grammar-free engine package (`tabnas` on npm). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
-| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`. |
-| `go/jsonic/` | The relaxed-JSON (jsonic-style) grammar as a plugin package plus convenience API (`jsonic.Parse`, `jsonic.Make`, `jsonic.MakeJSON`). What most Go clients import. |
-| `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). The Go jsonic package runs all of them; TS runs the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones. |
+| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
+| `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). Both runtimes run the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones; the relaxed-grammar fixtures are kept for downstream grammar packages. |
 
 ## Authority and alignment rules
 
@@ -29,11 +28,11 @@ lexer. Grammar is contributed by plugins.
    the behavior is expressible as input → output).
 2. **Go-only features are intentional** and must be kept and tested:
    `Info.Map` (`MapRef`), `Info.List` (`ListRef`), `Info.Text`
-   (`Text`), `jsonic.MakeJSON()`, and the introspection API. They exist for
-   typed Go client code.
-3. The Go layout mirrors TS: the engine package ships no grammar; the
-   relaxed-JSON grammar is the `go/jsonic` plugin package. Don't fold
-   the grammar back into the engine.
+   (`Text`), and the introspection API. They exist for typed Go client
+   code and are exercised in `go/feature_info_test.go`.
+3. The Go layout mirrors TS: the engine package ships no grammar. The
+   strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`),
+   not in the engine. Don't fold a grammar back into the engine.
 4. Known, accepted behavior differences are documented in
    `go/doc/differences.md`. Update that file whenever you change
    either side's behavior or feature surface.
@@ -54,7 +53,7 @@ From `go/`:
 
 ```bash
 go build ./... && go vet ./...
-go test ./...                  # engine + jsonic; includes all shared fixtures
+go test ./...                  # engine + strict-JSON fixture; shared fixtures
 go test -coverpkg=./... -cover ./...
 ```
 
@@ -65,8 +64,8 @@ go test -coverpkg=./... -cover ./...
 Tab-separated, header row first, one case per line. `\n`, `\r`, `\t`
 in the input column are unescaped by the loaders. The expected column
 is JSON, or `ERROR:<code>` for error cases. Loaders:
-`ts/test/utility.js` (`loadTSV`) and `go/jsonic/feature_tsv_test.go`
-(`runParserTSV` / `runErrorTSV`; `specDir` resolves `../../test/spec`).
+`ts/test/utility.js` (`loadTSV`) and `go/spec_test.go`
+(`runParserTSV` / `runErrorTSV`; `specDir` resolves `../test/spec`).
 
 ## Documentation structure
 

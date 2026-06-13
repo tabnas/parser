@@ -60,9 +60,8 @@ The strict-JSON grammar used by the conformance tests lives as a test
 fixture at [`test/json-plugin.ts`](test/json-plugin.ts) — a worked
 example of a non-trivial grammar plugin.
 
-For lenient-JSON parsing (unquoted keys, implicit objects, comments,
-trailing commas, etc.) built into the package, see the
-[Go port](../go/).
+The [Go port](../go/) follows the same grammar-free design, with its
+strict-JSON grammar kept as a test fixture too.
 
 ## License
 
