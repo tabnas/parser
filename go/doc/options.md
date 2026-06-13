@@ -162,7 +162,8 @@ Controls parser rule behavior.
 | `Start` | `string` | `"val"` | Starting rule name |
 | `Finish` | `*bool` | `true` | Auto-close at EOF |
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
-| `Exclude` | `string` | `""` | Comma-separated group tags to exclude |
+| `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
+| `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
 
 ## `Lex`
 
@@ -172,6 +173,7 @@ Controls global lexer behavior.
 |---|---|---|---|
 | `Empty` | `*bool` | `true` | Allow empty source |
 | `EmptyResult` | `any` | `nil` | Value for empty source |
+| `Match` | `map[string]*MatchSpec` | `nil` | Custom lexer matchers, keyed by name (see [API reference](api.md#custom-matchers)) |
 
 ## `Parser`
 
@@ -187,7 +189,7 @@ Controls security features.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `Key` | `*bool` | `true` | Block `__proto__` and `constructor` keys |
+| `Key` | `*bool` | `true` | Block prototype-pollution keys (e.g. `__proto__`) |
 
 ## Go-Only Options (`Info`)
 
@@ -224,12 +226,28 @@ is `RegExp | LexMatcher`).
 | `Value` | `map[string]*MatchValueSpec` | name → `{Match, Val}` or `{Fn}` value matcher |
 | `Check` | `LexCheck` | Hook before the match matcher runs |
 
+## `Color`
+
+Controls ANSI color codes in formatted error messages (TS:
+`options.color`). All codes default to standard escapes.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Active` | `*bool` | `true` | Toggle color output (set `false` to disable) |
+| `Reset` | `string` | `ESC[0m` | Reset all attributes |
+| `Hi` | `string` | `ESC[91m` | Highlight the error header |
+| `Lo` | `string` | `ESC[2m` | Dim the trailing suffix |
+| `Line` | `string` | `ESC[34m` | Color the source-location arrow and gutter |
+
 ## Other Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `Ender` | `[]string` | Additional characters that end text tokens |
+| `TokenSet` | `map[string][]string` | Customize named token sets (e.g. `VAL`, `KEY`); values are token names |
 | `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
-| `ConfigModify` | `map[string]ConfigModifier` | Post-config callbacks |
+| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse |
+| `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
+| `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
 | `Tag` | `string` | Instance identifier tag (shown in the error suffix internal line) |

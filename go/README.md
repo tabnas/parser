@@ -2,21 +2,22 @@
 
 Version: 0.1.22
 
-A Go port of [tabnas](https://github.com/tabnas/parser) — the
-lenient JSON parser in the jsonic tradition. The TypeScript reference
-engine lives at [`../ts/`](../ts/) in this repo; both runtimes share
-the spec fixtures under [`../test/spec/`](../test/spec/), which keep
-the engine behavior aligned.
+A grammar-free parsing engine plus a relaxed-JSON grammar, in the
+jsonic tradition: lenient JSON for humans. It parses what you meant,
+not just what you typed — unquoted keys, implicit objects and arrays,
+comments, trailing commas, single-quoted strings, path diving, and
+more.
 
-Like the TypeScript package, the engine package
-(`github.com/tabnas/parser/go`) ships **no grammar** — grammar comes
-from plugins. The relaxed-JSON grammar lives in the
-[`jsonic`](jsonic/) sub-package, which is what most Go clients want:
+The module ships two packages:
 
-tabnas/jsonic accepts all standard JSON -- and then goes further.
-Unquoted keys, implicit objects, comments, trailing commas,
-single-quoted strings, multiline strings, path diving, and more. It
-parses what you meant, not just what you typed.
+- the engine, `github.com/tabnas/parser/go` (imported as `tabnas`),
+  which ships **no grammar** — grammar comes from plugins;
+- the relaxed-JSON grammar, `github.com/tabnas/parser/go/jsonic`,
+  which is what most Go clients want.
+
+This is a Go port of the [TypeScript reference](../ts/); both runtimes
+share the spec fixtures under [`../test/spec/`](../test/spec/) to stay
+aligned.
 
 ## Install
 
@@ -24,80 +25,52 @@ parses what you meant, not just what you typed.
 go get github.com/tabnas/parser/go@latest
 ```
 
-## Quick Example
+## A taste
 
 ```go
 package main
 
 import (
-    "fmt"
-    "github.com/tabnas/parser/go/jsonic"
+	"fmt"
+
+	"github.com/tabnas/parser/go/jsonic"
 )
 
 func main() {
-    result, err := jsonic.Parse("a:1, b:2")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(result) // map[a:1 b:2]
+	result, err := jsonic.Parse("a:1, b:2")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(result) // map[a:1 b:2]
 }
 ```
 
-That's it. No schema, no struct tags, no ceremony. Full UTF-8
-support (keys, values, escapes — including astral-plane characters
-and JSON surrogate pairs), and the API never panics: every failure
-is a returned `error`, even for arbitrary malformed byte input.
-
-## Configured Instance
-
-You don't have to accept the defaults. `jsonic.Make` gives you a
-configured parser instance (engine + relaxed-JSON grammar) with
-whatever behavior you need:
-
-```go
-import (
-    tabnas "github.com/tabnas/parser/go"
-    "github.com/tabnas/parser/go/jsonic"
-)
-
-func boolp(b bool) *bool { return &b }
-
-j := jsonic.Make(tabnas.Options{
-    Number: &tabnas.NumberOptions{Lex: boolp(false)},
-})
-
-result, err := j.Parse("a:1, b:2")
-// {"a": "1", "b": "2"} — numbers are kept as strings
-```
-
-For a bare engine with your own grammar, use `tabnas.Make()` and
-install rules via `Rule`/`Grammar`, or apply the jsonic grammar
-explicitly with `j.Use(jsonic.Plugin)`.
-
-Options compose. Turn things off, turn things on. You can always change
-it later.
-
-## Syntax
-
-tabnas/jsonic accepts all standard JSON plus the relaxations listed in the
-[syntax reference](doc/syntax.md). Here are the highlights:
-
-- **Unquoted keys**: `a:1` &rarr; `{"a": 1}`
-- **Implicit objects**: `a:1,b:2` &rarr; `{"a": 1, "b": 2}`
-- **Implicit arrays**: `a,b,c` &rarr; `["a", "b", "c"]`
-- **Comments**: `#`, `//`, `/* */`
-- **Single/backtick quotes**: `'hello'`, `` `hello` ``
-- **Path diving**: `a:b:1` &rarr; `{"a": {"b": 1}}`
-- **Trailing commas**: `{a:1,}` &rarr; `{"a": 1}`
-- **All number formats**: hex, octal, binary, separators
+No schema, no struct tags, no ceremony. Full UTF-8 support (keys,
+values, escapes — including astral-plane characters and JSON surrogate
+pairs), and the API never panics: every failure is a returned `error`,
+even for arbitrary malformed byte input.
 
 ## Documentation
 
-- [API Reference](doc/api.md) -- types, functions, and methods
-- [Syntax Reference](doc/syntax.md) -- all supported syntax
-- [Options Reference](doc/options.md) -- configuration options
-- [Plugin Guide](doc/plugins.md) -- writing plugins
-- [Differences from TypeScript](doc/differences.md) -- what to know if you use both
+Learning and reference, by purpose:
+
+- [Tutorial](doc/tutorial.md) — start here: `go get` to a working
+  parse and one customization.
+- [How-to guide](doc/guide.md) — focused recipes for individual tasks.
+- [API reference](doc/api.md) — every type, function, and method.
+- [Options reference](doc/options.md) — every configuration field.
+- [Syntax reference](doc/syntax.md) — Go result types.
+- [Plugin guide](doc/plugins.md) — authoring grammars and matchers.
+- [Concepts](doc/concepts.md) — how the Go packages fit together and
+  the no-panic guarantee.
+- [Differences from TypeScript](doc/differences.md) — for those who
+  use both runtimes.
+
+Shared, language-neutral docs:
+
+- [Syntax specification](../doc/syntax.md) — the canonical relaxed-JSON
+  grammar.
+- [Architecture](../doc/architecture.md) — the engine design.
 
 ## License
 

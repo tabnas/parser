@@ -2,19 +2,19 @@
 
 Options are passed to `new Tabnas(options)` (or to `am.make(options)`
 to derive a child) to configure a parser instance. All fields are
-optional — unset fields use defaults.
+optional — unset fields use defaults. The complete option type is
+`TabnasOptions` (see `src/types.ts`); the default values are in
+`src/defaults.ts`.
 
 ```js
-const { Tabnas, bnf } = require('tabnas')
+const { Tabnas } = require('tabnas')
 
 const am = new Tabnas({
-  plugins: [bnf],
+  plugins: [myGrammarPlugin],
   comment: { lex: false },
   number: { hex: false },
 })
 ```
-
-The complete option type is `TabnasOptions` (see `src/types.ts`).
 
 ## `plugins`
 
@@ -24,7 +24,7 @@ instance (`am.make({ … })`) re-run every plugin in this list against
 their own merged options.
 
 ```js
-new Tabnas({ plugins: [bnf, Debug, myGrammarPlugin] })
+new Tabnas({ plugins: [myGrammarPlugin, anotherPlugin] })
 ```
 
 `plugins` is consumed by the constructor — it's not stored back into
@@ -33,26 +33,40 @@ new Tabnas({ plugins: [bnf, Debug, myGrammarPlugin] })
 
 ## `plugin`
 
-Per-plugin option bag. `am.use(myPlugin, { x: 1 })` stores `{ x: 1 }`
-under `options.plugin.mypluginname`. Plugins read their own settings
-from there.
+Per-plugin option bag, namespaced by plugin name (lowercased).
+`am.use(myPlugin, { x: 1 })` stores `{ x: 1 }` under
+`options.plugin.myplugin`. Plugins read their own settings from there.
 
 ```js
 am.options.plugin.foo                 // foo's merged options
 ```
 
+## `tag`
+
+A short label appended to `am.id` and shown in error diagnostics.
+Default `'-'`.
+
 ## `fixed`
 
-Controls recognition of fixed structural tokens (`{`, `}`, `[`, `]`, `:`, `,`).
+Controls recognition of fixed structural tokens (`{`, `}`, `[`, `]`,
+`:`, `,`).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `lex` | boolean | `true` | Enable fixed token recognition |
-| `token` | object | (built-in) | Map of token name to source character |
+| `token` | object | (built-in) | Map of token name to source string |
+
+## `tokenSet`
+
+Named groups of tokens, used by grammars and by `am.tokenSet(name)`.
+
+| Set | Default members |
+|---|---|
+| `IGNORE` | `#SP`, `#LN`, `#CM` |
+| `VAL` | `#TX`, `#NR`, `#ST`, `#VL` |
+| `KEY` | `#TX`, `#NR`, `#ST`, `#VL` |
 
 ## `space`
-
-Controls whitespace handling.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -60,8 +74,6 @@ Controls whitespace handling.
 | `chars` | string | `" \t"` | Characters treated as space |
 
 ## `line`
-
-Controls line ending handling.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -72,16 +84,12 @@ Controls line ending handling.
 
 ## `text`
 
-Controls unquoted text lexing.
-
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `lex` | boolean | `true` | Enable text matching |
-| `modify` | function[] | `[]` | Pipeline of value transformers applied after matching |
+| `lex` | boolean | `true` | Enable unquoted-text matching |
+| `modify` | function[] | `[]` | Value transformers applied after matching |
 
 ## `number`
-
-Controls numeric literal parsing.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -89,25 +97,23 @@ Controls numeric literal parsing.
 | `hex` | boolean | `true` | Support `0x` hexadecimal |
 | `oct` | boolean | `true` | Support `0o` octal |
 | `bin` | boolean | `true` | Support `0b` binary |
-| `sep` | string\|null | `"_"` | Separator character (null to disable) |
-| `exclude` | RegExp | -- | Pattern to exclude from number matching |
+| `sep` | string\|null | `"_"` | Digit separator character (null to disable) |
+| `exclude` | RegExp | — | Pattern to exclude from number matching |
 
 ## `comment`
-
-Controls comment handling.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `lex` | boolean | `true` | Enable all comment lexing |
-| `def` | object | (see below) | Comment type definitions |
+| `def` | object | (see below) | Comment-type definitions |
 
 Default comment definitions:
 
 ```js
 {
-  hash:  { line: true, start: '#' },
-  slash: { line: true, start: '//' },
-  block: { line: false, start: '/*', end: '*/' }
+  hash:  { line: true, start: '#',  lex: true, eatline: false },
+  slash: { line: true, start: '//', lex: true, eatline: false },
+  multi: { line: false, start: '/*', end: '*/', lex: true, eatline: false },
 }
 ```
 
@@ -118,46 +124,56 @@ Each definition has:
 | `line` | boolean | `true` for line comments, `false` for block |
 | `start` | string | Start marker |
 | `end` | string | End marker (block comments only) |
-| `eatline` | boolean | Consume trailing newline after comment |
+| `lex` | boolean | Enable this definition |
+| `eatline` | boolean | Consume the trailing newline after the comment |
+| `suffix` | string\|string[]\|matcher | Optional body terminators |
+
+Set a definition to `false`/`null` to remove it.
 
 ## `string`
-
-Controls quoted string parsing.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `lex` | boolean | `true` | Enable string matching |
-| `chars` | string | `"'\"\`` | Quote characters |
-| `multiChars` | string | `` "`" `` | Characters that allow multiline strings |
+| `chars` | string | `` "'\"`" `` | Quote characters |
+| `multiChars` | string | `` "`" `` | Quote characters that allow multiline strings |
 | `escapeChar` | string | `"\\"` | Escape character |
-| `escape` | object | (standard) | Escape sequence mappings |
-| `allowUnknown` | boolean | `true` | Allow unknown escape sequences |
-| `abandon` | boolean | `false` | On error, let next matcher try |
-| `replace` | object | -- | Character replacement map during scanning |
+| `escape` | object | (standard) | Escape-sequence mappings |
+| `allowUnknown` | boolean | `true` | Copy unknown escape sequences through (`\w` → `w`) |
+| `replace` | object | — | Character replacement map during scanning |
+| `abandon` | boolean | `false` | On error, let the next matcher try instead of failing |
 
 ## `map`
-
-Controls object/map behavior.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `extend` | boolean | `true` | Deep-merge duplicate keys |
-| `merge` | function | -- | Custom merge function: `(prev, curr) => result` |
-| `child` | boolean | `false` | Parse bare colon as `child$` key |
+| `merge` | function | — | Custom merge for duplicates: `(prev, curr, rule, ctx) => result` |
+| `child` | boolean | `false` | Parse bare colon as a `child$` key |
 
 ## `list`
-
-Controls array/list behavior.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `property` | boolean | `true` | Allow key-value pairs in arrays |
-| `pair` | boolean | `false` | Push pairs as object elements |
-| `child` | boolean | `false` | Parse bare colon as child value |
+| `pair` | boolean | `false` | Parse pairs as object elements (takes precedence over `property`) |
+| `child` | boolean | `false` | Parse bare colon as a child value |
+
+## `info`
+
+When enabled, a non-enumerable marker property is attached to parsed
+nodes carrying metadata (implicit flag, quote info, etc.).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `map` | boolean | `false` | Attach marker to map nodes |
+| `list` | boolean | `false` | Attach marker to list nodes |
+| `text` | boolean | `false` | Wrap string values as `String` objects with marker |
+| `marker` | string | `"__info__"` | Property name for the marker |
 
 ## `value`
 
-Controls keyword recognition.
+Keyword values — source words that resolve to fixed JS values.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -170,96 +186,150 @@ Default value definitions:
 {
   true:  { val: true },
   false: { val: false },
-  null:  { val: null }
+  null:  { val: null },
 }
 ```
 
-Add custom keywords:
+Each definition is `{ val, match?, consume? }`. A `match` RegExp gives
+a pattern-based value (matched by the text matcher, so lower priority
+than pure tokens). For high-priority pattern values, use `match`
+(below) instead.
 
 ```js
-am.make({
-  value: {
-    def: {
-      yes: { val: true },
-      no:  { val: false }
-    }
-  }
-})
+am.make({ value: { def: { yes: { val: true }, no: { val: false } } } })
 ```
 
 ## `match`
 
-Controls custom matcher tokens and values.
+Custom matcher tokens and pattern values.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `lex` | boolean | `false` | Enable custom matchers |
-| `token` | object | -- | Map of token name to RegExp or matcher function |
-| `value` | object | -- | Map of value name to `{match, val?}` |
+| `lex` | boolean | `true` | Enable custom matchers |
+| `token` | object | `{}` | Map of token name to RegExp or matcher function |
+| `value` | object | — | Map of value name to `{ match, val? }` (RegExp must start with `^`) |
+
+```js
+new Tabnas({
+  match: {
+    value: { date: { match: /^\d{4}-\d{2}-\d{2}/, val: (m) => new Date(m[0]) } },
+  },
+})
+```
+
+## `ender`
+
+Additional text-ending characters. String or string array. Default
+`[]`.
 
 ## `rule`
-
-Controls parser rule behavior.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `start` | string | `"val"` | Name of the starting rule |
 | `finish` | boolean | `true` | Auto-close unclosed structures at EOF |
-| `maxmul` | number | `3` | Rule occurrence multiplier limit |
-| `include` | string | -- | Include only rules with these group tags |
-| `exclude` | string | -- | Exclude rules with these group tags |
+| `maxmul` | number | `3` | Rule-occurrence multiplier limit |
+| `include` | string | `""` | Include only alternates with these group tags (comma-separated) |
+| `exclude` | string | `""` | Exclude alternates with these group tags (comma-separated) |
 
 ## `lex`
-
-Controls global lexer behavior.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `empty` | boolean | `true` | Allow empty source input |
 | `emptyResult` | any | `undefined` | Value returned for empty input |
+| `match` | object | (built-in) | Matcher registry: `{ <name>: { order, make } }` |
+
+The `match` registry maps each matcher name to its priority `order`
+and a `make` factory. Lower `order` runs first. See `src/defaults.ts`
+for the built-in registry.
+
+## `parse`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `prepare` | object | `{}` | Named functions run to prepare the parse `Context` |
+
+## `result`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `fail` | any[] | `[]` | Fail the parse if the result matches any of these |
+
+## `rewind`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `history` | number | `64` | Consumed tokens retained for `ctx.rewind()`; `Infinity` to retain all |
 
 ## `safe`
 
-Controls security features.
-
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `key` | boolean | `true` | Block `__proto__` and `constructor` keys |
+| `key` | boolean | `true` | Block prototype-polluting keys (`__proto__`, …) |
 
 ## `error`
 
-Custom error message templates, keyed by error code.
+Custom error-message templates, keyed by error code. Templates use
+`{key}` placeholders.
 
 ```js
-new Tabnas({
-  error: { unexpected: 'bad character: ' },
-})
+new Tabnas({ error: { unexpected: 'bad character: {src}' } })
 ```
+
+The built-in codes are `unknown`, `unexpected`, `invalid_unicode`,
+`invalid_ascii`, `unprintable`, `unterminated_string`,
+`unterminated_comment`, `unknown_rule`, `end_of_source`.
 
 ## `hint`
 
-Additional explanatory text per error code, appended to error messages.
+Additional explanatory text per error code, appended below the
+message. Same `{key}` template syntax.
+
+## `errmsg`
+
+Controls error-message framing.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | `"tabnas"` | Prefix shown as `[name/code]` |
+| `suffix` | boolean\|string\|function | `true` | Append the internal-diagnostics line (`true`), or a custom suffix |
+| `link` | string | — | A "see also" line (e.g. a docs URL) shown when `suffix` is `true` |
+
+## `color`
+
+ANSI colouring for error output. All fields off by default.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `active` | boolean | `false` | Enable colour |
+| `reset` / `hi` / `lo` / `line` | string | `""` | ANSI escape codes for each role |
 
 ## `debug`
 
-Controls debug output.
-
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `get_console` | function | -- | Returns the console object for logging |
-| `maxlen` | number | -- | Max output length for debug strings |
-| `print` | object | -- | `{config?, src?}` debug print options |
+| `get_console` | function | `() => console` | Returns the console used for logging |
+| `maxlen` | number | `99` | Max length of a parse value when printed |
+| `print` | object | `{ config: false }` | `{ config?, src? }` print options |
 
 ## Construction-only flags
 
-These three meta-flags only matter at instance construction. Once an
-instance exists, changing them has no effect.
+These meta-flags only matter at instance construction; changing them
+afterwards has no effect.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `defaults$` | boolean | `true` | If `false`, skip merging in the built-in defaults — start from a blank options bag. |
-| `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (`#NR`, `#ST`, `#TX`, …). |
-| `grammar$` | boolean | -- | Reserved for plugins. Read by some plugins to opt out of registering grammar. |
+| `defaults$` | boolean | `true` | If `false`, skip merging the built-in defaults — start from a blank options bag |
+| `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (read by `configure`) |
+| `grammar$` | boolean | — | Reserved for plugins to opt out of registering grammar |
 
 `am.empty(opts)` is shorthand for `new Tabnas({ defaults$: false,
 standard$: false, grammar$: false, ...opts })`.
+
+## Advanced
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `config.modify` | object | `{}` | Named `(config, options) => void` hooks run after `configure` |
+| `parser.start` | function | — | Supply a custom parser entry point, replacing the built-in parser |

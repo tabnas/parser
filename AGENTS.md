@@ -65,5 +65,24 @@ go test -coverpkg=./... -cover ./...
 Tab-separated, header row first, one case per line. `\n`, `\r`, `\t`
 in the input column are unescaped by the loaders. The expected column
 is JSON, or `ERROR:<code>` for error cases. Loaders:
-`ts/test/utility.js` (`loadTSV`) and `go/alignment_test.go`
-(`runParserTSV` / `runErrorTSV`).
+`ts/test/utility.js` (`loadTSV`) and `go/jsonic/feature_tsv_test.go`
+(`runParserTSV` / `runErrorTSV`; `specDir` resolves `../../test/spec`).
+
+## Documentation structure
+
+Docs are split by purpose, and that split is intentional — keep each
+file to one job:
+
+- **Tutorials** (`doc/tutorial.md`) teach a newcomer step by step.
+- **How-to guides** (`doc/guide.md`, `doc/plugins.md`) are task recipes.
+- **Reference** (`doc/api.md`, `doc/options.md`, `doc/syntax.md`,
+  top-level [`doc/syntax.md`](doc/syntax.md)) is dry and complete.
+- **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
+  `doc/concepts.md`, `go/doc/differences.md`, the `ts/doc/*-feasibility.md`
+  reports) covers design and rationale.
+
+READMEs are orientation hubs that route to the four types — don't grow
+them into manuals. When you change behavior or signatures, update the
+matching reference doc; when you add a capability, consider whether it
+needs a how-to. The top-level [`doc/`](doc/) holds the language-neutral
+syntax spec and architecture notes shared by both runtimes.

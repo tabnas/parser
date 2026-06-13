@@ -35,6 +35,25 @@ node --test --experimental-test-coverage test/**/*.test.js
 Tests run against the compiled output — always `npm run build` after
 editing `src/` or `test/*.ts`.
 
+## Documentation
+
+The docs follow a strict four-purpose split — keep each file to ONE
+purpose, never mix them:
+
+- `doc/tutorial.md` — learning: one guided happy path, no options dumps.
+- `doc/guide.md` — task recipes ("how to X"), short and focused.
+- `doc/api.md`, `doc/options.md` — reference: dry, complete, no teaching.
+- `doc/concepts.md` — explanation: the TS-specific engine model and
+  rationale; links to the shared `../../doc/architecture.md`.
+- `doc/plugins.md` — the plugin-authoring how-to.
+- `doc/bnf-to-tabnas-feasibility.md`, `doc/lsp-feasibility.md` —
+  design-note explanations.
+
+`README.md` is an **orientation hub**: what the package is, install,
+one tiny example, and links out. Do not let it grow into a manual —
+new detail belongs in the relevant doc above. Ground every factual
+claim against `src/` and `package.json` before writing.
+
 ## Rules of the road
 
 - Behavior changes here are changes to the spec: the Go port

@@ -1,20 +1,24 @@
 # Writing Plugins
 
-Plugins extend tabnas by adding a grammar, registering custom
-matchers, modifying rules, or subscribing to parse events. The bundled
-plugins are `bnf` and `Debug`, both under `src/plugins/<name>/`. The
-test fixture at `test/json-plugin.ts` is a worked example of a
-non-trivial grammar plugin (strict JSON).
+A plugin is how grammar (and tooling) gets into tabnas — the package
+itself is grammar-free. A plugin adds tokens, registers matchers,
+modifies rules, hooks events, or decorates the instance. This is a
+how-to: for the full method and option signatures, follow the links
+into the [API reference](api.md) and [options reference](options.md).
+
+The strict-JSON fixture at [`test/json-plugin.ts`](../test/json-plugin.ts)
+is a complete, non-trivial example to read alongside this guide.
+Companion plugins (`@tabnas/bnf`, `@tabnas/debug`) live in their own
+packages.
 
 ## Plugin Structure
 
-A plugin is a function that receives an `Tabnas` instance and an
-optional options object. The function does whatever work it wants
-against the instance:
+A plugin is a function that receives a `Tabnas` instance and an
+optional options object, and configures the instance:
 
 ```js
 function myPlugin(tabnas, options) {
-  // Modify the parser here
+  // configure the instance here
 }
 
 const { Tabnas } = require('tabnas')
@@ -22,7 +26,7 @@ const am = new Tabnas()
 am.use(myPlugin, { key: 'value' })
 ```
 
-You can pass plugins at construction time too, in order:
+Pass plugins at construction time too, applied in order:
 
 ```js
 const am = new Tabnas({ plugins: [myPlugin, anotherPlugin] })
@@ -51,13 +55,13 @@ myPlugin.defaults = { key: 'default' }
 ### Returning a wrapped instance
 
 `am.use(plugin)` returns whatever the plugin returns, falling back to
-the instance. This lets plugins wrap or proxy the instance:
+the instance. This lets a plugin wrap or proxy the instance:
 
 ```js
 function wrapping(am) {
-  // Tabnas uses ES #private state; the wrapper Proxy must bind
-  // methods to the underlying target so private-field access resolves
-  // to the real instance.
+  // Tabnas uses ES #private state; the wrapper Proxy must bind methods
+  // to the underlying target so private-field access resolves to the
+  // real instance.
   return new Proxy(am, {
     get(target, prop) {
       const v = target[prop]
@@ -67,12 +71,11 @@ function wrapping(am) {
 }
 
 const wrapped = am.use(wrapping)
-wrapped.parse('{"a":1}')          // works
 ```
 
 ## Adding Tokens
 
-Register a fresh token by name. The first lookup mints a new Tin (an
+Register a fixed token by name; the first lookup mints a new Tin (an
 opaque token id):
 
 ```js
@@ -82,7 +85,7 @@ function tildePlugin(am) {
 }
 ```
 
-Token names conventionally use `#XX` form. Built-in tokens:
+Token names conventionally use `#XX` form. Standard tokens:
 
 | Name | Src | Description |
 |---|---|---|
@@ -92,21 +95,22 @@ Token names conventionally use `#XX` form. Built-in tokens:
 | `#CS` | `]` | Close square |
 | `#CL` | `:` | Colon |
 | `#CA` | `,` | Comma |
-| `#NR` | -- | Number |
-| `#ST` | -- | String |
-| `#TX` | -- | Text (unquoted) |
-| `#VL` | -- | Value (keyword) |
-| `#SP` | -- | Space |
-| `#LN` | -- | Line |
-| `#CM` | -- | Comment |
-| `#BD` | -- | Bad (error) |
-| `#ZZ` | -- | End |
-| `#AA` | -- | Any (wildcard) |
+| `#NR` | — | Number |
+| `#ST` | — | String |
+| `#TX` | — | Text (unquoted) |
+| `#VL` | — | Value (keyword) |
+| `#SP` | — | Space |
+| `#LN` | — | Line |
+| `#CM` | — | Comment |
+| `#BD` | — | Bad (error) |
+| `#ZZ` | — | End |
+| `#AA` | — | Any (wildcard) |
 
 ## Modifying Rules
 
 The parser drives off named rules, each with `open` and `close`
-alternate lists. Alternates match token patterns and fire actions.
+alternate lists. An alternate matches a short token pattern (up to two
+tokens of lookahead) and fires actions.
 
 ```js
 function myPlugin(am) {
@@ -114,10 +118,7 @@ function myPlugin(am) {
 
   am.rule('val', (rs) => {
     rs.open([
-      {
-        s: ['#TL'],
-        a: (rule) => { rule.node = 42 }
-      }
+      { s: ['#TL'], a: (rule) => { rule.node = 42 } },
     ])
   })
 }
@@ -129,43 +130,43 @@ existing alternate list. Pass `mods` to control merge behaviour:
 | Mod | Effect |
 |---|---|
 | `{ append: true }` | Append at the end (default). |
-| `{ delete: [i, …] }` | Remove the listed indices from the existing alts before appending. |
-| `{ move: [from, to] }` | Reorder existing alts. |
+| `{ delete: [i, …] }` | Remove the listed indices before appending. |
+| `{ move: [from, to, …] }` | Reorder existing alternates. |
 
 ### Alternate Spec Fields
 
 | Field | Description |
 |---|---|
-| `s` | Token pattern to match — array of token-name strings (or arrays of names for OR-of-tokens). Up to two-token lookahead. |
+| `s` | Token pattern to match — array of token-name strings (or arrays of names for OR-of-tokens), or a space-separated string. Up to two-token lookahead. |
 | `a` | Action: `(rule, ctx) => void` (also accepts a `@funcref` string). |
 | `p` | Push a new rule onto the stack by name (creates a child). |
-| `r` | Replace current rule with another by name (creates a sibling). |
+| `r` | Replace the current rule with another by name (creates a sibling). |
 | `b` | Backtrack: number of tokens to put back. |
-| `g` | Group tag string (e.g. `'json'`, `'map,end'`). Used by `rule.include` / `rule.exclude` filtering. |
-| `c` | Condition: function that returns true to allow the alt, or an object pattern to match against `rule.n` counters. |
+| `g` | Group tag(s). Used by `rule.include` / `rule.exclude` filtering. |
+| `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters. |
 | `n` | Increment named counters by these amounts. |
 | `u` | Custom data attached to the rule's `u` bag. |
 | `k` | Custom data attached to `k` (propagates via push / replace). |
 | `h` | Modifier: `(rule, ctx, alt, next) => alt`. |
-| `e` | Error: `(rule, ctx, alt) => Token | undefined`. Returns a token to record an error. |
+| `e` | Error: `(rule, ctx, alt) => Token | undefined`. |
 
 ### State Actions
 
-Each rule spec has four hook points:
+Each rule has four hook points:
 
 | Hook | When |
 |---|---|
-| `bo` | Before-open — runs before open alternates are tried. |
-| `ao` | After-open — runs after an open alternate matches. |
-| `bc` | Before-close — runs before close alternates are tried. |
-| `ac` | After-close — runs after a close alternate matches. |
+| `bo` | Before-open — before open alternates are tried. |
+| `ao` | After-open — after an open alternate matches. |
+| `bc` | Before-close — before close alternates are tried. |
+| `ac` | After-close — after a close alternate matches. |
 
 Register via the chainable API:
 
 ```js
 am.rule('map', (rs) => {
   rs.bo((rule, ctx) => {
-    // … runs once per map rule, before its open phase
+    // runs once per map rule, before its open phase
   })
 })
 ```
@@ -173,7 +174,7 @@ am.rule('map', (rs) => {
 ## Custom Matchers
 
 For syntax that doesn't fit the built-in matchers, add a custom lexer
-matcher via the `match` option:
+matcher via the `match` option. A regex value is the simplest form:
 
 ```js
 const am = new Tabnas({
@@ -181,42 +182,41 @@ const am = new Tabnas({
   match: {
     lex: true,
     value: {
-      date: {
-        match: /^\d{4}-\d{2}-\d{2}/,
-        val: (m) => new Date(m[0])
-      }
-    }
-  }
+      date: { match: /^\d{4}-\d{2}-\d{2}/, val: (m) => new Date(m[0]) },
+    },
+  },
 })
 
-am.parse('d: 2024-01-15')           // { d: Date('2024-01-15') }
+am.parse('2024-01-15')              // Date(2024-01-15)
 ```
+
+The regex must be anchored with `^`. For full control, register a
+matcher function under `match.token`, or build one on the shared
+scan-spec primitives exposed via `Tabnas.util` (`scan`,
+`guardedMatcher`, `buildCharRunSpec`, …) — see the
+[utility reference](api.md#tabnasutil-static) and the matchers in
+`src/lexer.ts`.
 
 ## Subscribing to Events
 
-Plugins can observe the parse without modifying it:
+A plugin can observe the parse without modifying it:
 
 ```js
 function loggingPlugin(am) {
   am.sub({
-    lex: (token, rule, ctx) => {
-      console.log('lexed:', token.toString())
-    },
-    rule: (rule, ctx) => {
-      console.log('rule:', rule.name, rule.state)
-    }
+    lex: (token, rule, ctx) => { console.log('lexed:', token.toString()) },
+    rule: (rule, ctx) => { console.log('rule:', rule.name, rule.state) },
   })
 }
 ```
 
 ## Token Sets
 
-Access groups of tokens by name:
+Access groups of tokens by name (callable or as a map):
 
 ```js
 const ignoreTins = am.tokenSet('IGNORE')   // [#SP, #LN, #CM]
-const valueTins  = am.tokenSet('VAL')      // [#TX, #NR, #ST, #VL]
-const keyTins    = am.tokenSet('KEY')      // [#TX, #NR, #ST, #VL]
+const { VAL, KEY } = am.tokenSet           // map form
 ```
 
 Define your own with the `tokenSet` option:
@@ -225,29 +225,19 @@ Define your own with the `tokenSet` option:
 am.options({ tokenSet: { MYSET: ['#TX', '#NR'] } })
 ```
 
-## Plugin Folder Layout
+## Declarative grammar
 
-Plugins shipped in this package live under `src/plugins/<name>/`:
-
-```
-src/plugins/
-├── json/index.ts                    # Strict JSON grammar
-├── bnf/
-│   ├── index.ts                     # Plugin entry — adds am.bnf
-│   ├── converter.ts                 # BNF → GrammarSpec conversion
-│   └── bin/tabnas-bnf-cli.ts       # CLI entry
-└── debug/index.ts                   # Tracing + describe()
-```
-
-If you ship a plugin as its own npm package, the convention is
-`tabnas-<name>` or `@<scope>/tabnas-<name>`. The CLI's `--plugin`
-flag understands both raw module names and the `@tabnas/<name>`
-shorthand.
+Instead of registering rules imperatively, a plugin can describe them
+as data via `am.grammar(spec)`. Function fields are supplied as
+`@funcref` strings resolved against `spec.ref`. This is how the
+strict-JSON fixture is written — see
+[`test/json-plugin.ts`](../test/json-plugin.ts) and
+[`am.grammar`](api.md#amgrammarspec-settings).
 
 ## Example: a tiny CSV plugin
 
-Build on top of the bare engine — a CSV grammar replaces the standard
-rules entirely.
+Build on the bare engine — a CSV grammar replaces the standard rules
+entirely.
 
 ```js
 function csvPlugin(am, opts) {
@@ -286,5 +276,12 @@ function csvPlugin(am, opts) {
 }
 ```
 
-Apply with `am.use(csvPlugin)` on a bare instance (`new Tabnas()`,
-no `json` plugin), or in the `plugins` array at construction time.
+Apply with `am.use(csvPlugin)` on a bare instance, or via the
+`plugins` array at construction time.
+
+## Packaging
+
+If you ship a plugin as its own npm package, the convention is
+`tabnas-<name>` or `@<scope>/tabnas-<name>` (as the companion
+`@tabnas/bnf` and `@tabnas/debug` packages do). The package itself
+holds no grammar — yours is the grammar.

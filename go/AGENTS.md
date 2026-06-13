@@ -44,6 +44,24 @@ mirror it. Accepted differences are documented in
   plugin and its convenience API.
 - `utility.go` — `Deep`, `StrInject`, text-form option parsing.
 
+## Documentation
+
+`README.md` is an orientation hub: what the module is, `go get`, one
+taste example, and links out. The `doc/` files are organized by a
+single purpose each — keep them unmixed:
+
+- `doc/tutorial.md` — learning-oriented, one sequential happy path.
+- `doc/guide.md` — task-oriented how-to recipes.
+- `doc/api.md`, `doc/options.md`, `doc/syntax.md` — reference (dry,
+  complete; do not teach).
+- `doc/concepts.md`, `doc/differences.md` — explanation (background,
+  rationale, TS↔Go comparison).
+- `doc/plugins.md` — focused grammar-authoring how-to.
+
+When editing, verify every signature against the source and keep
+examples compiling. Don't turn the tutorial into an options dump or
+the reference into a tutorial.
+
 ## Commands
 
 ```bash
