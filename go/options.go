@@ -87,6 +87,10 @@ type Options struct {
 	// Matches TS options.info.
 	Info *InfoOptions
 
+	// Rewind bounds how many consumed tokens are retained for
+	// ctx.Rewind. Mirrors TS options.rewind.
+	Rewind *RewindOptions
+
 	// Property holds Go-specific options not present in the TypeScript version.
 	Property *PropertyOptions
 
@@ -165,6 +169,16 @@ type InfoOptions struct {
 	// Marker is the key under which info metadata is stored on wrapped
 	// values. Mirrors TS `options.info.marker`. Default: "__info__".
 	Marker string
+}
+
+// RewindOptions bounds the consumed-token history retained for
+// ctx.Rewind. Mirrors TS options.rewind.
+type RewindOptions struct {
+	// History is the maximum number of consumed tokens retained for
+	// ctx.Rewind. A non-positive value means unbounded (TS Infinity).
+	// Default: 64. ctx.Rewind returns an error if its target mark has
+	// been evicted from the retained window.
+	History *int
 }
 
 // PropertyOptions holds Go-specific options not present in the TypeScript version.
@@ -1003,6 +1017,14 @@ func buildConfig(o *Options) *LexConfig {
 	copy(cfg.ValSet, TinSetVAL)
 	cfg.KeySet = make([]Tin, len(TinSetKEY))
 	copy(cfg.KeySet, TinSetKEY)
+
+	// Rewind history cap (consumed-token retention for ctx.Rewind).
+	// Default 64, matching TS defaults.ts; a non-positive value is
+	// unbounded.
+	cfg.RewindHistory = 64
+	if o.Rewind != nil && o.Rewind.History != nil {
+		cfg.RewindHistory = *o.Rewind.History
+	}
 
 	// Info options (metadata on parsed output)
 	if o.Info != nil {

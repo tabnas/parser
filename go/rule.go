@@ -558,6 +558,28 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		}
 	}
 
+	// Compute how many tokens this alt consumes (matched minus
+	// backtrack) once, and record them on the rewind history BEFORE the
+	// action runs, so a ctx.Rewind() call inside the action sees the
+	// just-matched tokens. The same count drives the lookahead-buffer
+	// shift below. Mirrors the TS rules.ts ordering.
+	consumed := 0
+	if alt != nil {
+		backtrack := alt.B
+		if alt.BF != nil {
+			backtrack = alt.BF(r, ctx)
+		}
+		if isOpen {
+			consumed = r.ON - backtrack
+		} else {
+			consumed = r.CN - backtrack
+		}
+		if consumed < 0 {
+			consumed = 0
+		}
+		ctx.recordConsumed(consumed)
+	}
+
 	// Action callback
 	if alt != nil && alt.A != nil {
 		alt.A(r, ctx)
@@ -650,38 +672,19 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	// Token consumption with backtrack (only when an alt matched).
-	// Generalized from the previous 2-slot shift to any number of
+	// `consumed` was computed above (and recorded on the rewind history)
+	// before the action ran; reuse it here for the lookahead-buffer
+	// shift. Generalized from the previous 2-slot shift to any number of
 	// consumed positions, to match the N-token lookahead support in
 	// ParseAlts.
 	if alt != nil {
-		backtrack := alt.B
-		if alt.BF != nil {
-			backtrack = alt.BF(r, ctx)
-		}
-		var consumed int
-		if isOpen {
-			consumed = r.ON - backtrack
-		} else {
-			consumed = r.CN - backtrack
-		}
-		if consumed < 0 {
-			consumed = 0
-		}
-
 		if consumed > 0 {
-			// Maintain the 2-slot history (V1 = last consumed,
-			// V2 = prior). Semantics preserved for consumed == 1, 2.
-			if consumed == 1 {
-				ctx.V2 = ctx.V1
-				ctx.V1 = ctx.T[0]
-			} else {
-				ctx.V2 = ctx.T[consumed-2]
-				ctx.V1 = ctx.T[consumed-1]
-			}
-
-			// Shift the lookahead buffer left by `consumed` slots,
-			// filling vacated tail positions with NoToken so later
-			// alts re-fetch from the lexer.
+			// V1 / V2 were set in recordConsumed before the action (the
+			// consumed tbuf slots are already cleared to NoToken here).
+			// Compact the lookahead buffer: shift left by `consumed`,
+			// filling vacated tail positions with NoToken so later alts
+			// re-fetch from the lexer. If a ctx.Rewind() ran in the
+			// action it already cleared/re-queued T, so this is a no-op.
 			L := len(ctx.T)
 			for i := 0; i < L-consumed; i++ {
 				ctx.T[i] = ctx.T[i+consumed]

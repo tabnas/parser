@@ -166,6 +166,14 @@ Controls parser rule behavior.
 | `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
 | `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
 
+## `Rewind`
+
+Bounds the consumed-token history retained for `ctx.Rewind`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; a non-positive value retains all (TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
+
 ## `Lex`
 
 Controls global lexer behavior.

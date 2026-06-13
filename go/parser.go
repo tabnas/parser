@@ -22,6 +22,17 @@ type Context struct {
 	T1 *Token // Alias of T[1] (legacy). Kept in sync with T[1].
 	V1 *Token // Previous token (TS: v1)
 	V2 *Token // Previous previous token (TS: v2)
+
+	// Consumed-token rewind history. V holds the tokens consumed (not
+	// backtracked) so far, bounded by cfg.RewindHistory (a ring buffer
+	// trimmed from the front). VAbs is the absolute count of consumed
+	// tokens — used as the Mark() value, decoupled from len(V) so the
+	// ring-buffer cap can evict old tokens without invalidating
+	// outstanding marks. Mirrors TS ctx.v / ctx.vAbs.
+	V    []*Token
+	VAbs int
+	Lex  *Lex // Attached by parser.start(); used by Rewind to re-feed tokens.
+
 	RS       []*Rule           // Rule stack (TS: rs)
 	RSI      int               // Rule stack index (TS: rsI)
 	RSM      map[string]*RuleSpec // Rule spec map (TS: rsm)
@@ -44,6 +55,97 @@ type Context struct {
 	Log      func(...any)      // Debug logger (TS: log)
 	NOTOKEN  *Token            // Sentinel no-token (TS: NOTOKEN)
 	NORULE   *Rule             // Sentinel no-rule (TS: NORULE)
+}
+
+// recordConsumed appends the leading `consumed` lookahead tokens to the
+// rewind history, advances VAbs, and applies the ring-buffer cap. Called
+// before an alt's action runs so a ctx.Rewind() inside that action sees
+// the just-matched tokens. Mirrors the TS rules.ts v-history push.
+func (ctx *Context) recordConsumed(consumed int) {
+	if consumed <= 0 {
+		return
+	}
+	// Maintain the legacy 2-slot history (V1 = last consumed, V2 = prior)
+	// from the matched tokens before their tbuf slots are cleared below.
+	if consumed == 1 {
+		ctx.V2 = ctx.V1
+		ctx.V1 = ctx.T[0]
+	} else if consumed >= 2 {
+		ctx.V2 = ctx.T[consumed-2]
+		ctx.V1 = ctx.T[consumed-1]
+	}
+	// Move consumed tokens into the rewind history and clear their tbuf
+	// slots, so a ctx.Rewind() inside the action distinguishes "already
+	// in V" (NoToken slot, replayed from V) from genuine pre-lexed
+	// lookahead past the consumed position (a real token still in T).
+	for i := 0; i < consumed && i < len(ctx.T); i++ {
+		ctx.V = append(ctx.V, ctx.T[i])
+		ctx.T[i] = NoToken
+	}
+	ctx.VAbs += consumed
+	// Amortised-O(1) ring buffer: let V grow to twice the cap, then trim
+	// its front back down to the cap. A non-positive cap means unbounded
+	// (TS Infinity).
+	cap := ctx.Cfg.RewindHistory
+	if cap > 0 && len(ctx.V) > 2*cap {
+		ctx.V = append([]*Token(nil), ctx.V[len(ctx.V)-cap:]...)
+	}
+}
+
+// Mark records a rewind point at the current parse position. The returned
+// value can be passed to Rewind to replay the tokens consumed since the
+// mark. Mirrors TS ctx.mark().
+func (ctx *Context) Mark() int {
+	return ctx.VAbs
+}
+
+// Rewind replays the tokens consumed since the given mark, re-feeding them
+// through the lexer's pending-token queue so the parser re-reads them.
+// Returns an error if the mark has been evicted from the retained history
+// window (cfg.RewindHistory was too small for the grammar). Mirrors TS
+// ctx.rewind(), which throws in that case; Go reports it as an error to
+// preserve the no-panic guarantee.
+func (ctx *Context) Rewind(mark int) error {
+	k := ctx.VAbs - mark
+	if k <= 0 {
+		return nil
+	}
+	if k > len(ctx.V) {
+		return fmt.Errorf(
+			"tabnas: ctx.Rewind target %d is outside the retained history "+
+				"window (oldest mark available is %d, current is %d); "+
+				"increase options.rewind.history",
+			mark, ctx.VAbs-len(ctx.V), ctx.VAbs)
+	}
+
+	// Preserve the lookahead buffer (tokens the lexer already produced
+	// past the consumed position): collect them in order, clear the
+	// slots, and re-queue them BEHIND the rewound consumed tokens so the
+	// next fetch serves consumed-then-lookahead in original order.
+	var lookahead []*Token
+	for i := 0; i < len(ctx.T); i++ {
+		if ctx.T[i] != nil && ctx.T[i] != NoToken {
+			lookahead = append(lookahead, ctx.T[i])
+		}
+		ctx.T[i] = NoToken
+	}
+	ctx.T0 = NoToken
+	ctx.T1 = NoToken
+
+	// The rewound consumed tokens are the last k of V, oldest-first.
+	rewound := make([]*Token, k)
+	copy(rewound, ctx.V[len(ctx.V)-k:])
+	ctx.V = ctx.V[:len(ctx.V)-k]
+	ctx.VAbs -= k
+
+	if ctx.Lex != nil {
+		prefix := append(rewound, lookahead...)
+		ctx.Lex.tokens = append(prefix, ctx.Lex.tokens...)
+		// Clear any cached end-of-source token so the lexer serves from
+		// the replenished queue rather than short-circuiting to #ZZ.
+		ctx.Lex.end = nil
+	}
+	return nil
 }
 
 // Parser orchestrates the parsing process.
@@ -134,6 +236,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	lex.Ctx = ctx
+	ctx.Lex = lex
 
 	startName := p.Config.RuleStart
 	if startName == "" {

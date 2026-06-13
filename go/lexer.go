@@ -64,6 +64,7 @@ type LexConfig struct {
 	EscapeMap    map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
 	EscapeRemoved map[string]bool  // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
 	EscapeStrict  bool             // Disable the non-standard \xHH and \u{...} structural escapes.
+	RewindHistory int              // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
 	SpaceChars   map[rune]bool
 	LineChars    map[rune]bool
 	RowChars     map[rune]bool
