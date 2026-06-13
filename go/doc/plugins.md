@@ -33,6 +33,54 @@ Return a non-nil error to abort installation. Plugins are re-applied
 when `Derive()` creates a child instance; a plugin that fails during
 derivation surfaces through `Derive`'s returned error.
 
+### Registering several plugins
+
+`Use` returns an `error`, not the instance, so Go does not chain
+registrations the way the TypeScript API does
+(`new Tabnas().use(a).use(b)`). The idiomatic equivalent is sequential
+calls with error checks:
+
+```go
+j := tabnas.Make()
+if err := j.Use(jsonGrammar); err != nil {
+	return nil, err
+}
+if err := j.Use(csvGrammar, map[string]any{"delimiter": ";"}); err != nil {
+	return nil, err
+}
+```
+
+For a uniform list with no per-plugin options, a loop reads cleanly:
+
+```go
+j := tabnas.Make()
+for _, p := range []tabnas.Plugin{jsonGrammar, csvGrammar, debugPlugin} {
+	if err := j.Use(p); err != nil {
+		return nil, err
+	}
+}
+```
+
+### Grammar dependencies and order
+
+Plugins are applied in registration order, and a grammar plugin may
+build on tokens, rules, or token sets that an earlier plugin
+registered. Order is therefore significant: **register a grammar's
+dependencies before the grammar itself.** For example, a CSV grammar
+that reuses a relaxed-JSON value grammar to parse each cell depends on
+that grammar being installed first:
+
+```go
+j := tabnas.Make()
+_ = j.Use(jsonic) // dependency: provides the cell-value rules/tokens
+_ = j.Use(csv)    // builds on what jsonic registered
+```
+
+A plugin can fail fast if a required dependency is missing — inspect the
+instance in its body (e.g. look up an expected token, or check
+`j.RSM()` for a required rule) and return a clear `error` rather than
+producing a confusing parse failure later.
+
 ### Default options
 
 To ship default options that a caller can override, use `UseDefaults`.
