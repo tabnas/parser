@@ -53,11 +53,9 @@ func Make(opts ...tabnas.Options) *tabnas.Tabnas {
 	}
 
 	j := tabnas.Make(o)
-	if err := j.Use(Plugin); err != nil {
-		// buildGrammar cannot fail; a non-nil error means the engine
-		// rejected the plugin, which is a programming error here.
-		panic(err)
-	}
+	// Plugin is infallible (always returns nil): buildGrammar has no
+	// failure modes, so the Use error can be discarded.
+	_ = j.Use(Plugin)
 
 	if include != "" || exclude != "" {
 		j.SetOptions(tabnas.Options{

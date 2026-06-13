@@ -406,7 +406,7 @@ func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 // Derive creates a new Tabnas instance inheriting this instance's config,
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
 // This matches TypeScript's tabnas.make(options, parent).
-func (j *Tabnas) Derive(opts ...Options) *Tabnas {
+func (j *Tabnas) Derive(opts ...Options) (*Tabnas, error) {
 	// Start with parent's options, merge with new ones.
 	child := Make(opts...)
 
@@ -494,9 +494,9 @@ func (j *Tabnas) Derive(opts ...Options) *Tabnas {
 	for _, pe := range j.plugins {
 		child.plugins = append(child.plugins, pe)
 		if err := pe.plugin(child, pe.opts); err != nil {
-			// Plugin errors during Derive are programming errors; panic
-			// since Derive doesn't return an error.
-			panic("tabnas: plugin error during Derive: " + err.Error())
+			// Mirrors TS make(), where a plugin throwing during child
+			// derivation propagates to the caller.
+			return nil, fmt.Errorf("tabnas: plugin error during Derive: %w", err)
 		}
 	}
 
@@ -528,7 +528,7 @@ func (j *Tabnas) Derive(opts ...Options) *Tabnas {
 		}
 	}
 
-	return child
+	return child, nil
 }
 
 // SetOptions deep-merges new options into this instance and rebuilds the

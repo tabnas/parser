@@ -380,8 +380,20 @@ function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
     // else BODY (class 0)
   }
 
-  // Bytes >= 256 are always plain body chars (no special meaning).
-  const fallback = (_c: string): number => 0
+  // Char codes >= 256 classify like the table: the quote itself, the
+  // escape char, replace chars, and (multi-line) line chars are special;
+  // everything else is plain body. Without this, non-Latin-1 quote chars
+  // could open a string but never close it.
+  const lineChars = cfg.line.chars
+  const rowChars = cfg.line.rowChars
+  const fallback = (c: string): number => {
+    const cc = c.charCodeAt(0)
+    if (c === qchar) return 1
+    if (cc === escCharCode) return 1
+    if (hasReplace && replaceCodeMap[cc] !== undefined) return 1
+    if (isMultiLine && lineChars[c]) return rowChars[c] ? 3 : 2
+    return 0
+  }
 
   return {
     initialState: 0,
@@ -1113,20 +1125,38 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI += 3
         } else if ('u' === ec) {
           sI++ // past 'u'
-          const ux = '{' === src[sI] ? (sI++, 1) : 0
-          const ulen = ux ? 6 : 4
-          const uu = parseInt(src.substring(sI, sI + ulen), 16)
-          if (isNaN(uu)) {
-            if (mcfg.abandon) return undefined
-            sI = sI - 2 - ux
-            cI -= 1
-            pnt.sI = sI
-            pnt.cI = cI
-            return lex.bad(S.invalid_unicode, sI, sI + ulen + 2 + 2 * ux)
+          if ('{' === src[sI]) {
+            // Braced form \u{H...H}: 1-6 hex digits, any code point.
+            const endI = src.indexOf('}', sI + 1)
+            const digits = -1 === endI ? '' : src.substring(sI + 1, endI)
+            const uu =
+              0 < digits.length && digits.length <= 6 && /^[0-9a-fA-F]+$/.test(digits)
+                ? parseInt(digits, 16)
+                : NaN
+            if (isNaN(uu) || 0x10ffff < uu) {
+              if (mcfg.abandon) return undefined
+              sI = sI - 2
+              pnt.sI = sI
+              pnt.cI = cI - 1
+              return lex.bad(S.invalid_unicode, sI, -1 === endI ? srclen : endI + 1)
+            }
+            buf.push(String.fromCodePoint(uu))
+            cI += endI + 1 - sI + 1
+            sI = endI + 1
+          } else {
+            const uu = parseInt(src.substring(sI, sI + 4), 16)
+            if (isNaN(uu)) {
+              if (mcfg.abandon) return undefined
+              sI = sI - 2
+              cI -= 1
+              pnt.sI = sI
+              pnt.cI = cI
+              return lex.bad(S.invalid_unicode, sI, sI + 6)
+            }
+            buf.push(String.fromCharCode(uu))
+            sI += 4
+            cI += 5
           }
-          buf.push(String.fromCodePoint(uu))
-          sI += ulen + ux
-          cI += ulen + 1 + ux
         } else if (allowUnknown) {
           buf.push(ec)
           sI++

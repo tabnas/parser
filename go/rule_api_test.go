@@ -151,7 +151,10 @@ func TestMakeRuleCondOperators(t *testing.T) {
 		{"$eq", "n", "", 99, true},
 	}
 	for _, tt := range tests {
-		cond := MakeRuleCond(tt.op, tt.prop, tt.subprop, tt.val)
+		cond, err := MakeRuleCond(tt.op, tt.prop, tt.subprop, tt.val)
+		if err != nil {
+			t.Fatalf("MakeRuleCond(%s): %v", tt.op, err)
+		}
 		if got := cond(r, nil); got != tt.want {
 			t.Errorf("MakeRuleCond(%s,%s,%s,%d) = %v, want %v",
 				tt.op, tt.prop, tt.subprop, tt.val, got, tt.want)
@@ -161,19 +164,19 @@ func TestMakeRuleCondOperators(t *testing.T) {
 
 func TestMakeRuleCondNilRule(t *testing.T) {
 	// getRuleProp(nil) → not found → condition true.
-	cond := MakeRuleCond("$eq", "d", "", 5)
+	cond, err := MakeRuleCond("$eq", "d", "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !cond(nil, nil) {
 		t.Error("condition on nil rule should be true")
 	}
 }
 
-func TestMakeRuleCondUnknownOpPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("expected panic for unknown comparison operator")
-		}
-	}()
-	MakeRuleCond("$bogus", "d", "", 0)
+func TestMakeRuleCondUnknownOpError(t *testing.T) {
+	if _, err := MakeRuleCond("$bogus", "d", "", 0); err == nil {
+		t.Error("expected error for unknown comparison operator")
+	}
 }
 
 // --- NormAlt / NormAlts ---

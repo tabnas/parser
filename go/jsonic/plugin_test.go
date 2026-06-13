@@ -711,7 +711,7 @@ func TestDerive(t *testing.T) {
 	parent := Make()
 	parent.Token("#TL", "~")
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	// Child should inherit parent's custom token.
 	if _, ok := child.Config().FixedTokens["~"]; !ok {
@@ -721,7 +721,7 @@ func TestDerive(t *testing.T) {
 
 func TestDeriveIsolation(t *testing.T) {
 	parent := Make()
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	// Modifying child should not affect parent.
 	child.Token("#TX", "!")
@@ -744,7 +744,7 @@ func TestDeriveInheritsPlugins(t *testing.T) {
 		t.Fatalf("expected count 1, got %d", count)
 	}
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	// Plugin should be re-invoked on child.
 	if count != 2 {
@@ -1238,7 +1238,7 @@ func TestDeriveInheritsIgnoreSet(t *testing.T) {
 	parent := Make()
 	parent.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP, tabnas.TinCM}) // Remove LN
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	childIgn := child.TokenSet("IGNORE")
 	if len(childIgn) != 2 {
@@ -1354,7 +1354,7 @@ func TestDeriveInheritsValKeySet(t *testing.T) {
 	parent.SetTokenSet("VAL", []tabnas.Tin{tabnas.TinTX, tabnas.TinNR, tabnas.TinST}) // Remove VL
 	parent.SetTokenSet("KEY", []tabnas.Tin{tabnas.TinTX})                             // Only TX
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	childVal := child.TokenSet("VAL")
 	if len(childVal) != 3 {
@@ -1586,7 +1586,7 @@ func TestDeriveTokenInheritance(t *testing.T) {
 	c0 := Make()
 	c0.Token("#B0", "b")
 
-	c1 := c0.Derive()
+	c1, _ := c0.Derive()
 	c1.Token("#D0", "d")
 
 	// c1 inherits c0's token.
@@ -1645,7 +1645,7 @@ func TestDeriveMultiLevelPluginInheritance(t *testing.T) {
 	expectMap(t, "j", resultJ, map[string]any{"x": "aaa", "y": "B", "z": "C"})
 
 	// a1 derives from j. a1 should inherit plugin A.
-	a1 := j.Derive()
+	a1, _ := j.Derive()
 	resultA1, err := a1.Parse("x:A,y:B,z:C")
 	if err != nil {
 		t.Fatalf("a1.Parse: %v", err)
@@ -1653,7 +1653,7 @@ func TestDeriveMultiLevelPluginInheritance(t *testing.T) {
 	expectMap(t, "a1", resultA1, map[string]any{"x": "aaa", "y": "B", "z": "C"})
 
 	// a2 derives from j. a2 adds plugin B.
-	a2 := j.Derive()
+	a2, _ := j.Derive()
 	a2.Use(makeTokenPlugin("B", "bbb"))
 
 	resultA2, err := a2.Parse("x:A,y:B,z:C")
@@ -1676,7 +1676,7 @@ func TestDeriveMultiLevelPluginInheritance(t *testing.T) {
 	expectMap(t, "j again", resultJAgain, map[string]any{"x": "aaa", "y": "B", "z": "C"})
 
 	// a22 derives from a2. Inherits plugins A and B. Adds plugin C.
-	a22 := a2.Derive()
+	a22, _ := a2.Derive()
 	a22.Use(makeTokenPlugin("C", "ccc"))
 
 	resultA22, err := a22.Parse("x:A,y:B,z:C")
@@ -1835,7 +1835,7 @@ func TestDecorateInherited(t *testing.T) {
 	parent := Make()
 	parent.Decorate("foo", "FOO")
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	// Child inherits parent decoration.
 	if child.Decoration("foo") != "FOO" {
@@ -2013,7 +2013,7 @@ func TestPluginOptions(t *testing.T) {
 func TestPluginOptionsInherited(t *testing.T) {
 	j := Make()
 	j.SetPluginOptions("foo", map[string]any{"x": 1})
-	child := j.Derive()
+	child, _ := j.Derive()
 
 	po := child.PluginOptions("foo")
 	if po == nil || po["x"] != 1 {
@@ -2449,7 +2449,7 @@ func TestCustomTokenSet(t *testing.T) {
 func TestCustomTokenSetInherited(t *testing.T) {
 	j := Make()
 	j.SetTokenSet("CUSTOM", []tabnas.Tin{tabnas.TinNR})
-	child := j.Derive()
+	child, _ := j.Derive()
 
 	if child.TokenSet("CUSTOM") == nil {
 		t.Error("child should inherit custom token set")

@@ -306,7 +306,7 @@ func TestDeriveCopiesCustomMatchers(t *testing.T) {
 			return func(lex *Lex, rule *Rule) *Token { return nil }
 		}},
 	}}})
-	child := parent.Derive()
+	child, _ := parent.Derive()
 	found := false
 	for _, m := range child.Config().CustomMatchers {
 		if m.Name == "pm" {

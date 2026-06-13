@@ -1,6 +1,7 @@
 package tabnas
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -86,7 +87,17 @@ func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ru
 }
 
 // startParse is the internal entry point that populates the full Context.
-func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (any, error) {
+// A recover guard converts any panic (from plugin callbacks, custom
+// matchers, or engine bugs) into an "internal" TabnasError, upholding the
+// package guarantee that parsing never panics, whatever the input.
+func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			err = p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1)
+		}
+	}()
+
 	if src == "" {
 		return nil, nil
 	}
@@ -213,25 +224,25 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 	// Follow replacement chain: when val is replaced by list (implicit list),
 	// root.Node is stale. Follow Next/Prev links to find the actual result.
-	result := root
-	for result.Next != NoRule && result.Next != nil && result.Next.Prev == result {
-		result = result.Next
+	resRule := root
+	for resRule.Next != NoRule && resRule.Next != nil && resRule.Next.Prev == resRule {
+		resRule = resRule.Next
 	}
 
-	if IsUndefined(result.Node) {
+	if IsUndefined(resRule.Node) {
 		return nil, nil
 	}
 
 	// Check result.fail
 	if len(p.Config.ResultFail) > 0 {
 		for _, fail := range p.Config.ResultFail {
-			if result.Node == fail {
+			if resRule.Node == fail {
 				return nil, p.finishErr(p.makeError("unexpected", "", src, 0, 1, 1), ctx, meta, nil)
 			}
 		}
 	}
 
-	return result.Node, nil
+	return resRule.Node, nil
 }
 
 // finishErr enriches a parse error with context for the formatted output:

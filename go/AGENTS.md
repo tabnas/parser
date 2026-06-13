@@ -64,3 +64,9 @@ go test -run TestName -v ./...
 - Error-output assertions: ANSI color is on by default — disable via
   `Options{Color: &ColorOptions{Active: &off}}` or assert on
   substrings that avoid escape-code boundaries.
+- **No panics**: public APIs return errors, never panic — parsing has
+  a recover guard (panics become `"internal"` TabnasErrors), and
+  `jsonic/utf8_test.go` carries a `FuzzParse` fuzz target. Don't add
+  `panic(...)` to production code; thread an error instead.
+- Unicode: any UTF-8 char works in data and as configured matcher
+  chars; columns count runes. See `doc/differences.md` ("Unicode").

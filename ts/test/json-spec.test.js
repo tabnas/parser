@@ -16,36 +16,39 @@ const { loadTSV } = require('./utility')
 describe('json-spec', function () {
   it('include-json', () => {
     const j = new Tabnas({ plugins: [json] })
-    for (const { cols, row } of loadTSV('include-json')) {
-      const [input, expected] = cols
-      assert.deepEqual(
-        j.parse(input),
-        JSON.parse(expected),
-        'include-json.tsv row ' + row + ': ' + input,
-      )
+    for (const name of ['include-json', 'include-json-utf8']) {
+      for (const { cols, row } of loadTSV(name)) {
+        const [input, expected] = cols
+        assert.deepEqual(
+          j.parse(input),
+          JSON.parse(expected),
+          name + '.tsv row ' + row + ': ' + input,
+        )
+      }
     }
   })
 
   it('include-json-errors', () => {
     const j = new Tabnas({ plugins: [json] })
-    for (const { cols, row } of loadTSV('include-json-errors')) {
+    for (const name of ['include-json-errors', 'include-json-utf8-errors'])
+    for (const { cols, row } of loadTSV(name)) {
       const [input, expected] = cols
       assert.ok(
         expected.startsWith('ERROR:'),
-        'include-json-errors.tsv row ' + row + ': expected must be ERROR:<code>',
+        name + ".tsv row " + row + ': expected must be ERROR:<code>',
       )
       const code = expected.slice('ERROR:'.length)
       try {
         j.parse(input)
         assert.fail(
-          'include-json-errors.tsv row ' + row + ': ' + input +
+          name + ".tsv row " + row + ': ' + input +
           ' should error with ' + code,
         )
       } catch (e) {
         assert.equal(
           e.code,
           code,
-          'include-json-errors.tsv row ' + row + ': ' + input,
+          name + ".tsv row " + row + ': ' + input,
         )
       }
     }

@@ -1,0 +1,6 @@
+input	expected
+"\u{110000}"	ERROR:invalid_unicode
+"\u{}"	ERROR:invalid_unicode
+"\uZZZZ"	ERROR:invalid_unicode
+"\u{GGGG}"	ERROR:invalid_unicode
+"\u{1234567}"	ERROR:invalid_unicode

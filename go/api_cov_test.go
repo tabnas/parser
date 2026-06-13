@@ -358,7 +358,7 @@ func TestDeriveInheritsExtendedState(t *testing.T) {
 	parent.SetPluginOptions("plug", map[string]any{"a": 1})
 	parent.Sub(func(tkn *Token, r *Rule, ctx *Context) {}, func(r *Rule, ctx *Context) {})
 
-	child := parent.Derive()
+	child, _ := parent.Derive()
 
 	if !child.Config().EnderChars[';'] {
 		t.Error("child should inherit ender chars")
@@ -380,7 +380,7 @@ func TestDeriveInheritsExtendedState(t *testing.T) {
 	}
 }
 
-func TestDerivePluginErrorPanics(t *testing.T) {
+func TestDerivePluginErrorReturned(t *testing.T) {
 	parent := Make()
 	fail := false
 	bad := Plugin(func(j *Tabnas, opts map[string]any) error {
@@ -393,12 +393,12 @@ func TestDerivePluginErrorPanics(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail = true
-	defer func() {
-		if recover() == nil {
-			t.Error("expected panic when plugin errors during Derive")
-		}
-	}()
-	parent.Derive()
+	// Mirrors TS make(): a plugin failing during child derivation
+	// surfaces as an error (never a panic).
+	if _, err := parent.Derive(); err == nil ||
+		!strings.Contains(err.Error(), "boom") {
+		t.Errorf("expected plugin error from Derive, got %v", err)
+	}
 }
 
 // --- SetOptions: tokenSet resolution and rule include ---

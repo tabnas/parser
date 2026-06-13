@@ -1,5 +1,7 @@
 package tabnas
 
+import "unicode/utf8"
+
 // scan.go — declarative single-byte state machine driver for the simpler
 // matchers. Port of the TS scan-spec design (ts/src/lexer.ts): the space,
 // line, comment-eatline, and string-body walks all have the shape "walk
@@ -20,10 +22,12 @@ package tabnas
 // char that ends the match" express as ScanConsume|ScanStop, while "stop
 // without consuming" is just ScanStop.
 //
-// Unlike TS (which scans UTF-16 code units and needs a fallback class
-// function for char codes >= 256), Go scans bytes, so ClassOf covers every
-// possible input; multi-byte UTF-8 sequences land in whatever class their
-// individual bytes map to (class 0 for all current specs).
+// UTF-8: ASCII bytes classify via the ClassOf table (fast path). Lead
+// bytes >= 0x80 decode a full rune and classify it via Fallback — the
+// analogue of the TS fallback class function for UTF-16 code units >=
+// 256 — consuming the whole rune as one column. When Fallback is nil the
+// driver runs in pure byte mode (continuation bytes classify via
+// ClassOf), which is correct for specs whose stop classes are all ASCII.
 
 // Scan action flags and state mask (TS: CONSUME, IS_ROW, CI_RESET, STOP,
 // STATE_MASK).
@@ -41,6 +45,12 @@ type ScanSpec struct {
 	NClasses     int
 	ClassOf      [256]uint8
 	Table        []int32
+
+	// Fallback classifies non-ASCII runes (lead byte >= 0x80). When set,
+	// the driver decodes the full UTF-8 rune, classifies it with this
+	// function, and consumes it as a single column. Mirrors the TS
+	// fallback class function for char codes >= 256.
+	Fallback func(r rune) uint8
 }
 
 // ScanOut receives the positions reached by a Scan (TS: ScanOut).
@@ -68,11 +78,19 @@ func Scan(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOu
 	state := spec.InitialState
 
 	for sI < srclen {
-		cls := int(spec.ClassOf[src[sI]])
+		var cls int
+		size := 1
+		if b := src[sI]; b < 0x80 || spec.Fallback == nil {
+			cls = int(spec.ClassOf[b])
+		} else {
+			r, rsize := utf8.DecodeRuneInString(src[sI:])
+			size = rsize
+			cls = int(spec.Fallback(r))
+		}
 		action := table[state*ncls+cls]
 
 		if action&ScanConsume != 0 {
-			sI++
+			sI += size
 			if action&ScanIsRow != 0 {
 				rI++
 				cI = 1
@@ -110,7 +128,7 @@ var lineRunTable = []int32{
 // (TS: buildLineRunSpec).
 func BuildLineRunSpec(lineChars, rowChars map[rune]bool) *ScanSpec {
 	spec := &ScanSpec{InitialState: 0, NClasses: 3, Table: lineRunTable}
-	for cc := 0; cc < 256; cc++ {
+	for cc := 0; cc < 128; cc++ {
 		if lineChars[rune(cc)] {
 			if rowChars[rune(cc)] {
 				spec.ClassOf[cc] = 2
@@ -118,6 +136,15 @@ func BuildLineRunSpec(lineChars, rowChars map[rune]bool) *ScanSpec {
 				spec.ClassOf[cc] = 1
 			}
 		}
+	}
+	spec.Fallback = func(r rune) uint8 {
+		if lineChars[r] {
+			if rowChars[r] {
+				return 2
+			}
+			return 1
+		}
+		return 0
 	}
 	return spec
 }
@@ -134,10 +161,16 @@ var charRunTable = []int32{
 // (TS: buildCharRunSpec).
 func BuildCharRunSpec(chars map[rune]bool) *ScanSpec {
 	spec := &ScanSpec{InitialState: 0, NClasses: 2, Table: charRunTable}
-	for cc := 0; cc < 256; cc++ {
+	for cc := 0; cc < 128; cc++ {
 		if chars[rune(cc)] {
 			spec.ClassOf[cc] = 1
 		}
+	}
+	spec.Fallback = func(r rune) uint8 {
+		if chars[r] {
+			return 1
+		}
+		return 0
 	}
 	return spec
 }
@@ -164,30 +197,32 @@ var stringBodyTable = []int32{
 // One spec per quote char because the quote char is encoded in the class
 // table; the string matcher caches them per config
 // (TS: buildStringBodySpec).
-func BuildStringBodySpec(cfg *LexConfig, q byte) *ScanSpec {
-	isMultiLine := cfg.MultiChars[rune(q)]
-	spec := &ScanSpec{InitialState: 0, NClasses: 4, Table: stringBodyTable}
-	for cc := 0; cc < 256; cc++ {
+func BuildStringBodySpec(cfg *LexConfig, q rune) *ScanSpec {
+	isMultiLine := cfg.MultiChars[q]
+	classify := func(r rune) uint8 {
 		switch {
-		case byte(cc) == q:
-			spec.ClassOf[cc] = 1
-		case rune(cc) == cfg.EscapeChar:
-			spec.ClassOf[cc] = 1
-		case hasKey(cfg.StringReplace, rune(cc)):
-			spec.ClassOf[cc] = 1
-		case cc < 32:
-			if isMultiLine && cfg.LineChars[rune(cc)] {
-				if cfg.RowChars[rune(cc)] {
-					spec.ClassOf[cc] = 3
-				} else {
-					spec.ClassOf[cc] = 2
+		case r == q:
+			return 1
+		case r == cfg.EscapeChar:
+			return 1
+		case hasKey(cfg.StringReplace, r):
+			return 1
+		case r < 32:
+			if isMultiLine && cfg.LineChars[r] {
+				if cfg.RowChars[r] {
+					return 3
 				}
-			} else {
-				spec.ClassOf[cc] = 1
+				return 2
 			}
+			return 1
 		}
-		// else BODY (class 0)
+		return 0 // BODY
 	}
+	spec := &ScanSpec{InitialState: 0, NClasses: 4, Table: stringBodyTable}
+	for cc := 0; cc < 128; cc++ {
+		spec.ClassOf[cc] = classify(rune(cc))
+	}
+	spec.Fallback = classify
 	return spec
 }
 
@@ -216,9 +251,9 @@ func (cfg *LexConfig) lineRunSpec() *ScanSpec {
 	return cfg.lineSpec
 }
 
-func (cfg *LexConfig) stringBodySpec(q byte) *ScanSpec {
+func (cfg *LexConfig) stringBodySpec(q rune) *ScanSpec {
 	if cfg.stringSpecs == nil {
-		cfg.stringSpecs = make(map[byte]*ScanSpec, len(cfg.StringChars))
+		cfg.stringSpecs = make(map[rune]*ScanSpec, len(cfg.StringChars))
 	}
 	if spec, ok := cfg.stringSpecs[q]; ok {
 		return spec

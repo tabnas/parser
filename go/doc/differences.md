@@ -1,8 +1,9 @@
 # Differences from TypeScript
 
 The TypeScript version is the authoritative implementation. The Go version is
-a faithful port of the engine behavior, with deliberate Go-only additions for
-Go client code, and one deliberate packaging difference described first.
+a faithful port of the engine behavior — same packaging (grammar-free
+engine), same lexer structure, same error model — with deliberate Go-only
+additions for Go client code, listed below.
 
 ## Packaging: Aligned (Grammar-Free Engine)
 
@@ -69,7 +70,8 @@ Both implementations now share the same error model:
 | Source site extract with caret | yes | yes |
 
 The remaining difference is delivery: TypeScript throws `TabnasError` as an
-exception; Go returns `*TabnasError` as an `error` value.
+exception; Go returns `*TabnasError` as an `error` value and never panics
+(see "Error Delivery and the No-Panic Guarantee" below).
 
 ## Custom Matchers
 
@@ -146,10 +148,47 @@ machine driver (`Scan` / TS `scan()`), per-byte class tables built by
 shared matcher entry guard (`guardedMatch` / TS `guardedMatcher`). The
 space, line, comment-eatline, and string-body walks all run on the driver,
 and the scan primitives are exposed via the util bag in both runtimes so
-plugin authors can build their own matchers on it. One mechanical
-difference: TS scans UTF-16 code units (and needs a fallback class
-function for char codes ≥ 256), while Go scans bytes, so the Go
-`ScanSpec.ClassOf` table covers every input directly.
+plugin authors can build their own matchers on it. Both use a fallback
+classifier beyond the fast-path table: TS for UTF-16 code units ≥ 256,
+Go for UTF-8 lead bytes ≥ 0x80 (decoding the full rune); see the
+Unicode section below.
+
+## Unicode / UTF-8
+
+Both runtimes handle UTF-8 characters of all sizes (2/3/4-byte
+sequences; BMP and astral planes) in keys, values, strings, comments,
+and escapes, and both accept any Unicode character as a configured
+matcher char (space/line/quote/ender sets) via their fallback
+classifiers. The shared `include-json-utf8*.tsv` fixtures pin the
+common surface. Mechanical differences:
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Scan unit | UTF-16 code units | UTF-8 bytes (runes decoded on demand) |
+| Error columns | UTF-16 units (astral char = 2) | Runes (any char = 1) |
+| `\uXXXX` surrogate pairs | Implicit (UTF-16 strings) | Explicitly combined |
+| Lone surrogates | Preserved (JS strings allow them) | U+FFFD (matches encoding/json) |
+| `\u{...}` braced escapes | 1-6 hex digits, ≤ U+10FFFF, else `invalid_unicode` | Same |
+| Invalid UTF-8 input bytes | n/a (JS strings are UTF-16) | Passed through byte-for-byte, never a panic |
+
+Column positions agree between the runtimes except for astral-plane
+characters (TS counts 2, Go counts 1).
+
+## Error Delivery and the No-Panic Guarantee
+
+TypeScript throws `TabnasError`; Go returns errors — and the Go API
+guarantees it **never panics**:
+
+- Parsing wraps a recover guard that converts any panic (including
+  panics thrown by plugin callbacks or custom matchers) into an
+  `"internal"`-code `*TabnasError`.
+- `Grammar` has the same guard for malformed specs.
+- APIs that previously panicked now return errors: `Derive` returns
+  `(*Tabnas, error)` (a failing plugin during child derivation mirrors
+  TS `make()` throwing), and `MakeRuleCond` returns
+  `(AltCond, error)` for unknown operators.
+- `go test -fuzz=FuzzParse ./jsonic/` exercises the guarantee against
+  arbitrary byte input.
 
 ## Type System
 

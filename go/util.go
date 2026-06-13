@@ -22,7 +22,7 @@ type UtilBag struct {
 	Scan                func(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOut) bool
 	BuildCharRunSpec    func(chars map[rune]bool) *ScanSpec
 	BuildLineRunSpec    func(lineChars, rowChars map[rune]bool) *ScanSpec
-	BuildStringBodySpec func(cfg *LexConfig, q byte) *ScanSpec
+	BuildStringBodySpec func(cfg *LexConfig, q rune) *ScanSpec
 }
 
 // Entry is a (key, value) pair returned by Entries. Matches the 2-tuple

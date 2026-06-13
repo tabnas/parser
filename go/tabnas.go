@@ -26,6 +26,7 @@ var errorMessages = map[string]string{
 	"unterminated_comment": "unterminated comment: {src}",
 	"unknown_rule":         "unknown rule: {rulename}",
 	"end_of_source":        "unexpected end of source",
+	"internal":             "internal error: {src}",
 }
 
 // Error hint templates matching TypeScript defaults (ts/src/defaults.ts).
@@ -48,6 +49,8 @@ var defaultHints = map[string]string{
 	"unknown_rule": "No rule named {rulename} is defined.",
 
 	"end_of_source": "Unexpected end of source.",
+
+	"internal": "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input.",
 }
 
 // TabnasError is the error type returned by Parse when parsing fails.

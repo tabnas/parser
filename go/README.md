@@ -43,7 +43,10 @@ func main() {
 }
 ```
 
-That's it. No schema, no struct tags, no ceremony.
+That's it. No schema, no struct tags, no ceremony. Full UTF-8
+support (keys, values, escapes — including astral-plane characters
+and JSON surrogate pairs), and the API never panics: every failure
+is a returned `error`, even for arbitrary malformed byte input.
 
 ## Configured Instance
 

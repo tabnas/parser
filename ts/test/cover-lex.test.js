@@ -258,13 +258,11 @@ describe('cover-lex', () => {
   })
 
   it('string-non-ascii-quote-and-lazy-spec', () => {
-    // Non-ASCII quote char goes through the Chars-map fallback for
-    // quote detection. Bytes >= 256 are always body chars inside the
-    // string, so a non-ASCII closing quote is never seen and the
-    // string is unterminated.
+    // Non-ASCII quote chars go through the fallback classifier for
+    // both opening and closing quotes, so the string terminates.
     let t = tokens({ string: { chars: '"「' } }, '「ab「')
-    assert.equal(t[0].name, '#BD')
-    assert.equal(t[0].why, 'unterminated_string')
+    assert.equal(t[0].name, '#ST')
+    assert.equal(t[0].val, 'ab')
 
     // A config modifier that adds a quote char after the matchers are
     // built triggers the lazy body-spec construction.

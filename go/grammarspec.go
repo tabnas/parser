@@ -97,7 +97,13 @@ type GrammarAltSpec struct {
 // An optional *GrammarSetting may be supplied to append a tag (or tags) to
 // every rule-alt G property in the spec.
 // Returns an error if any FuncRef is missing or has the wrong type.
-func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) error {
+func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error) {
+	// Recover guard: malformed specs must produce errors, never panics.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("Grammar: internal error: %v", r)
+		}
+	}()
 	// Apply typed Options directly.
 	if gs.Options != nil {
 		j.SetOptions(*gs.Options)

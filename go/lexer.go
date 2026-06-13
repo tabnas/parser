@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // MatchValueEntry holds a resolved match.value matcher entry.
@@ -146,7 +147,7 @@ type LexConfig struct {
 	// replaces the config contents.
 	spaceSpec   *ScanSpec
 	lineSpec    *ScanSpec
-	stringSpecs map[byte]*ScanSpec
+	stringSpecs map[rune]*ScanSpec
 
 	// Map/List options
 	MapExtend    bool         // Deep-merge duplicate keys. Default: true.
@@ -625,7 +626,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				}
 				tkn := l.Token("#VL", TinVL, val, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 		}
@@ -671,7 +672,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				name := l.tinNameFor(tin)
 				tkn := l.Token(name, tin, res, res)
 				l.pnt.SI += len(res)
-				l.pnt.CI += len(res)
+				l.pnt.CI += utf8.RuneCountInString(res)
 				return tkn
 			}
 		}
@@ -708,7 +709,7 @@ func (l *Lex) matchFixed() *Token {
 				tin := l.Config.FixedTokens[fs]
 				tkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				return tkn
 			}
 		}
@@ -744,7 +745,11 @@ func (l *Lex) matchSpace() *Token {
 // When LineSingle is true, generates separate tokens for each newline sequence.
 func (l *Lex) matchLine() *Token {
 	sI := l.pnt.SI
-	if sI >= l.pnt.Len || !l.Config.LineChars[rune(l.Src[sI])] {
+	if sI >= l.pnt.Len {
+		return nil
+	}
+	ch, chSize := utf8.DecodeRuneInString(l.Src[sI:])
+	if !l.Config.LineChars[ch] {
 		return nil
 	}
 
@@ -752,9 +757,8 @@ func (l *Lex) matchLine() *Token {
 
 	if l.Config.LineSingle {
 		// Single mode: consume one newline sequence (\r\n or \n or \r)
-		ch := l.Src[sI]
-		sI++
-		if l.Config.RowChars[rune(ch)] {
+		sI += chSize
+		if l.Config.RowChars[ch] {
 			rI++
 		}
 		// Handle \r\n as a single sequence
@@ -795,7 +799,11 @@ func (l *Lex) matchComment() *Token {
 			fI := len(start)
 			cI := l.pnt.CI + len(start)
 			suffixLen := 0
-			for fI < len(fwd) && !l.Config.LineChars[rune(fwd[fI])] {
+			for fI < len(fwd) {
+				r, rsize := utf8.DecodeRuneInString(fwd[fI:])
+				if l.Config.LineChars[r] {
+					break
+				}
 				if n := commentSuffixMatch(fwd, fI, suffixes); n > 0 {
 					suffixLen = n
 					break
@@ -805,7 +813,7 @@ func (l *Lex) matchComment() *Token {
 					break
 				}
 				cI++
-				fI++
+				fI += rsize
 			}
 			if suffixLen > 0 {
 				// Consume the suffix as part of the comment body.
@@ -819,7 +827,11 @@ func (l *Lex) matchComment() *Token {
 			}
 			// EatLine: also consume trailing line characters, only when
 			// the comment terminated at a line-char (not via suffix).
-			atLineChar := fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])]
+			atLineChar := false
+			if fI < len(fwd) {
+				r, _ := utf8.DecodeRuneInString(fwd[fI:])
+				atLineChar = l.Config.LineChars[r]
+			}
 			if atLineChar && l.Config.CommentLineEatLine[start] {
 				var out ScanOut
 				Scan(fwd, fI, l.pnt.RI, 1, l.Config.lineRunSpec(), &out)
@@ -859,12 +871,13 @@ func (l *Lex) matchComment() *Token {
 					suffixLen = n
 					break
 				}
-				if l.Config.RowChars[rune(fwd[fI])] {
+				r, rsize := utf8.DecodeRuneInString(fwd[fI:])
+				if l.Config.RowChars[r] {
 					rI++
 					cI = 0
 				}
 				cI++
-				fI++
+				fI += rsize
 			}
 			if suffixLen > 0 {
 				// Consume the suffix, advancing column/row like the End path.
@@ -951,13 +964,13 @@ func (l *Lex) matchString() *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
 	}
-	q := rune(l.Src[l.pnt.SI])
+	q, qlen := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
 	if !l.Config.StringChars[q] {
 		return nil
 	}
 
 	src := l.Src
-	sI := l.pnt.SI + 1
+	sI := l.pnt.SI + qlen
 	rI := l.pnt.RI
 	cI := l.pnt.CI + 1
 
@@ -969,7 +982,7 @@ func (l *Lex) matchString() *Token {
 	// chars and, for multi-line quotes, line chars (advancing rI and
 	// resetting cI). Stops on the quote, the escape char, replace chars,
 	// and disallowed control chars — dispatched below.
-	bodySpec := l.Config.stringBodySpec(byte(q))
+	bodySpec := l.Config.stringBodySpec(q)
 	var out ScanOut
 
 	for sI < srclen {
@@ -982,18 +995,18 @@ func (l *Lex) matchString() *Token {
 		}
 
 		cI++
-		c := rune(src[sI])
+		c, csize := utf8.DecodeRuneInString(src[sI:])
 
 		// End quote
 		if c == q {
-			sI++
+			sI += csize
 			foundClose = true
 			break
 		}
 
 		// Escape character (all string types process escapes)
 		if c == l.Config.EscapeChar {
-			sI++
+			sI += csize
 			cI++
 			if sI >= srclen {
 				break
@@ -1059,9 +1072,13 @@ func (l *Lex) matchString() *Token {
 				if sI < srclen && src[sI] == '{' {
 					sI++
 					endI := strings.IndexByte(src[sI:], '}')
-					if endI >= 0 {
+					// 1-6 hex digits, any valid Unicode code point.
+					if endI >= 1 && endI <= 6 {
 						cc := parseHexInt(src[sI : sI+endI])
-						if cc >= 0 {
+						if cc >= 0 && cc <= 0x10FFFF {
+							// Surrogate code points are not scalar values;
+							// WriteRune substitutes U+FFFD, matching
+							// encoding/json's handling of lone surrogates.
 							sb.WriteRune(rune(cc))
 							sI += endI // skip past digits, loop handles +1
 							cI += endI + 2
@@ -1075,11 +1092,32 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, sI)
+						end := sI
+						if endI >= 0 {
+							end = sI + endI + 1
+						}
+						return l.bad("invalid_unicode", l.pnt.SI, end)
 					}
 				} else if sI+4 <= srclen {
 					cc := parseHexInt(src[sI : sI+4])
 					if cc >= 0 {
+						// Combine UTF-16 surrogate pairs split across two
+						// \uXXXX escapes (the JSON encoding of astral
+						// chars). TS strings are UTF-16 so pairing happens
+						// implicitly there; Go must pair explicitly. A
+						// lone surrogate becomes U+FFFD via WriteRune,
+						// matching encoding/json.
+						if 0xD800 <= cc && cc <= 0xDBFF &&
+							sI+10 <= srclen && src[sI+4] == '\\' && src[sI+5] == 'u' {
+							lo := parseHexInt(src[sI+6 : sI+10])
+							if 0xDC00 <= lo && lo <= 0xDFFF {
+								full := 0x10000 + (cc-0xD800)<<10 + (lo - 0xDC00)
+								sb.WriteRune(rune(full))
+								sI += 9
+								cI += 10
+								break
+							}
+						}
 						sb.WriteRune(rune(cc))
 						sI += 3
 						cI += 4
@@ -1121,7 +1159,7 @@ func (l *Lex) matchString() *Token {
 		// Replace chars stop the body run; emit the replacement.
 		if rep, ok := l.Config.StringReplace[c]; ok {
 			sb.WriteString(rep)
-			sI++
+			sI += csize
 			continue
 		}
 
@@ -1366,7 +1404,7 @@ func (l *Lex) matchNumber() *Token {
 				tin := l.Config.FixedTokens[fs]
 				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				l.tokens = append(l.tokens, fixTkn)
 				break
 			}
@@ -1388,7 +1426,7 @@ func (l *Lex) matchText() *Token {
 	start := sI
 
 	for sI < len(src) {
-		ch := rune(src[sI])
+		ch, chSize := utf8.DecodeRuneInString(src[sI:])
 		// Stop at characters whose lexers are enabled, plus ender chars.
 		// When a lexer is disabled, its characters are consumed as text
 		// (matching TS behavior where enderRE is built conditionally).
@@ -1438,7 +1476,7 @@ func (l *Lex) matchText() *Token {
 				break
 			}
 		}
-		sI++
+		sI += chSize
 	}
 
 	if sI == start {
@@ -1455,7 +1493,7 @@ func (l *Lex) matchText() *Token {
 			if val, ok := l.Config.ValueDef[msrc]; ok {
 				tkn := l.Token("#VL", TinVL, val, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 
@@ -1484,7 +1522,7 @@ func (l *Lex) matchText() *Token {
 							}
 							tkn := l.Token("#VL", TinVL, val, remsrc)
 							l.pnt.SI = start + len(remsrc)
-							l.pnt.CI += len(remsrc)
+							l.pnt.CI += utf8.RuneCountInString(remsrc)
 							return tkn
 						}
 					}
@@ -1496,17 +1534,17 @@ func (l *Lex) matchText() *Token {
 			case "true":
 				tkn := l.Token("#VL", TinVL, true, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			case "false":
 				tkn := l.Token("#VL", TinVL, false, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			case "null":
 				tkn := l.Token("#VL", TinVL, nil, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 		}
@@ -1529,7 +1567,7 @@ func (l *Lex) matchText() *Token {
 	}
 	tkn := l.Token("#TX", TinTX, textVal, msrc)
 	l.pnt.SI += mlen
-	l.pnt.CI += mlen
+	l.pnt.CI += utf8.RuneCountInString(msrc)
 
 	// Check if next chars are a fixed token - push as lookahead (subMatchFixed)
 	if l.pnt.SI < l.pnt.Len {
@@ -1540,7 +1578,7 @@ func (l *Lex) matchText() *Token {
 				tin := l.Config.FixedTokens[fs]
 				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				l.tokens = append(l.tokens, fixTkn)
 				matched = true
 				break
@@ -1607,7 +1645,7 @@ func (l *Lex) isTextChar(pos int) bool {
 		return false
 	}
 	ch := l.Src[pos]
-	r := rune(ch)
+	r, _ := utf8.DecodeRuneInString(l.Src[pos:])
 	// Only treat whitespace as non-text if the corresponding lexer is enabled.
 	if l.Config.SpaceLex && l.Config.SpaceChars[r] {
 		return false
