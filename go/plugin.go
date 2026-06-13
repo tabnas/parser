@@ -671,8 +671,7 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 // textParser parses tabnas-format text for the text-form convenience
 // APIs (SetOptionsText, GrammarText). The engine ships no grammar
 // (matching the TS package), so a grammar package must register a
-// parser — importing the jsonic package does this in its init, in the
-// manner of database/sql drivers.
+// parser via RegisterTextParser, in the manner of database/sql drivers.
 var textParser func(src string) (any, error)
 
 // RegisterTextParser sets the parser used by SetOptionsText and
@@ -687,7 +686,7 @@ func RegisterTextParser(p func(src string) (any, error)) {
 func parseText(api, text string) (any, error) {
 	if textParser == nil {
 		return nil, fmt.Errorf(
-			"%s: no text parser registered — import a grammar package (e.g. jsonic) or call RegisterTextParser", api)
+			"%s: no text parser registered — call RegisterTextParser with a grammar package's parser", api)
 	}
 	return textParser(text)
 }

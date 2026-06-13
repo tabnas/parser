@@ -17,7 +17,7 @@ a:b:c:1           →  {"a": {"b": {"c": 1}}}
 | Runtime | Start here |
 |---|---|
 | **TypeScript / JavaScript** (canonical) | [`ts/README.md`](ts/README.md) |
-| **Go** | [`go/README.md`](go/README.md) — most Go users want the [`jsonic`](go/jsonic/) package |
+| **Go** | [`go/README.md`](go/README.md) — a grammar-free engine; bring your own grammar plugin |
 
 ## Documentation
 
@@ -44,8 +44,7 @@ The docs are organised by what you are trying to do:
 | Path | What it is |
 |---|---|
 | [`ts/`](ts/) | The canonical TypeScript engine (the `tabnas` npm package). |
-| [`go/`](go/) | The Go port of the engine — grammar-free, same layout as TS. |
-| [`go/jsonic/`](go/jsonic/) | The relaxed-JSON grammar for Go, as a plugin package plus a convenience API. |
+| [`go/`](go/) | The Go port of the engine — grammar-free, same layout as TS. The strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`). |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
 

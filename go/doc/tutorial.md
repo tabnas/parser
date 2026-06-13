@@ -1,9 +1,9 @@
-# Tutorial: your first tabnas parse (Go)
+# Tutorial: your first parser (Go)
 
-This walks you from nothing to a working parse, then through one
-customization. Follow it in order — each step builds on the last.
-When you finish you will have parsed a string, inspected the result,
-configured a parser instance, and handled an error.
+tabnas ships no grammar, so there is nothing to "turn on" — you teach
+the engine one token and one rule, watch it parse, then extend it once.
+This walks you from nothing to a working parse and an error you can
+read. Follow it in order — each step builds on the last.
 
 For a recipe-style index of individual tasks, see the
 [how-to guide](guide.md). For exhaustive signatures, see the
@@ -17,14 +17,13 @@ Add the module to your project:
 go get github.com/tabnas/parser/go@latest
 ```
 
-You will use two packages: the engine
-(`github.com/tabnas/parser/go`, imported as `tabnas`) and the
-relaxed-JSON grammar (`github.com/tabnas/parser/go/jsonic`). For a
-first parse you only need `jsonic`.
+You need one package: the engine
+(`github.com/tabnas/parser/go`, imported as `tabnas`).
 
-## 2. Parse a string
+## 2. Create an instance
 
-Create `main.go`:
+A parser is a `*tabnas.Tabnas` value. Create one and try to parse
+something:
 
 ```go
 package main
@@ -32,15 +31,74 @@ package main
 import (
 	"fmt"
 
-	"github.com/tabnas/parser/go/jsonic"
+	tabnas "github.com/tabnas/parser/go"
 )
 
 func main() {
-	result, err := jsonic.Parse("a:1, b:2")
-	if err != nil {
+	j := tabnas.Make()
+	_, err := j.Parse("hello")
+	fmt.Println(err) // non-nil: no grammar yet
+}
+```
+
+The bare instance knows how to *lex* (split text into tokens) but has
+no rule that says what to *do* with them, so this returns an error. The
+API never panics — every failure comes back as an `error`. Adding a
+grammar is the whole point.
+
+## 3. Define one token and one rule
+
+A grammar is a plugin: a `func(j *tabnas.Tabnas, opts map[string]any) error`
+that configures the instance. The smallest useful grammar recognises a
+single word.
+
+```go
+func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
+	// Teach the lexer a fixed token: the source `hello` lexes as #HI.
+	hi := "hello"
+	j.SetOptions(tabnas.Options{Fixed: &tabnas.FixedOptions{
+		Token: map[string]*string{"#HI": &hi},
+	}})
+	HI := j.Token("#HI")
+
+	// Teach the start rule (`val`) what to do when it sees that token:
+	// set the result node to the string "world".
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = []*tabnas.AltSpec{{
+			S: [][]tabnas.Tin{{HI}},
+			A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" },
+		}}
+		rs.Close = []*tabnas.AltSpec{{S: [][]tabnas.Tin{{tabnas.TinZZ}}}}
+	})
+	return nil
+}
+```
+
+Two things happened here:
+
+- The `Fixed` option registered a **fixed token** — an exact source
+  string. `"hello"` in the input now lexes as the token named `#HI`.
+- `j.Rule("val", ...)` modified the start rule. Each rule has an
+  **open** phase holding a list of **alternates**. The one alternate
+  here says: if the next token sequence (`S`) is `#HI`, run the
+  **action** (`A`), which assigns the result to `r.Node`. The close
+  alternate accepts end-of-input (`#ZZ`).
+
+`val` is the default start rule. Every parse begins there.
+
+## 4. Parse
+
+Install the plugin with `Use`, then parse:
+
+```go
+func main() {
+	j := tabnas.Make()
+	if err := j.Use(helloGrammar); err != nil {
 		panic(err)
 	}
-	fmt.Println(result) // map[a:1 b:2]
+
+	result, _ := j.Parse("hello")
+	fmt.Println(result) // world
 }
 ```
 
@@ -50,73 +108,45 @@ Run it:
 go run .
 ```
 
-You wrote `a:1, b:2` — no braces, no quotes around the keys — and got
-back an object. That is the point of the relaxed grammar: it parses
-what you meant. `jsonic.Parse` is the zero-config convenience
-function; it builds a fresh parser for each call.
+You wrote a parser. It accepts exactly one input, but the machinery is
+the same one a full JSON grammar uses.
 
-## 3. Inspect the result
+## 5. Extend it once
 
-`jsonic.Parse` returns `any`. For relaxed-JSON input the concrete
-types are predictable:
-
-- objects → `map[string]any`
-- arrays → `[]any`
-- numbers → `float64`
-- strings → `string`
-- booleans → `bool`
-- `null` / empty input → `nil`
-
-So type-assert and read fields directly:
+Real grammars combine tokens. Add a second word and let either match.
+An alternate fires when its whole token sequence matches, so add a
+second alternate:
 
 ```go
-result, _ := jsonic.Parse("a:1, b:2")
-m := result.(map[string]any)
-fmt.Println(m["a"]) // 1   (a float64)
+func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
+	hi, by := "hello", "bye"
+	j.SetOptions(tabnas.Options{Fixed: &tabnas.FixedOptions{
+		Token: map[string]*string{"#HI": &hi, "#BY": &by},
+	}})
+	HI, BY := j.Token("#HI"), j.Token("#BY")
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = []*tabnas.AltSpec{
+			{S: [][]tabnas.Tin{{HI}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" }},
+			{S: [][]tabnas.Tin{{BY}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "farewell" }},
+		}
+		rs.Close = []*tabnas.AltSpec{{S: [][]tabnas.Tin{{tabnas.TinZZ}}}}
+	})
+	return nil
+}
+
+// j.Parse("hello") // world
+// j.Parse("bye")   // farewell
 ```
 
-Numbers come back as `float64`, matching `encoding/json`. The full
-list of result types lives in the [syntax reference](syntax.md).
+The parser tries each open alternate in order and takes the first whose
+token sequence matches. That ordering — first match wins, two-token
+lookahead, no backtracking — is the model you design grammars around.
 
-## 4. Make a configured instance
+## 6. Catch an error
 
-The defaults are not the only option. `jsonic.Make` returns a
-configured parser instance — the engine plus the relaxed-JSON grammar
-— that you can reuse across many parses. It takes a `tabnas.Options`
-value.
-
-Option fields are pointers, so `nil` means "use the default". Define
-a tiny helper to take the address of a literal:
-
-```go
-func boolp(b bool) *bool { return &b }
-```
-
-Now change one behavior — turn number lexing off so numeric-looking
-values stay as strings:
-
-```go
-import (
-	tabnas "github.com/tabnas/parser/go"
-	"github.com/tabnas/parser/go/jsonic"
-)
-
-j := jsonic.Make(tabnas.Options{
-	Number: &tabnas.NumberOptions{Lex: boolp(false)},
-})
-
-result, _ := j.Parse("a:1, b:2")
-m := result.(map[string]any)
-fmt.Println(m["a"]) // 1   (now a string, not a float64)
-```
-
-The same instance `j` can parse as many strings as you like. Every
-option is documented in the [options reference](options.md).
-
-## 5. Catch an error
-
-When the input is malformed, `Parse` returns an `error` — it never
-panics. Parse an unterminated string and look at the structured
+When the input does not match, `Parse` returns an `error` — it never
+panics. Parse something the grammar rejects and read the structured
 detail:
 
 ```go
@@ -125,13 +155,15 @@ import (
 	"fmt"
 
 	tabnas "github.com/tabnas/parser/go"
-	"github.com/tabnas/parser/go/jsonic"
 )
 
-_, err := jsonic.Parse(`"abc`)
+j := tabnas.Make()
+_ = j.Use(helloGrammar)
+
+_, err := j.Parse("nope")
 var te *tabnas.TabnasError
 if errors.As(err, &te) {
-	fmt.Println(te.Code) // unterminated_string
+	fmt.Println(te.Code)        // e.g. unexpected
 	fmt.Println(te.Row, te.Col) // 1 1
 }
 ```
@@ -144,6 +176,8 @@ end users. The `*tabnas.TabnasError` fields (`Code`, `Row`, `Col`,
 ## Where to go next
 
 - [How-to guide](guide.md) — focused recipes for individual tasks.
+- [Plugin guide](plugins.md) — structure a grammar plugin properly,
+  including a worked strict-JSON example.
 - [Options reference](options.md) — every configuration field.
 - [API reference](api.md) — every type, function, and method.
-- [Concepts](concepts.md) — how the Go packages fit together and why.
+- [Concepts](concepts.md) — how the engine fits together and why.

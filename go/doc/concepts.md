@@ -1,42 +1,65 @@
 # Concepts (Go)
 
-Background reading for the Go packages: how they are split, the
-guarantees they make, and the mechanics that are specific to Go. For
-the language-neutral engine model — lexer, parser, rules, alternates —
-read the shared [architecture](../../doc/architecture.md) first; this
+Background reading for the Go package: what it ships, the guarantees it
+makes, and the mechanics that are specific to Go. For the
+language-neutral engine model — lexer, parser, rules, alternates — read
+the shared [architecture](../../doc/architecture.md) first; this
 document only covers what is Go-specific. For the behavioral
 TypeScript ↔ Go comparison, see [differences](differences.md).
 
-## Two packages: engine and grammar
+## One package: the grammar-free engine
 
-The module ships two packages:
+The module ships a single package:
 
 - `github.com/tabnas/parser/go` (package `tabnas`) — the parsing
   *engine*. It ships **no grammar**. On its own it lexes and runs
-  rules, but a fresh `tabnas.Make()` has no rules to run.
-- `github.com/tabnas/parser/go/jsonic` — the relaxed-JSON grammar,
-  supplied as a plugin (`jsonic.Plugin`) plus convenience
-  constructors (`Parse`, `Make`, `MakeJSON`).
+  rules, but a fresh `tabnas.Make()` has no rules to run, so it cannot
+  parse anything until you teach it a language.
 
 This mirrors the canonical TypeScript package, where every grammar —
-even strict JSON — arrives as a plugin rather than being baked in. The
-split keeps the engine reusable: the same lexer and rule machinery
-drive relaxed JSON, strict JSON, or any grammar you write, depending
-only on which plugin is installed. The relaxed-JSON behavior that
-gives the project its name is just the most common plugin, not a
-privileged built-in.
+even strict JSON — arrives as a plugin rather than being baked in. A
+grammar is a `Plugin` (`func(j *Tabnas, opts map[string]any) error`)
+that registers tokens and rules; you install it with `Use` and then
+call `Parse`. The grammar-free design keeps the engine reusable: the
+same lexer and rule machinery drive relaxed (jsonic-style) JSON, strict
+JSON, or any grammar you write, depending only on which plugin is
+installed. No grammar is a privileged built-in.
 
-A practical consequence: most Go clients import `jsonic` and never
-touch the engine directly. You reach for the bare `tabnas` package
-only when you are authoring a grammar (see the [plugin
-guide](plugins.md)).
+The strict-JSON grammar is not part of the public API. It lives in the
+repository only as a **test fixture** — `go/jsonplugin_test.go`
+(`package tabnas`, test-only) — so the engine has a non-trivial grammar
+to exercise the shared conformance fixtures and the Go-only
+introspection features against. Read it as a worked example of a
+non-trivial grammar plugin, but its `makeJSON` / `jsonPlugin` helpers
+are test-only and are not importable by client code. Client code brings
+its own grammar plugin (see the [plugin guide](plugins.md)).
 
-One Go-specific wrinkle of the split: the engine's text-form
-convenience APIs (`SetOptionsText`, `GrammarText`) need a parser for
-their text argument, but the engine has no grammar. A grammar package
-registers one via `tabnas.RegisterTextParser`; importing `jsonic` does
-this automatically in its `init`, in the manner of database/sql
-drivers.
+One Go-specific wrinkle: the engine's text-form convenience APIs
+(`SetOptionsText`, `GrammarText`) need a parser for their text
+argument, but the engine has no grammar. There is no built-in text
+parser; you register one yourself via `tabnas.RegisterTextParser`
+(typically a grammar package does this in its `init`, in the manner of
+database/sql drivers). Until one is registered, the text-form APIs
+return an error rather than panicking.
+
+## Go-only introspection: MapRef, ListRef, Text
+
+The engine adds typed wrappers over parse output that the TypeScript
+runtime does not, for Go client code that wants structured access to
+parse metadata. They are opt-in via `Options{Info: &InfoOptions{...}}`:
+
+- `Info.Map: boolp(true)` wraps objects as `MapRef` (`MapRef.Val`,
+  `MapRef.Implicit`, `MapRef.Meta`) — internally `Info.Map` → the
+  config's `MapRef` flag.
+- `Info.List: boolp(true)` wraps arrays as `ListRef` (`ListRef.Val`,
+  `ListRef.Implicit`, …) — `Info.List` → `ListRef`.
+- `Info.Text: boolp(true)` wraps strings/text as `Text`
+  (`Text.Quote`, `Text.Str`) — `Info.Text` → the config's `Text` flag.
+
+A grammar must honour these flags to produce the wrappers; the
+strict-JSON fixture does so, which is one reason it is kept. See
+[differences](differences.md#go-specific-features) for the full
+comparison.
 
 ## The no-panic guarantee
 

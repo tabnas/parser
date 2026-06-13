@@ -21,10 +21,10 @@ follows from it:
 - The relaxed-JSON ("jsonic") behaviour that gives the project its name
   is just the most common plugin, not a privileged built-in.
 
-In Go the relaxed-JSON grammar lives in the separate
-[`jsonic`](../go/jsonic/) package; in TypeScript the strict-JSON grammar
-lives as a test fixture, and richer grammars come from companion
-packages.
+In both runtimes the strict-JSON grammar lives as a test fixture
+([`ts/test/json-plugin.ts`](../ts/test/json-plugin.ts),
+[`go/jsonplugin_test.go`](../go/jsonplugin_test.go)); richer grammars,
+including the relaxed-JSON one, come from companion packages.
 
 ## Two stages: lexer then parser
 

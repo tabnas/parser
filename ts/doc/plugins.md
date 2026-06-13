@@ -26,10 +26,20 @@ const am = new Tabnas()
 am.use(myPlugin, { key: 'value' })
 ```
 
-Pass plugins at construction time too, applied in order:
+`use()` returns the instance, so the idiomatic way to assemble a parser
+is to chain registrations off the constructor:
 
 ```js
-const am = new Tabnas({ plugins: [myPlugin, anotherPlugin] })
+const p = new Tabnas()
+  .use(jsonGrammar)
+  .use(csvGrammar, { delimiter: ';' })
+  .use(debugPlugin)
+```
+
+Or pass plugins at construction time — same effect, applied in order:
+
+```js
+const p = new Tabnas({ plugins: [jsonGrammar, csvGrammar, debugPlugin] })
 ```
 
 Plugins should be idempotent (or guard against re-application) because
@@ -38,6 +48,25 @@ registered, against the child's merged options. That re-run is what
 makes option-conditional alternates (e.g. `list.child`) work — the
 plugin's grammar registration sees the child's settings, not the
 parent's.
+
+### Grammar dependencies and order
+
+Plugins are applied in registration order, and a grammar plugin may
+build on tokens, rules, or token sets that an earlier plugin
+registered. Order is therefore significant: **register a grammar's
+dependencies before the grammar itself.** For example, a CSV grammar
+that reuses a relaxed-JSON value grammar to parse each cell depends on
+that grammar being installed first:
+
+```js
+const p = new Tabnas()
+  .use(jsonic)   // dependency: provides the cell-value rules/tokens
+  .use(csv)      // builds on what jsonic registered
+```
+
+A plugin can fail fast if a required dependency is missing — inspect the
+instance (e.g. `am.token('#…')` or the rule set) in its body and throw a
+clear error rather than producing a confusing parse failure later.
 
 ### TypeScript signature
 
