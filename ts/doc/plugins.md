@@ -237,7 +237,12 @@ strict-JSON fixture is written — see
 ## Example: a tiny CSV plugin
 
 Build on the bare engine — a CSV grammar replaces the standard rules
-entirely.
+entirely. A complete, runnable version of this grammar (with the
+`csvcont` / `rowcont` continuations filled in) lives in
+[`test/csv-grammar.test.js`](../test/csv-grammar.test.js); the plugin
+entry points shown above — `use`, custom tokens, rule modification,
+custom matchers, and `sub` — are unit-tested in
+[`test/plugin.test.js`](../test/plugin.test.js).
 
 ```js
 function csvPlugin(am, opts) {
