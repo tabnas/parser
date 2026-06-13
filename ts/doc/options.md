@@ -138,8 +138,9 @@ Set a definition to `false`/`null` to remove it.
 | `chars` | string | `` "'\"`" `` | Quote characters |
 | `multiChars` | string | `` "`" `` | Quote characters that allow multiline strings |
 | `escapeChar` | string | `"\\"` | Escape character |
-| `escape` | object | (standard) | Escape-sequence mappings |
+| `escape` | object | (standard) | Escape-sequence mappings. Map a key to `null` or `''` to remove a built-in escape (e.g. `{ v: null }` rejects `\v`) |
 | `allowUnknown` | boolean | `true` | Copy unknown escape sequences through (`\w` → `w`) |
+| `escapeStrict` | boolean | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `allowUnknown: false`, yields JSON.parse-conformant escapes |
 | `replace` | object | — | Character replacement map during scanning |
 | `abandon` | boolean | `false` | On error, let the next matcher try instead of failing |
 

@@ -62,6 +62,9 @@ type LexConfig struct {
 	MultiChars   map[rune]bool // Multiline quote characters
 	EscapeChar   rune
 	EscapeMap    map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
+	EscapeRemoved map[string]bool  // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
+	EscapeStrict  bool             // Disable the non-standard \xHH and \u{...} structural escapes.
+	RewindHistory int              // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
 	SpaceChars   map[rune]bool
 	LineChars    map[rune]bool
 	RowChars     map[rune]bool
@@ -1022,6 +1025,24 @@ func (l *Lex) matchString() *Token {
 				}
 			}
 
+			// An escape removed via {"esc": ""}, or the \xHH ASCII escape
+			// when strict mode is on, is treated as an unknown escape (so
+			// the hardcoded switch below never fires for it). Mirrors the
+			// TS runtime: \v/\'/\` can be dropped from the escape map, and
+			// strict mode disables \x.
+			if l.Config.EscapeRemoved[string(esc)] ||
+				(l.Config.EscapeStrict && esc == 'x') {
+				if l.Config.AllowUnknownEscape {
+					sb.WriteByte(esc)
+					sI++
+					continue
+				}
+				if l.Config.StringAbandon {
+					return nil
+				}
+				return l.bad("unexpected", l.pnt.SI, sI+1)
+			}
+
 			switch esc {
 			case 'b':
 				sb.WriteByte('\b')
@@ -1067,9 +1088,12 @@ func (l *Lex) matchString() *Token {
 					return l.bad("invalid_ascii", l.pnt.SI, sI)
 				}
 			case 'u':
-				// Unicode escape \u**** or \u{*****}
+				// Unicode escape \u**** or \u{*****}. Strict mode disables
+				// the braced \u{...} form (plain \uXXXX stays), so a braced
+				// escape falls into the 4-hex-digit path below and fails as
+				// invalid_unicode (the '{' is not a hex digit).
 				sI++
-				if sI < srclen && src[sI] == '{' {
+				if !l.Config.EscapeStrict && sI < srclen && src[sI] == '{' {
 					sI++
 					endI := strings.IndexByte(src[sI:], '}')
 					// 1-6 hex digits, any valid Unicode code point.

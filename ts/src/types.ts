@@ -154,6 +154,11 @@ export type TabnasOptions = {
       [char: string]: string | null
     }
     allowUnknown?: boolean
+    // Restrict escapes to the standard set: disable the non-standard
+    // \xHH and \u{...} structural escapes (plain \uXXXX stays). Default
+    // false. Combine with escape-map removals + allowUnknown:false for
+    // JSON.parse-conformant escape handling.
+    escapeStrict?: boolean
     replace?: { [char: string]: string | null }
     abandon?: boolean
     check?: LexCheck
@@ -397,6 +402,7 @@ export type Config = {
     multiChars: Chars
     multiBitmap: Uint8Array       // 256-byte fast-path lookup for multiChars
     allowUnknown: boolean
+    escapeStrict: boolean
     replaceCodeMap: { [charCode: number]: string }
     hasReplace: boolean
     abandon: boolean

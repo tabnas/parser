@@ -87,6 +87,10 @@ type Options struct {
 	// Matches TS options.info.
 	Info *InfoOptions
 
+	// Rewind bounds how many consumed tokens are retained for
+	// ctx.Rewind. Mirrors TS options.rewind.
+	Rewind *RewindOptions
+
 	// Property holds Go-specific options not present in the TypeScript version.
 	Property *PropertyOptions
 
@@ -165,6 +169,16 @@ type InfoOptions struct {
 	// Marker is the key under which info metadata is stored on wrapped
 	// values. Mirrors TS `options.info.marker`. Default: "__info__".
 	Marker string
+}
+
+// RewindOptions bounds the consumed-token history retained for
+// ctx.Rewind. Mirrors TS options.rewind.
+type RewindOptions struct {
+	// History is the maximum number of consumed tokens retained for
+	// ctx.Rewind. A non-positive value means unbounded (TS Infinity).
+	// Default: 64. ctx.Rewind returns an error if its target mark has
+	// been evicted from the retained window.
+	History *int
 }
 
 // PropertyOptions holds Go-specific options not present in the TypeScript version.
@@ -320,8 +334,14 @@ type StringOptions struct {
 	Chars        string            // Quote characters. Default: `'"` + "`".
 	MultiChars   string            // Multiline quote characters. Default: "`".
 	EscapeChar   string            // Escape character. Default: "\\".
-	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}.
+	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}. An entry mapped to "" removes a built-in escape (e.g. {"v": ""} rejects \v).
 	AllowUnknown *bool             // Allow unknown escapes. Default: true.
+
+	// EscapeStrict restricts escapes to the standard set: it disables the
+	// non-standard structural escapes \xHH and \u{...} (plain \uXXXX
+	// stays). Default: false. Combined with escape-map removals and
+	// AllowUnknown:false this yields JSON.parse-conformant handling.
+	EscapeStrict *bool
 	Abandon      *bool             // On string error, return nil to let next matcher try. Default: false.
 	Replace      map[rune]string   // Character replacements applied during string scanning.
 
@@ -914,14 +934,25 @@ func buildConfig(o *Options) *LexConfig {
 		cfg.EscapeChar = '\\'
 	}
 	cfg.AllowUnknownEscape = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.AllowUnknown }), true)
+	cfg.EscapeStrict = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.EscapeStrict }), false)
 	cfg.StringAbandon = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.Abandon }), false)
 	if o.String != nil && o.String.Replace != nil {
 		cfg.StringReplace = o.String.Replace
 	}
 	if o.String != nil && o.String.Escape != nil {
+		// An entry mapped to "" removes a built-in escape (parity with
+		// the TS runtime, where mapping to null/'' drops the escape);
+		// the removed set is consulted before the hardcoded switch in the
+		// lexer so the built-in no longer fires. Other entries
+		// add/override escapes.
 		cfg.EscapeMap = make(map[string]string, len(o.String.Escape))
+		cfg.EscapeRemoved = make(map[string]bool)
 		for k, v := range o.String.Escape {
-			cfg.EscapeMap[k] = v
+			if v == "" {
+				cfg.EscapeRemoved[k] = true
+			} else {
+				cfg.EscapeMap[k] = v
+			}
 		}
 	}
 
@@ -986,6 +1017,14 @@ func buildConfig(o *Options) *LexConfig {
 	copy(cfg.ValSet, TinSetVAL)
 	cfg.KeySet = make([]Tin, len(TinSetKEY))
 	copy(cfg.KeySet, TinSetKEY)
+
+	// Rewind history cap (consumed-token retention for ctx.Rewind).
+	// Default 64, matching TS defaults.ts; a non-positive value is
+	// unbounded.
+	cfg.RewindHistory = 64
+	if o.Rewind != nil && o.Rewind.History != nil {
+		cfg.RewindHistory = *o.Rewind.History
+	}
 
 	// Info options (metadata on parsed output)
 	if o.Info != nil {

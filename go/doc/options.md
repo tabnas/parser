@@ -109,8 +109,9 @@ Controls quoted string parsing.
 | `Chars` | `string` | `"'\"\`` | Quote characters |
 | `MultiChars` | `string` | `` "`" `` | Multiline quote characters |
 | `EscapeChar` | `string` | `"\\"` | Escape character |
-| `Escape` | `map[string]string` | (standard) | Escape sequence mappings |
+| `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |
+| `EscapeStrict` | `*bool` | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `AllowUnknown: false`, yields JSON-conformant escapes |
 | `Abandon` | `*bool` | `false` | On error, return nil to let next matcher try |
 | `Replace` | `map[rune]string` | `nil` | Character replacements during scanning |
 
@@ -164,6 +165,14 @@ Controls parser rule behavior.
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
 | `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
 | `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
+
+## `Rewind`
+
+Bounds the consumed-token history retained for `ctx.Rewind`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; a non-positive value retains all (TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
 
 ## `Lex`
 

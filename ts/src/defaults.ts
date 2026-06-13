@@ -174,6 +174,10 @@ const defaults: TabnasOptions = {
     // Allow unknown escape characters - they are copied to output: '\w' -> 'w'.
     allowUnknown: true,
 
+    // Restrict escapes to the standard set: disable the non-standard
+    // structural escapes \xHH and \u{...} (plain \uXXXX stays).
+    escapeStrict: false,
+
     // If string lexing fails, instead of error, allow other matchers to try.
     abandon: false,
   },
