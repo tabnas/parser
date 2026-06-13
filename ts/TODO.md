@@ -23,7 +23,7 @@
 * P3; implicit lists in pair values: "a:1,2 b:3" -> {a:[1,2], b:3} - pair key terminates (A)
 * P3; internal errors - e.g. adding a null rulespec
 * P3; is s:[] needed? different from s:undefined ?
-* P3; line continuation ("\" at end) should be a feature of standard AMAGAMA text
+* P3; line continuation ("\" at end) should be a feature of standard TABNAS text
 * P3; option for sparse arrays: https://dmitripavlutin.com/javascript-sparse-dense-arrays/
 * P3; perhaps remove the # prefix from token names?
 * P3; rename tokens to be user friendly - maybe?

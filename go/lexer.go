@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // MatchValueEntry holds a resolved match.value matcher entry.
@@ -14,6 +15,7 @@ type MatchValueEntry struct {
 	Name  string
 	Match *regexp.Regexp
 	Val   func([]string) any
+	Fn    LexMatcher // Function-form matcher (TS LexMatcher branch); takes precedence over Match.
 }
 
 // ValueDefEntry is a name-tagged wrapper around *ValueDef used to sort
@@ -24,11 +26,13 @@ type ValueDefEntry struct {
 	Def  *ValueDef
 }
 
-// MatchTokenEntry pairs a Tin with its match regexp, pre-sorted by Tin at
-// configure time so MatchTokens iteration during lexing is deterministic.
+// MatchTokenEntry pairs a Tin with its matcher — regexp or function form
+// (TS match.token: RegExp | LexMatcher) — pre-sorted by Tin at configure
+// time so MatchTokens iteration during lexing is deterministic.
 type MatchTokenEntry struct {
 	Tin   Tin
 	Match *regexp.Regexp
+	Fn    LexMatcher // Function-form matcher; takes precedence over Match.
 }
 
 // Lex is the lexer that produces tokens from source text.
@@ -82,6 +86,7 @@ type LexConfig struct {
 	// Match options (TS: cfg.match)
 	MatchLex          bool                          // Enable custom matching. Default: false.
 	MatchTokens       map[Tin]*regexp.Regexp         // Custom token tin → regexp (storage).
+	MatchTokenFns     map[Tin]LexMatcher             // Custom token tin → function matcher (storage).
 	MatchTokensSorted []*MatchTokenEntry             // Sorted-by-tin view for deterministic iteration.
 	MatchValues       []*MatchValueEntry             // Custom value matchers, sorted by name.
 
@@ -113,6 +118,36 @@ type LexConfig struct {
 	// Color carries the resolved ANSI escape codes for error formatting.
 	// Populated from Options.Color by buildConfig.
 	Color ColorConfig
+
+	// ErrorMessages holds error message templates by code (TS: cfg.error).
+	// Options.Error entries are merged over the package defaults by
+	// buildConfig. Templates may use {key} placeholders (code, src, ...).
+	ErrorMessages map[string]string
+
+	// Hints holds explanatory hint templates by code (TS: cfg.hint).
+	// Options.Hint entries are merged over the package defaults.
+	Hints map[string]string
+
+	// ErrTag is the error header name (TS: errmsg.name). "" → "tabnas".
+	ErrTag string
+
+	// ErrSuffix mirrors TS errmsg.suffix: nil/true renders the standard
+	// internal suffix block, false suppresses it, string/func replace it.
+	ErrSuffix any
+
+	// ErrLink is an optional "see also" line (TS: errmsg.link) rendered
+	// inside the standard suffix block.
+	ErrLink string
+
+	// Tag is the instance tag (TS: options.tag), shown in the internal
+	// error suffix.
+	Tag string
+
+	// Lazily built scan specs (see scan.go). Cleared whenever SetOptions
+	// replaces the config contents.
+	spaceSpec   *ScanSpec
+	lineSpec    *ScanSpec
+	stringSpecs map[rune]*ScanSpec
 
 	// Map/List options
 	MapExtend    bool         // Deep-merge duplicate keys. Default: true.
@@ -284,14 +319,21 @@ func (cfg *LexConfig) SortFixedTokens() {
 	cfg.FixedSorted = sorted
 }
 
-// RebuildMatchTokensSorted projects MatchTokens (map[Tin]*regexp.Regexp) into
+// RebuildMatchTokensSorted projects MatchTokens and MatchTokenFns into
 // MatchTokensSorted ([]*MatchTokenEntry) in ascending Tin order. Call this
-// after any mutation of MatchTokens so the lexer can iterate deterministically
-// without sorting during parse.
+// after any mutation of either map so the lexer can iterate deterministically
+// without sorting during parse. A function matcher takes precedence over a
+// regexp registered for the same tin.
 func (cfg *LexConfig) RebuildMatchTokensSorted() {
-	sorted := make([]*MatchTokenEntry, 0, len(cfg.MatchTokens))
+	sorted := make([]*MatchTokenEntry, 0, len(cfg.MatchTokens)+len(cfg.MatchTokenFns))
 	for tin, re := range cfg.MatchTokens {
+		if cfg.MatchTokenFns != nil && cfg.MatchTokenFns[tin] != nil {
+			continue
+		}
 		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Match: re})
+	}
+	for tin, fn := range cfg.MatchTokenFns {
+		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Fn: fn})
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].Tin < sorted[j].Tin
@@ -343,6 +385,17 @@ func (l *Lex) Bad(why string) *Token {
 	return tkn
 }
 
+// attachErrContext records the active rule and token on an error for the
+// standard "--internal: ..." suffix block (TS errdesc suffix).
+func (l *Lex) attachErrContext(je *TabnasError, r *Rule, tokenName, why string) {
+	if r != nil {
+		je.ruleName = r.Name
+		je.ruleState = r.State
+	}
+	je.tokenName = tokenName
+	je.why = why
+}
+
 // Next returns the next non-IGNORE token, passing the current parsing rule
 // to custom matchers for context-sensitive lexing.
 // On error (unterminated string, unterminated comment, unexpected character),
@@ -368,19 +421,15 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			if l.pnt.SI < len(l.Src) {
 				src = string(l.Src[l.pnt.SI])
 			}
-			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI)
-			if l.Config != nil {
-				je.color = l.Config.Color
-			}
+			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config)
+			l.attachErrContext(je, r, "#UK", "")
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
-			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI)
-			if l.Config != nil {
-				je.color = l.Config.Color
-			}
+			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
+			l.attachErrContext(je, r, tkn.Name, tkn.Why)
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: tkn.SI, RI: tkn.RI, CI: tkn.CI}
 		}
@@ -390,6 +439,22 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 		return tkn
 	}
+}
+
+// guardedMatch wraps a matcher body in the standard entry guards
+// (TS: guardedMatcher): skip when the matcher's lex flag is off, and
+// consult the optional check hook, which may short-circuit by returning
+// {Done: true, Token: t} — a nil hook token suppresses the matcher.
+func (l *Lex) guardedMatch(enabled bool, check LexCheck, body func() *Token) *Token {
+	if !enabled {
+		return nil
+	}
+	if check != nil {
+		if cr := check(l); cr != nil && cr.Done {
+			return cr.Token
+		}
+	}
+	return body()
 }
 
 // nextRaw returns the next raw token (including IGNORE tokens).
@@ -428,18 +493,9 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 	}
 
 	// Match matcher (priority 1e6) — regexp-based token and value matching.
-	if l.Config.MatchLex {
-		if l.Config.MatchCheck != nil {
-			if cr := l.Config.MatchCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil {
-					return cr.Token
-				}
-			} else if tkn := l.matchMatch(rule); tkn != nil {
-				return tkn
-			}
-		} else if tkn := l.matchMatch(rule); tkn != nil {
-			return tkn
-		}
+	if tkn := l.guardedMatch(l.Config.MatchLex, l.Config.MatchCheck,
+		func() *Token { return l.matchMatch(rule) }); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before fixed (< 2e6).
@@ -450,12 +506,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.FixedLex {
-		if l.Config.FixedCheck != nil {
-			if cr := l.Config.FixedCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchFixed(); tkn != nil { return tkn }
-		} else if tkn := l.matchFixed(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.FixedLex, l.Config.FixedCheck, l.matchFixed); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before space (< 3e6).
@@ -466,12 +518,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.SpaceLex {
-		if l.Config.SpaceCheck != nil {
-			if cr := l.Config.SpaceCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchSpace(); tkn != nil { return tkn }
-		} else if tkn := l.matchSpace(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.SpaceLex, l.Config.SpaceCheck, l.matchSpace); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before line (< 4e6).
@@ -482,12 +530,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.LineLex {
-		if l.Config.LineCheck != nil {
-			if cr := l.Config.LineCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchLine(); tkn != nil { return tkn }
-		} else if tkn := l.matchLine(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.LineLex, l.Config.LineCheck, l.matchLine); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before string (< 5e6).
@@ -498,12 +542,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.StringLex {
-		if l.Config.StringCheck != nil {
-			if cr := l.Config.StringCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchString(); tkn != nil { return tkn }
-		} else if tkn := l.matchString(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.StringLex, l.Config.StringCheck, l.matchString); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before comment (< 6e6).
@@ -514,12 +554,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.CommentLex {
-		if l.Config.CommentCheck != nil {
-			if cr := l.Config.CommentCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchComment(); tkn != nil { return tkn }
-		} else if tkn := l.matchComment(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.CommentLex, l.Config.CommentCheck, l.matchComment); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before number (< 7e6).
@@ -530,12 +566,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.NumberLex {
-		if l.Config.NumberCheck != nil {
-			if cr := l.Config.NumberCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchNumber(); tkn != nil { return tkn }
-		} else if tkn := l.matchNumber(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.NumberLex, l.Config.NumberCheck, l.matchNumber); tkn != nil {
+		return tkn
 	}
 
 	// Run custom matchers with priority before text (< 8e6).
@@ -546,12 +578,9 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		cI++
 	}
 
-	if l.Config.TextLex || l.Config.ValueLex {
-		if l.Config.TextCheck != nil {
-			if cr := l.Config.TextCheck(l); cr != nil && cr.Done {
-				if cr.Token != nil { return cr.Token }
-			} else if tkn := l.matchText(); tkn != nil { return tkn }
-		} else if tkn := l.matchText(); tkn != nil { return tkn }
+	if tkn := l.guardedMatch(l.Config.TextLex || l.Config.ValueLex,
+		l.Config.TextCheck, l.matchText); tkn != nil {
+		return tkn
 	}
 
 	// Run remaining custom matchers (priority >= 8e6).
@@ -577,6 +606,13 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 
 	// Match values first (TS: valueMatchers loop).
 	for _, vm := range l.Config.MatchValues {
+		// Function-form matcher (TS: LexMatcher branch).
+		if vm.Fn != nil {
+			if tkn := vm.Fn(l, rule); tkn != nil {
+				return tkn
+			}
+			continue
+		}
 		if vm.Match != nil {
 			res := vm.Match.FindStringSubmatch(fwd)
 			if res != nil && len(res[0]) > 0 {
@@ -590,7 +626,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				}
 				tkn := l.Token("#VL", TinVL, val, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 		}
@@ -608,7 +644,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 
 		for _, mt := range l.Config.MatchTokensSorted {
 			tin, re := mt.Tin, mt.Match
-			if re == nil {
+			if re == nil && mt.Fn == nil {
 				continue
 			}
 			// Check if this Tin is expected at position 0 in any alt.
@@ -623,12 +659,20 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				continue
 			}
 
+			// Function-form matcher (TS: LexMatcher branch).
+			if mt.Fn != nil {
+				if tkn := mt.Fn(l, rule); tkn != nil {
+					return tkn
+				}
+				continue
+			}
+
 			res := re.FindString(fwd)
 			if res != "" {
 				name := l.tinNameFor(tin)
 				tkn := l.Token(name, tin, res, res)
 				l.pnt.SI += len(res)
-				l.pnt.CI += len(res)
+				l.pnt.CI += utf8.RuneCountInString(res)
 				return tkn
 			}
 		}
@@ -665,7 +709,7 @@ func (l *Lex) matchFixed() *Token {
 				tin := l.Config.FixedTokens[fs]
 				tkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				return tkn
 			}
 		}
@@ -686,27 +730,26 @@ func (l *Lex) matchFixed() *Token {
 
 // matchSpace matches space and tab characters.
 func (l *Lex) matchSpace() *Token {
-	sI := l.pnt.SI
-	cI := l.pnt.CI
-	for sI < l.pnt.Len && l.Config.SpaceChars[rune(l.Src[sI])] {
-		sI++
-		cI++
+	var out ScanOut
+	if !Scan(l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config.spaceRunSpec(), &out) {
+		return nil
 	}
-	if sI > l.pnt.SI {
-		src := l.Src[l.pnt.SI:sI]
-		tkn := l.Token("#SP", TinSP, nil, src)
-		l.pnt.SI = sI
-		l.pnt.CI = cI
-		return tkn
-	}
-	return nil
+	src := l.Src[l.pnt.SI:out.SI]
+	tkn := l.Token("#SP", TinSP, nil, src)
+	l.pnt.SI = out.SI
+	l.pnt.CI = out.CI
+	return tkn
 }
 
 // matchLine matches line ending characters (\r, \n).
 // When LineSingle is true, generates separate tokens for each newline sequence.
 func (l *Lex) matchLine() *Token {
 	sI := l.pnt.SI
-	if sI >= l.pnt.Len || !l.Config.LineChars[rune(l.Src[sI])] {
+	if sI >= l.pnt.Len {
+		return nil
+	}
+	ch, chSize := utf8.DecodeRuneInString(l.Src[sI:])
+	if !l.Config.LineChars[ch] {
 		return nil
 	}
 
@@ -714,9 +757,8 @@ func (l *Lex) matchLine() *Token {
 
 	if l.Config.LineSingle {
 		// Single mode: consume one newline sequence (\r\n or \n or \r)
-		ch := l.Src[sI]
-		sI++
-		if l.Config.RowChars[rune(ch)] {
+		sI += chSize
+		if l.Config.RowChars[ch] {
 			rI++
 		}
 		// Handle \r\n as a single sequence
@@ -735,16 +777,12 @@ func (l *Lex) matchLine() *Token {
 	}
 
 	// Default: consume all consecutive line characters into one token
-	for sI < l.pnt.Len && l.Config.LineChars[rune(l.Src[sI])] {
-		if l.Config.RowChars[rune(l.Src[sI])] {
-			rI++
-		}
-		sI++
-	}
-	src := l.Src[l.pnt.SI:sI]
+	var out ScanOut
+	Scan(l.Src, sI, rI, l.pnt.CI, l.Config.lineRunSpec(), &out)
+	src := l.Src[l.pnt.SI:out.SI]
 	tkn := l.Token("#LN", TinLN, nil, src)
-	l.pnt.SI = sI
-	l.pnt.RI = rI
+	l.pnt.SI = out.SI
+	l.pnt.RI = out.RI
 	l.pnt.CI = 1
 	return tkn
 }
@@ -761,7 +799,11 @@ func (l *Lex) matchComment() *Token {
 			fI := len(start)
 			cI := l.pnt.CI + len(start)
 			suffixLen := 0
-			for fI < len(fwd) && !l.Config.LineChars[rune(fwd[fI])] {
+			for fI < len(fwd) {
+				r, rsize := utf8.DecodeRuneInString(fwd[fI:])
+				if l.Config.LineChars[r] {
+					break
+				}
 				if n := commentSuffixMatch(fwd, fI, suffixes); n > 0 {
 					suffixLen = n
 					break
@@ -771,7 +813,7 @@ func (l *Lex) matchComment() *Token {
 					break
 				}
 				cI++
-				fI++
+				fI += rsize
 			}
 			if suffixLen > 0 {
 				// Consume the suffix as part of the comment body.
@@ -785,15 +827,16 @@ func (l *Lex) matchComment() *Token {
 			}
 			// EatLine: also consume trailing line characters, only when
 			// the comment terminated at a line-char (not via suffix).
-			atLineChar := fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])]
+			atLineChar := false
+			if fI < len(fwd) {
+				r, _ := utf8.DecodeRuneInString(fwd[fI:])
+				atLineChar = l.Config.LineChars[r]
+			}
 			if atLineChar && l.Config.CommentLineEatLine[start] {
-				rI := l.pnt.RI
-				for fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])] {
-					if l.Config.RowChars[rune(fwd[fI])] {
-						rI++
-					}
-					fI++
-				}
+				var out ScanOut
+				Scan(fwd, fI, l.pnt.RI, 1, l.Config.lineRunSpec(), &out)
+				fI = out.SI
+				rI := out.RI
 				src := fwd[:fI]
 				tkn := l.Token("#CM", TinCM, nil, src)
 				l.pnt.SI += len(src)
@@ -828,12 +871,13 @@ func (l *Lex) matchComment() *Token {
 					suffixLen = n
 					break
 				}
-				if l.Config.RowChars[rune(fwd[fI])] {
+				r, rsize := utf8.DecodeRuneInString(fwd[fI:])
+				if l.Config.RowChars[r] {
 					rI++
 					cI = 0
 				}
 				cI++
-				fI++
+				fI += rsize
 			}
 			if suffixLen > 0 {
 				// Consume the suffix, advancing column/row like the End path.
@@ -857,12 +901,10 @@ func (l *Lex) matchComment() *Token {
 				fI += len(end)
 				// EatLine: also consume trailing line characters
 				if l.Config.CommentBlockEatLine[start] {
-					for fI < len(fwd) && l.Config.LineChars[rune(fwd[fI])] {
-						if l.Config.RowChars[rune(fwd[fI])] {
-							rI++
-						}
-						fI++
-					}
+					var out ScanOut
+					Scan(fwd, fI, rI, 1, l.Config.lineRunSpec(), &out)
+					fI = out.SI
+					rI = out.RI
 					cI = 1
 				}
 				src := fwd[:fI]
@@ -922,14 +964,13 @@ func (l *Lex) matchString() *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
 	}
-	q := rune(l.Src[l.pnt.SI])
+	q, qlen := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
 	if !l.Config.StringChars[q] {
 		return nil
 	}
 
-	isMultiLine := l.Config.MultiChars[q]
 	src := l.Src
-	sI := l.pnt.SI + 1
+	sI := l.pnt.SI + qlen
 	rI := l.pnt.RI
 	cI := l.pnt.CI + 1
 
@@ -937,20 +978,35 @@ func (l *Lex) matchString() *Token {
 	srclen := len(src)
 	foundClose := false
 
+	// Per-quote body spec (TS buildStringBodySpec): consumes plain body
+	// chars and, for multi-line quotes, line chars (advancing rI and
+	// resetting cI). Stops on the quote, the escape char, replace chars,
+	// and disallowed control chars — dispatched below.
+	bodySpec := l.Config.stringBodySpec(q)
+	var out ScanOut
+
 	for sI < srclen {
+		if Scan(src, sI, rI, cI, bodySpec, &out) {
+			sb.WriteString(src[sI:out.SI])
+			sI, rI, cI = out.SI, out.RI, out.CI
+			if sI >= srclen {
+				break
+			}
+		}
+
 		cI++
-		c := rune(src[sI])
+		c, csize := utf8.DecodeRuneInString(src[sI:])
 
 		// End quote
 		if c == q {
-			sI++
+			sI += csize
 			foundClose = true
 			break
 		}
 
 		// Escape character (all string types process escapes)
 		if c == l.Config.EscapeChar {
-			sI++
+			sI += csize
 			cI++
 			if sI >= srclen {
 				break
@@ -1016,9 +1072,13 @@ func (l *Lex) matchString() *Token {
 				if sI < srclen && src[sI] == '{' {
 					sI++
 					endI := strings.IndexByte(src[sI:], '}')
-					if endI >= 0 {
+					// 1-6 hex digits, any valid Unicode code point.
+					if endI >= 1 && endI <= 6 {
 						cc := parseHexInt(src[sI : sI+endI])
-						if cc >= 0 {
+						if cc >= 0 && cc <= 0x10FFFF {
+							// Surrogate code points are not scalar values;
+							// WriteRune substitutes U+FFFD, matching
+							// encoding/json's handling of lone surrogates.
 							sb.WriteRune(rune(cc))
 							sI += endI // skip past digits, loop handles +1
 							cI += endI + 2
@@ -1032,11 +1092,32 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, sI)
+						end := sI
+						if endI >= 0 {
+							end = sI + endI + 1
+						}
+						return l.bad("invalid_unicode", l.pnt.SI, end)
 					}
 				} else if sI+4 <= srclen {
 					cc := parseHexInt(src[sI : sI+4])
 					if cc >= 0 {
+						// Combine UTF-16 surrogate pairs split across two
+						// \uXXXX escapes (the JSON encoding of astral
+						// chars). TS strings are UTF-16 so pairing happens
+						// implicitly there; Go must pair explicitly. A
+						// lone surrogate becomes U+FFFD via WriteRune,
+						// matching encoding/json.
+						if 0xD800 <= cc && cc <= 0xDBFF &&
+							sI+10 <= srclen && src[sI+4] == '\\' && src[sI+5] == 'u' {
+							lo := parseHexInt(src[sI+6 : sI+10])
+							if 0xDC00 <= lo && lo <= 0xDFFF {
+								full := 0x10000 + (cc-0xD800)<<10 + (lo - 0xDC00)
+								sb.WriteRune(rune(full))
+								sI += 9
+								cI += 10
+								break
+							}
+						}
 						sb.WriteRune(rune(cc))
 						sI += 3
 						cI += 4
@@ -1066,63 +1147,24 @@ func (l *Lex) matchString() *Token {
 			continue
 		}
 
-		// Check for unprintable / multiline
+		// Disallowed control char (multi-line line chars are consumed
+		// by the body spec, so any control char reaching here is bad).
 		if c < 32 {
-			if isMultiLine && l.Config.LineChars[c] {
-				if l.Config.RowChars[c] {
-					rI++
-				}
-				cI = 1
-				sb.WriteByte(src[sI])
-				sI++
-				continue
-			}
-			// Non-multiline unprintable - bad
 			if l.Config.StringAbandon {
 				return nil
 			}
 			break
 		}
 
-		// Normal body - fast scan
-		bI := sI
-		if len(l.Config.StringReplace) > 0 {
-			// Char-by-char with replacement support
-			for sI < srclen {
-				cc := rune(src[sI])
-				if cc < 32 || cc == q || cc == rune(l.Config.EscapeChar) {
-					break
-				}
-				if rep, ok := l.Config.StringReplace[cc]; ok {
-					// Flush pending plain chars
-					if sI > bI {
-						sb.WriteString(src[bI:sI])
-					}
-					sb.WriteString(rep)
-					sI++
-					cI++
-					bI = sI
-					continue
-				}
-				sI++
-				cI++
-			}
-			if sI > bI {
-				sb.WriteString(src[bI:sI])
-			}
-		} else {
-			for sI < srclen {
-				cc := rune(src[sI])
-				if cc < 32 || cc == q || cc == rune(l.Config.EscapeChar) {
-					break
-				}
-				sI++
-				cI++
-			}
-			sb.WriteString(src[bI:sI])
+		// Replace chars stop the body run; emit the replacement.
+		if rep, ok := l.Config.StringReplace[c]; ok {
+			sb.WriteString(rep)
+			sI += csize
+			continue
 		}
-		cI-- // loop will re-increment
-		continue
+
+		// Unreachable: every stop class is dispatched above.
+		break
 	}
 
 	// Check for unterminated string
@@ -1362,7 +1404,7 @@ func (l *Lex) matchNumber() *Token {
 				tin := l.Config.FixedTokens[fs]
 				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				l.tokens = append(l.tokens, fixTkn)
 				break
 			}
@@ -1384,7 +1426,7 @@ func (l *Lex) matchText() *Token {
 	start := sI
 
 	for sI < len(src) {
-		ch := rune(src[sI])
+		ch, chSize := utf8.DecodeRuneInString(src[sI:])
 		// Stop at characters whose lexers are enabled, plus ender chars.
 		// When a lexer is disabled, its characters are consumed as text
 		// (matching TS behavior where enderRE is built conditionally).
@@ -1434,7 +1476,7 @@ func (l *Lex) matchText() *Token {
 				break
 			}
 		}
-		sI++
+		sI += chSize
 	}
 
 	if sI == start {
@@ -1451,7 +1493,7 @@ func (l *Lex) matchText() *Token {
 			if val, ok := l.Config.ValueDef[msrc]; ok {
 				tkn := l.Token("#VL", TinVL, val, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 
@@ -1480,7 +1522,7 @@ func (l *Lex) matchText() *Token {
 							}
 							tkn := l.Token("#VL", TinVL, val, remsrc)
 							l.pnt.SI = start + len(remsrc)
-							l.pnt.CI += len(remsrc)
+							l.pnt.CI += utf8.RuneCountInString(remsrc)
 							return tkn
 						}
 					}
@@ -1492,17 +1534,17 @@ func (l *Lex) matchText() *Token {
 			case "true":
 				tkn := l.Token("#VL", TinVL, true, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			case "false":
 				tkn := l.Token("#VL", TinVL, false, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			case "null":
 				tkn := l.Token("#VL", TinVL, nil, msrc)
 				l.pnt.SI += mlen
-				l.pnt.CI += mlen
+				l.pnt.CI += utf8.RuneCountInString(msrc)
 				return tkn
 			}
 		}
@@ -1525,7 +1567,7 @@ func (l *Lex) matchText() *Token {
 	}
 	tkn := l.Token("#TX", TinTX, textVal, msrc)
 	l.pnt.SI += mlen
-	l.pnt.CI += mlen
+	l.pnt.CI += utf8.RuneCountInString(msrc)
 
 	// Check if next chars are a fixed token - push as lookahead (subMatchFixed)
 	if l.pnt.SI < l.pnt.Len {
@@ -1536,7 +1578,7 @@ func (l *Lex) matchText() *Token {
 				tin := l.Config.FixedTokens[fs]
 				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
 				l.pnt.SI += len(fs)
-				l.pnt.CI += len(fs)
+				l.pnt.CI += utf8.RuneCountInString(fs)
 				l.tokens = append(l.tokens, fixTkn)
 				matched = true
 				break
@@ -1603,7 +1645,7 @@ func (l *Lex) isTextChar(pos int) bool {
 		return false
 	}
 	ch := l.Src[pos]
-	r := rune(ch)
+	r, _ := utf8.DecodeRuneInString(l.Src[pos:])
 	// Only treat whitespace as non-text if the corresponding lexer is enabled.
 	if l.Config.SpaceLex && l.Config.SpaceChars[r] {
 		return false

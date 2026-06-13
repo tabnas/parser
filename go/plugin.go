@@ -233,6 +233,29 @@ func (j *Tabnas) registerMatchSpecs(opts *Options) {
 	})
 }
 
+// applyMatchTokens resolves match.token / match.tokenFn names to Tins and
+// registers the matchers (TS match.token: RegExp | LexMatcher). Called at
+// construction (Make) and on SetOptions.
+func (j *Tabnas) applyMatchTokens(opts *Options) {
+	if opts.Match == nil || (opts.Match.Token == nil && opts.Match.TokenFn == nil) {
+		return
+	}
+	cfg := j.parser.Config
+	for name, re := range opts.Match.Token {
+		tin := j.Token(name)
+		cfg.MatchTokens[tin] = re
+	}
+	for name, fn := range opts.Match.TokenFn {
+		tin := j.Token(name)
+		if cfg.MatchTokenFns == nil {
+			cfg.MatchTokenFns = make(map[Tin]LexMatcher)
+		}
+		cfg.MatchTokenFns[tin] = fn
+	}
+	// Project maps → sorted slice so lex-time iteration is deterministic.
+	cfg.RebuildMatchTokensSorted()
+}
+
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
 //   - non-nil: remove any existing src→tin mapping for that name, then set
@@ -271,7 +294,6 @@ func (j *Tabnas) applyFixedTokens(opts *Options) {
 		j.parser.Config.SortFixedTokens()
 	}
 }
-
 
 // Plugins returns the list of installed plugins (for introspection).
 func (j *Tabnas) Plugins() []Plugin {
@@ -384,7 +406,7 @@ func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 // Derive creates a new Tabnas instance inheriting this instance's config,
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
 // This matches TypeScript's tabnas.make(options, parent).
-func (j *Tabnas) Derive(opts ...Options) *Tabnas {
+func (j *Tabnas) Derive(opts ...Options) (*Tabnas, error) {
 	// Start with parent's options, merge with new ones.
 	child := Make(opts...)
 
@@ -472,9 +494,9 @@ func (j *Tabnas) Derive(opts ...Options) *Tabnas {
 	for _, pe := range j.plugins {
 		child.plugins = append(child.plugins, pe)
 		if err := pe.plugin(child, pe.opts); err != nil {
-			// Plugin errors during Derive are programming errors; panic
-			// since Derive doesn't return an error.
-			panic("tabnas: plugin error during Derive: " + err.Error())
+			// Mirrors TS make(), where a plugin throwing during child
+			// derivation propagates to the caller.
+			return nil, fmt.Errorf("tabnas: plugin error during Derive: %w", err)
 		}
 	}
 
@@ -506,7 +528,7 @@ func (j *Tabnas) Derive(opts ...Options) *Tabnas {
 		}
 	}
 
-	return child
+	return child, nil
 }
 
 // SetOptions deep-merges new options into this instance and rebuilds the
@@ -545,6 +567,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	if len(j.parser.Config.MatchTokens) > 0 {
 		for k, v := range j.parser.Config.MatchTokens {
 			cfg.MatchTokens[k] = v
+		}
+	}
+	if len(j.parser.Config.MatchTokenFns) > 0 {
+		for k, v := range j.parser.Config.MatchTokenFns {
+			cfg.MatchTokenFns[k] = v
 		}
 	}
 	if len(j.parser.Config.MatchValues) > 0 {
@@ -587,15 +614,9 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// Apply fixed.token overrides (add, swap, or delete fixed-token mappings).
 	j.applyFixedTokens(&opts)
 
-	// Apply match.token: resolve token names to Tins and register regexp matchers.
-	if opts.Match != nil && opts.Match.Token != nil {
-		for name, re := range opts.Match.Token {
-			tin := j.Token(name)
-			j.parser.Config.MatchTokens[tin] = re
-		}
-		// Project map → sorted slice so lex-time iteration is deterministic.
-		j.parser.Config.RebuildMatchTokensSorted()
-	}
+	// Apply match.token / match.tokenFn: resolve token names to Tins and
+	// register regexp or function matchers.
+	j.applyMatchTokens(&opts)
 
 	// Apply tokenSet: resolve token names and update per-instance sets.
 	if opts.TokenSet != nil {
@@ -612,31 +633,12 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 		}
 	}
 
-	// Apply error messages.
-	if j.options.Error != nil {
-		for k, v := range j.options.Error {
-			j.parser.ErrorMessages[k] = v
-		}
-	}
-
-	// Apply hints.
-	if j.options.Hint != nil {
-		if j.hints == nil {
-			j.hints = make(map[string]string)
-		}
-		if j.parser.Hints == nil {
-			j.parser.Hints = make(map[string]string)
-		}
-		for k, v := range j.options.Hint {
-			j.hints[k] = v
-			j.parser.Hints[k] = v
-		}
-	}
-
-	// Apply errmsg options.
-	if j.options.ErrMsg != nil && j.options.ErrMsg.Name != "" {
-		j.parser.ErrTag = j.options.ErrMsg.Name
-	}
+	// Re-alias the parser error fields to the rebuilt config maps.
+	// buildConfig resolved Error/Hint/ErrMsg from the merged options.
+	j.parser.ErrorMessages = j.parser.Config.ErrorMessages
+	j.parser.Hints = j.parser.Config.Hints
+	j.parser.ErrTag = j.parser.Config.ErrTag
+	j.hints = j.parser.Config.Hints
 
 	// Apply lex options (empty source handling).
 	// Uses merged options so that values set at Make() or via prior
@@ -666,16 +668,41 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	return j
 }
 
+// textParser parses tabnas-format text for the text-form convenience
+// APIs (SetOptionsText, GrammarText). The engine ships no grammar
+// (matching the TS package), so a grammar package must register a
+// parser — importing the jsonic package does this in its init, in the
+// manner of database/sql drivers.
+var textParser func(src string) (any, error)
+
+// RegisterTextParser sets the parser used by SetOptionsText and
+// GrammarText. Grammar packages call this from init(); the last
+// registration wins.
+func RegisterTextParser(p func(src string) (any, error)) {
+	textParser = p
+}
+
+// parseText runs the registered text parser, or errors when none is
+// registered (e.g. the engine is used without a grammar package).
+func parseText(api, text string) (any, error) {
+	if textParser == nil {
+		return nil, fmt.Errorf(
+			"%s: no text parser registered — import a grammar package (e.g. jsonic) or call RegisterTextParser", api)
+	}
+	return textParser(text)
+}
+
 // SetOptionsText parses a tabnas-format options string, converts it to an
 // Options struct via MapToOptions, and applies it via SetOptions.
 // Returns the instance for chaining and any parse error encountered.
 // Complement to SetOptions that accepts a textual specification of the
-// desired options tree.
+// desired options tree. Requires a registered text parser (see
+// RegisterTextParser).
 func (j *Tabnas) SetOptionsText(text string) (*Tabnas, error) {
 	if text == "" {
 		return j, nil
 	}
-	parsed, err := Make().Parse(text)
+	parsed, err := parseText("SetOptionsText", text)
 	if err != nil {
 		return j, err
 	}

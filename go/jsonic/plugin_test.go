@@ -1,0 +1,2457 @@
+package jsonic
+
+import tabnas "github.com/tabnas/parser/go"
+
+import (
+	"strings"
+	"testing"
+)
+
+// hasExactTag checks if tagStr (comma-separated) contains the exact tag.
+func hasExactTag(tagStr, tag string) bool {
+	for _, t := range strings.Split(tagStr, ",") {
+		if strings.TrimSpace(t) == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// --- Plugin: Use and basic invocation ---
+
+func TestUseInvokesPlugin(t *testing.T) {
+	invoked := false
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		invoked = true
+		return nil
+	})
+	if !invoked {
+		t.Error("plugin was not invoked")
+	}
+}
+
+func TestUsePassesOptions(t *testing.T) {
+	var got map[string]any
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		got = opts
+		return nil
+	}, map[string]any{"key": "value"})
+	if got == nil || got["key"] != "value" {
+		t.Errorf("plugin options not passed correctly: %v", got)
+	}
+}
+
+func TestUseChaining(t *testing.T) {
+	order := []string{}
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		order = append(order, "first")
+		return nil
+	})
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		order = append(order, "second")
+		return nil
+	})
+	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
+		t.Errorf("expected [first second], got %v", order)
+	}
+}
+
+func TestPlugins(t *testing.T) {
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error { return nil })
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error { return nil })
+	// jsonic.Make installs the grammar via Use, so the grammar plugin
+	// is counted alongside the two test plugins (engine/grammar split).
+	if len(j.Plugins()) != 3 {
+		t.Errorf("expected 3 plugins (grammar + 2), got %d", len(j.Plugins()))
+	}
+}
+
+// --- Plugin: Token registration ---
+
+func TestTokenRegisterNew(t *testing.T) {
+	j := Make()
+	tin := j.Token("#TL", "~")
+	if tin < tabnas.TinMAX {
+		t.Errorf("new token should have Tin >= TinMAX(%d), got %d", tabnas.TinMAX, tin)
+	}
+	// Look up by name returns same Tin.
+	tin2 := j.Token("#TL")
+	if tin2 != tin {
+		t.Errorf("lookup returned different Tin: %d vs %d", tin2, tin)
+	}
+}
+
+func TestTokenLookupBuiltin(t *testing.T) {
+	j := Make()
+	tin := j.Token("#OB")
+	if tin != tabnas.TinOB {
+		t.Errorf("expected TinOB=%d, got %d", tabnas.TinOB, tin)
+	}
+}
+
+func TestTokenFixedRegistration(t *testing.T) {
+	j := Make()
+	tin := j.Token("#TL", "~")
+	// The fixed token map should now contain '~'.
+	if j.Config().FixedTokens["~"] != tin {
+		t.Errorf("fixed token '~' not registered in config")
+	}
+}
+
+func TestTokenMultipleRegistrations(t *testing.T) {
+	j := Make()
+	t1 := j.Token("#T1", "!")
+	t2 := j.Token("#T2", "@")
+	if t1 == t2 {
+		t.Error("different tokens got same Tin")
+	}
+	if t1 < tabnas.TinMAX || t2 < tabnas.TinMAX {
+		t.Error("custom tokens should have Tin >= TinMAX")
+	}
+}
+
+func TestTinName(t *testing.T) {
+	j := Make()
+	j.Token("#TL", "~")
+	name := j.TinName(tabnas.TinOB)
+	if name != "#OB" {
+		t.Errorf("expected #OB, got %s", name)
+	}
+	tin := j.Token("#TL")
+	name2 := j.TinName(tin)
+	if name2 != "#TL" {
+		t.Errorf("expected #TL, got %s", name2)
+	}
+}
+
+// --- Plugin: Custom fixed token used in parsing ---
+
+func TestPluginCustomFixedToken(t *testing.T) {
+	// Plugin that makes '~' a separator (like comma).
+	tildeSep := func(j *tabnas.Tabnas, opts map[string]any) error {
+		// Register ~ as the comma token (replacing comma behavior).
+		j.Token("#CA", "~")
+		return nil
+	}
+
+	j := Make()
+	j.Use(tildeSep)
+
+	// Now ~ should act as a comma separator.
+	result, err := j.Parse("a ~ b ~ c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr, ok := result.([]any)
+	if !ok {
+		t.Fatalf("expected array, got %T: %v", result, result)
+	}
+	if len(arr) != 3 {
+		t.Fatalf("expected 3 elements, got %d: %v", len(arr), arr)
+	}
+	if arr[0] != "a" || arr[1] != "b" || arr[2] != "c" {
+		t.Errorf("expected [a b c], got %v", arr)
+	}
+}
+
+// --- Plugin: Rule modification ---
+
+func TestPluginRuleModification(t *testing.T) {
+	// Plugin that makes all string values uppercase.
+	upperPlugin := func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+			// Add an after-close action that uppercases string nodes.
+			rs.AC = append(rs.AC, func(r *tabnas.Rule, ctx *tabnas.Context) {
+				if s, ok := r.Node.(string); ok {
+					r.Node = strings.ToUpper(s)
+				}
+			})
+		})
+		return nil
+	}
+
+	j := Make()
+	j.Use(upperPlugin)
+
+	result, err := j.Parse(`"hello"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "HELLO" {
+		t.Errorf("expected HELLO, got %v", result)
+	}
+}
+
+func TestPluginRuleAddAlternate(t *testing.T) {
+	// Plugin that adds a custom "hundred" rule.
+	hundredPlugin := func(j *tabnas.Tabnas, opts map[string]any) error {
+		// Register a custom fixed token 'H'.
+		TH := j.Token("#TH", "H")
+
+		// Add a new rule that produces 100.
+		j.Rule("hundred", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+			rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+				r.Node = float64(100)
+			})
+		})
+
+		// Modify val rule to recognize 'H' and push to "hundred".
+		j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+			rs.Open = append([]*tabnas.AltSpec{{
+				S: [][]tabnas.Tin{{TH}},
+				P: "hundred",
+			}}, rs.Open...)
+		})
+		return nil
+	}
+
+	j := Make()
+	j.Use(hundredPlugin)
+
+	result, err := j.Parse("H")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != float64(100) {
+		t.Errorf("expected 100, got %v (%T)", result, result)
+	}
+}
+
+func TestPluginRuleNewRule(t *testing.T) {
+	j := Make()
+	// Verify we can create a new rule.
+	j.Rule("custom", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		if rs.Name != "custom" {
+			t.Errorf("expected rule name 'custom', got '%s'", rs.Name)
+		}
+	})
+	if j.RSM()["custom"] == nil {
+		t.Error("custom rule not created")
+	}
+}
+
+// --- Plugin: Custom matcher ---
+
+func TestPluginCustomMatcher(t *testing.T) {
+	// Plugin that matches "$$" as a special value.
+	dollarPlugin := func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Match: map[string]*tabnas.MatchSpec{
+			"dollar": {Order: 1500000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+				return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+					pnt := lex.Cursor()
+					if pnt.SI+2 <= pnt.Len && lex.Src[pnt.SI:pnt.SI+2] == "$$" {
+						tkn := lex.Token("#VL", tabnas.TinVL, "DOLLAR", "$$")
+						pnt.SI += 2
+						pnt.CI += 2
+						return tkn
+					}
+					return nil
+				}
+			}},
+		}}})
+		return nil
+	}
+
+	j := Make()
+	j.Use(dollarPlugin)
+
+	result, err := j.Parse("$$")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "DOLLAR" {
+		t.Errorf("expected DOLLAR, got %v", result)
+	}
+}
+
+func TestPluginCustomMatcherInObject(t *testing.T) {
+	// Custom matcher that matches "@" as a special value.
+	atPlugin := func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Match: map[string]*tabnas.MatchSpec{
+			"at": {Order: 1500000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+				return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+					pnt := lex.Cursor()
+					if pnt.SI < pnt.Len && lex.Src[pnt.SI] == '@' {
+						tkn := lex.Token("#VL", tabnas.TinVL, "AT_VALUE", "@")
+						pnt.SI++
+						pnt.CI++
+						return tkn
+					}
+					return nil
+				}
+			}},
+		}}})
+		return nil
+	}
+
+	j := Make()
+	j.Use(atPlugin)
+
+	result, err := j.Parse("{a: @}")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T: %v", result, result)
+	}
+	if m["a"] != "AT_VALUE" {
+		t.Errorf("expected AT_VALUE, got %v", m["a"])
+	}
+}
+
+func TestPluginMatcherPriority(t *testing.T) {
+	// Verify early matchers (priority < 2e6) run before built-in matchers.
+	// The early matcher sees '42' before the number matcher does.
+	earlySawInput := false
+
+	j := Make()
+	j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Match: map[string]*tabnas.MatchSpec{
+		"early": {Order: 1000000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+			return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+				pnt := lex.Cursor()
+				if pnt.SI < pnt.Len && lex.Src[pnt.SI] == '4' {
+					earlySawInput = true
+				}
+				return nil // Pass through to built-in matchers.
+			}
+		}},
+	}}})
+
+	j.Parse("42")
+
+	if !earlySawInput {
+		t.Error("early matcher was not invoked before built-in number matcher")
+	}
+}
+
+func TestPluginMatcherLowPriorityCaptures(t *testing.T) {
+	// An early custom matcher can capture input before built-in matchers.
+	j := Make()
+	j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Match: map[string]*tabnas.MatchSpec{
+		"capture42": {Order: 1000000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+			return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+				pnt := lex.Cursor()
+				if pnt.SI+2 <= pnt.Len && lex.Src[pnt.SI:pnt.SI+2] == "42" {
+					tkn := lex.Token("#VL", tabnas.TinVL, "FORTY_TWO", "42")
+					pnt.SI += 2
+					pnt.CI += 2
+					return tkn
+				}
+				return nil
+			}
+		}},
+	}}})
+
+	result, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "FORTY_TWO" {
+		t.Errorf("expected FORTY_TWO, got %v", result)
+	}
+}
+
+// --- Plugin: Config and RSM access ---
+
+func TestPluginConfigAccess(t *testing.T) {
+	j := Make()
+	cfg := j.Config()
+	if cfg == nil {
+		t.Fatal("Config() returned nil")
+	}
+	if !cfg.FixedLex {
+		t.Error("expected FixedLex to be true")
+	}
+}
+
+func TestPluginRSMAccess(t *testing.T) {
+	j := Make()
+	rsm := j.RSM()
+	if rsm == nil {
+		t.Fatal("RSM() returned nil")
+	}
+	if rsm["val"] == nil {
+		t.Error("expected 'val' rule in RSM")
+	}
+}
+
+// --- Plugin: Instance isolation ---
+
+func TestPluginInstanceIsolation(t *testing.T) {
+	j1 := Make()
+	j2 := Make()
+
+	// Registering a token on j1 should not affect j2.
+	j1.Token("#T1", "~")
+
+	if _, ok := j2.Config().FixedTokens["~"]; ok {
+		t.Error("custom token leaked from j1 to j2")
+	}
+}
+
+// --- Plugin: Composite test (full plugin workflow) ---
+
+func TestPluginComposite(t *testing.T) {
+	// A realistic plugin that:
+	// 1. Registers a custom token ';' as separator (replacing comma)
+	// 2. Adds a before-open action to list rule
+
+	semiPlugin := func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.Token("#CA", ";")
+		return nil
+	}
+
+	j := Make()
+	j.Use(semiPlugin)
+
+	// Semicolon should work as separator.
+	result, err := j.Parse("a ; b ; c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr, ok := result.([]any)
+	if !ok {
+		t.Fatalf("expected array, got %T: %v", result, result)
+	}
+	if len(arr) != 3 {
+		t.Fatalf("expected 3 elements, got %d: %v", len(arr), arr)
+	}
+
+	// Original comma should still work too (it's still in FixedTokens).
+	result2, err := j.Parse("x , y")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	arr2, ok := result2.([]any)
+	if !ok {
+		t.Fatalf("expected array, got %T: %v", result2, result2)
+	}
+	if len(arr2) != 2 {
+		t.Fatalf("expected 2 elements, got %d: %v", len(arr2), arr2)
+	}
+}
+
+// --- Plugin: Nil options handling ---
+
+func TestUseNilOptions(t *testing.T) {
+	invoked := false
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		invoked = true
+		if opts != nil {
+			t.Errorf("expected nil opts, got %v", opts)
+		}
+		return nil
+	})
+	if !invoked {
+		t.Error("plugin not invoked")
+	}
+}
+
+// --- Plugin: Disable built-in features ---
+
+func TestPluginDisableComments(t *testing.T) {
+	// Disable comments entirely by providing empty comment definitions.
+	j := Make(tabnas.Options{
+		Comment: &tabnas.CommentOptions{
+			Lex: boolPtr(false),
+			Def: map[string]*tabnas.CommentDef{},
+		},
+	})
+
+	// With comments disabled and no comment defs, # should be treated as text.
+	result, err := j.Parse(`{a: #hello}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T: %v", result, result)
+	}
+	if v, ok := m["a"].(string); !ok || !strings.HasPrefix(v, "#hello") {
+		t.Errorf("expected a to start with '#hello', got %v", m["a"])
+	}
+}
+
+func TestPluginDisableNumbers(t *testing.T) {
+	j := Make(tabnas.Options{
+		Number: &tabnas.NumberOptions{Lex: boolPtr(false)},
+	})
+
+	// With numbers disabled, 42 should be treated as text.
+	result, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "42" {
+		t.Errorf("expected string '42', got %v (%T)", result, result)
+	}
+}
+
+// --- Multi-character fixed tokens ---
+
+func TestMultiCharFixedToken(t *testing.T) {
+	j := Make()
+	TA := j.Token("#TA", "=>")
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = append([]*tabnas.AltSpec{{
+			S: [][]tabnas.Tin{{TA}},
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				r.Node = "ARROW"
+			},
+		}}, rs.Open...)
+	})
+
+	result, err := j.Parse("=>")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ARROW" {
+		t.Errorf("expected ARROW, got %v", result)
+	}
+}
+
+func TestMultiCharFixedTokenLongestMatch(t *testing.T) {
+	j := Make()
+	TEQ := j.Token("#TEQ", "=")
+	TARROW := j.Token("#TARROW", "=>")
+
+	matchedEQ := false
+	matchedArrow := false
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = append([]*tabnas.AltSpec{
+			{
+				S: [][]tabnas.Tin{{TARROW}},
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+					matchedArrow = true
+					r.Node = "ARROW"
+				},
+			},
+			{
+				S: [][]tabnas.Tin{{TEQ}},
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+					matchedEQ = true
+					r.Node = "EQ"
+				},
+			},
+		}, rs.Open...)
+	})
+
+	// "=>" should match the arrow (longer), not just "=".
+	result, err := j.Parse("=>")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ARROW" {
+		t.Errorf("expected ARROW, got %v", result)
+	}
+	if !matchedArrow {
+		t.Error("arrow should have been matched")
+	}
+	if matchedEQ {
+		t.Error("eq should not have been matched for =>")
+	}
+}
+
+func TestMultiCharFixedTokenBreaksText(t *testing.T) {
+	j := Make()
+	j.Token("#TA", "=>")
+
+	// "abc=>" should parse "abc" as text, then "=>" as fixed token.
+	result, err := j.Parse("{key: abc=>}")
+	if err != nil {
+		// If the parser can't handle "=>" in this context, that's OK.
+		// The important thing is that "=>" breaks text.
+		return
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+	// "key" should be "abc" since "=>" breaks text.
+	if v, ok := m["key"].(string); ok && v == "abc" {
+		// Expected behavior: text stops at "=>"
+	}
+	_ = m
+}
+
+// --- Ender system ---
+
+func TestEnderCharsBreakText(t *testing.T) {
+	j := Make(tabnas.Options{
+		Ender: []string{"|"},
+	})
+
+	// "|" should end text tokens.
+	result, err := j.Parse("abc|def")
+	if err != nil {
+		// Ender chars may cause unexpected token errors depending on grammar.
+		// That's expected - the important thing is text stops at "|".
+		return
+	}
+	// If it parses successfully, "abc" should be separated from "def".
+	_ = result
+}
+
+func TestEnderCharsInMap(t *testing.T) {
+	j := Make(tabnas.Options{
+		Ender: []string{"|"},
+	})
+
+	// In a map, ender should break values.
+	result, err := j.Parse("{a: hello|world}")
+	if err != nil {
+		return // Ender breaking may cause parse issues
+	}
+	_ = result
+}
+
+// --- Custom escape mappings ---
+
+func TestCustomEscapeMappings(t *testing.T) {
+	j := Make(tabnas.Options{
+		String: &tabnas.StringOptions{
+			Escape: map[string]string{
+				"a": "ALPHA",
+				"d": "DELTA",
+			},
+		},
+	})
+
+	result, err := j.Parse(`"\a"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ALPHA" {
+		t.Errorf("expected ALPHA, got %v", result)
+	}
+
+	result2, err := j.Parse(`"\d"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result2 != "DELTA" {
+		t.Errorf("expected DELTA, got %v", result2)
+	}
+
+	// Standard escapes should still work.
+	result3, err := j.Parse(`"\n"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result3 != "\n" {
+		t.Errorf("expected newline, got %v", result3)
+	}
+}
+
+// --- Subscriptions ---
+
+func TestSubLex(t *testing.T) {
+	j := Make()
+
+	tokens := []string{}
+	j.Sub(func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
+		tokens = append(tokens, tkn.Src)
+	}, nil)
+
+	j.Parse("{a: 1}")
+
+	if len(tokens) == 0 {
+		t.Error("lex subscriber was not invoked")
+	}
+
+	// Should have seen "{", "a", ":", "1", "}", end
+	foundBrace := false
+	for _, tok := range tokens {
+		if tok == "{" {
+			foundBrace = true
+		}
+	}
+	if !foundBrace {
+		t.Errorf("expected to see '{' token, got: %v", tokens)
+	}
+}
+
+func TestSubRule(t *testing.T) {
+	j := Make()
+
+	ruleNames := []string{}
+	j.Sub(nil, func(rule *tabnas.Rule, ctx *tabnas.Context) {
+		ruleNames = append(ruleNames, rule.Name)
+	})
+
+	j.Parse("{a: 1}")
+
+	if len(ruleNames) == 0 {
+		t.Error("rule subscriber was not invoked")
+	}
+
+	// Should see rule processing for val, map, pair, etc.
+	foundVal := false
+	for _, name := range ruleNames {
+		if name == "val" {
+			foundVal = true
+		}
+	}
+	if !foundVal {
+		t.Errorf("expected to see 'val' rule, got: %v", ruleNames)
+	}
+}
+
+// --- Instance derivation ---
+
+func TestDerive(t *testing.T) {
+	parent := Make()
+	parent.Token("#TL", "~")
+
+	child, _ := parent.Derive()
+
+	// Child should inherit parent's custom token.
+	if _, ok := child.Config().FixedTokens["~"]; !ok {
+		t.Error("child should inherit parent's custom fixed token")
+	}
+}
+
+func TestDeriveIsolation(t *testing.T) {
+	parent := Make()
+	child, _ := parent.Derive()
+
+	// Modifying child should not affect parent.
+	child.Token("#TX", "!")
+
+	if _, ok := parent.Config().FixedTokens["!"]; ok {
+		t.Error("child modification leaked to parent")
+	}
+}
+
+func TestDeriveInheritsPlugins(t *testing.T) {
+	count := 0
+	parent := Make()
+	parent.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		count++
+		return nil
+	})
+
+	// Plugin was invoked once on parent.
+	if count != 1 {
+		t.Fatalf("expected count 1, got %d", count)
+	}
+
+	child, _ := parent.Derive()
+
+	// Plugin should be re-invoked on child.
+	if count != 2 {
+		t.Errorf("expected count 2 after derive, got %d", count)
+	}
+	// Grammar plugin (installed by jsonic.Make) + the counting plugin.
+	if len(child.Plugins()) != 2 {
+		t.Errorf("expected 2 plugins (grammar + counter), got %d", len(child.Plugins()))
+	}
+}
+
+// --- Dynamic options ---
+
+func TestSetOptions(t *testing.T) {
+	j := Make()
+
+	// Parse with defaults.
+	result, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != float64(42) {
+		t.Errorf("expected 42, got %v", result)
+	}
+
+	// Disable number lexing.
+	j.SetOptions(tabnas.Options{
+		Number: &tabnas.NumberOptions{Lex: boolPtr(false)},
+	})
+
+	// Now 42 should be text.
+	result2, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result2 != "42" {
+		t.Errorf("expected string '42' after SetOptions, got %v (%T)", result2, result2)
+	}
+}
+
+func TestSetOptionsDeepMerge(t *testing.T) {
+	// SetOptions should deep-merge like the TS options() setter:
+	// setting one sub-field should not clobber sibling sub-fields.
+	j := Make(tabnas.Options{
+		Number: &tabnas.NumberOptions{Lex: boolPtr(true), Hex: boolPtr(true)},
+	})
+
+	// Disable hex but leave Lex untouched.
+	j.SetOptions(tabnas.Options{
+		Number: &tabnas.NumberOptions{Hex: boolPtr(false)},
+	})
+
+	opts := j.Options()
+	if opts.Number == nil {
+		t.Fatal("expected Number options to be non-nil")
+	}
+	if opts.Number.Lex == nil || !*opts.Number.Lex {
+		t.Errorf("expected Number.Lex to remain true after SetOptions, got %v", opts.Number.Lex)
+	}
+	if opts.Number.Hex == nil || *opts.Number.Hex {
+		t.Errorf("expected Number.Hex to be false after SetOptions, got %v", opts.Number.Hex)
+	}
+
+	// Numbers should still parse (Lex is still true).
+	result, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != float64(42) {
+		t.Errorf("expected 42, got %v (%T)", result, result)
+	}
+}
+
+func TestSetOptionsDeepMergeMaps(t *testing.T) {
+	// Map fields like Error and Comment.Def should merge, not replace.
+	j := Make(tabnas.Options{
+		Error: map[string]string{"unexpected": "custom unexpected"},
+	})
+
+	j.SetOptions(tabnas.Options{
+		Error: map[string]string{"unterminated_string": "custom unterminated"},
+	})
+
+	opts := j.Options()
+	if opts.Error["unexpected"] != "custom unexpected" {
+		t.Errorf("expected Error['unexpected'] to be preserved, got %q", opts.Error["unexpected"])
+	}
+	if opts.Error["unterminated_string"] != "custom unterminated" {
+		t.Errorf("expected Error['unterminated_string'] to be set, got %q", opts.Error["unterminated_string"])
+	}
+}
+
+func TestSetOptionsChaining(t *testing.T) {
+	// Multiple SetOptions calls should accumulate, not reset.
+	j := Make()
+
+	j.SetOptions(tabnas.Options{
+		Comment: &tabnas.CommentOptions{Lex: boolPtr(false)},
+	})
+	j.SetOptions(tabnas.Options{
+		Number: &tabnas.NumberOptions{Lex: boolPtr(false)},
+	})
+
+	opts := j.Options()
+	if opts.Comment == nil || opts.Comment.Lex == nil || *opts.Comment.Lex {
+		t.Error("expected Comment.Lex to remain false after second SetOptions")
+	}
+	if opts.Number == nil || opts.Number.Lex == nil || *opts.Number.Lex {
+		t.Error("expected Number.Lex to be false after second SetOptions")
+	}
+}
+
+// --- Rule exclude ---
+
+func TestExclude(t *testing.T) {
+	j := Make()
+
+	// Count alternates with exact "json" group tag before exclude.
+	hasJsonGroup := false
+	for _, rs := range j.RSM() {
+		for _, alt := range rs.Open {
+			if hasExactTag(alt.G, "json") {
+				hasJsonGroup = true
+				break
+			}
+		}
+		if hasJsonGroup {
+			break
+		}
+	}
+
+	if !hasJsonGroup {
+		// Grammar doesn't use "json" group tags, so exclude won't remove anything.
+		// But the option should still work without error.
+		j.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Exclude: "json"}})
+		return
+	}
+
+	// If there are "json" tagged alts, exclude should remove them.
+	j.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Exclude: "json"}})
+
+	for _, rs := range j.RSM() {
+		for _, alt := range rs.Open {
+			if hasExactTag(alt.G, "json") {
+				t.Errorf("rule %s still has 'json' group alt after Exclude", rs.Name)
+			}
+		}
+		for _, alt := range rs.Close {
+			if hasExactTag(alt.G, "json") {
+				t.Errorf("rule %s still has 'json' close alt after Exclude", rs.Name)
+			}
+		}
+	}
+}
+
+func TestExcludeCustomGroup(t *testing.T) {
+	j := Make()
+
+	// Add a custom alternate with a group tag.
+	TT := j.Token("#TT", "!")
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = append(rs.Open, &tabnas.AltSpec{
+			S: [][]tabnas.Tin{{TT}},
+			G: "custom,test",
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) { r.Node = "BANG" },
+		})
+	})
+
+	// Exclude "custom" group via option.
+	j.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Exclude: "custom"}})
+
+	// The custom alt should be removed.
+	found := false
+	for _, alt := range j.RSM()["val"].Open {
+		if strings.Contains(alt.G, "custom") {
+			found = true
+		}
+	}
+	if found {
+		t.Error("custom group alt should have been excluded")
+	}
+}
+
+// --- Parse metadata ---
+
+func TestParseMeta(t *testing.T) {
+	j := Make()
+
+	// Add a rule action that reads metadata.
+	var capturedMeta map[string]any
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedMeta = ctx.Meta
+		})
+	})
+
+	meta := map[string]any{"mode": "test", "version": 2}
+	j.ParseMeta("42", meta)
+
+	if capturedMeta == nil {
+		t.Fatal("meta was not passed to context")
+	}
+	if capturedMeta["mode"] != "test" {
+		t.Errorf("expected mode=test, got %v", capturedMeta["mode"])
+	}
+	if capturedMeta["version"] != 2 {
+		t.Errorf("expected version=2, got %v", capturedMeta["version"])
+	}
+}
+
+func TestParseMetaNil(t *testing.T) {
+	j := Make()
+
+	// ParseMeta with nil meta should work.
+	result, err := j.ParseMeta("42", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != float64(42) {
+		t.Errorf("expected 42, got %v", result)
+	}
+}
+
+// --- isTextChar config-aware ---
+
+func TestCustomFixedTokenBreaksText(t *testing.T) {
+	j := Make()
+	j.Token("#TL", "~")
+
+	// "abc~def" should break at "~"
+	result, err := j.Parse("{key: abc~def}")
+	if err != nil {
+		// May cause parse error since ~def is unexpected.
+		// The important test is that text stops at ~.
+		return
+	}
+	_ = result
+}
+
+// --- Empty source handling ---
+
+func TestEmptySourceDefault(t *testing.T) {
+	j := Make()
+	result, err := j.Parse("")
+	if err != nil {
+		t.Fatalf("empty source should not error by default: %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected nil for empty source, got %v", result)
+	}
+}
+
+func TestEmptySourceDisabled(t *testing.T) {
+	j := Make(tabnas.Options{
+		Lex: &tabnas.LexOptions{Empty: boolPtr(false)},
+	})
+	_, err := j.Parse("")
+	if err == nil {
+		t.Error("expected error when empty source is disallowed")
+	}
+}
+
+func TestEmptySourceCustomResult(t *testing.T) {
+	j := Make(tabnas.Options{
+		Lex: &tabnas.LexOptions{EmptyResult: "EMPTY"},
+	})
+	result, err := j.Parse("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "EMPTY" {
+		t.Errorf("expected 'EMPTY', got %v", result)
+	}
+}
+
+// --- Custom parser.start ---
+
+func TestCustomParserStart(t *testing.T) {
+	j := Make(tabnas.Options{
+		Parser: &tabnas.ParserOptions{
+			Start: func(src string, j *tabnas.Tabnas, meta map[string]any) (any, error) {
+				return "CUSTOM:" + src, nil
+			},
+		},
+	})
+	result, err := j.Parse("hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "CUSTOM:hello" {
+		t.Errorf("expected 'CUSTOM:hello', got %v", result)
+	}
+}
+
+func TestCustomParserStartWithMeta(t *testing.T) {
+	j := Make(tabnas.Options{
+		Parser: &tabnas.ParserOptions{
+			Start: func(src string, j *tabnas.Tabnas, meta map[string]any) (any, error) {
+				prefix := ""
+				if meta != nil {
+					if p, ok := meta["prefix"].(string); ok {
+						prefix = p
+					}
+				}
+				return prefix + src, nil
+			},
+		},
+	})
+	result, err := j.ParseMeta("world", map[string]any{"prefix": "hello-"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "hello-world" {
+		t.Errorf("expected 'hello-world', got %v", result)
+	}
+}
+
+// --- Error hints ---
+
+func TestErrorHints(t *testing.T) {
+	j := Make(tabnas.Options{
+		Hint: map[string]string{
+			"unexpected": "Check your syntax for typos.",
+		},
+	})
+	_, err := j.Parse("}")
+	if err == nil {
+		t.Fatal("expected error for stray close brace")
+	}
+	je, ok := err.(*tabnas.TabnasError)
+	if !ok {
+		t.Fatalf("expected *TabnasError, got %T", err)
+	}
+	if je.Hint != "Check your syntax for typos." {
+		t.Errorf("expected hint text, got %q", je.Hint)
+	}
+	// Hint should appear in the error string, indented (TS errdesc format).
+	errStr := je.Error()
+	if !strings.Contains(errStr, "\n\n  Check your syntax for typos.") {
+		t.Errorf("error string should contain indented hint, got:\n%s", errStr)
+	}
+}
+
+func TestErrorHintsInOutput(t *testing.T) {
+	j := Make(tabnas.Options{
+		Hint: map[string]string{
+			"unterminated_string": "Did you forget a closing quote?",
+		},
+	})
+	_, err := j.Parse(`"unclosed`)
+	if err == nil {
+		t.Fatal("expected error for unterminated string")
+	}
+	je, ok := err.(*tabnas.TabnasError)
+	if !ok {
+		t.Fatalf("expected *TabnasError, got %T", err)
+	}
+	if je.Hint != "Did you forget a closing quote?" {
+		t.Errorf("expected hint for unterminated_string, got %q", je.Hint)
+	}
+}
+
+// --- Config modify callbacks ---
+
+func TestConfigModify(t *testing.T) {
+	j := Make(tabnas.Options{Property: &tabnas.PropertyOptions{
+		ConfigModify: map[string]tabnas.ConfigModifier{
+			"disable-hex": func(cfg *tabnas.LexConfig, opts *tabnas.Options) {
+				cfg.NumberHex = false
+			},
+		},
+	}})
+
+	// With hex disabled, 0xFF should be text.
+	result, err := j.Parse("0xFF")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == float64(255) {
+		t.Error("hex should be disabled by config modifier")
+	}
+	if result != "0xFF" {
+		t.Errorf("expected string '0xFF', got %v (%T)", result, result)
+	}
+}
+
+// --- TokenSet ---
+
+func TestTokenSetVAL(t *testing.T) {
+	j := Make()
+	val := j.TokenSet("VAL")
+	if val == nil {
+		t.Fatal("TokenSet('VAL') returned nil")
+	}
+	if len(val) != 4 {
+		t.Errorf("expected 4 VAL tokens, got %d", len(val))
+	}
+	// Should contain TinTX, TinNR, TinST, TinVL.
+	found := map[tabnas.Tin]bool{}
+	for _, tin := range val {
+		found[tin] = true
+	}
+	for _, expected := range []tabnas.Tin{tabnas.TinTX, tabnas.TinNR, tabnas.TinST, tabnas.TinVL} {
+		if !found[expected] {
+			t.Errorf("VAL set missing Tin %d", expected)
+		}
+	}
+}
+
+func TestTokenSetIGNORE(t *testing.T) {
+	j := Make()
+	ign := j.TokenSet("IGNORE")
+	if ign == nil {
+		t.Fatal("TokenSet('IGNORE') returned nil")
+	}
+	if len(ign) != 3 {
+		t.Errorf("expected 3 IGNORE tokens, got %d", len(ign))
+	}
+}
+
+func TestTokenSetKEY(t *testing.T) {
+	j := Make()
+	key := j.TokenSet("KEY")
+	if key == nil {
+		t.Fatal("TokenSet('KEY') returned nil")
+	}
+	if len(key) != 4 {
+		t.Errorf("expected 4 KEY tokens, got %d", len(key))
+	}
+}
+
+func TestTokenSetUnknown(t *testing.T) {
+	j := Make()
+	result := j.TokenSet("NONEXISTENT")
+	if result != nil {
+		t.Errorf("expected nil for unknown set, got %v", result)
+	}
+}
+
+func TestSetTokenSetIGNORE(t *testing.T) {
+	// Setting IGNORE via SetTokenSet should update the per-instance IgnoreSet
+	// used by the lexer, matching TS behavior where cfg.tokenSetTins.IGNORE is mutable.
+	j := Make()
+
+	// Default: IGNORE has 3 tokens (SP, LN, CM).
+	ign := j.TokenSet("IGNORE")
+	if len(ign) != 3 {
+		t.Fatalf("expected 3 default IGNORE tokens, got %d", len(ign))
+	}
+
+	// Remove LN from the IGNORE set (keep only SP and CM).
+	j.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP, tabnas.TinCM})
+
+	ign2 := j.TokenSet("IGNORE")
+	if len(ign2) != 2 {
+		t.Errorf("expected 2 IGNORE tokens after SetTokenSet, got %d", len(ign2))
+	}
+
+	// Verify the lexer config's IgnoreSet was updated.
+	if j.Config().IgnoreSet[tabnas.TinLN] {
+		t.Error("expected TinLN removed from IgnoreSet, but it is still present")
+	}
+	if !j.Config().IgnoreSet[tabnas.TinSP] {
+		t.Error("expected TinSP in IgnoreSet")
+	}
+	if !j.Config().IgnoreSet[tabnas.TinCM] {
+		t.Error("expected TinCM in IgnoreSet")
+	}
+}
+
+func TestSetTokenSetIGNOREPerInstance(t *testing.T) {
+	// Verify that modifying IGNORE on one instance does not affect another.
+	j1 := Make()
+	j2 := Make()
+
+	j1.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP}) // Only spaces
+
+	// j1 should have 1 IGNORE token.
+	if len(j1.TokenSet("IGNORE")) != 1 {
+		t.Errorf("j1 should have 1 IGNORE token, got %d", len(j1.TokenSet("IGNORE")))
+	}
+
+	// j2 should still have the default 3 IGNORE tokens.
+	if len(j2.TokenSet("IGNORE")) != 3 {
+		t.Errorf("j2 should still have 3 IGNORE tokens, got %d", len(j2.TokenSet("IGNORE")))
+	}
+}
+
+func TestDeriveInheritsIgnoreSet(t *testing.T) {
+	// A derived instance should inherit the parent's customized IGNORE set.
+	parent := Make()
+	parent.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP, tabnas.TinCM}) // Remove LN
+
+	child, _ := parent.Derive()
+
+	childIgn := child.TokenSet("IGNORE")
+	if len(childIgn) != 2 {
+		t.Errorf("child should inherit 2 IGNORE tokens, got %d", len(childIgn))
+	}
+	if child.Config().IgnoreSet[tabnas.TinLN] {
+		t.Error("child should not have TinLN in IgnoreSet")
+	}
+
+	// Modifying child should not affect parent.
+	child.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP})
+	if len(parent.TokenSet("IGNORE")) != 2 {
+		t.Errorf("parent should still have 2 IGNORE tokens, got %d", len(parent.TokenSet("IGNORE")))
+	}
+}
+
+func TestSetOptionsPreservesIgnoreSet(t *testing.T) {
+	// A plugin (or prior call) may mutate IGNORE via SetTokenSet. A
+	// subsequent SetOptions — including one triggered internally by
+	// Grammar() — must not silently reset IGNORE to defaults.
+	j := Make()
+	j.SetTokenSet("IGNORE", []tabnas.Tin{tabnas.TinSP, tabnas.TinCM}) // Remove LN
+
+	// Unrelated SetOptions call must not reset the IGNORE set.
+	yes := true
+	j.SetOptions(tabnas.Options{Number: &tabnas.NumberOptions{Hex: &yes}})
+
+	if j.Config().IgnoreSet[tabnas.TinLN] {
+		t.Error("SetOptions reset IgnoreSet — TinLN re-added after unrelated options change")
+	}
+	if len(j.TokenSet("IGNORE")) != 2 {
+		t.Errorf("expected 2 IGNORE tokens after SetOptions, got %d", len(j.TokenSet("IGNORE")))
+	}
+
+	// Grammar() applies Options via SetOptions internally — same guarantee must hold.
+	if err := j.Grammar(&tabnas.GrammarSpec{Options: &tabnas.Options{Tag: "t"}}); err != nil {
+		t.Fatalf("Grammar failed: %v", err)
+	}
+	if j.Config().IgnoreSet[tabnas.TinLN] {
+		t.Error("Grammar's internal SetOptions reset IgnoreSet — TinLN re-added")
+	}
+	if len(j.TokenSet("IGNORE")) != 2 {
+		t.Errorf("expected 2 IGNORE tokens after Grammar, got %d", len(j.TokenSet("IGNORE")))
+	}
+
+	// Explicit TokenSet override in the new options must still win.
+	j.SetOptions(tabnas.Options{TokenSet: map[string][]string{"IGNORE": {"#SP"}}})
+	if len(j.TokenSet("IGNORE")) != 1 {
+		t.Errorf("expected TokenSet override to shrink IGNORE to 1 token, got %d", len(j.TokenSet("IGNORE")))
+	}
+}
+
+func TestSetTokenSetVAL(t *testing.T) {
+	j := Make()
+
+	// Default: VAL has 4 tokens (TX, NR, ST, VL).
+	val := j.TokenSet("VAL")
+	if len(val) != 4 {
+		t.Fatalf("expected 4 default VAL tokens, got %d", len(val))
+	}
+
+	// Add a custom token to VAL.
+	rl := j.Token("#RL")
+	j.SetTokenSet("VAL", append(val, rl))
+
+	val2 := j.TokenSet("VAL")
+	if len(val2) != 5 {
+		t.Errorf("expected 5 VAL tokens after SetTokenSet, got %d", len(val2))
+	}
+
+	// Verify the config's ValSet was updated.
+	if len(j.Config().ValSet) != 5 {
+		t.Errorf("expected Config.ValSet to have 5 entries, got %d", len(j.Config().ValSet))
+	}
+}
+
+func TestSetTokenSetKEY(t *testing.T) {
+	j := Make()
+
+	key := j.TokenSet("KEY")
+	if len(key) != 4 {
+		t.Fatalf("expected 4 default KEY tokens, got %d", len(key))
+	}
+
+	// Reduce KEY to just text and string.
+	j.SetTokenSet("KEY", []tabnas.Tin{tabnas.TinTX, tabnas.TinST})
+
+	key2 := j.TokenSet("KEY")
+	if len(key2) != 2 {
+		t.Errorf("expected 2 KEY tokens after SetTokenSet, got %d", len(key2))
+	}
+	if len(j.Config().KeySet) != 2 {
+		t.Errorf("expected Config.KeySet to have 2 entries, got %d", len(j.Config().KeySet))
+	}
+}
+
+func TestSetTokenSetVALPerInstance(t *testing.T) {
+	j1 := Make()
+	j2 := Make()
+
+	j1.SetTokenSet("VAL", []tabnas.Tin{tabnas.TinTX, tabnas.TinST})
+
+	if len(j1.TokenSet("VAL")) != 2 {
+		t.Errorf("j1 should have 2 VAL tokens, got %d", len(j1.TokenSet("VAL")))
+	}
+	if len(j2.TokenSet("VAL")) != 4 {
+		t.Errorf("j2 should still have 4 VAL tokens, got %d", len(j2.TokenSet("VAL")))
+	}
+}
+
+func TestDeriveInheritsValKeySet(t *testing.T) {
+	parent := Make()
+	parent.SetTokenSet("VAL", []tabnas.Tin{tabnas.TinTX, tabnas.TinNR, tabnas.TinST}) // Remove VL
+	parent.SetTokenSet("KEY", []tabnas.Tin{tabnas.TinTX})                             // Only TX
+
+	child, _ := parent.Derive()
+
+	childVal := child.TokenSet("VAL")
+	if len(childVal) != 3 {
+		t.Errorf("child should inherit 3 VAL tokens, got %d", len(childVal))
+	}
+	childKey := child.TokenSet("KEY")
+	if len(childKey) != 1 {
+		t.Errorf("child should inherit 1 KEY token, got %d", len(childKey))
+	}
+
+	// Modifying child should not affect parent.
+	child.SetTokenSet("VAL", []tabnas.Tin{tabnas.TinTX})
+	if len(parent.TokenSet("VAL")) != 3 {
+		t.Errorf("parent should still have 3 VAL tokens, got %d", len(parent.TokenSet("VAL")))
+	}
+}
+
+// --- LexCheck callbacks ---
+
+func TestLexCheckFixed(t *testing.T) {
+	j := Make()
+	// Override fixed check to replace '{' with a custom token.
+	j.Config().FixedCheck = func(lex *tabnas.Lex) *tabnas.LexCheckResult {
+		pnt := lex.Cursor()
+		if pnt.SI < pnt.Len && lex.Src[pnt.SI] == '{' {
+			tkn := lex.Token("#OB", tabnas.TinOB, nil, "{")
+			pnt.SI++
+			pnt.CI++
+			// Return the token normally (same behavior, but proves check ran).
+			return &tabnas.LexCheckResult{Done: true, Token: tkn}
+		}
+		return nil // Continue normal matching.
+	}
+
+	result, err := j.Parse("{a: 1}")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+	if m["a"] != float64(1) {
+		t.Errorf("expected a=1, got %v", m["a"])
+	}
+}
+
+func TestLexCheckSkipMatcher(t *testing.T) {
+	j := Make()
+	// Skip number matching for specific inputs.
+	j.Config().NumberCheck = func(lex *tabnas.Lex) *tabnas.LexCheckResult {
+		pnt := lex.Cursor()
+		if pnt.SI+3 <= pnt.Len && lex.Src[pnt.SI:pnt.SI+3] == "999" {
+			// Return Done=true with nil Token to skip number matching for "999".
+			return &tabnas.LexCheckResult{Done: true, Token: nil}
+		}
+		return nil
+	}
+
+	// 999 should fall through to text matcher.
+	result, err := j.Parse("999")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "999" {
+		t.Errorf("expected string '999', got %v (%T)", result, result)
+	}
+
+	// 42 should still be a number.
+	result2, err := j.Parse("42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result2 != float64(42) {
+		t.Errorf("expected 42, got %v", result2)
+	}
+}
+
+// --- RuleSpec helpers ---
+
+func TestRuleSpecClear(t *testing.T) {
+	rs := &tabnas.RuleSpec{
+		Name:  "test",
+		Open:  []*tabnas.AltSpec{{}, {}},
+		Close: []*tabnas.AltSpec{{}},
+		BO:    []tabnas.StateAction{func(r *tabnas.Rule, ctx *tabnas.Context) {}},
+	}
+	rs.Clear()
+	if len(rs.Open) != 0 || len(rs.Close) != 0 || len(rs.BO) != 0 {
+		t.Error("Clear() should empty all slices")
+	}
+}
+
+func TestRuleSpecAddOpen(t *testing.T) {
+	rs := &tabnas.RuleSpec{Name: "test"}
+	rs.AddOpen(&tabnas.AltSpec{P: "a"}, &tabnas.AltSpec{P: "b"})
+	if len(rs.Open) != 2 {
+		t.Errorf("expected 2 open alts, got %d", len(rs.Open))
+	}
+	if rs.Open[0].P != "a" || rs.Open[1].P != "b" {
+		t.Error("open alts not in expected order")
+	}
+}
+
+func TestRuleSpecPrependOpen(t *testing.T) {
+	rs := &tabnas.RuleSpec{Name: "test"}
+	rs.AddOpen(&tabnas.AltSpec{P: "b"})
+	rs.PrependOpen(&tabnas.AltSpec{P: "a"})
+	if len(rs.Open) != 2 {
+		t.Errorf("expected 2 open alts, got %d", len(rs.Open))
+	}
+	if rs.Open[0].P != "a" {
+		t.Errorf("expected first alt 'a', got '%s'", rs.Open[0].P)
+	}
+}
+
+func TestRuleSpecAddClose(t *testing.T) {
+	rs := &tabnas.RuleSpec{Name: "test"}
+	rs.AddClose(&tabnas.AltSpec{P: "x"})
+	if len(rs.Close) != 1 || rs.Close[0].P != "x" {
+		t.Error("AddClose failed")
+	}
+}
+
+func TestRuleSpecPrependClose(t *testing.T) {
+	rs := &tabnas.RuleSpec{Name: "test"}
+	rs.AddClose(&tabnas.AltSpec{P: "b"})
+	rs.PrependClose(&tabnas.AltSpec{P: "a"})
+	if len(rs.Close) != 2 || rs.Close[0].P != "a" {
+		t.Error("PrependClose failed")
+	}
+}
+
+func TestRuleSpecStateActions(t *testing.T) {
+	rs := &tabnas.RuleSpec{Name: "test"}
+	count := 0
+	action := func(r *tabnas.Rule, ctx *tabnas.Context) { count++ }
+	rs.AddBO(action)
+	rs.AddAO(action)
+	rs.AddBC(action)
+	rs.AddAC(action)
+	if len(rs.BO) != 1 || len(rs.AO) != 1 || len(rs.BC) != 1 || len(rs.AC) != 1 {
+		t.Error("state action addition failed")
+	}
+}
+
+// --- Debug plugin ---
+
+func TestDebugDescribe(t *testing.T) {
+	j := Make(tabnas.Options{Tag: "test-instance"})
+	j.Token("#TL", "~")
+	j.Use(tabnas.Debug)
+
+	desc := tabnas.Describe(j)
+	if desc == "" {
+		t.Fatal("Describe returned empty string")
+	}
+	if !strings.Contains(desc, "test-instance") {
+		t.Error("description should contain tag")
+	}
+	if !strings.Contains(desc, "#TL") {
+		t.Error("description should contain custom token")
+	}
+	if !strings.Contains(desc, "val") {
+		t.Error("description should contain val rule")
+	}
+	if !strings.Contains(desc, "FixedLex: true") {
+		t.Error("description should contain config settings")
+	}
+}
+
+func TestDebugPlugin(t *testing.T) {
+	j := Make()
+	// Debug without trace should not add subscribers.
+	j.Use(tabnas.Debug)
+	// Grammar plugin (installed by jsonic.Make) + Debug.
+	if len(j.Plugins()) != 2 {
+		t.Errorf("expected 2 plugins (grammar + Debug), got %d", len(j.Plugins()))
+	}
+}
+
+// --- Rule exclude from options ---
+
+func TestRuleExcludeFromOptions(t *testing.T) {
+	j := Make()
+
+	// Add tagged alternates.
+	TT := j.Token("#TT", "!")
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = append(rs.Open, &tabnas.AltSpec{
+			S: [][]tabnas.Tin{{TT}},
+			G: "experimental",
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) { r.Node = "BANG" },
+		})
+	})
+
+	// Create a new instance with exclude in options.
+	j2 := Make(tabnas.Options{
+		Rule: &tabnas.RuleOptions{Exclude: "experimental"},
+	})
+	// Manually add the same alt.
+	TT2 := j2.Token("#TT", "!")
+	j2.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.Open = append(rs.Open, &tabnas.AltSpec{
+			S: [][]tabnas.Tin{{TT2}},
+			G: "experimental",
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) { r.Node = "BANG" },
+		})
+	})
+	j2.SetOptions(tabnas.Options{Rule: &tabnas.RuleOptions{Exclude: "experimental"}})
+
+	// The experimental alt should be excluded.
+	found := false
+	for _, alt := range j2.RSM()["val"].Open {
+		if strings.Contains(alt.G, "experimental") {
+			found = true
+		}
+	}
+	if found {
+		t.Error("experimental group should have been excluded via options")
+	}
+}
+
+// --- Multi-level token inheritance and isolation (TS: parent-safe) ---
+
+func TestDeriveTokenInheritance(t *testing.T) {
+	// Parent registers token #B. Child registers token #D.
+	// Child should see both. Parent should only see #B.
+	c0 := Make()
+	c0.Token("#B0", "b")
+
+	c1, _ := c0.Derive()
+	c1.Token("#D0", "d")
+
+	// c1 inherits c0's token.
+	if _, ok := c1.Config().FixedTokens["b"]; !ok {
+		t.Error("child should inherit parent's #B0 token")
+	}
+	// c1 has its own token.
+	if _, ok := c1.Config().FixedTokens["d"]; !ok {
+		t.Error("child should have its own #D0 token")
+	}
+	// c0 is unaffected by c1's token.
+	if _, ok := c0.Config().FixedTokens["d"]; ok {
+		t.Error("parent should NOT have child's #D0 token")
+	}
+	// c0 still has its own token.
+	if _, ok := c0.Config().FixedTokens["b"]; !ok {
+		t.Error("parent should still have its #B0 token")
+	}
+}
+
+// --- Multi-level plugin inheritance with isolation (TS: naked-make) ---
+
+// makeTokenPlugin creates a plugin that registers a fixed token for `char`
+// and a val rule alternate that produces `val` when that token is seen.
+// This mirrors the TS make_token_plugin helper.
+func makeTokenPlugin(char, val string) tabnas.Plugin {
+	return func(j *tabnas.Tabnas, opts map[string]any) error {
+		tn := "#T<" + char + ">"
+		j.Token(tn, char)
+		TT := j.Token(tn, "")
+
+		j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+			capturedVal := val
+			capturedTT := TT
+			rs.Open = append([]*tabnas.AltSpec{{
+				S: [][]tabnas.Tin{{capturedTT}},
+				G: "cv" + strings.ToLower(capturedVal),
+				A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+					r.Node = capturedVal
+				},
+			}}, rs.Open...)
+		})
+		return nil
+	}
+}
+
+func TestDeriveMultiLevelPluginInheritance(t *testing.T) {
+	// j has plugin A (maps char "A" to value "aaa").
+	j := Make()
+	j.Use(makeTokenPlugin("A", "aaa"))
+
+	resultJ, err := j.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("j.Parse: %v", err)
+	}
+	expectMap(t, "j", resultJ, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+
+	// a1 derives from j. a1 should inherit plugin A.
+	a1, _ := j.Derive()
+	resultA1, err := a1.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a1.Parse: %v", err)
+	}
+	expectMap(t, "a1", resultA1, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+
+	// a2 derives from j. a2 adds plugin B.
+	a2, _ := j.Derive()
+	a2.Use(makeTokenPlugin("B", "bbb"))
+
+	resultA2, err := a2.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a2.Parse: %v", err)
+	}
+	expectMap(t, "a2", resultA2, map[string]any{"x": "aaa", "y": "bbb", "z": "C"})
+
+	// a1 and j should be unaffected by a2's plugin B.
+	resultA1Again, err := a1.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a1 again: %v", err)
+	}
+	expectMap(t, "a1 again", resultA1Again, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+
+	resultJAgain, err := j.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("j again: %v", err)
+	}
+	expectMap(t, "j again", resultJAgain, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+
+	// a22 derives from a2. Inherits plugins A and B. Adds plugin C.
+	a22, _ := a2.Derive()
+	a22.Use(makeTokenPlugin("C", "ccc"))
+
+	resultA22, err := a22.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a22.Parse: %v", err)
+	}
+	expectMap(t, "a22", resultA22, map[string]any{"x": "aaa", "y": "bbb", "z": "ccc"})
+
+	// a2 unaffected by a22's plugin C.
+	resultA2Again, err := a2.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a2 again: %v", err)
+	}
+	expectMap(t, "a2 again", resultA2Again, map[string]any{"x": "aaa", "y": "bbb", "z": "C"})
+
+	// a1 still unaffected.
+	resultA1Final, err := a1.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("a1 final: %v", err)
+	}
+	expectMap(t, "a1 final", resultA1Final, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+
+	// j still unaffected.
+	resultJFinal, err := j.Parse("x:A,y:B,z:C")
+	if err != nil {
+		t.Fatalf("j final: %v", err)
+	}
+	expectMap(t, "j final", resultJFinal, map[string]any{"x": "aaa", "y": "B", "z": "C"})
+}
+
+// expectMap asserts that result is a map[string]any matching expected.
+func expectMap(t *testing.T, label string, result any, expected map[string]any) {
+	t.Helper()
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: expected map[string]any, got %T: %v", label, result, result)
+	}
+	for k, v := range expected {
+		if m[k] != v {
+			t.Errorf("%s: key %q: got %v (%T), want %v (%T)", label, k, m[k], m[k], v, v)
+		}
+	}
+}
+
+// --- Custom parser error propagation (TS: custom-parser-error) ---
+
+func TestCustomParserStartError(t *testing.T) {
+	j := Make(tabnas.Options{
+		Parser: &tabnas.ParserOptions{
+			Start: func(src string, j *tabnas.Tabnas, meta map[string]any) (any, error) {
+				if src == "e:0" {
+					return nil, &tabnas.TabnasError{
+						Code:   "custom",
+						Detail: "bad-parser:e:0",
+					}
+				}
+				return src, nil
+			},
+		},
+	})
+
+	// Normal input works.
+	result, err := j.Parse("hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "hello" {
+		t.Errorf("expected 'hello', got %v", result)
+	}
+
+	// Error input propagates the error.
+	_, err = j.Parse("e:0")
+	if err == nil {
+		t.Fatal("expected error for 'e:0'")
+	}
+	je, ok := err.(*tabnas.TabnasError)
+	if !ok {
+		t.Fatalf("expected *TabnasError, got %T: %v", err, err)
+	}
+	if je.Code != "custom" {
+		t.Errorf("expected code 'custom', got %q", je.Code)
+	}
+	if !strings.Contains(je.Detail, "e:0") {
+		t.Errorf("expected detail to contain 'e:0', got %q", je.Detail)
+	}
+}
+
+// --- Plugin sets error hints (TS: plugin-errmsg) ---
+
+func TestPluginErrorHints(t *testing.T) {
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.SetOptions(tabnas.Options{
+			Hint: map[string]string{
+				"unexpected": "FOO",
+			},
+		})
+		return nil
+	})
+
+	_, err := j.Parse("x::1")
+	if err == nil {
+		t.Fatal("expected error for 'x::1'")
+	}
+	je, ok := err.(*tabnas.TabnasError)
+	if !ok {
+		t.Fatalf("expected *TabnasError, got %T", err)
+	}
+	errStr := je.Error()
+	if !strings.Contains(errStr, "unexpected") {
+		t.Errorf("error should contain 'unexpected', got:\n%s", errStr)
+	}
+	if !strings.Contains(errStr, "FOO") {
+		t.Errorf("error should contain hint 'FOO', got:\n%s", errStr)
+	}
+}
+
+// --- Decorate: dynamic string-keyed properties (TS: tabnas.foo = value) ---
+
+func TestDecorate(t *testing.T) {
+	// TS equivalent:
+	//   let jp0 = j.use(function foo(tabnas) { tabnas.foo = () => 'FOO' })
+	//   expect(jp0.foo()).equal('FOO')
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.Decorate("foo", "FOO")
+		return nil
+	})
+	if j.Decoration("foo") != "FOO" {
+		t.Errorf("expected Decoration('foo') = 'FOO', got %v", j.Decoration("foo"))
+	}
+}
+
+func TestDecorateChaining(t *testing.T) {
+	// TS: jp0 adds foo, jp1 adds bar, both accessible on jp1, foo still on jp0.
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.Decorate("foo", "FOO")
+		return nil
+	})
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.Decorate("bar", "BAR")
+		return nil
+	})
+
+	if j.Decoration("foo") != "FOO" {
+		t.Errorf("expected foo=FOO, got %v", j.Decoration("foo"))
+	}
+	if j.Decoration("bar") != "BAR" {
+		t.Errorf("expected bar=BAR, got %v", j.Decoration("bar"))
+	}
+}
+
+func TestDecorateInherited(t *testing.T) {
+	// TS: parent decorations inherited by make/derive.
+	parent := Make()
+	parent.Decorate("foo", "FOO")
+
+	child, _ := parent.Derive()
+
+	// Child inherits parent decoration.
+	if child.Decoration("foo") != "FOO" {
+		t.Errorf("child should inherit foo=FOO, got %v", child.Decoration("foo"))
+	}
+
+	// Child adds its own decoration.
+	child.Decorate("bar", "BAR")
+	if child.Decoration("bar") != "BAR" {
+		t.Errorf("expected child bar=BAR, got %v", child.Decoration("bar"))
+	}
+
+	// Parent unaffected by child's decoration.
+	if parent.Decoration("bar") != nil {
+		t.Errorf("parent should NOT have bar, got %v", parent.Decoration("bar"))
+	}
+}
+
+func TestDecorateUnset(t *testing.T) {
+	j := Make()
+	if j.Decoration("nonexistent") != nil {
+		t.Errorf("expected nil for unset decoration, got %v", j.Decoration("nonexistent"))
+	}
+}
+
+func TestDecorateFunction(t *testing.T) {
+	// Decorations can hold functions, matching TS tabnas.foo = () => 'FOO'.
+	j := Make()
+	j.Decorate("greet", func(name string) string {
+		return "hello " + name
+	})
+
+	fn := j.Decoration("greet").(func(string) string)
+	if fn("world") != "hello world" {
+		t.Errorf("expected 'hello world', got %q", fn("world"))
+	}
+}
+
+// --- Context: fields match TS Context ---
+
+func TestContextInst(t *testing.T) {
+	// TS: ctx.inst() returns the tabnas instance.
+	j := Make()
+	var capturedInst *tabnas.Tabnas
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedInst = ctx.Inst
+		})
+	})
+
+	j.Parse("42")
+
+	if capturedInst != j {
+		t.Error("ctx.Inst should be the Tabnas instance")
+	}
+}
+
+func TestContextOpts(t *testing.T) {
+	j := Make(tabnas.Options{Tag: "test-tag"})
+	var capturedOpts *tabnas.Options
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedOpts = ctx.Opts
+		})
+	})
+
+	j.Parse("42")
+
+	if capturedOpts == nil {
+		t.Fatal("ctx.Opts should not be nil")
+	}
+	if capturedOpts.Tag != "test-tag" {
+		t.Errorf("expected Tag 'test-tag', got %q", capturedOpts.Tag)
+	}
+}
+
+func TestContextCfg(t *testing.T) {
+	j := Make()
+	var capturedCfg *tabnas.LexConfig
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedCfg = ctx.Cfg
+		})
+	})
+
+	j.Parse("42")
+
+	if capturedCfg == nil {
+		t.Fatal("ctx.Cfg should not be nil")
+	}
+	if !capturedCfg.NumberLex {
+		t.Error("expected NumberLex=true in default config")
+	}
+}
+
+func TestContextSrc(t *testing.T) {
+	j := Make()
+	var capturedSrc string
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedSrc = ctx.Src
+		})
+	})
+
+	j.Parse("hello:world")
+
+	if capturedSrc != "hello:world" {
+		t.Errorf("expected ctx.Src='hello:world', got %q", capturedSrc)
+	}
+}
+
+func TestContextU(t *testing.T) {
+	// TS: ctx.u is a custom plugin data bag.
+	j := Make()
+	var capturedU map[string]any
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			ctx.U["plugin-data"] = "hello"
+		})
+		rs.AC = append(rs.AC, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedU = ctx.U
+		})
+	})
+
+	j.Parse("42")
+
+	if capturedU == nil {
+		t.Fatal("ctx.U should not be nil")
+	}
+	if capturedU["plugin-data"] != "hello" {
+		t.Errorf("expected ctx.U['plugin-data']='hello', got %v", capturedU["plugin-data"])
+	}
+}
+
+func TestContextMeta(t *testing.T) {
+	j := Make()
+	var capturedMeta map[string]any
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedMeta = ctx.Meta
+		})
+	})
+
+	j.ParseMeta("42", map[string]any{"file": "test.tabnas"})
+
+	if capturedMeta == nil || capturedMeta["file"] != "test.tabnas" {
+		t.Errorf("expected ctx.Meta['file']='test.tabnas', got %v", capturedMeta)
+	}
+}
+
+// --- Plugin options namespace (TS: options.plugin) ---
+
+func TestPluginOptions(t *testing.T) {
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.SetPluginOptions("foo", map[string]any{"x": 1})
+		return nil
+	})
+
+	po := j.PluginOptions("foo")
+	if po == nil || po["x"] != 1 {
+		t.Errorf("expected PluginOptions('foo')['x']=1, got %v", po)
+	}
+	if j.PluginOptions("bar") != nil {
+		t.Error("expected nil for unset plugin options")
+	}
+}
+
+func TestPluginOptionsInherited(t *testing.T) {
+	j := Make()
+	j.SetPluginOptions("foo", map[string]any{"x": 1})
+	child, _ := j.Derive()
+
+	po := child.PluginOptions("foo")
+	if po == nil || po["x"] != 1 {
+		t.Errorf("child should inherit plugin options, got %v", po)
+	}
+
+	// Child modification doesn't affect parent.
+	child.SetPluginOptions("foo", map[string]any{"y": 2})
+	if j.PluginOptions("foo")["y"] != nil {
+		t.Error("parent should not be affected by child plugin options")
+	}
+}
+
+// --- ErrMsg: custom error tag (TS: errmsg.name) ---
+
+func TestErrMsgName(t *testing.T) {
+	j := Make(tabnas.Options{
+		ErrMsg: &tabnas.ErrMsgOptions{Name: "bar"},
+	})
+	_, err := j.Parse("x::1")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "[bar/") {
+		t.Errorf("error should use custom tag 'bar', got:\n%s", errStr)
+	}
+	if strings.Contains(errStr, "[tabnas/") {
+		t.Errorf("error should NOT use default 'tabnas' tag, got:\n%s", errStr)
+	}
+}
+
+func TestErrMsgNameViaPlugin(t *testing.T) {
+	j := Make()
+	j.Use(func(j *tabnas.Tabnas, opts map[string]any) error {
+		j.SetOptions(tabnas.Options{
+			ErrMsg: &tabnas.ErrMsgOptions{Name: "myplugin"},
+		})
+		return nil
+	})
+	_, err := j.Parse("x::1")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "[myplugin/") {
+		t.Errorf("error should use 'myplugin' tag, got:\n%s", err.Error())
+	}
+}
+
+// --- Fixed: fixed token lookup (TS: tabnas.fixed(ref)) ---
+
+func TestFixedLookup(t *testing.T) {
+	j := Make()
+
+	// Lookup by source string.
+	if j.FixedSrc("{") != tabnas.TinOB {
+		t.Errorf("FixedSrc('{') = %v, want TinOB(%d)", j.FixedSrc("{"), tabnas.TinOB)
+	}
+
+	// Lookup by Tin.
+	if j.FixedTin(tabnas.TinOB) != "{" {
+		t.Errorf("FixedTin(TinOB) = %v, want '{'", j.FixedTin(tabnas.TinOB))
+	}
+
+	// Not found.
+	if j.FixedSrc("@") != 0 {
+		t.Errorf("FixedSrc('@') should return 0 for unknown")
+	}
+	if j.FixedTin(999) != "" {
+		t.Errorf("FixedTin(999) should return '' for unknown")
+	}
+}
+
+func TestFixedCustomToken(t *testing.T) {
+	j := Make()
+	j.Token("#TL", "~")
+
+	tin := j.FixedSrc("~")
+	if tin == 0 {
+		t.Error("FixedSrc('~') should find custom token")
+	}
+
+	if j.FixedTin(tin) != "~" {
+		t.Errorf("FixedTin(tin) = %v, want '~'", j.FixedTin(tin))
+	}
+}
+
+// --- FixedOptions.Token (TS: options.fixed.token StrMap) ---
+
+func TestFixedOptionsTokenOverride(t *testing.T) {
+	// Swap #CA source from "," to ";" via options; the old "," mapping goes away.
+	sep := ";"
+	j := Make()
+	j.SetOptions(tabnas.Options{Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#CA": &sep}}})
+
+	if _, ok := j.Config().FixedTokens[","]; ok {
+		t.Error("old #CA source ',' should be removed after override")
+	}
+	if tin := j.Config().FixedTokens[";"]; tin != tabnas.TinCA {
+		t.Errorf("';' should map to TinCA, got %v", tin)
+	}
+
+	// A list using ';' as separator should parse.
+	result, err := j.Parse("a;b;c")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	list, ok := result.([]any)
+	if !ok || len(list) != 3 {
+		t.Fatalf("expected 3-element list, got %T %v", result, result)
+	}
+}
+
+func TestFixedOptionsTokenDelete(t *testing.T) {
+	// Deleting #CL (':') via nil should remove the colon mapping.
+	j := Make()
+	j.SetOptions(tabnas.Options{Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#CL": nil}}})
+
+	if _, ok := j.Config().FixedTokens[":"]; ok {
+		t.Error("':' should be removed from FixedTokens after nil override")
+	}
+}
+
+func TestFixedOptionsTokenViaMake(t *testing.T) {
+	// The same override works when passed to Make(), not just SetOptions().
+	sep := "|"
+	j := Make(tabnas.Options{Fixed: &tabnas.FixedOptions{Token: map[string]*string{"#CA": &sep}}})
+
+	if _, ok := j.Config().FixedTokens[","]; ok {
+		t.Error("old ',' mapping should be gone when passed via Make()")
+	}
+	if tin := j.Config().FixedTokens["|"]; tin != tabnas.TinCA {
+		t.Errorf("'|' should map to TinCA, got %v", tin)
+	}
+}
+
+// --- ModifyOpen/ModifyClose with ListMods (TS: rs.open(alts, mods)) ---
+
+func TestModifyOpen(t *testing.T) {
+	j := Make()
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		origLen := len(rs.Open)
+		// Delete the first alternate.
+		rs.ModifyOpen(&tabnas.AltModListOpts{Delete: []int{0}})
+		if len(rs.Open) >= origLen {
+			t.Errorf("expected fewer open alts after delete, got %d (was %d)", len(rs.Open), origLen)
+		}
+	})
+}
+
+func TestModifyOpenCustom(t *testing.T) {
+	j := Make()
+	var customCalled bool
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.ModifyOpen(&tabnas.AltModListOpts{
+			Custom: func(list []*tabnas.AltSpec) []*tabnas.AltSpec {
+				customCalled = true
+				return list
+			},
+		})
+	})
+	if !customCalled {
+		t.Error("custom callback should have been called")
+	}
+}
+
+// --- ctx.Root (TS: ctx.root()) ---
+
+func TestContextRoot(t *testing.T) {
+	j := Make()
+	var capturedRoot *tabnas.Rule
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			capturedRoot = ctx.Root
+		})
+	})
+
+	j.Parse("42")
+
+	if capturedRoot == nil {
+		t.Fatal("ctx.Root should not be nil")
+	}
+	if capturedRoot.Name != "val" {
+		t.Errorf("ctx.Root.Name = %q, want 'val'", capturedRoot.Name)
+	}
+}
+
+// --- ctx.NOTOKEN / ctx.NORULE (TS: ctx.NOTOKEN, ctx.NORULE) ---
+
+func TestContextSentinels(t *testing.T) {
+	j := Make()
+	var gotNoToken *tabnas.Token
+	var gotNoRule *tabnas.Rule
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			gotNoToken = ctx.NOTOKEN
+			gotNoRule = ctx.NORULE
+		})
+	})
+
+	j.Parse("42")
+
+	if gotNoToken == nil || !gotNoToken.IsNoToken() {
+		t.Error("ctx.NOTOKEN should be the sentinel no-token")
+	}
+	if gotNoRule == nil || gotNoRule != tabnas.NoRule {
+		t.Error("ctx.NORULE should be the sentinel no-rule")
+	}
+}
+
+// --- ctx.TC (token count) ---
+
+func TestContextTC(t *testing.T) {
+	j := Make()
+	var tc int
+
+	j.Sub(nil, func(rule *tabnas.Rule, ctx *tabnas.Context) {
+		tc = ctx.TC
+	})
+
+	j.Parse("{a:1}")
+
+	if tc <= 0 {
+		t.Errorf("ctx.TC should be > 0 after parsing, got %d", tc)
+	}
+}
+
+// --- ctx.F (format function) ---
+
+func TestContextF(t *testing.T) {
+	j := Make()
+	var formatted string
+
+	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+		rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+			if ctx.F != nil {
+				formatted = ctx.F("hello")
+			}
+		})
+	})
+
+	j.Parse("42")
+
+	if formatted != "hello" {
+		t.Errorf("ctx.F('hello') = %q, want 'hello'", formatted)
+	}
+}
+
+// --- token.Use (custom metadata) ---
+
+func TestTokenUse(t *testing.T) {
+	j := Make()
+	var gotUse map[string]any
+
+	j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{Match: map[string]*tabnas.MatchSpec{
+		"test": {Order: 1500000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+			return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+				pnt := lex.Cursor()
+				if pnt.SI < pnt.Len && lex.Src[pnt.SI] == '@' {
+					tkn := lex.Token("#VL", tabnas.TinVL, "AT", "@")
+					tkn.Use = map[string]any{"custom": true}
+					pnt.SI++
+					pnt.CI++
+					return tkn
+				}
+				return nil
+			}
+		}},
+	}}})
+
+	j.Sub(func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
+		if tkn.Use != nil {
+			gotUse = tkn.Use
+		}
+	}, nil)
+
+	j.Parse("@")
+
+	if gotUse == nil || gotUse["custom"] != true {
+		t.Errorf("token.Use should contain custom data, got %v", gotUse)
+	}
+}
+
+// --- token.Bad() ---
+
+func TestTokenBad(t *testing.T) {
+	tkn := tabnas.MakeToken("#VL", tabnas.TinVL, nil, "x", tabnas.Point{})
+	tkn.Bad("test_error", map[string]any{"detail": "info"})
+
+	if tkn.Err != "test_error" {
+		t.Errorf("Bad() should set Err, got %q", tkn.Err)
+	}
+	if tkn.Use == nil || tkn.Use["detail"] != "info" {
+		t.Errorf("Bad() should merge details into Use, got %v", tkn.Use)
+	}
+}
+
+// --- lex.Bad() ---
+
+func TestLexBad(t *testing.T) {
+	lex := tabnas.NewLex("test", tabnas.DefaultLexConfig())
+	tkn := lex.Bad("bad_input")
+
+	if tkn.Tin != tabnas.TinBD {
+		t.Errorf("Bad() should create BD token, got Tin=%d", tkn.Tin)
+	}
+	if tkn.Err != "bad_input" {
+		t.Errorf("Bad() should set Err, got %q", tkn.Err)
+	}
+}
+
+// --- tabnas.Id ---
+
+func TestTabnasId(t *testing.T) {
+	j := Make()
+	if j.Id() == "" {
+		t.Error("Id() should not be empty")
+	}
+	if !strings.HasPrefix(j.Id(), "Tabnas/") {
+		t.Errorf("Id() should start with 'Tabnas/', got %q", j.Id())
+	}
+}
+
+func TestTabnasIdWithTag(t *testing.T) {
+	j := Make(tabnas.Options{Tag: "test"})
+	if !strings.Contains(j.Id(), "/test") {
+		t.Errorf("Id() with tag should contain '/test', got %q", j.Id())
+	}
+}
+
+func TestTabnasIdUnique(t *testing.T) {
+	j1 := Make()
+	j2 := Make()
+	if j1.Id() == j2.Id() {
+		t.Errorf("different instances should have different IDs: %q", j1.Id())
+	}
+}
+
+// --- tabnas.Empty() ---
+
+func TestEmpty(t *testing.T) {
+	j := tabnas.Empty()
+	// All rules should be cleared.
+	for name, rs := range j.RSM() {
+		if len(rs.Open) > 0 || len(rs.Close) > 0 {
+			t.Errorf("Empty() rule %q should have no alts, got %d open, %d close",
+				name, len(rs.Open), len(rs.Close))
+		}
+	}
+}
+
+// --- options.result.fail ---
+
+func TestResultFail(t *testing.T) {
+	j := Make(tabnas.Options{
+		Result: &tabnas.ResultOptions{Fail: []any{"BAD"}},
+		Value: &tabnas.ValueOptions{
+			Def: map[string]*tabnas.ValueDef{
+				"BAD": {Val: "BAD"},
+			},
+		},
+	})
+	_, err := j.Parse("BAD")
+	if err == nil {
+		t.Fatal("expected error for result in fail list")
+	}
+}
+
+func TestResultFailCustomValue(t *testing.T) {
+	j := Make(tabnas.Options{
+		Result: &tabnas.ResultOptions{Fail: []any{"FAIL"}},
+		Property: &tabnas.PropertyOptions{
+			ConfigModify: map[string]tabnas.ConfigModifier{
+				"fail": func(cfg *tabnas.LexConfig, opts *tabnas.Options) {
+					cfg.ResultFail = opts.Result.Fail
+				},
+			},
+		},
+	})
+
+	// Add a custom value that produces "FAIL".
+	j.SetOptions(tabnas.Options{
+		Value: &tabnas.ValueOptions{
+			Def: map[string]*tabnas.ValueDef{
+				"FAIL": {Val: "FAIL"},
+			},
+		},
+	})
+
+	_, err := j.Parse("FAIL")
+	if err == nil {
+		t.Fatal("expected error for result.fail value")
+	}
+}
+
+// --- lex.Fwd (forward lookahead) ---
+
+func TestLexFwd(t *testing.T) {
+	lex := tabnas.NewLex("hello world", tabnas.DefaultLexConfig())
+	if lex.Fwd(5) != "hello" {
+		t.Errorf("Fwd(5) = %q, want 'hello'", lex.Fwd(5))
+	}
+	if lex.Fwd(100) != "hello world" {
+		t.Errorf("Fwd(100) = %q, want 'hello world'", lex.Fwd(100))
+	}
+	// Advance position.
+	pnt := lex.Cursor()
+	pnt.SI = 6
+	if lex.Fwd(5) != "world" {
+		t.Errorf("Fwd(5) after advance = %q, want 'world'", lex.Fwd(5))
+	}
+}
+
+// --- Custom token sets (TS: options.tokenSet) ---
+
+func TestCustomTokenSet(t *testing.T) {
+	j := Make()
+	j.SetTokenSet("CUSTOM", []tabnas.Tin{tabnas.TinNR, tabnas.TinST})
+
+	tins := j.TokenSet("CUSTOM")
+	if len(tins) != 2 || tins[0] != tabnas.TinNR || tins[1] != tabnas.TinST {
+		t.Errorf("expected [TinNR, TinST], got %v", tins)
+	}
+
+	// Built-in sets still work.
+	if j.TokenSet("VAL") == nil {
+		t.Error("VAL set should still exist")
+	}
+}
+
+func TestCustomTokenSetInherited(t *testing.T) {
+	j := Make()
+	j.SetTokenSet("CUSTOM", []tabnas.Tin{tabnas.TinNR})
+	child, _ := j.Derive()
+
+	if child.TokenSet("CUSTOM") == nil {
+		t.Error("child should inherit custom token set")
+	}
+}

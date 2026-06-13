@@ -1,41 +1,49 @@
-# Syntax Reference (Go)
+# Syntax reference (Go)
 
-The Go version of tabnas supports the same core syntax as the TypeScript
-version. See the [top-level syntax reference](../../doc/syntax.md) for the
-full specification.
+The Go version accepts the same relaxed-JSON syntax as the TypeScript
+version. The canonical, language-neutral grammar is the
+[top-level syntax reference](../../doc/syntax.md).
 
-This page notes Go-specific behavior. For a complete list of differences, see
+This page is the reference for how the Go runtime represents parsed
+values. For the full TypeScript ↔ Go comparison see
 [differences.md](differences.md).
 
-## Return Types
+## Result types
 
 tabnas maps parsed values to Go types:
 
-| JSON Type | Go Type |
-|---|---|
-| Object | `map[string]any` |
-| Array | `[]any` |
-| String | `string` |
-| Number (integer) | `float64` |
-| Number (float) | `float64` |
-| Boolean | `bool` |
-| Null | `nil` |
+| Value             | Go type        |
+|-------------------|----------------|
+| Object            | `map[string]any` |
+| Array             | `[]any`        |
+| String            | `string`       |
+| Number (any form) | `float64`      |
+| Boolean           | `bool`         |
+| Null / empty input| `nil`          |
 
-### Extended Return Types
+All numbers are returned as `float64`, matching `encoding/json`
+conventions. A number must be followed by a terminator (whitespace, a
+structural character, or end of input), so `123abc` is a single text
+value, not a number followed by text — the same behavior as the
+TypeScript runtime.
 
-With options enabled, richer types are returned:
+## Extended result types
 
-- **`TextInfo: true`** -- string values become `tabnas.Text{Quote rune, Str string}`,
-  preserving which quote character was used.
-- **`ListRef: true`** -- arrays become `tabnas.ListRef{Val []any, Implicit bool, ...}`,
-  indicating whether the array was implicit (no brackets).
-- **`MapRef: true`** -- objects become `tabnas.MapRef{Val map[string]any, Implicit bool}`,
-  indicating whether the object was implicit (no braces).
+With `Info` options enabled, richer types are returned in place of the
+plain values above:
 
-## Number Handling
+| Option        | Wrapper type | Replaces |
+|---------------|--------------|----------|
+| `Info.Text`   | `tabnas.Text{Quote string, Str string}` | `string` |
+| `Info.List`   | `tabnas.ListRef{Val []any, Implicit bool, Child any, Meta map[string]any}` | `[]any` |
+| `Info.Map`    | `tabnas.MapRef{Val map[string]any, Implicit bool, Meta map[string]any}` | `map[string]any` |
 
-All numbers are returned as `float64`, matching `encoding/json` conventions.
+- `Text.Quote` is the quote character used in the source (`""` for
+  unquoted text).
+- `ListRef.Implicit` / `MapRef.Implicit` are `true` when the array /
+  object was written without brackets / braces.
+- `ListRef.Child` holds the bare-colon child value (`[:1]`) when
+  `List.Child` is enabled.
 
-The `number+text` edge case differs from TypeScript: input like `123abc` is
-rejected as not-a-number in Go (parsed as text), while TypeScript produces
-separate number and text tokens. See [differences.md](differences.md) for details.
+See the [how-to recipe](guide.md#get-quote--implicit-metadata) for
+usage.

@@ -1,6 +1,7 @@
 package tabnas
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -59,13 +60,18 @@ type Parser struct {
 func NewParser() *Parser {
 	cfg := DefaultLexConfig()
 	rsm := make(map[string]*RuleSpec)
-	buildGrammar(rsm, cfg)
-	// Copy global error messages as defaults.
-	msgs := make(map[string]string, len(errorMessages))
+	// Copy global error messages and hints as defaults; parser fields
+	// alias the config maps (see makeError / makeTabnasError).
+	cfg.ErrorMessages = make(map[string]string, len(errorMessages))
 	for k, v := range errorMessages {
-		msgs[k] = v
+		cfg.ErrorMessages[k] = v
 	}
-	return &Parser{Config: cfg, RSM: rsm, MaxMul: 3, ErrorMessages: msgs}
+	cfg.Hints = make(map[string]string, len(defaultHints))
+	for k, v := range defaultHints {
+		cfg.Hints[k] = v
+	}
+	return &Parser{Config: cfg, RSM: rsm, MaxMul: 3,
+		ErrorMessages: cfg.ErrorMessages, Hints: cfg.Hints}
 }
 
 // Start parses the source string and returns the result.
@@ -81,7 +87,17 @@ func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ru
 }
 
 // startParse is the internal entry point that populates the full Context.
-func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (any, error) {
+// A recover guard converts any panic (from plugin callbacks, custom
+// matchers, or engine bugs) into an "internal" TabnasError, upholding the
+// package guarantee that parsing never panics, whatever the input.
+func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			err = p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1)
+		}
+	}()
+
 	if src == "" {
 		return nil, nil
 	}
@@ -170,10 +186,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// specific about what went wrong. Matches TS behavior where
 			// lex errors propagate through #ZZ tokens.
 			if lex.Err != nil {
-				return nil, lex.Err
+				return nil, p.finishErr(lex.Err, ctx, meta, nil)
 			}
 			tkn := ctx.ParseErr
-			return nil, p.makeError("unexpected", tkn.Src, src, tkn.SI, tkn.RI, tkn.CI)
+			return nil, p.finishErr(p.makeError("unexpected", tkn.Src, src, tkn.SI, tkn.RI, tkn.CI), ctx, meta, tkn)
 		}
 
 		kI++
@@ -181,7 +197,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 	// Check for lexer errors (unterminated strings, comments, etc.)
 	if lex.Err != nil {
-		return nil, lex.Err
+		return nil, p.finishErr(lex.Err, ctx, meta, nil)
 	}
 
 	// Check for unconsumed tokens (syntax error) - explicit trailing content check.
@@ -189,79 +205,89 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	if ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ {
 		// Prefer lex errors over generic unexpected for unconsumed tokens too.
 		if lex.Err != nil {
-			return nil, lex.Err
+			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
-		return nil, p.makeError("unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI)
+		return nil, p.finishErr(p.makeError("unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI), ctx, meta, ctx.T0)
 	}
 	// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
 	endTkn := lex.Next(rule)
 	if endTkn.Tin != TinZZ {
 		if lex.Err != nil {
-			return nil, lex.Err
+			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
-		return nil, p.makeError("unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI)
+		return nil, p.finishErr(p.makeError("unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
 	}
 	// Check lexer errors from that final Next() call.
 	if lex.Err != nil {
-		return nil, lex.Err
+		return nil, p.finishErr(lex.Err, ctx, meta, nil)
 	}
 
 	// Follow replacement chain: when val is replaced by list (implicit list),
 	// root.Node is stale. Follow Next/Prev links to find the actual result.
-	result := root
-	for result.Next != NoRule && result.Next != nil && result.Next.Prev == result {
-		result = result.Next
+	resRule := root
+	for resRule.Next != NoRule && resRule.Next != nil && resRule.Next.Prev == resRule {
+		resRule = resRule.Next
 	}
 
-	if IsUndefined(result.Node) {
+	if IsUndefined(resRule.Node) {
 		return nil, nil
 	}
 
 	// Check result.fail
 	if len(p.Config.ResultFail) > 0 {
 		for _, fail := range p.Config.ResultFail {
-			if result.Node == fail {
-				return nil, p.makeError("unexpected", "", src, 0, 1, 1)
+			if resRule.Node == fail {
+				return nil, p.finishErr(p.makeError("unexpected", "", src, 0, 1, 1), ctx, meta, nil)
 			}
 		}
 	}
 
-	return result.Node, nil
+	return resRule.Node, nil
+}
+
+// finishErr enriches a parse error with context for the formatted output:
+// the source file name (meta["fileName"], TS: meta.fileName), the active
+// rule, and the failing token — feeding the "--internal: ..." suffix.
+func (p *Parser) finishErr(err error, ctx *Context, meta map[string]any, tkn *Token) error {
+	je, ok := err.(*TabnasError)
+	if !ok || je == nil {
+		return err
+	}
+	if meta != nil {
+		if fn, ok := meta["fileName"].(string); ok && je.fileName == "" {
+			je.fileName = fn
+		}
+	}
+	if ctx != nil && ctx.Rule != nil && je.ruleName == "" {
+		je.ruleName = ctx.Rule.Name
+		je.ruleState = ctx.Rule.State
+	}
+	if tkn != nil && je.tokenName == "" {
+		je.tokenName = tkn.Name
+		je.why = tkn.Why
+	}
+	return je
 }
 
 // makeError creates a TabnasError using this parser's error messages.
+// Parser-level fields (ErrorMessages, Hints, ErrTag) take precedence over
+// the config when set directly; normally they alias the config values.
 func (p *Parser) makeError(code, src, fullSource string, pos, row, col int) *TabnasError {
-	msgs := p.ErrorMessages
-	if msgs == nil {
-		msgs = errorMessages
+	cfg := p.Config
+	if cfg != nil && p.ErrorMessages != nil {
+		// Aliased in NewParser/Make; this guards direct field assignment.
+		cfg.ErrorMessages = p.ErrorMessages
 	}
-	tmpl, ok := msgs[code]
-	if !ok {
-		tmpl = msgs["unknown"]
-		if tmpl == "" {
-			tmpl = errorMessages["unknown"]
+	je := makeTabnasError(code, src, fullSource, pos, row, col, cfg)
+	if p.Hints != nil {
+		if hint, ok := p.Hints[code]; ok {
+			je.Hint = StrInject(hint, map[string]any{
+				"code": code, "src": src, "pos": pos, "row": row, "col": col,
+			})
 		}
 	}
-	detail := tmpl + src
-
-	hint := ""
-	if p.Hints != nil {
-		hint = p.Hints[code]
-	}
-
-	je := &TabnasError{
-		Code:       code,
-		Detail:     detail,
-		Pos:        pos,
-		Row:        row,
-		Col:        col,
-		Src:        src,
-		Hint:       hint,
-		fullSource: fullSource,
-		tag:        p.ErrTag,
-	}
-	if p.Config != nil {
-		je.color = p.Config.Color
+	if p.ErrTag != "" {
+		je.tag = p.ErrTag
 	}
 	return je
 }

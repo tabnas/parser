@@ -583,12 +583,6 @@ func ModList(list []any, opts *ModListOpts) []any {
 	return list
 }
 
-// deepEqual compares two values for deep equality.
-// Used internally for testing.
-func deepEqual(a, b any) bool {
-	return reflect.DeepEqual(a, b)
-}
-
 // IsFuncRef checks if a string is a function reference (starts with "@").
 func IsFuncRef(s string) bool {
 	return len(s) > 0 && s[0] == '@'
@@ -931,6 +925,9 @@ func MapToOptions(m map[string]any) Options {
 			case bool, string:
 				opts.ErrMsg.Suffix = v
 			}
+		}
+		if link, ok := em["link"].(string); ok {
+			opts.ErrMsg.Link = link
 		}
 	}
 

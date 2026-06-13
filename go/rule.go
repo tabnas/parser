@@ -277,40 +277,40 @@ func getRuleProp(r *Rule, prop string, subprop string) (int, bool) {
 // MakeRuleCond creates an AltCond function from a comparison operator, property path, and value.
 // Matches the TypeScript makeRuleCond(co, prop, subprop, val) function.
 // When the property is not set (missing), the condition returns true.
-func MakeRuleCond(op string, prop string, subprop string, val int) AltCond {
+func MakeRuleCond(op string, prop string, subprop string, val int) (AltCond, error) {
 	switch op {
 	case "$eq":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval == val
-		}
+		}, nil
 	case "$ne":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval != val
-		}
+		}, nil
 	case "$lt":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval < val
-		}
+		}, nil
 	case "$lte":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval <= val
-		}
+		}, nil
 	case "$gt":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval > val
-		}
+		}, nil
 	case "$gte":
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := getRuleProp(r, prop, subprop)
 			return !ok || rval >= val
-		}
+		}, nil
 	default:
-		panic("MakeRuleCond: unknown comparison operator: " + op)
+		return nil, fmt.Errorf("MakeRuleCond: unknown comparison operator: %s", op)
 	}
 }
 
@@ -342,9 +342,17 @@ func NormAlt(alt *AltSpec) error {
 
 		switch v := pspec.(type) {
 		case int:
-			conds = append(conds, MakeRuleCond("$eq", prop, subprop, v))
+			cond, err := MakeRuleCond("$eq", prop, subprop, v)
+			if err != nil {
+				return err
+			}
+			conds = append(conds, cond)
 		case CondOp:
-			conds = append(conds, MakeRuleCond(v.Op, prop, subprop, v.Val))
+			cond, err := MakeRuleCond(v.Op, prop, subprop, v.Val)
+			if err != nil {
+				return err
+			}
+			conds = append(conds, cond)
 		}
 	}
 

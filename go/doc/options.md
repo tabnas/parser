@@ -162,7 +162,8 @@ Controls parser rule behavior.
 | `Start` | `string` | `"val"` | Starting rule name |
 | `Finish` | `*bool` | `true` | Auto-close at EOF |
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
-| `Exclude` | `string` | `""` | Comma-separated group tags to exclude |
+| `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
+| `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
 
 ## `Lex`
 
@@ -172,6 +173,7 @@ Controls global lexer behavior.
 |---|---|---|---|
 | `Empty` | `*bool` | `true` | Allow empty source |
 | `EmptyResult` | `any` | `nil` | Value for empty source |
+| `Match` | `map[string]*MatchSpec` | `nil` | Custom lexer matchers, keyed by name (see [API reference](api.md#custom-matchers)) |
 
 ## `Parser`
 
@@ -187,38 +189,65 @@ Controls security features.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `Key` | `*bool` | `true` | Block `__proto__` and `constructor` keys |
+| `Key` | `*bool` | `true` | Block prototype-pollution keys (e.g. `__proto__`) |
 
-## Go-Only Options
+## Go-Only Options (`Info`)
 
-These options are specific to the Go version:
+These options are specific to the Go version, under `Options.Info`
+(`InfoOptions`). They give Go clients typed access to parse metadata.
 
-### `TextInfo`
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Info.Text` | `*bool` | `false` | Wrap string/text values in `Text{Quote, Str}` structs |
+| `Info.List` | `*bool` | `false` | Wrap arrays in `ListRef{Val, Implicit, ...}` structs (auto-enabled when `List.Child` is true) |
+| `Info.Map` | `*bool` | `false` | Wrap objects in `MapRef{Val, Implicit}` structs |
+| `Info.Marker` | `string` | `"__info__"` | Key under which info metadata is stored |
 
-| Type | Default | Description |
+## `ErrMsg`
+
+Controls error message formatting (TS: `options.errmsg`).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Name` | `string` | `"tabnas"` | Header tag: `[name/code]: ...` |
+| `Suffix` | `any` | `true` | `bool` (standard internal block on/off), `string` (literal), or `func(code, src string) string` |
+| `Link` | `string` | `""` | Optional "see also" line (e.g. docs URL) in the standard suffix |
+
+## `Match`
+
+Custom token and value matchers (TS: `options.match`, where each entry
+is `RegExp | LexMatcher`).
+
+| Field | Type | Description |
 |---|---|---|
-| `*bool` | `false` | Wrap string/text values in `Text{Quote, Str}` structs |
+| `Lex` | `*bool` | Enable custom matching. Default: `true` |
+| `Token` | `map[string]*regexp.Regexp` | `"#NAME"` → regexp token matcher |
+| `TokenFn` | `map[string]LexMatcher` | `"#NAME"` → function token matcher |
+| `Value` | `map[string]*MatchValueSpec` | name → `{Match, Val}` or `{Fn}` value matcher |
+| `Check` | `LexCheck` | Hook before the match matcher runs |
 
-### `ListRef`
+## `Color`
 
-| Type | Default | Description |
-|---|---|---|
-| `*bool` | `false` | Wrap arrays in `ListRef{Val, Implicit, ...}` structs |
+Controls ANSI color codes in formatted error messages (TS:
+`options.color`). All codes default to standard escapes.
 
-Automatically enabled when `List.Child` is true.
-
-### `MapRef`
-
-| Type | Default | Description |
-|---|---|---|
-| `*bool` | `false` | Wrap objects in `MapRef{Val, Implicit}` structs |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Active` | `*bool` | `true` | Toggle color output (set `false` to disable) |
+| `Reset` | `string` | `ESC[0m` | Reset all attributes |
+| `Hi` | `string` | `ESC[91m` | Highlight the error header |
+| `Lo` | `string` | `ESC[2m` | Dim the trailing suffix |
+| `Line` | `string` | `ESC[34m` | Color the source-location arrow and gutter |
 
 ## Other Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `Ender` | `[]string` | Additional characters that end text tokens |
-| `Error` | `map[string]string` | Custom error message templates |
-| `Hint` | `map[string]string` | Additional error explanations |
-| `ConfigModify` | `map[string]ConfigModifier` | Post-config callbacks |
-| `Tag` | `string` | Instance identifier tag |
+| `TokenSet` | `map[string][]string` | Customize named token sets (e.g. `VAL`, `KEY`); values are token names |
+| `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
+| `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
+| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse |
+| `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
+| `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
+| `Tag` | `string` | Instance identifier tag (shown in the error suffix internal line) |

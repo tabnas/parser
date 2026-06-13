@@ -1,25 +1,24 @@
 # API Reference
 
-tabnas exposes a single class — `Tabnas` — plus the bundled `bnf`
-and `Debug` plugins. The package ships **no grammar** of its own;
-every grammar arrives via a plugin.
+tabnas exposes a single class — `Tabnas` — plus error and lexer
+helpers. The package ships **no grammar** of its own; every grammar
+arrives via a plugin.
 
 ## Construction
 
 ### `new Tabnas(options?)`
 
 Create a parser instance. The class has no grammar by default; pass a
-`plugins` array to load one (or more) at construction time:
+`plugins` array to apply one (or more) at construction time:
 
 ```js
-const { Tabnas, bnf } = require('tabnas')
+const { Tabnas } = require('tabnas')
 
-const am = new Tabnas({ plugins: [bnf] })
-am.bnf('greet = "hi" / "hello"')
-am.parse('hi')                        // { rule: 'greet', src: 'hi', kids: [] }
+const am = new Tabnas({ plugins: [myGrammarPlugin] })
+am.parse(src)
 ```
 
-`options` is an [`TabnasOptions`](options.md) object — every field is
+`options` is a [`TabnasOptions`](options.md) object — every field is
 optional and merges with the defaults. The `plugins` field is the only
 field that doesn't survive into `am.options` after construction (it's
 consumed by the `use()` calls the constructor makes internally).
@@ -39,7 +38,7 @@ const blank = am.empty({ rule: { start: 'mything' } })
 Parse a string and return the result.
 
 ```js
-am.parse('hi')                        // depends on the active grammar
+am.parse(src)                         // depends on the active grammar
 ```
 
 Non-string inputs are returned unchanged — handy when threading values
@@ -56,8 +55,8 @@ code.
 
 Derive a child instance with overridden options. The child inherits the
 parent's plugin list and re-runs each plugin against the merged options
-— so option-conditional grammar alternatives get re-evaluated against
-the child's settings.
+— so option-conditional grammar alternates get re-evaluated against the
+child's settings.
 
 ```js
 const restricted = am.make({
@@ -66,8 +65,7 @@ const restricted = am.make({
 ```
 
 After re-running plugins the child applies `rule.include` /
-`rule.exclude` filtering on top, matching the original
-`parser.clone()` semantics.
+`rule.exclude` filtering on top.
 
 ### `am.empty(options?)`
 
@@ -108,6 +106,7 @@ Access or modify grammar rules.
 - `am.rule(name, definer)` — calls `definer(rs, parser)` to modify or
   create the rule. Use `rs.open([...])` / `rs.close([...])` to add
   alternates, and `bo` / `ao` / `bc` / `ac` for the state-action hooks.
+- `am.rule(name, null)` — delete a rule.
 
 ```js
 am.rule('val', (rs) => {
@@ -117,20 +116,35 @@ am.rule('val', (rs) => {
 })
 ```
 
+See [Writing plugins](plugins.md) for the full alternate-spec and
+state-action field lists.
+
+### `am.grammar(spec, settings?)`
+
+Apply a `GrammarSpec` — a JSON-shaped declarative representation of
+rule definitions, with function fields supplied as `@funcref` strings
+resolved against `spec.ref`. Used by plugins that ship grammar as data
+rather than code. `settings.rule.alt.g` appends group tags to every
+alternate in the spec.
+
 ### `am.token(ref)`
 
-Look up a token's name from its Tin, or its Tin from its name. Creates
-a new Tin if the name is previously unseen:
+Dual-shape, like `options`: callable for lookup-or-create, and
+indexable as a name → Tin map.
 
 ```js
-am.token('#OB')                       // 12 (or whatever the assignment was)
-am.token(12)                          // '#OB'
-am.token('#TL')                       // creates and returns a fresh Tin
+am.token('#OB')                       // Tin for the open-brace token
+am.token(12)                          // name for Tin 12
+am.token('#TL')                       // mints and returns a fresh Tin
+am.token.ST                           // map access (bare name, no '#')
 ```
+
+The map is keyed by both `#XX` and bare `XX` forms.
 
 ### `am.tokenSet(ref)`
 
-Look up a named token set. Built-in sets:
+Dual-shape: callable to look up a named set's Tin array, indexable as
+a name → Tin[] map. Built-in sets:
 
 | Name | Members |
 |---|---|
@@ -140,14 +154,8 @@ Look up a named token set. Built-in sets:
 
 ### `am.fixed(ref)`
 
-Lookup the source string ↔ Tin mapping for fixed (punctuation /
+Look up the source-string ↔ Tin mapping for fixed (punctuation /
 keyword) tokens.
-
-### `am.grammar(spec, settings?)`
-
-Apply a [`GrammarSpec`](#grammarspec) — a JSON-shaped declarative
-representation of rule definitions. Used by the BNF plugin and by
-plugins that ship grammar as data rather than code.
 
 ## Plugins
 
@@ -157,7 +165,7 @@ Register a plugin and invoke it. The plugin receives the instance and
 the merged plugin options:
 
 ```js
-function foo(am, opts) { /* …​ */ }
+function foo(am, opts) { /* … */ }
 am.use(foo, { x: 1 })
 ```
 
@@ -183,7 +191,8 @@ themselves against re-application).
 
 ### `am.sub({ lex?, rule? })`
 
-Subscribe to lex and rule events. Multiple subscriptions are allowed.
+Subscribe to lex and rule events. Multiple subscriptions are allowed
+and fire in registration order.
 
 ```js
 am.sub({
@@ -213,43 +222,44 @@ for things the public API doesn't surface; user code rarely needs it.
 
 ### `Tabnas.util` (static)
 
-Bag of helpers for plugin authors:
+Bag of helpers for plugin authors. Also reachable per-instance via
+`am.util`. Members:
 
-- `tokenize` — convert token names to Tin numbers.
-- `deep`, `clone` — deep merge / clone.
-- `regexp`, `escre` — safe regex construction.
-- `srcfmt` — format source strings for display.
-- `charset` — build character sets.
-- `errmsg`, `strinject` — error-message helpers.
-- `prop`, `keys`, `values`, `entries`, `omap`, `clean` — object utilities.
-- `trimstk`, `makelog`, `str`, `mesc` — misc helpers.
+- **Object / merge** — `deep`, `clone`, `keys`, `values`, `entries`,
+  `omap`, `clean`, `prop`.
+- **Regex / text** — `regexp`, `escre`, `charset`, `mesc`, `srcfmt`,
+  `str`, `tokenize`.
+- **Config** — `configure`, `parserwrap`, `badlex`, `makelog`.
+- **Error** — `errdesc`, `errinject`, `errmsg`, `errsite`,
+  `strinject`, `trimstk`.
+- **Lex scan primitives** — `scan`, `guardedMatcher`,
+  `buildCharRunSpec`, `buildLineRunSpec`, `buildStringBodySpec`, and
+  the scan-spec constants `CONSUME`, `IS_ROW`, `CI_RESET`, `STOP`,
+  `STATE_MASK`. These drive the table-driven matcher state machine;
+  plugin authors writing custom matchers can reuse them. See the
+  matchers in `src/lexer.ts` for usage.
 
 ### Constants
 
-`OPEN`, `CLOSE`, `BEFORE`, `AFTER`, `EMPTY`, `SKIP` — exported as both
-named exports and `Tabnas.X` static members. Used in rule definitions
-and state actions.
+`OPEN`, `CLOSE`, `BEFORE`, `AFTER`, `EMPTY`, `SKIP`, `S` — exported as
+both named exports and `Tabnas.X` static members. Used in rule
+definitions and state actions. `SKIP` is the deep-merge sentinel that
+preserves the base value.
 
-## Plugins shipped with this package
+### Lexer factories
 
-| Module path | Purpose |
-|---|---|
-| `tabnas` | re-exports `bnf`, `Debug` for ergonomic destructuring. |
-| `tabnas/dist/plugins/bnf` | BNF → grammar plugin + `bnfConvert` / `parseBnf` / `BnfParseError` exports. |
-| `tabnas/dist/plugins/debug` | Debug plugin (`Debug`) + tracing hooks. |
+Lower-level matcher and machinery factories, rarely needed by users
+but exported for advanced plugin authors and the engine itself:
 
-A strict-JSON grammar plugin lives as a test fixture under
-[`test/json-plugin.ts`](../test/json-plugin.ts) — useful as a worked
-example of a real grammar plugin. It compiles to
-`dist-test/json-plugin.js` and is exercised by `variant.test.js`.
-
-For plugin authors writing plugins of their own, see
-[plugins.md](plugins.md).
+`makeLex`, `makeParser`, `makeToken`, `makePoint`, `makeRule`,
+`makeRuleSpec`, `makeFixedMatcher`, `makeSpaceMatcher`,
+`makeLineMatcher`, `makeStringMatcher`, `makeCommentMatcher`,
+`makeNumberMatcher`, `makeTextMatcher`.
 
 ## Types
 
-The TypeScript types are kept in `src/types.ts` and re-exported via the
-main module. Notable shapes:
+The TypeScript types live in `src/types.ts` and are re-exported from
+the main module. Notable shapes:
 
 | Type | Description |
 |---|---|
@@ -263,31 +273,36 @@ main module. Notable shapes:
 | `Config` | Internal compiled form of `TabnasOptions`. |
 | `Context` | Per-parse state passed to rule actions and matchers. |
 | `GrammarSpec`, `GrammarAltSpec` | Declarative-grammar JSON shapes. |
-| `BnfConvertOptions` | BNF plugin's optional input. |
+| `ScanSpec`, `ScanOut` | Scan-spec driver types for custom matchers. |
 
 ## Error Handling
 
-Parse failures throw an `TabnasError`:
+A parse failure throws a `TabnasError` (extends `SyntaxError`). Its
+enumerable fields:
 
 | Property | Description |
 |---|---|
 | `code` | Error code (`'unexpected'`, `'unterminated_string'`, …). |
-| `message` | Formatted multi-line error including source context. |
-| `details` | Structured details (optional). |
-| `token` | The token that caused the error (with `sI` / `rI` / `cI` location info). |
+| `message` | Formatted, multi-line message including a source-context extract. |
+| `details` | Structured details (e.g. `{ state: 'open' }`); may be empty. |
+| `lineNumber` | Row of the offending token (1-based). |
+| `columnNumber` | Column of the offending token (1-based). |
+| `fileName` | From `meta.fileName`, if supplied to `parse()`. |
+| `meta` | The `meta` passed to `parse()`. |
+| `txts()` | Returns the resolved `{ msg, hint, site }` text parts. |
+
+Customise messages and hints through the [`error` and `hint`
+options](options.md#error). Error-code keys come from
+`src/defaults.ts`.
 
 ## Module Exports
 
 ```js
 const {
   Tabnas,            // the engine class
-  TabnasError,       // error class
+  TabnasError,       // error class (extends SyntaxError)
 
-  // Plugins
-  bnf,
-  Debug,
-
-  // Step / state constants
+  // Step / state constants and the string-table
   OPEN, CLOSE, BEFORE, AFTER, EMPTY, SKIP, S,
 
   // Lower-level factories (rarely needed by users)
@@ -300,3 +315,10 @@ const {
   util,
 } = require('tabnas')
 ```
+
+The package also exposes subpath exports for direct access to internal
+modules: `tabnas/lexer`, `tabnas/utility`, and `tabnas/error`.
+
+There is no bundled grammar export. Companion grammars and tooling are
+separate packages (`@tabnas/bnf`, `@tabnas/debug`); the strict-JSON
+grammar used by the tests is the fixture at `test/json-plugin.ts`.

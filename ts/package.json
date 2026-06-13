@@ -5,7 +5,7 @@
   "type": "commonjs",
   "types": "dist/tabnas.d.ts",
   "description": "A dynamic JSON parser that isn't strict and can be customized.",
-  "homepage": "https://github.com/rjrodger/tabnas",
+  "homepage": "https://github.com/tabnas/parser",
   "keywords": [
     "pattern",
     "matcher",
@@ -16,7 +16,8 @@
   "author": "Richard Rodger (http://richardrodger.com)",
   "repository": {
     "type": "git",
-    "url": "git://github.com/rjrodger/tabnas.git"
+    "url": "git://github.com/tabnas/parser.git",
+    "directory": "ts"
   },
   "scripts": {
     "test": "node --enable-source-maps --test test/**/*.test.js",

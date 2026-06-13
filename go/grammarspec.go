@@ -97,7 +97,13 @@ type GrammarAltSpec struct {
 // An optional *GrammarSetting may be supplied to append a tag (or tags) to
 // every rule-alt G property in the spec.
 // Returns an error if any FuncRef is missing or has the wrong type.
-func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) error {
+func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error) {
+	// Recover guard: malformed specs must produce errors, never panics.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("Grammar: internal error: %v", r)
+		}
+	}()
 	// Apply typed Options directly.
 	if gs.Options != nil {
 		j.SetOptions(*gs.Options)
@@ -214,7 +220,7 @@ func mergeG(existing string, extra []string) string {
 //	parsed, _ := gs.Parse(text)
 //	j.Grammar(&GrammarSpec{OptionsMap: parsed.(map[string]any)})
 func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) error {
-	parsed, err := Make().Parse(text)
+	parsed, err := parseText("GrammarText", text)
 	if err != nil {
 		return err
 	}
@@ -764,10 +770,10 @@ func resolveTokenNameStatic(name string) []Tin {
 	return nil
 }
 
-// resolveGrammarAltStatic converts a GrammarAltSpec to a concrete AltSpec
+// ResolveGrammarAltStatic converts a GrammarAltSpec to a concrete AltSpec
 // using only built-in token resolution. Used by the internal Grammar().
 // Errors cause the returned alt to have nil fields (best-effort).
-func resolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
+func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 	alt := &AltSpec{}
 
 	if ga.S != nil {

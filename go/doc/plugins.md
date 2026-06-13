@@ -1,159 +1,188 @@
-# Writing Plugins (Go)
+# Writing plugins (Go)
 
-Plugins extend tabnas by modifying the grammar, adding token types,
-registering custom matchers, or subscribing to parse events.
+A how-to for grammar authors. Plugins extend tabnas by modifying the
+grammar, adding token types, registering custom matchers, or
+subscribing to parse events. For the engine model behind these
+mechanics see the shared [architecture](../../doc/architecture.md);
+for exact signatures see the [API reference](api.md).
 
-## Plugin Structure
+## Plugin structure
 
-A plugin is a function with signature `Plugin`:
+A plugin is a function returning an `error`:
 
 ```go
-type Plugin func(j *Tabnas, opts map[string]any)
+type Plugin func(j *Tabnas, opts map[string]any) error
 ```
 
-Register a plugin with `Use`:
+Register it with `Use`, which invokes the plugin immediately and
+returns its error:
 
 ```go
-func myPlugin(j *tabnas.Tabnas, opts map[string]any) {
-    // modify the parser
+func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
+	// modify the parser
+	return nil
 }
 
 j := tabnas.Make()
-j.Use(myPlugin, map[string]any{"key": "value"})
+if err := j.Use(myPlugin, map[string]any{"key": "value"}); err != nil {
+	// plugin reported a failure
+}
 ```
 
-Plugins are re-applied when `Derive()` creates a child instance.
+Return a non-nil error to abort installation. Plugins are re-applied
+when `Derive()` creates a child instance; a plugin that fails during
+derivation surfaces through `Derive`'s returned error.
 
-## Adding Tokens
+### Default options
+
+To ship default options that a caller can override, use `UseDefaults`.
+It deep-merges your defaults under the caller's options before invoking
+the plugin:
+
+```go
+defaults := map[string]any{"sep": ",", "trim": true}
+err := j.UseDefaults(myPlugin, defaults, map[string]any{"trim": false})
+// plugin sees {"sep": ",", "trim": false}
+```
+
+For options that belong to a plugin namespace rather than a single
+call, store them with `SetPluginOptions(name, opts)` and read them back
+with `PluginOptions(name)`.
+
+## Adding tokens
 
 Register a new fixed token:
 
 ```go
-func tildePlugin(j *tabnas.Tabnas, opts map[string]any) {
-    TL := j.Token("#TL", "~")
-    _ = TL
+func tildePlugin(j *tabnas.Tabnas, opts map[string]any) error {
+	j.Token("#TL", "~")
+	return nil
 }
 ```
 
-Token names use `#XX` format by convention. Built-in tokens:
+Token names use the `#XX` convention. Built-in tokens:
 
-| Name | Src | Description |
-|---|---|---|
-| `#OB` | `{` | Open brace |
-| `#CB` | `}` | Close brace |
-| `#OS` | `[` | Open square bracket |
-| `#CS` | `]` | Close square bracket |
-| `#CL` | `:` | Colon |
-| `#CA` | `,` | Comma |
-| `#NR` | -- | Number |
-| `#ST` | -- | String |
-| `#TX` | -- | Text |
-| `#VL` | -- | Value (keyword) |
-| `#SP` | -- | Space |
-| `#LN` | -- | Line ending |
-| `#CM` | -- | Comment |
-| `#BD` | -- | Bad (error) |
-| `#ZZ` | -- | End of input |
+| Name  | Src | Description        |
+|-------|-----|--------------------|
+| `#OB` | `{` | open brace         |
+| `#CB` | `}` | close brace        |
+| `#OS` | `[` | open square        |
+| `#CS` | `]` | close square       |
+| `#CL` | `:` | colon              |
+| `#CA` | `,` | comma              |
+| `#NR` | —   | number             |
+| `#ST` | —   | string             |
+| `#TX` | —   | text               |
+| `#VL` | —   | value (keyword)    |
+| `#SP` | —   | space              |
+| `#LN` | —   | line ending        |
+| `#CM` | —   | comment            |
+| `#BD` | —   | bad (error)        |
+| `#ZZ` | —   | end of input       |
 
-## Modifying Rules
+## Modifying rules
 
-The parser has named rules, each with `Open` and `Close` alternate lists.
+Each rule has `Open` and `Close` alternate lists.
 
 ```go
-func myPlugin(j *tabnas.Tabnas, opts map[string]any) {
-    TL := j.Token("#TL", "~")
-
-    j.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
-        // Prepend a new alternate to the open phase
-        rs.Open = append([]*tabnas.AltSpec{{
-            S: [][]tabnas.Tin{{TL}},
-            A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-                r.Node = 42
-            },
-        }}, rs.Open...)
-    })
+func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
+	TL := j.Token("#TL", "~")
+	j.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
+		rs.Open = append([]*tabnas.AltSpec{{
+			S: [][]tabnas.Tin{{TL}},
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
+				r.Node = 42
+			},
+		}}, rs.Open...)
+	})
+	return nil
 }
 ```
 
-### AltSpec Fields
+### AltSpec fields
 
 | Field | Type | Description |
-|---|---|---|
-| `S` | `[][]Tin` | Token pattern to match |
-| `A` | `StateAction` | Action: `func(r *Rule, ctx *Context)` |
-| `P` | `string` | Push a new rule by name |
-| `R` | `string` | Replace current rule |
-| `B` | `int` | Backtrack: tokens to put back |
-| `G` | `string` | Group tag (e.g., `"json"`, `"tabnas,map"`) |
-| `H` | `AltModifier` | Custom handler: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
-| `E` | `func(r *Rule, ctx *Context) *Token` | Error function |
-| `PF` | `func(r *Rule, ctx *Context) string` | Dynamic push |
-| `RF` | `func(r *Rule, ctx *Context) string` | Dynamic replace |
-| `BF` | `func(r *Rule, ctx *Context) int` | Dynamic backtrack |
+|-------|------|-------------|
+| `S`  | `[][]Tin` | token pattern to match |
+| `A`  | `AltAction` | action: `func(r *Rule, ctx *Context)` |
+| `P`  | `string` | push a rule by name |
+| `R`  | `string` | replace the current rule |
+| `B`  | `int` | backtrack: tokens to put back |
+| `C`  | `AltCond` | match condition |
+| `G`  | `string` | group tags (e.g. `"json"`, `"tabnas,map"`) |
+| `H`  | `AltModifier` | modifier: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
+| `E`  | `AltError` | error function |
+| `PF` | `func(r *Rule, ctx *Context) string` | dynamic push |
+| `RF` | `func(r *Rule, ctx *Context) string` | dynamic replace |
+| `BF` | `func(r *Rule, ctx *Context) int` | dynamic backtrack |
 
-### State Actions
+### State actions
 
-Each `RuleSpec` has four hook points:
+Each `RuleSpec` has four phase-boundary hooks, each a `[]StateAction`
+(`func(r *Rule, ctx *Context)`):
 
 | Hook | When |
-|---|---|
-| `BO` | Before open alternates are tried |
-| `AO` | After an open alternate matches |
-| `BC` | Before close alternates are tried |
-| `AC` | After a close alternate matches |
+|------|------|
+| `BO` | before open alternates are tried |
+| `AO` | after an open alternate matches |
+| `BC` | before close alternates are tried |
+| `AC` | after a close alternate matches |
 
 ```go
 j.Rule("map", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
-    originalAO := rs.AO
-    rs.AO = func(r *tabnas.Rule, ctx *tabnas.Context) {
-        if originalAO != nil {
-            originalAO(r, ctx)
-        }
-        fmt.Println("opened a map")
-    }
+	rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+		fmt.Println("opened a map")
+	})
 })
 ```
 
-## Custom Matchers
+A `StateAction` returns nothing. To halt the parse with an error from
+within an action, set `ctx.ParseErr` to an error token (the TS
+equivalent of returning an error `Token`); the parse stops and that
+error is returned.
 
-For syntax beyond the built-in matchers, register a matcher via
-`options.lex.match` (mirrors TS `tabnas.options({ lex: { match: ... } })`):
+## Custom matchers
+
+For syntax beyond the built-in matchers, register one under
+`Options.Lex.Match`:
 
 ```go
 j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{
-    Match: map[string]*tabnas.MatchSpec{
-        "date": {Order: 1_000_000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
-            return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
-                // Read from lex.Cursor(), advance if matched, return *Token or nil
-                return nil
-            }
-        }},
-    },
+	Match: map[string]*tabnas.MatchSpec{
+		"date": {Order: 1_000_000, Make: func(_ *tabnas.LexConfig, _ *tabnas.Options) tabnas.LexMatcher {
+			return func(lex *tabnas.Lex, rule *tabnas.Rule) *tabnas.Token {
+				// read from lex.Cursor(), advance if matched, return *Token or nil
+				return nil
+			}
+		}},
+	},
 }})
 ```
 
-`Order` determines ordering (lower runs first). Built-in priorities:
-fixed=2M, space=3M, line=4M, string=5M, comment=6M, number=7M, text=8M.
-Setting a spec under an existing name replaces it.
+`Order` controls priority (lower runs first; built-ins are
+fixed=2M … text=8M). Setting a spec under an existing name replaces it.
+For walking bytes inside a matcher, the scan-spec primitives (`Scan`,
+`BuildCharRunSpec`, `BuildLineRunSpec`, `BuildStringBodySpec`) are
+exported — see the [API reference](api.md#scan-primitives). Full
+ordering, the `Lex` helper methods, and built-in priorities are listed
+in the [API reference](api.md#custom-matchers).
 
-## Subscribing to Events
+## Subscribing to events
 
 ```go
 j.Sub(
-    func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
-        fmt.Println("lexed:", tkn)
-    },
-    func(rule *tabnas.Rule, ctx *tabnas.Context) {
-        fmt.Println("rule:", rule.Name)
-    },
+	func(tkn *tabnas.Token, rule *tabnas.Rule, ctx *tabnas.Context) {
+		fmt.Println("lexed:", tkn)
+	},
+	func(rule *tabnas.Rule, ctx *tabnas.Context) {
+		fmt.Println("rule:", rule.Name)
+	},
 )
 ```
 
 Pass `nil` for either subscriber to skip it.
 
-## Token Sets
-
-Access groups of tokens:
+## Token sets
 
 ```go
 ignore := j.TokenSet("IGNORE") // [#SP, #LN, #CM]
@@ -161,9 +190,16 @@ vals   := j.TokenSet("VAL")    // [#TX, #NR, #ST, #VL]
 keys   := j.TokenSet("KEY")    // [#TX, #NR, #ST, #VL]
 ```
 
-## Differences from TypeScript Plugins
+## Differences from TypeScript plugins
 
-- No plugin option namespacing or defaults merging
-- `StateAction` has no return value (cannot return error tokens)
-- Custom matchers register via `options.lex.match` (same key/order shape as TS)
-- See [differences.md](differences.md) for the full list
+- Plugin signature is `func(j *Tabnas, opts map[string]any) error`;
+  failures are returned as `error`, not thrown.
+- Plugin defaults: `UseDefaults(plugin, defaults)` (TS uses a
+  `.defaults` property on the function).
+- Option namespacing: `PluginOptions` / `SetPluginOptions`.
+- `StateAction` returns nothing; halt with an error by setting
+  `ctx.ParseErr` (TS returns an error `Token`).
+- Custom matchers register via `Options.Lex.Match` (same key/order
+  shape as TS `lex.match`).
+
+See [differences.md](differences.md) for the full list.
