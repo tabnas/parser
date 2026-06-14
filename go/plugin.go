@@ -637,18 +637,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// Do NOT rebuild grammar — preserve existing RSM with user rule
 	// modifications. This matches TS where options() calls parser.clone()
 	// which inherits existing rules rather than rebuilding from scratch.
-
-	// Re-apply plugins (with re-entrancy guard to match TS behavior where
-	// options() setter does not re-trigger plugin application).
-	if !j.inSetOptions {
-		j.inSetOptions = true
-		for _, pe := range j.plugins {
-			// Ignore errors during re-application: the plugin already
-			// succeeded on initial Use(); re-invocation is for config sync.
-			_ = pe.plugin(j, pe.opts)
-		}
-		j.inSetOptions = false
-	}
+	//
+	// Do NOT re-apply plugins here either: TS #setOptions does not re-run
+	// plugins (only the make()/derive path does, on the child). Re-running
+	// them caused a plugin whose body calls SetOptions to be applied twice
+	// from a single Use(). Plugin re-application lives only in Derive.
 
 	// Apply lex.match specs: create matchers from MakeLexMatcher factories.
 	j.registerMatchSpecs(&opts)
