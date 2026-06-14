@@ -66,8 +66,8 @@ func TestCovNumberDisabled(t *testing.T) {
 		Number: &NumberOptions{Lex: &f},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("123"); err != nil || out != "123" {
 		t.Errorf("number-off: got %v %v", out, err)
@@ -101,8 +101,8 @@ func TestCovCommentEatLine(t *testing.T) {
 		}},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("# c\n42"); err != nil || out != float64(42) {
 		t.Errorf("eatline: got %v %v", out, err)
@@ -148,8 +148,8 @@ func TestCovText(t *testing.T) {
 	})
 	SEMI := je.Token("#SEMI")
 	je.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{SEMI}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{SEMI}}})
 	})
 	if out, err := je.Parse("ab;"); err != nil || out != "ab" {
 		t.Errorf("ender: got %v %v", out, err)
@@ -167,8 +167,8 @@ func TestCovTokenRegexMatcher(t *testing.T) {
 		"#AT": regexp.MustCompile(`^@\w+`),
 	}}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{AT}}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.Src }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{{AT}}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.Src }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("@foo"); err != nil || out != "@foo" {
 		t.Errorf("token-regex: got %v %v", out, err)
@@ -331,8 +331,8 @@ func errParser(em *ErrMsgOptions, color *ColorOptions) *Tabnas {
 	}
 	j := Make(o)
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	return j
 }
@@ -453,8 +453,8 @@ func TestCovScanBuilders(t *testing.T) {
 		Line:  &LineOptions{Chars: "\n;", RowChars: "\n"},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	// '~' is a space, ';' is a line char — both ignored around the value.
 	if out, err := j.Parse("~~1;\n"); err != nil || out != float64(1) {
@@ -579,8 +579,8 @@ func TestCovValueDefs(t *testing.T) {
 		Value: &ValueOptions{Def: map[string]*ValueDef{"yes": {Val: true}}},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("yes"); err != nil || out != true {
 		t.Errorf("value def exact: got %v %v", out, err)
@@ -593,8 +593,8 @@ func TestCovValueDefs(t *testing.T) {
 		}},
 	})
 	jr.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := jr.Parse("v12"); err != nil || out != "VERSION:v12" {
 		t.Errorf("value def regex: got %v %v", out, err)
@@ -632,8 +632,8 @@ func TestCovStringAbandon(t *testing.T) {
 		String: &StringOptions{Abandon: &yes},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}, {S: [][]Tin{{TinZZ}}, B: 1}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}, {}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}, &AltSpec{S: [][]Tin{{TinZZ}}, B: 1})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}}, &AltSpec{})
 	})
 	// An unterminated string with abandon → no string token; the lexer
 	// surfaces an unexpected/end rather than unterminated_string.
@@ -645,10 +645,10 @@ func TestCovStringAbandon(t *testing.T) {
 func TestCovPanicRecovery(t *testing.T) {
 	j := Make(Options{Rule: &RuleOptions{Start: "top"}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
 			panic("boom in action")
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	_, err := j.Parse("1")
 	if err == nil {
@@ -671,8 +671,8 @@ func TestCovParsePrepare(t *testing.T) {
 		}},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if _, err := j.Parse("1"); err != nil {
 		t.Fatal(err)
@@ -702,8 +702,8 @@ func TestCovResolveValFunc(t *testing.T) {
 		}},
 	}}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{TinVL}}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinVL}}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("$"); err != nil || out != "LAZY" {
 		t.Errorf("ResolveVal func: got %v %v", out, err)
@@ -746,8 +746,8 @@ func mkBlockComment(t *testing.T, def *CommentDef) *Tabnas {
 		Comment: &CommentOptions{Lex: &yes, Def: map[string]*CommentDef{"blk": def}},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	return j
 }
@@ -800,8 +800,8 @@ func TestCovUnicodeLineChar(t *testing.T) {
 		Line: &LineOptions{Chars: "\n ", RowChars: "\n "},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if out, err := j.Parse("   1"); err != nil || out != float64(1) {
 		t.Errorf("unicode line char: got %v %v", out, err)
@@ -829,11 +829,11 @@ func TestCovFilterMixedTags(t *testing.T) {
 	// on the installed alternates.
 	jx := Make(Options{Rule: &RuleOptions{Start: "top"}})
 	jx.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{
-			{S: [][]Tin{{TinNR}}, G: "drop", A: func(r *Rule, ctx *Context) { r.Node = "DROPPED" }},
-			{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}, // untagged: kept
-		}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{TinNR}}, G: "drop", A: func(r *Rule, ctx *Context) { r.Node = "DROPPED" }},
+			&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}, // untagged: kept
+		)
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	jx.SetOptions(Options{Rule: &RuleOptions{Exclude: "drop"}})
 	if out, err := jx.Parse("5"); err != nil || out != float64(5) {
@@ -843,11 +843,11 @@ func TestCovFilterMixedTags(t *testing.T) {
 	// Include a tag: untagged alts are dropped, only matching-tag kept.
 	ji := Make(Options{Rule: &RuleOptions{Start: "top"}})
 	ji.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{
-			{S: [][]Tin{TinSetVAL}, G: "keep", A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }},
-			{S: [][]Tin{{TinOB}}}, // untagged: dropped under include
-		}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}, G: "keep"}}
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{TinSetVAL}, G: "keep", A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }},
+			&AltSpec{S: [][]Tin{{TinOB}}}, // untagged: dropped under include
+		)
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}, G: "keep"})
 	})
 	ji.SetOptions(Options{Rule: &RuleOptions{Include: "keep"}})
 	if out, err := ji.Parse("7"); err != nil || out != float64(7) {
@@ -870,8 +870,8 @@ func TestCovTrailingAndEmpty(t *testing.T) {
 	// Custom empty result.
 	je := Make(Options{Rule: &RuleOptions{Start: "top"}, Lex: &LexOptions{EmptyResult: []any{}}})
 	je.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) { r.Node = r.O0.ResolveVal(r, ctx) }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	_, _ = je.Parse("")
 }

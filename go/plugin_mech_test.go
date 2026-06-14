@@ -19,10 +19,10 @@ import (
 func pmTopVal() *Tabnas {
 	j := Make(Options{Rule: &RuleOptions{Start: "top"}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
 			r.Node = r.O0.ResolveVal(r, ctx)
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	return j
 }
@@ -146,8 +146,8 @@ func TestPMRuleSpecAPI(t *testing.T) {
 			t.Errorf("phase %q not fired; got %v", want, phases)
 		}
 	}
-	if len(j.RSM()["top"].open) != 1 {
-		t.Errorf("expected 1 open alt after delete, got %d", len(j.RSM()["top"].open))
+	if len(j.RSM()["top"].OpenAlts()) != 1 {
+		t.Errorf("expected 1 open alt after delete, got %d", len(j.RSM()["top"].OpenAlts()))
 	}
 }
 
@@ -396,10 +396,10 @@ func TestPMDeriveInheritsOptions(t *testing.T) {
 		Number: &NumberOptions{Hex: &f}, // disable hex on the parent
 	})
 	parent.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
 			r.Node = r.O0.ResolveVal(r, ctx)
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 
 	child, err := parent.Derive()

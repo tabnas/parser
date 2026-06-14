@@ -140,13 +140,13 @@ func TestIncludeEmptyGroups(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before := len(j.RSM()["val"].open)
+	before := len(j.RSM()["val"].OpenAlts())
 	if before == 0 {
 		t.Fatal("expected seeded alts")
 	}
 	j.include("")
 	j.include(" , ")
-	if len(j.RSM()["val"].open) != before {
+	if len(j.RSM()["val"].OpenAlts()) != before {
 		t.Error("empty include set should not filter alts")
 	}
 }

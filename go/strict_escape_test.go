@@ -12,10 +12,10 @@ import "testing"
 func strParser(so *StringOptions) *Tabnas {
 	j := Make(Options{Rule: &RuleOptions{Start: "top"}, String: so})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{TinST}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinST}}, A: func(r *Rule, ctx *Context) {
 			r.Node = r.O0.ResolveVal(r, ctx)
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	return j
 }

@@ -47,10 +47,10 @@ func TestRewindRecordsConsumed(t *testing.T) {
 	j, tn := rewindParser(t, map[string]string{"Ta": "a", "Tb": "b", "Tc": "c"}, nil)
 	var recorded []string
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{tn["Ta"]}, {tn["Tb"]}, {tn["Tc"]}}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}, {tn["Tb"]}, {tn["Tc"]}}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}, A: func(r *Rule, ctx *Context) {
 			recorded = srcs(ctx.V)
-		}}}
+		}})
 	})
 	if _, err := j.Parse("abc"); err != nil {
 		t.Fatal(err)
@@ -67,19 +67,19 @@ func TestRewindReplays(t *testing.T) {
 	var trace []string
 	abc := [][]Tin{{tn["Ta"]}, {tn["Tb"]}, {tn["Tc"]}}
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: abc, P: "again", A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: abc, P: "again", A: func(r *Rule, ctx *Context) {
 			trace = append(trace, "first:"+strings.Join(srcs(ctx.V[len(ctx.V)-3:]), ""))
 			if err := ctx.Rewind(0); err != nil {
 				t.Errorf("rewind: %v", err)
 			}
 			trace = append(trace, "after-rewind-v-len:"+itoa(len(ctx.V)))
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	j.Rule("again", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: abc, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: abc, A: func(r *Rule, ctx *Context) {
 			trace = append(trace, "second:"+strings.Join(srcs(ctx.V[len(ctx.V)-3:]), ""))
-		}}}
+		}})
 	})
 	if _, err := j.Parse("abc"); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestRewindPartial(t *testing.T) {
 	j, tn := rewindParser(t, map[string]string{"Ta": "a", "Tb": "b", "Tc": "c", "Td": "d"}, nil)
 	var second string
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{
+		rs.AddOpen(&AltSpec{
 			S: [][]Tin{{tn["Ta"]}, {tn["Tb"]}, {tn["Tc"]}, {tn["Td"]}},
 			P: "tail",
 			A: func(r *Rule, ctx *Context) {
@@ -103,13 +103,13 @@ func TestRewindPartial(t *testing.T) {
 					t.Errorf("rewind: %v", err)
 				}
 			},
-		}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	j.Rule("tail", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{tn["Tb"]}, {tn["Tc"]}, {tn["Td"]}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Tb"]}, {tn["Tc"]}, {tn["Td"]}}, A: func(r *Rule, ctx *Context) {
 			second = strings.Join(srcs(ctx.V), "")
-		}}}
+		}})
 	})
 	if _, err := j.Parse("abcd"); err != nil {
 		t.Fatal(err)
@@ -123,14 +123,14 @@ func TestRewindNoOp(t *testing.T) {
 	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, nil)
 	ok := false
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
 			mark := ctx.Mark()
 			if err := ctx.Rewind(mark); err != nil {
 				t.Errorf("rewind: %v", err)
 			}
 			ok = ctx.VAbs == mark
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if _, err := j.Parse("a"); err != nil {
 		t.Fatal(err)
@@ -145,15 +145,12 @@ func TestRewindHistoryCap(t *testing.T) {
 	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, &cap4)
 	maxSeen := 0
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
 			if len(ctx.V) > maxSeen {
 				maxSeen = len(ctx.V)
 			}
-		}}}
-		rs.close = []*AltSpec{
-			{S: [][]Tin{{tn["Ta"]}}, B: 1, R: "top"},
-			{S: [][]Tin{{TinZZ}}},
-		}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tn["Ta"]}}, B: 1, R: "top"}, &AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if _, err := j.Parse("a a a a a a a a a a a a a a a a a a a a"); err != nil {
 		t.Fatal(err)
@@ -172,10 +169,10 @@ func TestRewindPastWindowErrors(t *testing.T) {
 	var rewindErr error
 	five := [][]Tin{{tn["Ta"]}, {tn["Ta"]}, {tn["Ta"]}, {tn["Ta"]}, {tn["Ta"]}, {tn["Ta"]}}
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: five, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: five, A: func(r *Rule, ctx *Context) {
 			rewindErr = ctx.Rewind(0)
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if _, err := j.Parse("a a a a a a"); err != nil {
 		t.Fatal(err)
@@ -193,10 +190,10 @@ func TestRewindDefaultHistory64(t *testing.T) {
 		ten[i] = []Tin{tn["Ta"]}
 	}
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: ten, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: ten, A: func(r *Rule, ctx *Context) {
 			finalV = len(ctx.V)
-		}}}
-		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	if _, err := j.Parse("a a a a a a a a a a"); err != nil {
 		t.Fatal(err)
@@ -212,15 +209,12 @@ func TestRewindUnbounded(t *testing.T) {
 	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, &zero)
 	maxV := 0
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.open = []*AltSpec{{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
 			if len(ctx.V) > maxV {
 				maxV = len(ctx.V)
 			}
-		}}}
-		rs.close = []*AltSpec{
-			{S: [][]Tin{{tn["Ta"]}}, B: 1, R: "top"},
-			{S: [][]Tin{{TinZZ}}},
-		}
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tn["Ta"]}}, B: 1, R: "top"}, &AltSpec{S: [][]Tin{{TinZZ}}})
 	})
 	var sb strings.Builder
 	for i := 0; i < 200; i++ {
