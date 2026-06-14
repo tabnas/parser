@@ -220,10 +220,19 @@ func mergeG(existing string, extra []string) string {
 //	gs := tabnas.Make()
 //	parsed, _ := gs.Parse(text)
 //	j.Grammar(&GrammarSpec{OptionsMap: parsed.(map[string]any)})
-func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) error {
-	parsed, err := parseText("GrammarText", text)
-	if err != nil {
-		return err
+func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) (err error) {
+	// The map→spec conversion below can panic on malformed input; the
+	// nested Grammar() has its own guard, but wrap the whole body so the
+	// conversion is covered too.
+	defer func() {
+		if r := recover(); r != nil {
+			err = j.internalError("GrammarText", r)
+		}
+	}()
+
+	parsed, perr := parseText("GrammarText", text)
+	if perr != nil {
+		return perr
 	}
 	if parsed == nil {
 		return nil

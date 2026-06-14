@@ -636,7 +636,17 @@ func (j *Tabnas) Parse(src string) (any, error) {
 }
 
 // parseInternal handles empty source, custom parser.start, and delegation.
-func (j *Tabnas) parseInternal(src string, meta map[string]any) (any, error) {
+func (j *Tabnas) parseInternal(src string, meta map[string]any) (result any, err error) {
+	// Uphold the no-panic guarantee across both parse paths. startParse has
+	// its own recover, but a custom Options.Parser.Start (parserStart) does
+	// not — guard the whole entry so any panic becomes an "internal" error.
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			err = j.internalError("Parse", r)
+		}
+	}()
+
 	// Handle empty source.
 	if src == "" {
 		if !j.emptyAllow {
@@ -647,12 +657,12 @@ func (j *Tabnas) parseInternal(src string, meta map[string]any) (any, error) {
 
 	// Custom parser start.
 	if j.parserStart != nil {
-		result, err := j.parserStart(src, j, meta)
-		return result, j.attachHint(err)
+		out, perr := j.parserStart(src, j, meta)
+		return out, j.attachHint(perr)
 	}
 
-	result, err := j.parser.startParse(src, meta, j.lexSubs, j.ruleSubs, j)
-	return result, j.attachHint(err)
+	out, perr := j.parser.startParse(src, meta, j.lexSubs, j.ruleSubs, j)
+	return out, j.attachHint(perr)
 }
 
 // attachHint enriches a TabnasError with instance-level context: hint
