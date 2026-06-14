@@ -67,7 +67,22 @@ type pluginEntry struct {
 //
 //	j := tabnas.Make()
 //	err := j.Use(myPlugin, map[string]any{"key": "value"})
-func (j *Tabnas) Use(plugin Plugin, opts ...map[string]any) error {
+// internalError converts a recovered panic value into an "internal"-code
+// *TabnasError, so error-returning public APIs uphold the no-panic
+// guarantee: any panic (including from plugin callbacks or grammar specs)
+// surfaces as a returned error rather than crashing the caller.
+func (j *Tabnas) internalError(api string, r any) error {
+	return j.parser.makeError("internal", fmt.Sprintf("%s: %v", api, r), "", 0, 1, 1)
+}
+
+func (j *Tabnas) Use(plugin Plugin, opts ...map[string]any) (err error) {
+	// Plugin code is arbitrary; a panic in it becomes an "internal" error.
+	defer func() {
+		if r := recover(); r != nil {
+			err = j.internalError("Use", r)
+		}
+	}()
+
 	var pluginOpts map[string]any
 	if len(opts) > 0 && opts[0] != nil {
 		pluginOpts = opts[0]
@@ -87,7 +102,13 @@ func (j *Tabnas) Use(plugin Plugin, opts ...map[string]any) error {
 //
 //	j := tabnas.Make()
 //	err := j.UseDefaults(hoover.Hoover, hoover.Defaults, map[string]any{...})
-func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map[string]any) error {
+func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map[string]any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = j.internalError("UseDefaults", r)
+		}
+	}()
+
 	pluginOpts := Deep(map[string]any{}, defaults).(map[string]any)
 	if len(opts) > 0 && opts[0] != nil {
 		pluginOpts = Deep(pluginOpts, opts[0]).(map[string]any)
@@ -406,7 +427,16 @@ func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 // Derive creates a new Tabnas instance inheriting this instance's config,
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
 // This matches TypeScript's tabnas.make(options, parent).
-func (j *Tabnas) Derive(opts ...Options) (*Tabnas, error) {
+func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
+	// Re-applies plugins (arbitrary code) and deep-merges options; a panic
+	// in either becomes an "internal" error rather than crashing.
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			err = j.internalError("Derive", r)
+		}
+	}()
+
 	// Inherit the parent's accumulated options, with the derive options
 	// merged on top (derive options win). Mirrors TS make(), where the
 	// child is built from deep(parent.merged, opts) — so settings like
@@ -708,7 +738,16 @@ func parseText(api, text string) (any, error) {
 // Complement to SetOptions that accepts a textual specification of the
 // desired options tree. Requires a registered text parser (see
 // RegisterTextParser).
-func (j *Tabnas) SetOptionsText(text string) (*Tabnas, error) {
+func (j *Tabnas) SetOptionsText(text string) (result *Tabnas, err error) {
+	// Text parsing + MapToOptions + SetOptions can panic on malformed
+	// input; convert any panic into an "internal" error.
+	defer func() {
+		if r := recover(); r != nil {
+			result = j
+			err = j.internalError("SetOptionsText", r)
+		}
+	}()
+
 	if text == "" {
 		return j, nil
 	}
