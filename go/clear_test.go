@@ -172,10 +172,10 @@ func TestClearFnrefReplaceSurvivesDerive(t *testing.T) {
 	if len(log) != 1 || log[0] != "B" {
 		t.Errorf("parent: log=%v want [B]", log)
 	}
-	// Derive does not inherit Rule.Start (unlike TS make()), so pass it
-	// explicitly; the point under test is that /replace survives the
-	// plugin re-application during derivation.
-	child, err := j.Derive(Options{Rule: &RuleOptions{Start: "top"}})
+	// Derive inherits the parent's options (incl. Rule.Start); the point
+	// under test is that /replace survives the plugin re-application
+	// during derivation.
+	child, err := j.Derive()
 	if err != nil {
 		t.Fatal(err)
 	}
