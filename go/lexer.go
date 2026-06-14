@@ -38,12 +38,12 @@ type MatchTokenEntry struct {
 // Lex is the lexer that produces tokens from source text.
 type Lex struct {
 	Src    string
-	Ctx    *Context  // Parse context (includes Ctx.Rule for context-sensitive lexing)
+	Ctx    *Context // Parse context (includes Ctx.Rule for context-sensitive lexing)
 	pnt    Point
-	end    *Token    // End-of-source token (cached)
-	tokens []*Token  // Lookahead token queue
+	end    *Token   // End-of-source token (cached)
+	tokens []*Token // Lookahead token queue
 	Config *LexConfig
-	Err    error     // First error encountered during lexing
+	Err    error // First error encountered during lexing
 }
 
 // LexConfig holds lexer configuration.
@@ -58,22 +58,22 @@ type LexConfig struct {
 	StringLex  bool // Enable string matching. Default: true.
 	ValueLex   bool // Enable value keyword matching. Default: true.
 
-	StringChars  map[rune]bool // Quote characters
-	MultiChars   map[rune]bool // Multiline quote characters
-	EscapeChar   rune
-	EscapeMap    map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
-	EscapeRemoved map[string]bool  // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
-	EscapeStrict  bool             // Disable the non-standard \xHH and \u{...} structural escapes.
-	RewindHistory int              // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
-	SpaceChars   map[rune]bool
-	LineChars    map[rune]bool
-	RowChars     map[rune]bool
-	CommentLine  []string // Line comment starters: "#", "//"
-	CommentBlock [][2]string // Block comment: [start, end] pairs
-	NumberHex    bool
-	NumberOct    bool
-	NumberBin    bool
-	NumberSep    rune // Separator char (underscore)
+	StringChars        map[rune]bool // Quote characters
+	MultiChars         map[rune]bool // Multiline quote characters
+	EscapeChar         rune
+	EscapeMap          map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
+	EscapeRemoved      map[string]bool   // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
+	EscapeStrict       bool              // Disable the non-standard \xHH and \u{...} structural escapes.
+	RewindHistory      int               // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
+	SpaceChars         map[rune]bool
+	LineChars          map[rune]bool
+	RowChars           map[rune]bool
+	CommentLine        []string    // Line comment starters: "#", "//"
+	CommentBlock       [][2]string // Block comment: [start, end] pairs
+	NumberHex          bool
+	NumberOct          bool
+	NumberBin          bool
+	NumberSep          rune // Separator char (underscore)
 	AllowUnknownEscape bool
 	StringAbandon      bool            // On string error, return nil instead of bad token.
 	StringReplace      map[rune]string // Character replacements during string scanning.
@@ -87,11 +87,11 @@ type LexConfig struct {
 	ValueDefRe []*ValueDefEntry
 
 	// Match options (TS: cfg.match)
-	MatchLex          bool                          // Enable custom matching. Default: false.
-	MatchTokens       map[Tin]*regexp.Regexp         // Custom token tin → regexp (storage).
-	MatchTokenFns     map[Tin]LexMatcher             // Custom token tin → function matcher (storage).
-	MatchTokensSorted []*MatchTokenEntry             // Sorted-by-tin view for deterministic iteration.
-	MatchValues       []*MatchValueEntry             // Custom value matchers, sorted by name.
+	MatchLex          bool                   // Enable custom matching. Default: false.
+	MatchTokens       map[Tin]*regexp.Regexp // Custom token tin → regexp (storage).
+	MatchTokenFns     map[Tin]LexMatcher     // Custom token tin → function matcher (storage).
+	MatchTokensSorted []*MatchTokenEntry     // Sorted-by-tin view for deterministic iteration.
+	MatchValues       []*MatchValueEntry     // Custom value matchers, sorted by name.
 
 	// Number options
 	NumberExclude func(string) bool // Exclude certain number-like strings.
@@ -163,7 +163,7 @@ type LexConfig struct {
 	SafeKey bool // Prevent __proto__ keys. Default: true.
 
 	// Rule options
-	FinishRule bool // Auto-close unclosed structures at EOF
+	FinishRule bool   // Auto-close unclosed structures at EOF
 	RuleStart  string // Starting rule name. Default: "val".
 
 	// EnderChars lists additional characters that end text and number tokens.
@@ -263,14 +263,14 @@ type LexCheckResult struct {
 // DefaultLexConfig returns the default lexer configuration matching tabnas defaults.
 func DefaultLexConfig() *LexConfig {
 	return &LexConfig{
-		FixedLex:     true,
-		SpaceLex:     true,
-		LineLex:      true,
-		TextLex:      true,
-		NumberLex:    true,
-		CommentLex:   true,
-		StringLex:    true,
-		ValueLex:     true,
+		FixedLex:   true,
+		SpaceLex:   true,
+		LineLex:    true,
+		TextLex:    true,
+		NumberLex:  true,
+		CommentLex: true,
+		StringLex:  true,
+		ValueLex:   true,
 
 		StringChars:        map[rune]bool{'\'': true, '"': true, '`': true},
 		MultiChars:         map[rune]bool{'`': true},
@@ -640,9 +640,9 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 	if rule != nil && rule.Spec != nil {
 		var alts []*AltSpec
 		if rule.State == OPEN {
-			alts = rule.Spec.Open
+			alts = rule.Spec.open
 		} else {
-			alts = rule.Spec.Close
+			alts = rule.Spec.close
 		}
 
 		for _, mt := range l.Config.MatchTokensSorted {

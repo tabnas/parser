@@ -323,4 +323,3 @@ func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexCo
 
 	return je
 }
-

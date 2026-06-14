@@ -63,18 +63,23 @@ func jsonOptions() Options {
 }
 
 // registerJSONGrammar installs the strict JSON rule set (val / map /
-// list / pair / elem) on j. Exposed separately from the options so other
-// fixtures can layer on the JSON core. cfg is read for the info
-// (MapRef / ListRef / Text) and finish settings.
-func registerJSONGrammar(j *Tabnas) {
+// list / pair / elem) on j via the declarative Grammar API, mirroring
+// ts/test/json-plugin.ts's registerJsonGrammar: lifecycle actions are
+// supplied as `@<rule>-<phase>` funcrefs (auto-wired by name) and the
+// alternates reference `@pairkey` for the key-capture action. The closures
+// read cfg for the info (MapRef / ListRef / Text) settings.
+//
+// Using the declarative funcref form (rather than direct field assignment)
+// keeps this fixture conceptually identical to the TS one: later layers
+// accumulate and must use `/replace` or ClearActions to override.
+func registerJSONGrammar(j *Tabnas) error {
 	cfg := j.Config()
 
-	// val: a value is a map, a list, or a plain scalar token.
-	j.Rule("val", func(rs *RuleSpec, _ *Parser) {
-		rs.BO = []StateAction{func(r *Rule, ctx *Context) {
+	ref := map[FuncRef]any{
+		"@val-bo": StateAction(func(r *Rule, ctx *Context) {
 			r.Node = Undefined
-		}}
-		rs.BC = []StateAction{func(r *Rule, ctx *Context) {
+		}),
+		"@val-bc": StateAction(func(r *Rule, ctx *Context) {
 			if !IsUndefined(r.Node) {
 				return
 			}
@@ -100,74 +105,49 @@ func registerJSONGrammar(j *Tabnas) {
 				val = Text{Quote: quote, Str: str}
 			}
 			r.Node = val
-		}}
-		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOB}}, P: "map", B: 1, G: "map,json"},
-			{S: [][]Tin{{TinOS}}, P: "list", B: 1, G: "list,json"},
-			{S: [][]Tin{TinSetVAL}, G: "val,json"},
-		}
-		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinZZ}}, G: "end,json"},
-			{B: 1, G: "more,json"},
-		}
-	})
+		}),
 
-	// map: an object. bo creates the (possibly wrapped) node; bc marks
-	// the wrapper's implicit flag.
-	j.Rule("map", func(rs *RuleSpec, _ *Parser) {
-		rs.BO = []StateAction{func(r *Rule, ctx *Context) {
+		"@map-bo": StateAction(func(r *Rule, ctx *Context) {
 			if cfg.MapRef {
 				r.Node = MapRef{Val: make(map[string]any), Meta: make(map[string]any)}
 			} else {
 				r.Node = make(map[string]any)
 			}
-		}}
-		rs.BC = []StateAction{func(r *Rule, ctx *Context) {
+		}),
+		"@map-bc": StateAction(func(r *Rule, ctx *Context) {
 			if cfg.MapRef {
 				if mr, ok := r.Node.(MapRef); ok {
 					mr.Implicit = !(r.O0 != NoToken && r.O0.Tin == TinOB)
 					r.Node = mr
 				}
 			}
-		}}
-		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOB}, {TinCB}}, B: 1, N: map[string]int{"pk": 0}, G: "map,json"},
-			{S: [][]Tin{{TinOB}}, P: "pair", N: map[string]int{"pk": 0}, G: "map,json,pair"},
-		}
-		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCB}}, G: "end,json"},
-		}
-	})
+		}),
 
-	// list: an array.
-	j.Rule("list", func(rs *RuleSpec, _ *Parser) {
-		rs.BO = []StateAction{func(r *Rule, ctx *Context) {
+		"@list-bo": StateAction(func(r *Rule, ctx *Context) {
 			if cfg.ListRef {
 				r.Node = ListRef{Val: make([]any, 0), Meta: make(map[string]any)}
 			} else {
 				r.Node = make([]any, 0)
 			}
-		}}
-		rs.BC = []StateAction{func(r *Rule, ctx *Context) {
+		}),
+		"@list-bc": StateAction(func(r *Rule, ctx *Context) {
 			if cfg.ListRef {
 				if lr, ok := r.Node.(ListRef); ok {
 					lr.Implicit = !(r.O0 != NoToken && r.O0.Tin == TinOS)
 					r.Node = lr
 				}
 			}
-		}}
-		rs.Open = []*AltSpec{
-			{S: [][]Tin{{TinOS}, {TinCS}}, B: 1, G: "list,json"},
-			{S: [][]Tin{{TinOS}}, P: "elem", G: "list,elem,json"},
-		}
-		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCS}}, G: "end,json"},
-		}
-	})
+		}),
 
-	// pair: a key:value entry inside a map.
-	j.Rule("pair", func(rs *RuleSpec, _ *Parser) {
-		rs.BC = []StateAction{func(r *Rule, ctx *Context) {
+		"@pairkey": AltAction(func(r *Rule, ctx *Context) {
+			keyToken := r.O0
+			if keyToken.Tin == TinST || keyToken.Tin == TinTX {
+				r.U["key"], _ = keyToken.Val.(string)
+			} else {
+				r.U["key"] = keyToken.Src
+			}
+		}),
+		"@pair-bc": StateAction(func(r *Rule, ctx *Context) {
 			if _, ok := r.U["pair"]; !ok {
 				return
 			}
@@ -177,32 +157,9 @@ func registerJSONGrammar(j *Tabnas) {
 				val = nil
 			}
 			r.Node = jsonMapSet(r.Node, key, val)
-		}}
-		rs.Open = []*AltSpec{
-			{
-				S: [][]Tin{{TinST}, {TinCL}},
-				P: "val",
-				U: map[string]any{"pair": true},
-				G: "map,pair,key,json",
-				A: func(r *Rule, ctx *Context) {
-					keyToken := r.O0
-					if keyToken.Tin == TinST || keyToken.Tin == TinTX {
-						r.U["key"], _ = keyToken.Val.(string)
-					} else {
-						r.U["key"] = keyToken.Src
-					}
-				},
-			},
-		}
-		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCA}}, R: "pair", G: "map,pair,json"},
-			{S: [][]Tin{{TinCB}}, B: 1, G: "map,pair,json"},
-		}
-	})
+		}),
 
-	// elem: a value inside a list.
-	j.Rule("elem", func(rs *RuleSpec, _ *Parser) {
-		rs.BC = []StateAction{func(r *Rule, ctx *Context) {
+		"@elem-bc": StateAction(func(r *Rule, ctx *Context) {
 			if IsUndefined(r.Child.Node) {
 				return
 			}
@@ -210,23 +167,67 @@ func registerJSONGrammar(j *Tabnas) {
 			if r.Parent != NoRule && r.Parent != nil {
 				r.Parent.Node = r.Node
 			}
-		}}
-		rs.Open = []*AltSpec{
-			{P: "val", G: "list,elem,val,json"},
-		}
-		rs.Close = []*AltSpec{
-			{S: [][]Tin{{TinCA}}, R: "elem", G: "list,elem,json"},
-			{S: [][]Tin{{TinCS}}, B: 1, G: "list,elem,json"},
-		}
-	})
+		}),
+	}
+
+	rules := map[string]*GrammarRuleSpec{
+		"val": {
+			Open: []*GrammarAltSpec{
+				{S: "#OB", P: "map", B: 1, G: "map,json"},
+				{S: "#OS", P: "list", B: 1, G: "list,json"},
+				{S: "#VAL", G: "val,json"},
+			},
+			Close: []*GrammarAltSpec{
+				{S: "#ZZ", G: "end,json"},
+				{B: 1, G: "more,json"},
+			},
+		},
+		"map": {
+			Open: []*GrammarAltSpec{
+				{S: "#OB #CB", B: 1, N: map[string]int{"pk": 0}, G: "map,json"},
+				{S: "#OB", P: "pair", N: map[string]int{"pk": 0}, G: "map,json,pair"},
+			},
+			Close: []*GrammarAltSpec{
+				{S: "#CB", G: "end,json"},
+			},
+		},
+		"list": {
+			Open: []*GrammarAltSpec{
+				{S: "#OS #CS", B: 1, G: "list,json"},
+				{S: "#OS", P: "elem", G: "list,elem,json"},
+			},
+			Close: []*GrammarAltSpec{
+				{S: "#CS", G: "end,json"},
+			},
+		},
+		"pair": {
+			Open: []*GrammarAltSpec{
+				{S: "#KEY #CL", P: "val", U: map[string]any{"pair": true}, A: "@pairkey", G: "map,pair,key,json"},
+			},
+			Close: []*GrammarAltSpec{
+				{S: "#CA", R: "pair", G: "map,pair,json"},
+				{S: "#CB", B: 1, G: "map,pair,json"},
+			},
+		},
+		"elem": {
+			Open: []*GrammarAltSpec{
+				{P: "val", G: "list,elem,val,json"},
+			},
+			Close: []*GrammarAltSpec{
+				{S: "#CA", R: "elem", G: "list,elem,json"},
+				{S: "#CS", B: 1, G: "list,elem,json"},
+			},
+		},
+	}
+
+	return j.Grammar(&GrammarSpec{Ref: ref, Rule: rules})
 }
 
 // jsonPlugin is the standard plugin form: apply strict options, then
 // register the grammar.
 func jsonPlugin(j *Tabnas, opts map[string]any) error {
 	j.SetOptions(jsonOptions())
-	registerJSONGrammar(j)
-	return nil
+	return registerJSONGrammar(j)
 }
 
 // makeJSON builds a strict-JSON parser, optionally layering extra options
@@ -234,7 +235,9 @@ func jsonPlugin(j *Tabnas, opts map[string]any) error {
 // strict configuration.
 func makeJSON(extra ...Options) *Tabnas {
 	j := Make(jsonOptions())
-	registerJSONGrammar(j)
+	if err := registerJSONGrammar(j); err != nil {
+		panic(err)
+	}
 	// Extra options are applied after the grammar exists so that rule
 	// include/exclude filters operate on the installed alternates (and
 	// info options reach the config the grammar closures captured).

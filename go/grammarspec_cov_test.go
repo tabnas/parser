@@ -366,7 +366,7 @@ func TestGrammarSettingAltGSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	open := j.RSM()["zzz"].Open
+	open := j.RSM()["zzz"].OpenAlts()
 	if open[0].G != "base,extra" {
 		t.Errorf("expected base,extra, got %q", open[0].G)
 	}
@@ -383,7 +383,7 @@ func TestGrammarSettingNilEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.RSM()["zzz"].Open[0].G != "solo" {
+	if j.RSM()["zzz"].OpenAlts()[0].G != "solo" {
 		t.Error("tags should be unchanged when no setting alt.g supplied")
 	}
 }
@@ -419,11 +419,11 @@ func TestApplyGrammarAltsTagMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rs.Open) != 1 {
-		t.Fatalf("expected 1 alt, got %d", len(rs.Open))
+	if len(rs.OpenAlts()) != 1 {
+		t.Fatalf("expected 1 alt, got %d", len(rs.OpenAlts()))
 	}
-	if rs.Open[0].G != "gg,tt" {
-		t.Errorf("expected gg,tt, got %q", rs.Open[0].G)
+	if rs.OpenAlts()[0].G != "gg,tt" {
+		t.Errorf("expected gg,tt, got %q", rs.OpenAlts()[0].G)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestApplyGrammarAltsUnsupportedSpec(t *testing.T) {
 	if err := applyGrammarAlts(j, rs, 42, nil, true, nil); err != nil {
 		t.Errorf("unsupported spec type should be a no-op: %v", err)
 	}
-	if len(rs.Open) != 0 {
+	if len(rs.OpenAlts()) != 0 {
 		t.Error("unsupported spec type should not add alts")
 	}
 }

@@ -33,28 +33,28 @@ type Context struct {
 	VAbs int
 	Lex  *Lex // Attached by parser.start(); used by Rewind to re-feed tokens.
 
-	RS       []*Rule           // Rule stack (TS: rs)
-	RSI      int               // Rule stack index (TS: rsI)
+	RS       []*Rule              // Rule stack (TS: rs)
+	RSI      int                  // Rule stack index (TS: rsI)
 	RSM      map[string]*RuleSpec // Rule spec map (TS: rsm)
-	KI       int               // Iteration counter (TS: kI)
-	Rule     *Rule             // Current parsing rule (TS: rule)
-	Meta     map[string]any    // Parse metadata (TS: meta)
-	LexSubs  []LexSub          // Lex event subscribers (TS: sub.lex)
-	RuleSubs []RuleSub         // Rule event subscribers (TS: sub.rule)
-	ParseErr *Token            // Error token, halts parse
+	KI       int                  // Iteration counter (TS: kI)
+	Rule     *Rule                // Current parsing rule (TS: rule)
+	Meta     map[string]any       // Parse metadata (TS: meta)
+	LexSubs  []LexSub             // Lex event subscribers (TS: sub.lex)
+	RuleSubs []RuleSub            // Rule event subscribers (TS: sub.rule)
+	ParseErr *Token               // Error token, halts parse
 
 	// Fields matching TS Context:
-	Opts     *Options          // Tabnas instance options (TS: opts)
-	Cfg      *LexConfig        // Tabnas instance config (TS: cfg)
-	Src      string            // Source text being parsed (TS: src)
-	Inst     *Tabnas           // Current Tabnas instance (TS: inst)
-	U        map[string]any    // Custom plugin data bag (TS: u)
-	Root     *Rule             // Root rule (TS: root)
-	TC       int               // Token count (TS: tC)
-	F        func(any) string  // Format value as string (TS: F)
-	Log      func(...any)      // Debug logger (TS: log)
-	NOTOKEN  *Token            // Sentinel no-token (TS: NOTOKEN)
-	NORULE   *Rule             // Sentinel no-rule (TS: NORULE)
+	Opts    *Options         // Tabnas instance options (TS: opts)
+	Cfg     *LexConfig       // Tabnas instance config (TS: cfg)
+	Src     string           // Source text being parsed (TS: src)
+	Inst    *Tabnas          // Current Tabnas instance (TS: inst)
+	U       map[string]any   // Custom plugin data bag (TS: u)
+	Root    *Rule            // Root rule (TS: root)
+	TC      int              // Token count (TS: tC)
+	F       func(any) string // Format value as string (TS: F)
+	Log     func(...any)     // Debug logger (TS: log)
+	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN)
+	NORULE  *Rule            // Sentinel no-rule (TS: NORULE)
 }
 
 // recordConsumed appends the leading `consumed` lookahead tokens to the
@@ -153,9 +153,9 @@ type Parser struct {
 	Config        *LexConfig
 	RSM           map[string]*RuleSpec
 	MaxMul        int               // Max rule occurrence multiplier. Default: 3.
-	ErrorMessages map[string]string  // Custom error message templates.
-	Hints         map[string]string  // Explanatory hints per error code.
-	ErrTag        string             // Custom error tag (TS: errmsg.name). Default: "tabnas".
+	ErrorMessages map[string]string // Custom error message templates.
+	Hints         map[string]string // Explanatory hints per error code.
+	ErrTag        string            // Custom error tag (TS: errmsg.name). Default: "tabnas".
 }
 
 // NewParser creates a parser with default configuration.

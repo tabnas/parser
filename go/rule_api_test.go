@@ -264,28 +264,28 @@ func TestNormAltCDIgnoredWhenCSet(t *testing.T) {
 }
 
 func TestNormAlts(t *testing.T) {
-	spec := &RuleSpec{
-		Name:  "x",
-		Open:  []*AltSpec{{CD: map[string]any{"d": 0}}},
-		Close: []*AltSpec{{CD: map[string]any{"d": CGt(0)}}},
-	}
+	spec := &RuleSpec{Name: "x"}
+	spec.AddOpen(&AltSpec{CD: map[string]any{"d": 0}})
+	spec.AddClose(&AltSpec{CD: map[string]any{"d": CGt(0)}})
 	if err := NormAlts(spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.Open[0].C == nil || spec.Close[0].C == nil {
+	if spec.OpenAlts()[0].C == nil || spec.CloseAlts()[0].C == nil {
 		t.Error("NormAlts should convert CD to C in both Open and Close")
 	}
 }
 
 func TestNormAltsOpenError(t *testing.T) {
-	spec := &RuleSpec{Open: []*AltSpec{{G: "BAD!"}}}
+	spec := &RuleSpec{}
+	spec.AddOpen(&AltSpec{G: "BAD!"})
 	if err := NormAlts(spec); err == nil {
 		t.Error("expected error for invalid Open group tag")
 	}
 }
 
 func TestNormAltsCloseError(t *testing.T) {
-	spec := &RuleSpec{Close: []*AltSpec{{G: "BAD!"}}}
+	spec := &RuleSpec{}
+	spec.AddClose(&AltSpec{G: "BAD!"})
 	if err := NormAlts(spec); err == nil {
 		t.Error("expected error for invalid Close group tag")
 	}
@@ -315,38 +315,40 @@ func TestModifyClose(t *testing.T) {
 	a := &AltSpec{G: "aa"}
 	b := &AltSpec{G: "bb"}
 	c := &AltSpec{G: "cc"}
-	rs := &RuleSpec{Close: []*AltSpec{a, b, c}}
+	rs := &RuleSpec{}
+	rs.AddClose(a, b, c)
 
 	// Delete index 0, move last to front (TS rs.close(alts, {delete, move})).
 	rs.ModifyClose(&AltModListOpts{Delete: []int{0}, Move: []int{-1, 0}})
-	if len(rs.Close) != 2 {
-		t.Fatalf("expected 2 alts, got %d", len(rs.Close))
+	if len(rs.CloseAlts()) != 2 {
+		t.Fatalf("expected 2 alts, got %d", len(rs.CloseAlts()))
 	}
-	if rs.Close[0].G != "cc" || rs.Close[1].G != "bb" {
-		t.Errorf("expected [cc bb], got [%s %s]", rs.Close[0].G, rs.Close[1].G)
+	if rs.CloseAlts()[0].G != "cc" || rs.CloseAlts()[1].G != "bb" {
+		t.Errorf("expected [cc bb], got [%s %s]", rs.CloseAlts()[0].G, rs.CloseAlts()[1].G)
 	}
 
 	// Custom modification callback.
 	rs.ModifyClose(&AltModListOpts{Custom: func(list []*AltSpec) []*AltSpec {
 		return list[:1]
 	}})
-	if len(rs.Close) != 1 || rs.Close[0].G != "cc" {
-		t.Errorf("custom should keep first only, got %v", rs.Close)
+	if len(rs.CloseAlts()) != 1 || rs.CloseAlts()[0].G != "cc" {
+		t.Errorf("custom should keep first only, got %v", rs.CloseAlts())
 	}
 
 	// nil mods → unchanged.
 	rs.ModifyClose(nil)
-	if len(rs.Close) != 1 {
+	if len(rs.CloseAlts()) != 1 {
 		t.Error("nil mods should leave list unchanged")
 	}
 }
 
 func TestModifyCloseCustomReturningNil(t *testing.T) {
-	rs := &RuleSpec{Close: []*AltSpec{{G: "aa"}}}
+	rs := &RuleSpec{}
+	rs.AddClose(&AltSpec{G: "aa"})
 	rs.ModifyClose(&AltModListOpts{Custom: func(list []*AltSpec) []*AltSpec {
 		return nil
 	}})
-	if len(rs.Close) != 1 {
+	if len(rs.CloseAlts()) != 1 {
 		t.Error("custom returning nil should leave list unchanged")
 	}
 }

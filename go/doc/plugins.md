@@ -130,18 +130,32 @@ Token names use the `#XX` convention. Built-in tokens:
 
 ## Modifying rules
 
-Each rule has `Open` and `Close` alternate lists.
+Each rule has open/close alternate lists and bo/ao/bc/ac lifecycle action
+lists. These are **mutated through methods**, not by direct field access —
+the lists are unexported on `RuleSpec`, matching the TypeScript runtime
+(where direct array assignment is likewise impossible). The methods:
+
+| Method | Effect |
+|---|---|
+| `AddOpen(alts…)` / `AddClose(alts…)` | Append alternates |
+| `PrependOpen(alts…)` / `PrependClose(alts…)` | Prepend alternates |
+| `ModifyOpen(mods)` / `ModifyClose(mods)` | Clear / delete / move / custom (see [Replacing rules and actions](#replacing-rules-and-actions)) |
+| `ClearOpen()` / `ClearClose()` | Remove all alternates for that phase |
+| `AddBO/AddAO/AddBC/AddAC(fn)` | Append a lifecycle action |
+| `PrependBO/PrependAO/PrependBC/PrependAC(fn)` | Prepend a lifecycle action |
+| `ClearActions(phases…)` | Remove lifecycle actions (no args = all) |
+| `Fnref(ref)` | Install lifecycle actions by `@<rule>-<phase>` funcref |
+| `OpenAlts()` / `CloseAlts()` / `Actions(phase)` | Read accessors |
+| `HasBO()/HasAO()/HasBC()/HasAC()` | Lifecycle presence flags |
 
 ```go
 func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 	TL := j.Token("#TL", "~")
 	j.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
-		rs.Open = append([]*tabnas.AltSpec{{
+		rs.PrependOpen(&tabnas.AltSpec{
 			S: [][]tabnas.Tin{{TL}},
-			A: func(r *tabnas.Rule, ctx *tabnas.Context) {
-				r.Node = 42
-			},
-		}}, rs.Open...)
+			A: func(r *tabnas.Rule, ctx *tabnas.Context) { r.Node = 42 },
+		})
 	})
 	return nil
 }
@@ -178,7 +192,7 @@ Each `RuleSpec` has four phase-boundary hooks, each a `[]StateAction`
 
 ```go
 j.Rule("map", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
-	rs.AO = append(rs.AO, func(r *tabnas.Rule, ctx *tabnas.Context) {
+	rs.AddAO(func(r *tabnas.Rule, ctx *tabnas.Context) {
 		fmt.Println("opened a map")
 	})
 })
@@ -198,8 +212,8 @@ to earlier ones. To instead replace what earlier plugins contributed:
   `ClearOpen()` / `ClearClose()`, then re-add:
 
   ```go
-  rs.ModifyOpen(&tabnas.AltModListOpts{Clear: true})
-  rs.Open = append(rs.Open, &tabnas.AltSpec{ /* ... */ })
+  rs.ClearOpen().AddOpen(&tabnas.AltSpec{ /* ... */ })
+  // or, equivalently: rs.ModifyOpen(&tabnas.AltModListOpts{Clear: true}); rs.AddOpen(...)
   ```
 
   Declaratively, set `Clear` on the alt-list inject:
@@ -228,6 +242,26 @@ to earlier ones. To instead replace what earlier plugins contributed:
 wins deterministically across `Derive()`. All of this is opt-in —
 existing grammars that use neither `Clear` nor `/replace` keep the append
 behavior unchanged.
+
+### Funcref slot and dedup semantics
+
+The funcref suffixes match the TypeScript runtime:
+
+- `@<rule>-<phase>/append` and the plain `@<rule>-<phase>` are the **same
+  slot** — providing both installs one action (the `/append` entry wins),
+  exactly as TS resolves `fr[base+'/append'] ?? fr[base]`. Use `/prepend`
+  for a distinct front-inserted action.
+- A funcref already installed for a phase is **not** re-installed on a
+  later `Grammar()` / `Fnref()` call (dedup). TS dedups by function
+  identity; Go dedups by function pointer (`reflect.ValueOf(fn).Pointer()`).
+  Go has no per-closure identity, so two *distinct* closures created from
+  the same function literal share a code pointer and dedup as one. Register
+  **stable, reused** `StateAction` / ref values across calls (as grammars
+  do) — the dependable pattern in both runtimes.
+
+`RuleSpec.Fnref(ref)` installs lifecycle actions by funcref imperatively,
+mirroring the TS `rs.fnref(frm)` method, for code-built grammars that don't
+go through `Grammar()`.
 
 ## Custom matchers
 

@@ -259,7 +259,7 @@ func TestGrammarInjectPrepend(t *testing.T) {
 		},
 	})
 
-	valClose := j.RSM()["val"].Close
+	valClose := j.RSM()["val"].CloseAlts()
 	// Second prepend goes before first prepend.
 	if valClose[0].G != "second" {
 		t.Errorf("expected first alt group=second, got %q", valClose[0].G)
@@ -449,7 +449,7 @@ func TestGroupTagsValidFormat(t *testing.T) {
 	j := Make()
 	tagRe := regexp.MustCompile(`^[a-z]+$`)
 	for name, rs := range j.RSM() {
-		for _, alt := range rs.Open {
+		for _, alt := range rs.OpenAlts() {
 			if alt.G != "" {
 				for _, tag := range strings.Split(alt.G, ",") {
 					if !tagRe.MatchString(tag) {
@@ -460,7 +460,7 @@ func TestGroupTagsValidFormat(t *testing.T) {
 				}
 			}
 		}
-		for _, alt := range rs.Close {
+		for _, alt := range rs.CloseAlts() {
 			if alt.G != "" {
 				for _, tag := range strings.Split(alt.G, ",") {
 					if !tagRe.MatchString(tag) {

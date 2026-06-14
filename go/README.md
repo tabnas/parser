@@ -39,11 +39,11 @@ func main() {
 		}})
 		HI := j.Token("#HI")
 		j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
-			rs.Open = []*tabnas.AltSpec{{
+			rs.AddOpen(&tabnas.AltSpec{
 				S: [][]tabnas.Tin{{HI}},
 				A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" },
-			}}
-			rs.Close = []*tabnas.AltSpec{{S: [][]tabnas.Tin{{tabnas.TinZZ}}}}
+			})
+			rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{tabnas.TinZZ}}})
 		})
 		return nil
 	})

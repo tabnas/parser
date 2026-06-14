@@ -133,14 +133,21 @@ type AltSpec struct {
 }
 
 // RuleSpec defines the specification for a parsing rule.
+//
+// The alternate lists (open/close) and lifecycle action lists (bo/ao/bc/ac)
+// are unexported: like the TypeScript RuleSpec, they are mutated only
+// through methods (AddOpen/PrependOpen/ModifyOpen/ClearOpen, AddBO/PrependBO/
+// ClearActions, Fnref, …) and read through getters (OpenAlts/CloseAlts,
+// Actions, HasBO/…). This keeps the engine's exposed API aligned with TS,
+// where direct array assignment is not possible.
 type RuleSpec struct {
 	Name  string
-	Open  []*AltSpec
-	Close []*AltSpec
-	BO    []StateAction // Before-open actions
-	BC    []StateAction // Before-close actions
-	AO    []StateAction // After-open actions
-	AC    []StateAction // After-close actions
+	open  []*AltSpec
+	close []*AltSpec
+	bo    []StateAction // Before-open actions
+	bc    []StateAction // Before-close actions
+	ao    []StateAction // After-open actions
+	ac    []StateAction // After-close actions
 
 	// fnrefInstalled tracks which StateAction functions have already
 	// been wired into each phase via wireStateActions, deduped by
@@ -158,36 +165,36 @@ type RuleSpec struct {
 
 // Clear removes all alternates and state actions from this RuleSpec.
 func (rs *RuleSpec) Clear() *RuleSpec {
-	rs.Open = rs.Open[:0]
-	rs.Close = rs.Close[:0]
-	rs.BO = rs.BO[:0]
-	rs.BC = rs.BC[:0]
-	rs.AO = rs.AO[:0]
-	rs.AC = rs.AC[:0]
+	rs.open = rs.open[:0]
+	rs.close = rs.close[:0]
+	rs.bo = rs.bo[:0]
+	rs.bc = rs.bc[:0]
+	rs.ao = rs.ao[:0]
+	rs.ac = rs.ac[:0]
 	return rs
 }
 
 // AddOpen appends alternates to the open list (at the end).
 func (rs *RuleSpec) AddOpen(alts ...*AltSpec) *RuleSpec {
-	rs.Open = append(rs.Open, alts...)
+	rs.open = append(rs.open, alts...)
 	return rs
 }
 
 // AddClose appends alternates to the close list (at the end).
 func (rs *RuleSpec) AddClose(alts ...*AltSpec) *RuleSpec {
-	rs.Close = append(rs.Close, alts...)
+	rs.close = append(rs.close, alts...)
 	return rs
 }
 
 // PrependOpen inserts alternates at the beginning of the open list.
 func (rs *RuleSpec) PrependOpen(alts ...*AltSpec) *RuleSpec {
-	rs.Open = append(alts, rs.Open...)
+	rs.open = append(alts, rs.open...)
 	return rs
 }
 
 // PrependClose inserts alternates at the beginning of the close list.
 func (rs *RuleSpec) PrependClose(alts ...*AltSpec) *RuleSpec {
-	rs.Close = append(alts, rs.Close...)
+	rs.close = append(alts, rs.close...)
 	return rs
 }
 
@@ -203,13 +210,13 @@ type AltModListOpts struct {
 // ModifyOpen applies delete/move/custom modifications to the open alternates list.
 // Matches TS `rs.open(alts, mods)` where mods has delete/move/custom.
 func (rs *RuleSpec) ModifyOpen(mods *AltModListOpts) *RuleSpec {
-	rs.Open = modifyAltList(rs.Open, mods)
+	rs.open = modifyAltList(rs.open, mods)
 	return rs
 }
 
 // ModifyClose applies delete/move/custom modifications to the close alternates list.
 func (rs *RuleSpec) ModifyClose(mods *AltModListOpts) *RuleSpec {
-	rs.Close = modifyAltList(rs.Close, mods)
+	rs.close = modifyAltList(rs.close, mods)
 	return rs
 }
 
@@ -248,25 +255,25 @@ func modifyAltList(list []*AltSpec, mods *AltModListOpts) []*AltSpec {
 
 // AddBO appends a before-open action.
 func (rs *RuleSpec) AddBO(action StateAction) *RuleSpec {
-	rs.BO = append(rs.BO, action)
+	rs.bo = append(rs.bo, action)
 	return rs
 }
 
 // AddAO appends an after-open action.
 func (rs *RuleSpec) AddAO(action StateAction) *RuleSpec {
-	rs.AO = append(rs.AO, action)
+	rs.ao = append(rs.ao, action)
 	return rs
 }
 
 // AddBC appends a before-close action.
 func (rs *RuleSpec) AddBC(action StateAction) *RuleSpec {
-	rs.BC = append(rs.BC, action)
+	rs.bc = append(rs.bc, action)
 	return rs
 }
 
 // AddAC appends an after-close action.
 func (rs *RuleSpec) AddAC(action StateAction) *RuleSpec {
-	rs.AC = append(rs.AC, action)
+	rs.ac = append(rs.ac, action)
 	return rs
 }
 
@@ -274,13 +281,13 @@ func (rs *RuleSpec) AddAC(action StateAction) *RuleSpec {
 // the lifecycle actions. A later plugin can call this, then AddOpen, to
 // replace the open alternates contributed by earlier plugins.
 func (rs *RuleSpec) ClearOpen() *RuleSpec {
-	rs.Open = nil
+	rs.open = nil
 	return rs
 }
 
 // ClearClose removes this rule's close alternates (see ClearOpen).
 func (rs *RuleSpec) ClearClose() *RuleSpec {
-	rs.Close = nil
+	rs.close = nil
 	return rs
 }
 
@@ -297,13 +304,13 @@ func (rs *RuleSpec) ClearActions(phases ...string) *RuleSpec {
 	for _, p := range all {
 		switch p {
 		case "bo":
-			rs.BO = nil
+			rs.bo = nil
 		case "ao":
-			rs.AO = nil
+			rs.ao = nil
 		case "bc":
-			rs.BC = nil
+			rs.bc = nil
 		case "ac":
-			rs.AC = nil
+			rs.ac = nil
 		}
 		base := "@" + rs.Name + "-" + p
 		delete(rs.fnrefInstalled, base)
@@ -311,6 +318,78 @@ func (rs *RuleSpec) ClearActions(phases ...string) *RuleSpec {
 	}
 	return rs
 }
+
+// Fnref installs lifecycle state actions from a funcref map, using the
+// reserved `@<rule>-<phase>` naming (with the optional `/prepend`,
+// `/append`, `/replace` suffixes). Mirrors the TS `rs.fnref(frm)` method,
+// giving append-by-funcref parity for code-built grammars without going
+// through Grammar(). Returns the RuleSpec for chaining.
+func (rs *RuleSpec) Fnref(ref map[FuncRef]any) *RuleSpec {
+	wireStateActions(rs, ref)
+	return rs
+}
+
+// PrependBO inserts a before-open action at the front (runs first).
+func (rs *RuleSpec) PrependBO(action StateAction) *RuleSpec {
+	rs.bo = append([]StateAction{action}, rs.bo...)
+	return rs
+}
+
+// PrependAO inserts an after-open action at the front.
+func (rs *RuleSpec) PrependAO(action StateAction) *RuleSpec {
+	rs.ao = append([]StateAction{action}, rs.ao...)
+	return rs
+}
+
+// PrependBC inserts a before-close action at the front.
+func (rs *RuleSpec) PrependBC(action StateAction) *RuleSpec {
+	rs.bc = append([]StateAction{action}, rs.bc...)
+	return rs
+}
+
+// PrependAC inserts an after-close action at the front.
+func (rs *RuleSpec) PrependAC(action StateAction) *RuleSpec {
+	rs.ac = append([]StateAction{action}, rs.ac...)
+	return rs
+}
+
+// OpenAlts returns this rule's open alternates. The returned slice is the
+// live backing slice — read-only by convention; mutate via the Add/Modify/
+// Clear methods. (Read accessor; the lists themselves are unexported, as in
+// the TS RuleSpec.)
+func (rs *RuleSpec) OpenAlts() []*AltSpec { return rs.open }
+
+// CloseAlts returns this rule's close alternates (see OpenAlts).
+func (rs *RuleSpec) CloseAlts() []*AltSpec { return rs.close }
+
+// Actions returns the registered lifecycle actions for a phase ("bo",
+// "ao", "bc", "ac"); an unknown phase returns nil.
+func (rs *RuleSpec) Actions(phase string) []StateAction {
+	switch phase {
+	case "bo":
+		return rs.bo
+	case "ao":
+		return rs.ao
+	case "bc":
+		return rs.bc
+	case "ac":
+		return rs.ac
+	}
+	return nil
+}
+
+// HasBO reports whether any before-open action is registered (mirrors the
+// TS RuleSpec.bo boolean presence flag); likewise HasAO/HasBC/HasAC.
+func (rs *RuleSpec) HasBO() bool { return len(rs.bo) > 0 }
+
+// HasAO reports whether any after-open action is registered.
+func (rs *RuleSpec) HasAO() bool { return len(rs.ao) > 0 }
+
+// HasBC reports whether any before-close action is registered.
+func (rs *RuleSpec) HasBC() bool { return len(rs.bc) > 0 }
+
+// HasAC reports whether any after-close action is registered.
+func (rs *RuleSpec) HasAC() bool { return len(rs.ac) > 0 }
 
 // getRuleProp accesses a rule property by path (e.g. "d", "n.pk").
 // Returns the integer value and whether it was found.
@@ -432,12 +511,12 @@ func NormAlt(alt *AltSpec) error {
 // NormAlts normalizes all alternates in a RuleSpec.  Returns the first
 // validation error encountered, if any.
 func NormAlts(spec *RuleSpec) error {
-	for _, alt := range spec.Open {
+	for _, alt := range spec.open {
 		if err := NormAlt(alt); err != nil {
 			return err
 		}
 	}
-	for _, alt := range spec.Close {
+	for _, alt := range spec.close {
 		if err := NormAlt(alt); err != nil {
 			return err
 		}
@@ -478,10 +557,10 @@ type Rule struct {
 	OS int
 	CS int
 
-	N      map[string]int
-	U      map[string]any
-	K      map[string]any
-	Why    string
+	N   map[string]int
+	U   map[string]any
+	K   map[string]any
+	Why string
 }
 
 // NoRule is a sentinel rule.
@@ -550,18 +629,18 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	def := r.Spec
 	var alts []*AltSpec
 	if isOpen {
-		alts = def.Open
+		alts = def.open
 	} else {
-		alts = def.Close
+		alts = def.close
 	}
 
 	// Before actions
-	if isOpen && len(def.BO) > 0 {
-		for _, action := range def.BO {
+	if isOpen && len(def.bo) > 0 {
+		for _, action := range def.bo {
 			action(r, ctx)
 		}
-	} else if !isOpen && len(def.BC) > 0 {
-		for _, action := range def.BC {
+	} else if !isOpen && len(def.bc) > 0 {
+		for _, action := range def.bc {
 			action(r, ctx)
 		}
 	}
@@ -713,12 +792,12 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	r.Next = next
 
 	// After actions
-	if isOpen && len(def.AO) > 0 {
-		for _, action := range def.AO {
+	if isOpen && len(def.ao) > 0 {
+		for _, action := range def.ao {
 			action(r, ctx)
 		}
-	} else if !isOpen && len(def.AC) > 0 {
-		for _, action := range def.AC {
+	} else if !isOpen && len(def.ac) > 0 {
+		for _, action := range def.ac {
 			action(r, ctx)
 		}
 	}

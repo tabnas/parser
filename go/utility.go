@@ -509,9 +509,9 @@ func formatCompactValue(val any) string {
 // ModListOpts configures list modifications for ModList.
 // Matches the TypeScript ListMods type.
 type ModListOpts struct {
-	Delete []int                   // Indices to delete (supports negative indices).
-	Move   []int                   // Pairs: [from, to, from, to, ...].
-	Custom func(list []any) []any  // Custom modification callback, applied last.
+	Delete []int                  // Indices to delete (supports negative indices).
+	Move   []int                  // Pairs: [from, to, from, to, ...].
+	Custom func(list []any) []any // Custom modification callback, applied last.
 }
 
 // ModList modifies a list by applying delete, move, and custom operations.
