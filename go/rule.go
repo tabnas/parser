@@ -312,6 +312,16 @@ func (rs *RuleSpec) ClearActions(phases ...string) *RuleSpec {
 	return rs
 }
 
+// Fnref installs lifecycle state actions from a funcref map, using the
+// reserved `@<rule>-<phase>` naming (with the optional `/prepend`,
+// `/append`, `/replace` suffixes). Mirrors the TS `rs.fnref(frm)` method,
+// giving append-by-funcref parity for code-built grammars without going
+// through Grammar(). Returns the RuleSpec for chaining.
+func (rs *RuleSpec) Fnref(ref map[FuncRef]any) *RuleSpec {
+	wireStateActions(rs, ref)
+	return rs
+}
+
 // getRuleProp accesses a rule property by path (e.g. "d", "n.pk").
 // Returns the integer value and whether it was found.
 // Matches the TypeScript getRuleProp(r, prop, subprop) function.

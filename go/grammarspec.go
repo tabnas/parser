@@ -705,37 +705,40 @@ func wireStateActions(rs *RuleSpec, ref map[FuncRef]any) {
 			continue
 		}
 
-		// Check /prepend first, then /append, then plain.
-		type variant struct {
-			key    string
-			append bool
-		}
-		for _, v := range []variant{
-			{base + "/prepend", false},
-			{base + "/append", true},
-			{base, true},
-		} {
-			fn, present := ref[v.key]
+		// Install /prepend, then /append-or-plain. Matching TS
+		// (`fr[base+'/append'] ?? fr[base]`), `/append` and the plain name
+		// are the SAME slot: providing both installs one (the /append
+		// entry wins). Dedupe by function pointer so the same StateAction
+		// isn't wired twice across Grammar() calls. (Go has no per-closure
+		// identity, so distinct closures sharing a code pointer dedupe as
+		// one — reuse stable ref values across calls, as grammars do.)
+		install := func(key string, doAppend bool) {
+			fn, present := ref[key]
 			if !present || fn == nil {
-				continue
+				return
 			}
 			sa, ok := fn.(StateAction)
 			if !ok {
-				continue
+				return
 			}
-			// Dedupe by function pointer so the same StateAction can't
-			// be wired twice for the same phase across Grammar() calls.
 			ptr := reflect.ValueOf(sa).Pointer()
 			if phaseSet[ptr] {
-				continue
+				return
 			}
 			phaseSet[ptr] = true
-			if v.append {
+			if doAppend {
 				*t.dest = append(*t.dest, sa)
 			} else {
 				*t.dest = append([]StateAction{sa}, *t.dest...)
 			}
 		}
+
+		install(base+"/prepend", false)
+		appendKey := base + "/append"
+		if _, ok := ref[appendKey]; !ok {
+			appendKey = base // '/append' ?? plain — one slot
+		}
+		install(appendKey, true)
 	}
 }
 

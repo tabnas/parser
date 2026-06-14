@@ -229,6 +229,26 @@ wins deterministically across `Derive()`. All of this is opt-in —
 existing grammars that use neither `Clear` nor `/replace` keep the append
 behavior unchanged.
 
+### Funcref slot and dedup semantics
+
+The funcref suffixes match the TypeScript runtime:
+
+- `@<rule>-<phase>/append` and the plain `@<rule>-<phase>` are the **same
+  slot** — providing both installs one action (the `/append` entry wins),
+  exactly as TS resolves `fr[base+'/append'] ?? fr[base]`. Use `/prepend`
+  for a distinct front-inserted action.
+- A funcref already installed for a phase is **not** re-installed on a
+  later `Grammar()` / `Fnref()` call (dedup). TS dedups by function
+  identity; Go dedups by function pointer (`reflect.ValueOf(fn).Pointer()`).
+  Go has no per-closure identity, so two *distinct* closures created from
+  the same function literal share a code pointer and dedup as one. Register
+  **stable, reused** `StateAction` / ref values across calls (as grammars
+  do) — the dependable pattern in both runtimes.
+
+`RuleSpec.Fnref(ref)` installs lifecycle actions by funcref imperatively,
+mirroring the TS `rs.fnref(frm)` method, for code-built grammars that don't
+go through `Grammar()`.
+
 ## Custom matchers
 
 For syntax beyond the built-in matchers, register one under
