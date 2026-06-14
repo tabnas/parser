@@ -256,6 +256,13 @@ class RuleSpec {
     const installed: Map<string, WeakSet<Function>> =
       ((this.def as any).fnrefInstalled =
         (this.def as any).fnrefInstalled || new Map())
+    // Phases an `@<rule>-<phase>/replace` fnref has taken ownership of.
+    // Once a phase is replaced, the plain/prepend/append fnrefs for it are
+    // ignored so older handlers (still lingering in the accumulated fnref
+    // map) are not re-installed on subsequent fnref() calls or re-derivation.
+    const replaced: Set<string> =
+      ((this.def as any).fnrefReplaced =
+        (this.def as any).fnrefReplaced || new Set())
 
     const reserved = [`@${rn}-bo`, `@${rn}-ao`, `@${rn}-bc`, `@${rn}-ac`]
     for (let base of reserved) {
@@ -263,6 +270,23 @@ class RuleSpec {
       if (!phaseSet) installed.set(base, phaseSet = new WeakSet())
 
       const aname = base.replace(/^[^-]+-/, '')
+
+      // `/replace` clears all prior actions for this phase (from any
+      // plugin) and installs the replacement, then owns the phase.
+      const replaceFn = fr[base + '/replace']
+      if (replaceFn) {
+        if (!replaced.has(base)) {
+          replaced.add(base)
+          ;(this.def as any)[aname].length = 0
+          phaseSet = new WeakSet()
+          installed.set(base, phaseSet)
+          phaseSet.add(replaceFn)
+          ;(this as any)[aname](true, replaceFn)
+        }
+        continue // phase owned by replace: skip prepend/append/plain
+      }
+      if (replaced.has(base)) continue
+
       const prependFn = fr[base + '/prepend']
       const appendFn = fr[base + '/append'] ?? fr[base]
 
@@ -287,6 +311,14 @@ class RuleSpec {
       .map((a) => normalt(a, rs, this))
     let altState: 'open' | 'close' = 'o' === rs ? 'open' : 'close'
     let alts: any = this.def[altState]
+
+    // `clear` empties the pre-existing alternates (from earlier plugins)
+    // before the new ones are injected — a later plugin can thus replace
+    // a rule's open/close alternates outright. Done before inject so the
+    // new alternates survive.
+    if (mods?.clear) {
+      alts.length = 0
+    }
 
     alts[inject](...aa)
 
@@ -370,6 +402,40 @@ class RuleSpec {
     this.def.ao.length = 0
     this.def.bc.length = 0
     this.def.ac.length = 0
+    return this
+  }
+
+  // Remove this rule's open alternates without touching close or the
+  // lifecycle actions. A later plugin can call this, then re-add, to
+  // replace the open alternates contributed by earlier plugins.
+  clearOpen() {
+    this.def.open.length = 0
+    return this
+  }
+
+  // Remove this rule's close alternates (see clearOpen).
+  clearClose() {
+    this.def.close.length = 0
+    return this
+  }
+
+  // Remove the registered lifecycle actions for the named phases (any of
+  // 'bo', 'ao', 'bc', 'ac'); with no arguments, clear all four. The
+  // fnref dedup/replace bookkeeping for those phases is reset too, so a
+  // subsequent fnref() re-installs cleanly. Alternates are untouched.
+  clearActions(...phases: ('bo' | 'ao' | 'bc' | 'ac')[]) {
+    const all = (0 < phases.length ? phases : ['bo', 'ao', 'bc', 'ac']) as (
+      'bo' | 'ao' | 'bc' | 'ac'
+    )[]
+    const installed: Map<string, WeakSet<Function>> | undefined = (this.def as any)
+      .fnrefInstalled
+    const replaced: Set<string> | undefined = (this.def as any).fnrefReplaced
+    for (const p of all) {
+      ;(this.def as any)[p].length = 0
+      const base = `@${this.name}-${p}`
+      installed && installed.delete(base)
+      replaced && replaced.delete(base)
+    }
     return this
   }
 

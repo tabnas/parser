@@ -148,6 +148,12 @@ type RuleSpec struct {
 	// duplicate state actions when they re-register the same handler
 	// for the same reserved `@<rulename>-<phase>` slot.
 	fnrefInstalled map[string]map[uintptr]bool
+
+	// fnrefReplaced records phases an `@<rulename>-<phase>/replace` fnref
+	// has taken ownership of. Once replaced, the plain/prepend/append
+	// fnrefs for that phase are ignored so older handlers are not
+	// re-installed on subsequent wireStateActions calls or re-derivation.
+	fnrefReplaced map[string]bool
 }
 
 // Clear removes all alternates and state actions from this RuleSpec.
@@ -188,6 +194,7 @@ func (rs *RuleSpec) PrependClose(alts ...*AltSpec) *RuleSpec {
 // AltModListOpts configures modifications for RuleSpec alternate lists.
 // Matches the TS ListMods parameter to rs.open(alts, mods)/rs.close(alts, mods).
 type AltModListOpts struct {
+	Clear  bool                             // Empty the existing list before applying.
 	Delete []int                            // Indices to delete (supports negative).
 	Move   []int                            // Pairs: [from, to, from, to, ...].
 	Custom func(list []*AltSpec) []*AltSpec // Custom modification callback.
@@ -207,7 +214,15 @@ func (rs *RuleSpec) ModifyClose(mods *AltModListOpts) *RuleSpec {
 }
 
 func modifyAltList(list []*AltSpec, mods *AltModListOpts) []*AltSpec {
-	if mods == nil || list == nil {
+	if mods == nil {
+		return list
+	}
+	// Clear empties the existing alternates before delete/move/custom, so a
+	// later plugin can replace a rule's alternates outright.
+	if mods.Clear {
+		list = nil
+	}
+	if list == nil && mods.Custom == nil {
 		return list
 	}
 	// Convert to []any, apply ModList, convert back.
@@ -252,6 +267,48 @@ func (rs *RuleSpec) AddBC(action StateAction) *RuleSpec {
 // AddAC appends an after-close action.
 func (rs *RuleSpec) AddAC(action StateAction) *RuleSpec {
 	rs.AC = append(rs.AC, action)
+	return rs
+}
+
+// ClearOpen removes this rule's open alternates without touching close or
+// the lifecycle actions. A later plugin can call this, then AddOpen, to
+// replace the open alternates contributed by earlier plugins.
+func (rs *RuleSpec) ClearOpen() *RuleSpec {
+	rs.Open = nil
+	return rs
+}
+
+// ClearClose removes this rule's close alternates (see ClearOpen).
+func (rs *RuleSpec) ClearClose() *RuleSpec {
+	rs.Close = nil
+	return rs
+}
+
+// ClearActions removes the registered lifecycle actions for the named
+// phases (any of "bo", "ao", "bc", "ac"); with no arguments, all four are
+// cleared. The fnref dedup/replace bookkeeping for those phases is reset
+// too, so a subsequent wireStateActions re-installs cleanly. Alternates
+// are untouched.
+func (rs *RuleSpec) ClearActions(phases ...string) *RuleSpec {
+	all := phases
+	if len(all) == 0 {
+		all = []string{"bo", "ao", "bc", "ac"}
+	}
+	for _, p := range all {
+		switch p {
+		case "bo":
+			rs.BO = nil
+		case "ao":
+			rs.AO = nil
+		case "bc":
+			rs.BC = nil
+		case "ac":
+			rs.AC = nil
+		}
+		base := "@" + rs.Name + "-" + p
+		delete(rs.fnrefInstalled, base)
+		delete(rs.fnrefReplaced, base)
+	}
 	return rs
 }
 

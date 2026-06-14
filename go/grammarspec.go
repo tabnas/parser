@@ -45,6 +45,7 @@ type GrammarAltListSpec struct {
 // GrammarInjectSpec controls how alts are merged into existing rule alternates.
 type GrammarInjectSpec struct {
 	Append bool  // If true, append; if false, prepend (default).
+	Clear  bool  // If true, empty the existing alternates before inserting.
 	Delete []int // Indices to delete (supports negative).
 	Move   []int // Pairs: [from, to, from, to, ...].
 }
@@ -412,9 +413,10 @@ func applyGrammarAlts(j *Tabnas, rs *RuleSpec, spec any, ref map[FuncRef]any, is
 		dest = &rs.Open
 	}
 
-	// Apply inject modifiers (delete, move) to existing alts first.
-	if inject != nil && (len(inject.Delete) > 0 || len(inject.Move) > 0) {
+	// Apply inject modifiers (clear, delete, move) to existing alts first.
+	if inject != nil && (inject.Clear || len(inject.Delete) > 0 || len(inject.Move) > 0) {
 		*dest = modifyAltList(*dest, &AltModListOpts{
+			Clear:  inject.Clear,
 			Delete: inject.Delete,
 			Move:   inject.Move,
 		})
@@ -663,12 +665,35 @@ func wireStateActions(rs *RuleSpec, ref map[FuncRef]any) {
 	if rs.fnrefInstalled == nil {
 		rs.fnrefInstalled = map[string]map[uintptr]bool{}
 	}
+	if rs.fnrefReplaced == nil {
+		rs.fnrefReplaced = map[string]bool{}
+	}
 	for _, t := range targets {
 		base := "@" + rs.Name + "-" + t.suffix
 		phaseSet, ok := rs.fnrefInstalled[base]
 		if !ok {
 			phaseSet = map[uintptr]bool{}
 			rs.fnrefInstalled[base] = phaseSet
+		}
+
+		// `/replace` clears all prior actions for this phase (from any
+		// plugin) and installs the replacement, then owns the phase: once
+		// replaced, the plain/prepend/append fnrefs for it are ignored.
+		if rf, present := ref[base+"/replace"]; present && rf != nil {
+			if sa, ok := rf.(StateAction); ok {
+				if !rs.fnrefReplaced[base] {
+					rs.fnrefReplaced[base] = true
+					*t.dest = nil
+					phaseSet = map[uintptr]bool{}
+					rs.fnrefInstalled[base] = phaseSet
+					phaseSet[reflect.ValueOf(sa).Pointer()] = true
+					*t.dest = append(*t.dest, sa)
+				}
+				continue
+			}
+		}
+		if rs.fnrefReplaced[base] {
+			continue
 		}
 
 		// Check /prepend first, then /append, then plain.

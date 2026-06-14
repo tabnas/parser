@@ -555,6 +555,7 @@ export type AltSpecish = AltSpec | undefined | null | false | 0 | typeof NaN
 // List modifications
 export type ListMods = {
   append?: boolean // if `true` apppend new entries, otherwise prepend.
+  clear?: boolean // if `true`, empty the existing list before adding new entries.
   move?: number[] // [from,to,  from,to,  ...]
   delete?: number[] // [index0, index1, ...]
   custom?: (alts: AltSpec[]) => null | AltSpec[]
