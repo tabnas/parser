@@ -159,8 +159,43 @@ existing alternate list. Pass `mods` to control merge behaviour:
 | Mod | Effect |
 |---|---|
 | `{ append: true }` | Append at the end (default). |
+| `{ clear: true }` | Empty the existing alternates first, then add the new ones — a later plugin can replace a rule's alternates outright. |
 | `{ delete: [i, …] }` | Remove the listed indices before appending. |
 | `{ move: [from, to, …] }` | Reorder existing alternates. |
+
+### Replacing rules and actions
+
+By default a later plugin's alternates and lifecycle actions are
+**appended** to earlier ones (see [State Actions](#state-actions)). To
+instead replace what earlier plugins contributed:
+
+- **Alternates** — pass `{ clear: true }` to `rs.open` / `rs.close`, or
+  use `rs.clearOpen()` / `rs.clearClose()` then re-add:
+
+  ```js
+  am.rule('val', (rs) => rs.open([{ s: ['#OB'], p: 'map' }], { clear: true }))
+  ```
+
+  Declaratively, the same via the alt-list `inject`:
+
+  ```js
+  am.grammar({ rule: { val: { open: { alts: [...], inject: { clear: true } } } } })
+  ```
+
+- **Lifecycle actions** — `rs.clearActions('bo', 'ao', …)` (no args clears
+  all four phases) removes earlier actions for those phases; then register
+  fresh ones. Declaratively, append `/replace` to the funcref name:
+
+  ```js
+  // drops every previously-registered `map` before-open action, installs this one
+  am.grammar({ ref: { '@map-bo/replace': resetMap }, rule: { map: {} } })
+  ```
+
+`/replace` takes ownership of the phase: once a phase is replaced, plain
+/ `/prepend` / `/append` funcrefs for it are ignored, and the replacement
+wins deterministically across `am.make()` re-derivation. All of this is
+opt-in — existing grammars that use neither `clear` nor `/replace` keep
+the append behavior unchanged.
 
 ### Alternate Spec Fields
 

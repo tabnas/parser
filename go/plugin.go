@@ -407,8 +407,19 @@ func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
 // This matches TypeScript's tabnas.make(options, parent).
 func (j *Tabnas) Derive(opts ...Options) (*Tabnas, error) {
-	// Start with parent's options, merge with new ones.
-	child := Make(opts...)
+	// Inherit the parent's accumulated options, with the derive options
+	// merged on top (derive options win). Mirrors TS make(), where the
+	// child is built from deep(parent.merged, opts) — so settings like
+	// rule.start, number/string/comment config, etc. carry to the child
+	// without each plugin having to re-apply them.
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if j.options != nil {
+		o = Deep(*j.options, o).(Options)
+	}
+	child := Make(o)
 
 	// Copy parent's custom fixed tokens.
 	for k, v := range j.parser.Config.FixedTokens {

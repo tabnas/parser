@@ -386,6 +386,46 @@ func TestPMDeriveInheritsPlugins(t *testing.T) {
 	}
 }
 
+func TestPMDeriveInheritsOptions(t *testing.T) {
+	// The child inherits the parent's accumulated options (matching TS
+	// make()): rule.start and lexer option toggles carry over without
+	// being passed to Derive or re-applied by a plugin.
+	f := false
+	parent := Make(Options{
+		Rule:   &RuleOptions{Start: "top"},
+		Number: &NumberOptions{Hex: &f}, // disable hex on the parent
+	})
+	parent.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.Open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+			r.Node = r.O0.ResolveVal(r, ctx)
+		}}}
+		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+	})
+
+	child, err := parent.Derive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inherited rule.start: the child uses "top" as its start rule.
+	if child.Config().RuleStart != "top" {
+		t.Errorf("child RuleStart = %q, want top", child.Config().RuleStart)
+	}
+	// Inherited number.hex=false: "0xFF" is not a number (parsed as text).
+	if out, err := child.Parse("0xFF"); err != nil {
+		t.Fatalf("child parse: %v", err)
+	} else if out == float64(255) {
+		t.Error("child should have inherited number.hex=false")
+	}
+	// Derive options override the inherited ones.
+	gc, err := parent.Derive(Options{Rule: &RuleOptions{Start: "other"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gc.Config().RuleStart != "other" {
+		t.Errorf("derive opts should override: RuleStart = %q", gc.Config().RuleStart)
+	}
+}
+
 // --- Token.Bad / Lex.Bad ---
 
 func TestPMTokenBad(t *testing.T) {

@@ -189,6 +189,46 @@ within an action, set `ctx.ParseErr` to an error token (the TS
 equivalent of returning an error `Token`); the parse stops and that
 error is returned.
 
+### Replacing rules and actions
+
+By default a later plugin's alternates and state actions are **appended**
+to earlier ones. To instead replace what earlier plugins contributed:
+
+- **Alternates** — `ModifyOpen` / `ModifyClose` with `Clear: true`, or
+  `ClearOpen()` / `ClearClose()`, then re-add:
+
+  ```go
+  rs.ModifyOpen(&tabnas.AltModListOpts{Clear: true})
+  rs.Open = append(rs.Open, &tabnas.AltSpec{ /* ... */ })
+  ```
+
+  Declaratively, set `Clear` on the alt-list inject:
+
+  ```go
+  "val": {Open: &tabnas.GrammarAltListSpec{
+      Alts:   []*tabnas.GrammarAltSpec{ /* ... */ },
+      Inject: &tabnas.GrammarInjectSpec{Clear: true},
+  }}
+  ```
+
+- **State actions** — `rs.ClearActions("bo", "ao", …)` (no args clears all
+  four phases) removes earlier actions; then register fresh ones.
+  Declaratively, append `/replace` to the funcref name:
+
+  ```go
+  // drops every previously-registered `map` before-open action, installs this one
+  j.Grammar(&tabnas.GrammarSpec{
+      Ref:  map[tabnas.FuncRef]any{"@map-bo/replace": tabnas.StateAction(resetMap)},
+      Rule: map[string]*tabnas.GrammarRuleSpec{"map": {}},
+  })
+  ```
+
+`/replace` takes ownership of the phase: once replaced, the plain /
+`/prepend` / `/append` funcrefs for it are ignored, and the replacement
+wins deterministically across `Derive()`. All of this is opt-in —
+existing grammars that use neither `Clear` nor `/replace` keep the append
+behavior unchanged.
+
 ## Custom matchers
 
 For syntax beyond the built-in matchers, register one under
