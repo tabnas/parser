@@ -39,10 +39,10 @@ func TestLexNumberHexDisabled(t *testing.T) {
 		Number: &NumberOptions{Hex: boolPtr(false)},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.Open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
 			r.Node = r.O0.ResolveVal(r, ctx)
 		}}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	out, err := j.Parse("0xff")
 	if err != nil {
@@ -129,7 +129,7 @@ func TestLexEmptyInstance(t *testing.T) {
 	}
 	// An empty instance has no grammar: every rule's alternates are cleared.
 	for name, rs := range e.RSM() {
-		if len(rs.Open) != 0 || len(rs.Close) != 0 {
+		if len(rs.open) != 0 || len(rs.close) != 0 {
 			t.Errorf("rule %q should be cleared in an empty instance", name)
 		}
 	}

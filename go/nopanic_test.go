@@ -64,10 +64,10 @@ func TestNoPanicDerive(t *testing.T) {
 func TestNoPanicParseAction(t *testing.T) {
 	j := Make(Options{Rule: &RuleOptions{Start: "top"}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.Open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
 			panic("boom in action")
 		}}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	_, err := j.Parse("1")
 	wantInternal(t, "Parse", err)
@@ -122,8 +122,8 @@ func TestNoPanicCustomMatcher(t *testing.T) {
 		}},
 	}}})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.Open = []*AltSpec{{S: [][]Tin{TinSetVAL}}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.open = []*AltSpec{{S: [][]Tin{TinSetVAL}}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	_, err := j.Parse("1")
 	wantInternal(t, "Parse(matcher)", err)

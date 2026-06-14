@@ -34,7 +34,13 @@ mirror it. Accepted differences are documented in
 - `lexer.go` — matchers and `LexConfig` (the resolved option tree;
   TS `cfg`). Simple matchers run on the scan-spec driver (scan.go),
   matching the TS lexer structure.
-- `parser.go`, `rule.go` — rule machinery.
+- `parser.go`, `rule.go` — rule machinery. `RuleSpec`'s alternate
+  (`open`/`close`) and lifecycle (`bo`/`ao`/`bc`/`ac`) lists are
+  **unexported**, mutated only via methods (`AddOpen`/`PrependOpen`/
+  `ModifyOpen`/`ClearOpen`, `AddBO`/`PrependBO`/`ClearActions`, `Fnref`)
+  and read via getters (`OpenAlts`/`CloseAlts`/`Actions`/`HasBO`…), to
+  match the TS RuleSpec API. In-package (white-box) tests access the
+  unexported fields directly; external grammars must use the methods.
 - `options.go` — `Options` tree, `Make`/`Empty`,
   `buildConfig` (Options → LexConfig, merging defaults).
 - `plugin.go` — `Use`, `SetOptions`, `Grammar`, match registration.

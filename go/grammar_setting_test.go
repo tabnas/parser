@@ -20,9 +20,9 @@ func altGTags(t *testing.T, j *Tabnas, rulename, state string) [][]string {
 	var alts []*AltSpec
 	switch state {
 	case "open":
-		alts = rs.Open
+		alts = rs.open
 	case "close":
-		alts = rs.Close
+		alts = rs.close
 	default:
 		t.Fatalf("bad state %q", state)
 	}

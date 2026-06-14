@@ -26,13 +26,13 @@ func TestClearModifyOpenReplaces(t *testing.T) {
 	Ta := j.Token("#Ta", "a")
 	Tb := j.Token("#Tb", "b")
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.Open = []*AltSpec{{S: [][]Tin{{Ta}}, A: func(r *Rule, _ *Context) { r.Node = "A" }}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.open = []*AltSpec{{S: [][]Tin{{Ta}}, A: func(r *Rule, _ *Context) { r.Node = "A" }}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	// Plugin B replaces A's open alternates: clear, then add.
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.ModifyOpen(&AltModListOpts{Clear: true})
-		rs.Open = append(rs.Open, &AltSpec{S: [][]Tin{{Tb}}, A: func(r *Rule, _ *Context) { r.Node = "B" }})
+		rs.open = append(rs.open, &AltSpec{S: [][]Tin{{Tb}}, A: func(r *Rule, _ *Context) { r.Node = "B" }})
 	})
 	if _, code := clearTryParse(j, "a"); code != "unexpected" {
 		t.Errorf("a after clear: code=%q want unexpected", code)
@@ -47,12 +47,12 @@ func TestClearOpenClose(t *testing.T) {
 	Ta := j.Token("#Ta", "a")
 	Tb := j.Token("#Tb", "b")
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
-		rs.Open = []*AltSpec{{S: [][]Tin{{Ta}}, A: func(r *Rule, _ *Context) { r.Node = "A" }}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.open = []*AltSpec{{S: [][]Tin{{Ta}}, A: func(r *Rule, _ *Context) { r.Node = "A" }}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.ClearOpen()
-		rs.Open = append(rs.Open, &AltSpec{S: [][]Tin{{Tb}}, A: func(r *Rule, _ *Context) { r.Node = "B" }})
+		rs.open = append(rs.open, &AltSpec{S: [][]Tin{{Tb}}, A: func(r *Rule, _ *Context) { r.Node = "B" }})
 	})
 	if _, code := clearTryParse(j, "a"); code != "unexpected" {
 		t.Errorf("a after ClearOpen: code=%q want unexpected", code)
@@ -68,8 +68,8 @@ func TestClearActionsReplaces(t *testing.T) {
 	var log []string
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.AddBO(func(r *Rule, _ *Context) { log = append(log, "A") })
-		rs.Open = []*AltSpec{{S: [][]Tin{{Ta}}}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.open = []*AltSpec{{S: [][]Tin{{Ta}}}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.ClearActions("bo")
@@ -196,8 +196,8 @@ func TestClearBackwardsCompatAppend(t *testing.T) {
 	var log []string
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.AddBO(func(r *Rule, _ *Context) { log = append(log, "A") })
-		rs.Open = []*AltSpec{{S: [][]Tin{{Ta}}}}
-		rs.Close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
+		rs.open = []*AltSpec{{S: [][]Tin{{Ta}}}}
+		rs.close = []*AltSpec{{S: [][]Tin{{TinZZ}}}}
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.AddBO(func(r *Rule, _ *Context) { log = append(log, "B") })

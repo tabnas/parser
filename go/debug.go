@@ -87,7 +87,7 @@ func Describe(j *Tabnas) string {
 	for _, name := range ruleNames {
 		rs := j.parser.RSM[name]
 		b.WriteString(fmt.Sprintf("  %s: open=%d close=%d bo=%d ao=%d bc=%d ac=%d\n",
-			name, len(rs.Open), len(rs.Close), len(rs.BO), len(rs.AO), len(rs.BC), len(rs.AC)))
+			name, len(rs.open), len(rs.close), len(rs.bo), len(rs.ao), len(rs.bc), len(rs.ac)))
 	}
 
 	// Custom matchers

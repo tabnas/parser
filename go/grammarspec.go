@@ -80,17 +80,17 @@ type GrammarAltSpec struct {
 	//   []string: ["#CB #CS"] — each element is a slot; within an element,
 	//             space-separated names are alternatives for that slot.
 	S any
-	B any             // Backtrack: int or FuncRef string
-	P string          // Push rule name or FuncRef
-	R string          // Replace rule name or FuncRef
-	A FuncRef         // Action function ref
-	E FuncRef         // Error function ref
-	H FuncRef         // Modifier function ref
-	C any             // Condition: FuncRef string or map[string]any for declarative
-	N map[string]int  // Counter increments
-	U map[string]any  // Custom props
-	K map[string]any  // Propagated custom props
-	G string          // Group tags (comma-separated)
+	B any            // Backtrack: int or FuncRef string
+	P string         // Push rule name or FuncRef
+	R string         // Replace rule name or FuncRef
+	A FuncRef        // Action function ref
+	E FuncRef        // Error function ref
+	H FuncRef        // Modifier function ref
+	C any            // Condition: FuncRef string or map[string]any for declarative
+	N map[string]int // Counter increments
+	U map[string]any // Custom props
+	K map[string]any // Propagated custom props
+	G string         // Group tags (comma-separated)
 }
 
 // Grammar applies a declarative grammar specification to this Tabnas instance.
@@ -417,9 +417,9 @@ func applyGrammarAlts(j *Tabnas, rs *RuleSpec, spec any, ref map[FuncRef]any, is
 		return err
 	}
 
-	dest := &rs.Close
+	dest := &rs.close
 	if isOpen {
-		dest = &rs.Open
+		dest = &rs.open
 	}
 
 	// Apply inject modifiers (clear, delete, move) to existing alts first.
@@ -666,10 +666,10 @@ func wireStateActions(rs *RuleSpec, ref map[FuncRef]any) {
 		dest   *[]StateAction
 	}
 	targets := []target{
-		{"bo", &rs.BO},
-		{"ao", &rs.AO},
-		{"bc", &rs.BC},
-		{"ac", &rs.AC},
+		{"bo", &rs.bo},
+		{"ao", &rs.ao},
+		{"bc", &rs.bc},
+		{"ac", &rs.ac},
 	}
 	if rs.fnrefInstalled == nil {
 		rs.fnrefInstalled = map[string]map[uintptr]bool{}

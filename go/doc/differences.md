@@ -101,6 +101,9 @@ Full custom matchers (with lexer ordering control) are available in both via
 | Plugin signature | `(tabnas, opts?) => void \| Tabnas` | `func(j *Tabnas, opts map[string]any) error` |
 | Plugin failure | throw | returned `error` |
 | Rule definer | `(rs: RuleSpec, p: Parser) => void \| RuleSpec` | `func(rs *RuleSpec, p *Parser)` (no replacement return) |
+| RuleSpec alternate/action lists | private; mutated via methods | private; mutated via methods (`AddOpen`/`PrependOpen`/`ModifyOpen`/`ClearOpen`, `AddBO`/`PrependBO`/`ClearActions`, `Fnref`) and read via getters (`OpenAlts`/`CloseAlts`/`Actions`/`HasBO…`) — aligned with TS; direct field assignment is no longer possible |
+| Funcref `@x/append` vs plain `@x` | same slot (`fr['@x/append'] ?? fr['@x']`) | same slot (aligned) |
+| Funcref dedup | by function identity | by function pointer (Go has no per-closure identity; reuse stable ref values) |
 | State actions raising errors | Return an error `Token` | Set `ctx.ParseErr` (same effect: parse halts with the error) |
 | Plugin defaults | `.defaults` property on the function | `UseDefaults(plugin, defaults)` |
 | Option namespacing | Plugin options merged by name | `PluginOptions` / `SetPluginOptions` |

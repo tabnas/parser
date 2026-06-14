@@ -118,13 +118,32 @@ Return a value set by `Decorate`, or nil.
 ### `(*Tabnas) Rule(name string, definer RuleDefiner) *Tabnas`
 
 Modify or create a grammar rule. The definer receives the `*RuleSpec`
-and owning `*Parser` and can modify the rule's `Open`/`Close` alternate
-lists and state actions (`BO`, `BC`, `AO`, `AC`). A new empty rule is
-created if the name is unknown.
+and owning `*Parser`. A new empty rule is created if the name is unknown.
 
 ```go
 type RuleDefiner func(rs *RuleSpec, p *Parser)
 ```
+
+The rule's alternate and lifecycle-action lists are **unexported** and
+mutated through methods (matching the TS RuleSpec, where direct array
+assignment is not possible):
+
+| Method(s) | Purpose |
+|---|---|
+| `AddOpen(alts…)` / `AddClose(alts…)` | append alternates |
+| `PrependOpen(alts…)` / `PrependClose(alts…)` | prepend alternates |
+| `ModifyOpen(mods)` / `ModifyClose(mods)` | clear / delete / move / custom |
+| `ClearOpen()` / `ClearClose()` | remove all alternates for a phase |
+| `AddBO/AddAO/AddBC/AddAC(fn)` | append a lifecycle action |
+| `PrependBO/PrependAO/PrependBC/PrependAC(fn)` | prepend a lifecycle action |
+| `ClearActions(phases…)` | remove lifecycle actions (no args = all four) |
+| `Fnref(ref)` | install lifecycle actions by `@<rule>-<phase>` funcref |
+| `OpenAlts()` / `CloseAlts()` | read alternates |
+| `Actions(phase)` | read a phase's actions (`"bo"`/`"ao"`/`"bc"`/`"ac"`) |
+| `HasBO()/HasAO()/HasBC()/HasAC()` | lifecycle presence flags |
+
+`AltModListOpts` (the `ModifyOpen`/`ModifyClose` argument) has fields
+`Clear`, `Delete`, `Move`, and `Custom`.
 
 ### `(*Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) error`
 

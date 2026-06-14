@@ -7,13 +7,13 @@ import "sort"
 // functions so plugin authors porting from TS can keep calls shaped like
 // `j.Util().Deep(a, b)` instead of re-importing each helper.
 type UtilBag struct {
-	Deep       func(base any, rest ...any) any
-	Keys       func(m map[string]any) []string
-	Values     func(m map[string]any) []any
-	Entries    func(m map[string]any) []Entry
-	Omap       func(m map[string]any, fn func(Entry) []any) map[string]any
-	Str        func(val any, maxlen int) string
-	StrInject  func(template string, vals any) string
+	Deep      func(base any, rest ...any) any
+	Keys      func(m map[string]any) []string
+	Values    func(m map[string]any) []any
+	Entries   func(m map[string]any) []Entry
+	Omap      func(m map[string]any, fn func(Entry) []any) map[string]any
+	Str       func(val any, maxlen int) string
+	StrInject func(template string, vals any) string
 
 	// Lex scan primitives — exposed so plugin authors can build their
 	// own matchers on the same state-machine driver (TS exposes scan,

@@ -67,6 +67,7 @@ type pluginEntry struct {
 //
 //	j := tabnas.Make()
 //	err := j.Use(myPlugin, map[string]any{"key": "value"})
+//
 // internalError converts a recovered panic value into an "internal"-code
 // *TabnasError, so error-returning public APIs uphold the no-panic
 // guarantee: any panic (including from plugin callbacks or grammar specs)
@@ -128,10 +129,10 @@ func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map
 // Example:
 //
 //	j.Rule("val", func(rs *RuleSpec, p *Parser) {
-//	    rs.Open = append([]*AltSpec{{
+//	    rs.open = append([]*AltSpec{{
 //	        S: [][]Tin{{myToken}},
 //	        A: func(r *Rule, ctx *Context) { r.Node = "custom" },
-//	    }}, rs.Open...)
+//	    }}, rs.open...)
 //	})
 func (j *Tabnas) Rule(name string, definer RuleDefiner) *Tabnas {
 	rs := j.parser.RSM[name]
@@ -778,8 +779,8 @@ func (j *Tabnas) include(groups ...string) *Tabnas {
 		return j
 	}
 	for _, rs := range j.parser.RSM {
-		rs.Open = filterAltsInclude(rs.Open, includeSet)
-		rs.Close = filterAltsInclude(rs.Close, includeSet)
+		rs.open = filterAltsInclude(rs.open, includeSet)
+		rs.close = filterAltsInclude(rs.close, includeSet)
 	}
 	return j
 }
@@ -791,8 +792,8 @@ func (j *Tabnas) exclude(groups ...string) *Tabnas {
 	excludeSet := buildTagSet(groups)
 
 	for _, rs := range j.parser.RSM {
-		rs.Open = filterAlts(rs.Open, excludeSet)
-		rs.Close = filterAlts(rs.Close, excludeSet)
+		rs.open = filterAlts(rs.open, excludeSet)
+		rs.close = filterAlts(rs.close, excludeSet)
 	}
 	return j
 }

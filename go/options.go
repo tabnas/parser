@@ -193,8 +193,8 @@ type PropertyOptions struct {
 // Go splits the union across two fields: Token/Value hold the regexp
 // forms, TokenFn and MatchValueSpec.Fn hold the function forms.
 type MatchOptions struct {
-	Lex   *bool                     // Enable custom matching. Default: true.
-	Token map[string]*regexp.Regexp // "#NAME" → regexp pattern for custom tokens.
+	Lex   *bool                      // Enable custom matching. Default: true.
+	Token map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
 	Value map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
 
 	// TokenFn registers function-form token matchers ("#NAME" → matcher),
@@ -210,8 +210,8 @@ type MatchOptions struct {
 // MatchValueSpec defines a custom value matcher.
 // Matches TS options.match.value[name] (RegExp | LexMatcher).
 type MatchValueSpec struct {
-	Match *regexp.Regexp       // Regexp pattern to match against.
-	Val   func([]string) any   // Optional value transformer, receives match groups.
+	Match *regexp.Regexp     // Regexp pattern to match against.
+	Val   func([]string) any // Optional value transformer, receives match groups.
 
 	// Fn is the function-form matcher (TS LexMatcher branch). When set,
 	// Match/Val are ignored and the function's non-nil Token is the match.
@@ -342,8 +342,8 @@ type StringOptions struct {
 	// stays). Default: false. Combined with escape-map removals and
 	// AllowUnknown:false this yields JSON.parse-conformant handling.
 	EscapeStrict *bool
-	Abandon      *bool             // On string error, return nil to let next matcher try. Default: false.
-	Replace      map[rune]string   // Character replacements applied during string scanning.
+	Abandon      *bool           // On string error, return nil to let next matcher try. Default: false.
+	Replace      map[rune]string // Character replacements applied during string scanning.
 
 	// Check is a LexCheck hook invoked before the string matcher runs.
 	// Mirrors TS `options.string.check`.
@@ -451,23 +451,23 @@ var idCounter int
 
 // Tabnas is a configured parser instance, equivalent to TypeScript's Tabnas.make().
 type Tabnas struct {
-	id           string             // Unique instance identifier (TS: tabnas.id)
-	options      *Options
-	parser       *Parser
-	plugins      []pluginEntry      // Registered plugins
-	tinByName    map[string]Tin     // Custom token name → Tin
-	nameByTin    map[Tin]string     // Custom Tin → token name
-	nextTin      Tin                // Next available Tin for allocation
-	lexSubs      []LexSub           // Lex event subscribers
-	ruleSubs     []RuleSub          // Rule event subscribers
-	hints        map[string]string  // Error hints per error code
-	emptyAllow   bool               // Allow empty source
-	emptyResult  any                // Result for empty source
-	parserStart  func(src string, j *Tabnas, meta map[string]any) (any, error)
-	inSetOptions bool               // Re-entrancy guard for SetOptions
-	decorations     map[string]any     // Plugin decorations (TS: tabnas.foo = value)
+	id              string // Unique instance identifier (TS: tabnas.id)
+	options         *Options
+	parser          *Parser
+	plugins         []pluginEntry     // Registered plugins
+	tinByName       map[string]Tin    // Custom token name → Tin
+	nameByTin       map[Tin]string    // Custom Tin → token name
+	nextTin         Tin               // Next available Tin for allocation
+	lexSubs         []LexSub          // Lex event subscribers
+	ruleSubs        []RuleSub         // Rule event subscribers
+	hints           map[string]string // Error hints per error code
+	emptyAllow      bool              // Allow empty source
+	emptyResult     any               // Result for empty source
+	parserStart     func(src string, j *Tabnas, meta map[string]any) (any, error)
+	inSetOptions    bool                      // Re-entrancy guard for SetOptions
+	decorations     map[string]any            // Plugin decorations (TS: tabnas.foo = value)
 	pluginOpts      map[string]map[string]any // Plugin options namespace (TS: options.plugin)
-	customTokenSets map[string][]Tin  // Custom token sets (TS: options.tokenSet)
+	customTokenSets map[string][]Tin          // Custom token sets (TS: options.tokenSet)
 }
 
 // Decorate sets a named value on this instance. This is the Go equivalent of
@@ -570,13 +570,13 @@ func Make(opts ...Options) *Tabnas {
 	instanceId := "Tabnas/" + strconv.Itoa(idCounter) + tag
 
 	j := &Tabnas{
-		id:          instanceId,
-		options:     &o,
-		parser:      p,
-		tinByName:   tinByName,
-		nameByTin:   nameByTin,
-		nextTin:     TinMAX,
-		emptyAllow:  true, // default: allow empty source
+		id:         instanceId,
+		options:    &o,
+		parser:     p,
+		tinByName:  tinByName,
+		nameByTin:  nameByTin,
+		nextTin:    TinMAX,
+		emptyAllow: true, // default: allow empty source
 	}
 
 	// Error messages, hints, and errmsg formatting are resolved into the

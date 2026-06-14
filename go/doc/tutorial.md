@@ -64,11 +64,11 @@ func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
 	// Teach the start rule (`val`) what to do when it sees that token:
 	// set the result node to the string "world".
 	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
-		rs.Open = []*tabnas.AltSpec{{
+		rs.AddOpen(&tabnas.AltSpec{
 			S: [][]tabnas.Tin{{HI}},
 			A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" },
-		}}
-		rs.Close = []*tabnas.AltSpec{{S: [][]tabnas.Tin{{tabnas.TinZZ}}}}
+		})
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{tabnas.TinZZ}}})
 	})
 	return nil
 }
@@ -126,11 +126,11 @@ func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
 	HI, BY := j.Token("#HI"), j.Token("#BY")
 
 	j.Rule("val", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
-		rs.Open = []*tabnas.AltSpec{
-			{S: [][]tabnas.Tin{{HI}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" }},
-			{S: [][]tabnas.Tin{{BY}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "farewell" }},
-		}
-		rs.Close = []*tabnas.AltSpec{{S: [][]tabnas.Tin{{tabnas.TinZZ}}}}
+		rs.AddOpen(
+			&tabnas.AltSpec{S: [][]tabnas.Tin{{HI}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "world" }},
+			&tabnas.AltSpec{S: [][]tabnas.Tin{{BY}}, A: func(r *tabnas.Rule, _ *tabnas.Context) { r.Node = "farewell" }},
+		)
+		rs.AddClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{tabnas.TinZZ}}})
 	})
 	return nil
 }
