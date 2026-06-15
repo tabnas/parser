@@ -36,29 +36,153 @@ addition expressions (`1+2+3`):
 ```js
 const { Tabnas } = require('@tabnas/parser')
 
-// `#NR` (number) is a built-in token; declare `+` as the `#PL` token.
-// Parsing starts at the `add` rule.
-const tn = new Tabnas({
-  fixed: { token: { '#PL': '+' } },
-  rule: { start: 'add' },
-})
+// Create a new parser.
+const tn = new Tabnas()
 
+// Define the grammar.
 tn.grammar({
-  ref: {
-    // After the pushed right-hand expression closes, add it in.
-    '@add-bc': (r) => { if (null != r.child.node) r.node += r.child.node },
+
+  options: {
+
+    // Define a new token named #PL, a "+" character.
+    fixed: { token: { '#PL': '+' } },
+
+    // Start parsing at the 'val' rule.
+    rule: { start: 'val' },
   },
+  
   rule: {
+  
+    // The 'val' rule holds the running total.
+    // Each rule instance has a 'node' representing its value.
+    val: {
+    
+      // Define the "opening" phase of the rule.
+      open:  [
+      
+        // This is an "alternate", it matches any tokens.
+        { 
+          // "push" down into an 'add' rule.
+          p: 'add', 
+          
+          // An "action" - set the counter to 0.
+          a: (r) => { r.node = 0 } 
+        }
+       ]
+       
+      // Define the "closing" phase of the rule.
+      close: [
+        {} // Ending "alternate" - does nothing.
+      ]
+    }
+    
+    // The 'add' rule performs the addition.
     add: {
-      open:  [{ s: '#NR', a: (r) => { r.node = r.o0.val } }],  // a number
-      close: [{ s: '#PL', p: 'add' }, {}],                     // `+ add`, or end
-    },
-  },
+      open:  [
+        { 
+          // Match a number - #NR is a built-in token for numbers.
+          s: '#NR',
+          
+          // Add the number to the total.
+          a: (r) => { 
+            r.parent.node +=  // The parent is the 'val'. 
+              r.o[0].val      // Get the value of the first opening token. 
+          } 
+        }
+      ],
+      close: [
+        // If there is a "+" following the number, keep going.
+        { 
+          s: '#PL', // This is our "+" token, #PL
+          r: 'add'  // 'Repeat" the 'add' rule
+        }, 
+        
+        // Else end the rule.
+        {}
+      ]
+    }
+  }
 })
 
 tn.parse('1+2+3')   // => 6
 tn.parse('10+20')   // => 30
 ```
+
+
+You can debug the parser using the  [`@tabnas/debug`](https://github.com/tabnas/debug)) plugin:
+
+
+```
+========= ABNF =========
+val = add
+add = NR [ PL add ]
+
+NR = <number>
+PL = "+"
+
+    
+========= RULES =========
+  val:
+    op: add        ← val OPEN pushes `add`
+  add:
+    cr: add        ← add CLOSE replaces with `add`  (the `+` loop)
+
+========= ALTS =========
+  val:
+    OPEN:   0 []                p=add   A      ← push add, run action (init node=0)
+    CLOSE:  0 []
+  add:
+    OPEN:   0 [#NR]             A             ← match a number, run action (+= number)
+    CLOSE:  0 [#PL]             r=add         ← on `+`, replace with add
+            1 []                              ← else, end
+```
+
+
+Here is how `1+2+3` is parsed, step by step. **Push** (`p`) descends into
+the `add` loop; **replace** (`r`) loops within a single stack frame; the
+running total accumulates on the `val` node:
+
+```mermaid
+flowchart TD
+    Start(["parse('1+2+3')"]):::io --> V0
+
+    subgraph D0 ["stack depth 0 · start rule 'val' — holds the running total"]
+      direction TB
+      V0["val · OPEN<br/>node = 0"]:::open
+      Vc["val · CLOSE<br/>node = 6"]:::done
+    end
+
+    subgraph D1 ["stack depth 1 · 'add' loop — replace reuses ONE stack slot"]
+      direction TB
+      A2["add · OPEN<br/>lex #NR '1'<br/>parent.node += 1 ⇒ 1"]:::open
+      A2c{{"add · CLOSE"}}:::close
+      A3["add · OPEN<br/>lex #NR '2'<br/>parent.node += 2 ⇒ 3"]:::open
+      A3c{{"add · CLOSE"}}:::close
+      A4["add · OPEN<br/>lex #NR '3'<br/>parent.node += 3 ⇒ 6"]:::open
+      A4c{{"add · CLOSE"}}:::close
+    end
+
+    V0 -. "p: push 'add'" .-> A2
+    A2 --> A2c
+    A2c == "'+' (#PL) → r: replace" ==> A3
+    A3 --> A3c
+    A3c == "'+' (#PL) → r: replace" ==> A4
+    A4 --> A4c
+    A4c -- "end (#ZZ) → close & pop" --> Vc
+    Vc --> Result(["result ⇒ 6"]):::io
+
+    classDef open fill:#e3f2fd,stroke:#1565c0,color:#0d47a1;
+    classDef close fill:#fff3e0,stroke:#e65100,color:#bf360c;
+    classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20;
+    classDef io fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c;
+```
+
+- **Dotted edge** = `p` push: `val` descends into the `add` loop (depth 0 → 1).
+- **Thick edges** = `r` replace: each `+` swaps `add` for the next `add` at the
+  *same* depth — the whole loop lives in one stack frame (no growth).
+- **Plain edge** = close & pop: end-of-source (`#ZZ`) ends the loop, popping
+  back to `val`, which closes returning the total.
+
 
 ## TypeScript is canonical; Go follows
 
