@@ -30,21 +30,35 @@ it is **grammar-agnostic**:
 - **Plugins** — a grammar is a plugin that registers tokens and rules.
   Compose several plugins to parse a dialect.
 
-**Benefits & features**
+A complete grammar is small. Here is a declarative grammar for integer
+addition expressions (`1+2+3`):
 
-- **Grammar-free core** — one engine, many grammars; nothing JSON-specific
-  is hard-wired.
-- **Pluggable & composable** — mix grammar plugins (JSON, JSONC, JSON5,
-  CSV, YAML, TOML, XML, INI, …) and tooling plugins (debug, BNF) on one
-  instance.
-- **Lenient by design** — the relaxed-JSON heritage makes human-friendly
-  input (unquoted keys, implicit structure, comments, trailing commas) a
-  first-class capability rather than an afterthought.
-- **Configurable end to end** — tokens, matchers, rules, and a deep options
-  tree are all overridable per instance.
-- **Good errors** — structured, located parse errors with source context.
-- **Two runtimes, one behaviour** — a canonical TypeScript engine and a Go
-  port that share the same `.tsv` conformance fixtures.
+```js
+const { Tabnas } = require('@tabnas/parser')
+
+// `#NR` (number) is a built-in token; declare `+` as the `#PL` token.
+// Parsing starts at the `add` rule.
+const tn = new Tabnas({
+  fixed: { token: { '#PL': '+' } },
+  rule: { start: 'add' },
+})
+
+tn.grammar({
+  ref: {
+    // After the pushed right-hand expression closes, add it in.
+    '@add-bc': (r) => { if (null != r.child.node) r.node += r.child.node },
+  },
+  rule: {
+    add: {
+      open:  [{ s: '#NR', a: (r) => { r.node = r.o0.val } }],  // a number
+      close: [{ s: '#PL', p: 'add' }, {}],                     // `+ add`, or end
+    },
+  },
+})
+
+tn.parse('1+2+3')   // => 6
+tn.parse('10+20')   // => 30
+```
 
 ## TypeScript is canonical; Go follows
 
