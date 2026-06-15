@@ -146,13 +146,12 @@ running total accumulates on the `val` node:
 flowchart TD
     Start(["parse('1+2+3')"]):::io --> V0
 
-    subgraph D0 ["stack depth 0 · start rule 'val' — holds the running total"]
+    subgraph S0a ["stack depth 0 · 'val' OPEN — running total starts at 0"]
       direction TB
       V0["val · OPEN<br/>node = 0"]:::open
-      Vc["val · CLOSE<br/>node = 6"]:::done
     end
 
-    subgraph D1 ["stack depth 1 · 'add' loop — replace reuses ONE stack slot"]
+    subgraph S1 ["stack depth 1 · 'add' loop — replace reuses ONE stack slot"]
       direction TB
       A2["add · OPEN<br/>lex #NR '1'<br/>parent.node += 1 ⇒ 1"]:::open
       A2c{{"add · CLOSE"}}:::close
@@ -160,6 +159,11 @@ flowchart TD
       A3c{{"add · CLOSE"}}:::close
       A4["add · OPEN<br/>lex #NR '3'<br/>parent.node += 3 ⇒ 6"]:::open
       A4c{{"add · CLOSE"}}:::close
+    end
+
+    subgraph S0b ["stack depth 0 · 'val' CLOSE — running total returned"]
+      direction TB
+      Vc["val · CLOSE<br/>node = 6"]:::done
     end
 
     V0 -. "p: push 'add'" .-> A2
