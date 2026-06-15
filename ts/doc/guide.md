@@ -11,7 +11,7 @@ Wrap your grammar in a plugin function and apply it. A grammar
 registers tokens, then registers rules that act on them.
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 
 function myGrammar(tn) {
   tn.options({ fixed: { token: { '#HI': 'hello' } } })
@@ -77,7 +77,7 @@ and [custom matchers](plugins.md#custom-matchers).
 A failed parse throws a `TabnasError`. Catch it and read its fields:
 
 ```js
-const { Tabnas, TabnasError } = require('tabnas')
+const { Tabnas, TabnasError } = require('@tabnas/parser')
 
 try {
   tn.parse(brokenSource)

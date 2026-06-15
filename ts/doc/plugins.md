@@ -21,7 +21,7 @@ function myPlugin(tabnas, options) {
   // configure the instance here
 }
 
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 const tn = new Tabnas()
 tn.use(myPlugin, { key: 'value' })
 ```
@@ -71,7 +71,7 @@ clear error rather than producing a confusing parse failure later.
 ### TypeScript signature
 
 ```ts
-import type { Plugin, Tabnas } from 'tabnas'
+import type { Plugin, Tabnas } from '@tabnas/parser'
 
 const myPlugin: Plugin = function myPlugin(tn: Tabnas, options?: any) {
   // …

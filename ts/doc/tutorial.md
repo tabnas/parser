@@ -9,7 +9,7 @@ last.
 ## Install
 
 ```bash
-npm install tabnas
+npm install @tabnas/parser
 ```
 
 ## Create an instance
@@ -18,7 +18,7 @@ A parser is an instance of the `Tabnas` class. Create one and try to
 parse something:
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 
 const tn = new Tabnas()
 tn.parse('hello')                     // throws — no grammar yet

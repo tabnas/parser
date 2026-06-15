@@ -7,7 +7,7 @@ optional — unset fields use defaults. The complete option type is
 `src/defaults.ts`.
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 
 const tn = new Tabnas({
   plugins: [myGrammarPlugin],

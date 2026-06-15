@@ -58,7 +58,7 @@ two ever differ, the TypeScript behaviour is authoritative.
 
 | Runtime | Package / module | Start here |
 |---|---|---|
-| **TypeScript / JavaScript** — original & canonical | `tabnas` (npm) | [`ts/README.md`](ts/README.md) |
+| **TypeScript / JavaScript** — original & canonical | `@tabnas/parser` (npm) | [`ts/README.md`](ts/README.md) |
 | **Go** — port that follows the TS engine | `github.com/tabnas/parser/go` | [`go/README.md`](go/README.md) |
 
 ## Documentation
@@ -85,7 +85,7 @@ runtimes:
 
 | Path | What it is |
 |---|---|
-| [`ts/`](ts/) | The canonical TypeScript engine (the `tabnas` npm package). |
+| [`ts/`](ts/) | The canonical TypeScript engine (the `@tabnas/parser` npm package). |
 | [`go/`](go/) | The Go port (`github.com/tabnas/parser/go`) — grammar-free, same layout as TS. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
@@ -109,3 +109,8 @@ This open source module is sponsored and supported by
 ## License
 
 MIT. Copyright (c) 2013-2026 Richard Rodger.
+
+
+## Tábla na nAistrithe — “The Table of Transitions.” - (tabnas)
+
+Is é Tábla na nAistrithe ainm an innill seo. Is gléas é déanta d’adhmad, de rothaí fiaclacha, de luamháin, agus de phionnaí. Tá stiall phár ann, agus comharthaí scríofa uirthi. Léann lámh bheag an innill comhartha amháin, féachann sí ar staid an innill, agus de réir rialacha Tábla na nAistrithe scríobhann sí comhartha nua, athraíonn sí a staid, agus bogann sí cearnóg amháin ar chlé nó ar dheis. Nuair nach bhfuil riail eile le leanúint aici, tagann Tábla na nAistrithe chun suaimhnis.

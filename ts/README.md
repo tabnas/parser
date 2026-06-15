@@ -6,13 +6,13 @@ package ships **no grammar** of its own: every grammar is a plugin
 that you (or another package) supply.
 
 ```bash
-npm install tabnas
+npm install @tabnas/parser
 ```
 
 A tiny taste — a one-token grammar defined inline:
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 
 const tn = new Tabnas({ plugins: [(tn) => {
   tn.options({ fixed: { token: { '#HI': 'hello' } } })

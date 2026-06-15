@@ -12,7 +12,7 @@ Create a parser instance. The class has no grammar by default; pass a
 `plugins` array to apply one (or more) at construction time:
 
 ```js
-const { Tabnas } = require('tabnas')
+const { Tabnas } = require('@tabnas/parser')
 
 const tn = new Tabnas({ plugins: [myGrammarPlugin] })
 tn.parse(src)
@@ -313,11 +313,11 @@ const {
 
   // Utility bag (also Tabnas.util)
   util,
-} = require('tabnas')
+} = require('@tabnas/parser')
 ```
 
 The package also exposes subpath exports for direct access to internal
-modules: `tabnas/lexer`, `tabnas/utility`, and `tabnas/error`.
+modules: `@tabnas/parser/lexer`, `@tabnas/parser/utility`, and `@tabnas/parser/error`.
 
 There is no bundled grammar export. Companion grammars and tooling are
 separate packages (`@tabnas/bnf`, `@tabnas/debug`); the strict-JSON
