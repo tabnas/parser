@@ -464,7 +464,6 @@ type Tabnas struct {
 	emptyAllow      bool              // Allow empty source
 	emptyResult     any               // Result for empty source
 	parserStart     func(src string, j *Tabnas, meta map[string]any) (any, error)
-	inSetOptions    bool                      // Re-entrancy guard for SetOptions
 	decorations     map[string]any            // Plugin decorations (TS: tabnas.foo = value)
 	pluginOpts      map[string]map[string]any // Plugin options namespace (TS: options.plugin)
 	customTokenSets map[string][]Tin          // Custom token sets (TS: options.tokenSet)

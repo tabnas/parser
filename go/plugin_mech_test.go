@@ -478,3 +478,29 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// A plugin is applied exactly once per Use, even when its body calls
+// SetOptions. SetOptions must not re-run registered plugins (matching TS
+// #setOptions, which does not re-trigger plugin application; only the
+// make()/Derive path re-runs them). Regression for a double-application
+// bug where Use(grammarPlugin) ran the grammar plugin twice.
+func TestPMUseAppliesPluginOnce(t *testing.T) {
+	runs := 0
+	p := func(j *Tabnas, _ map[string]any) error {
+		runs++
+		j.SetOptions(Options{Tag: "x"}) // grammar plugins typically do this
+		return nil
+	}
+	j := Make()
+	if err := j.Use(p); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Errorf("plugin applied %d times for one Use, want 1", runs)
+	}
+	// A subsequent direct SetOptions also must not re-run the plugin.
+	j.SetOptions(Options{Tag: "y"})
+	if runs != 1 {
+		t.Errorf("SetOptions re-ran plugin: %d times, want 1", runs)
+	}
+}

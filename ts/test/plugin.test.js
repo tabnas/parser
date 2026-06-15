@@ -203,3 +203,21 @@ describe('plugin', () => {
     })
   })
 })
+
+describe('plugin application', () => {
+  it('applies a plugin once per use, even if it calls options()', () => {
+    // A plugin whose body calls am.options() must not be re-applied by
+    // the options() setter (TS #setOptions does not re-run plugins; only
+    // make()/derive does). Parity guard with the Go engine.
+    const { Tabnas } = require('..')
+    let runs = 0
+    const am = new Tabnas()
+    am.use((am) => {
+      runs++
+      am.options({ tag: 'x' })
+    })
+    assert.equal(runs, 1, 'plugin should run exactly once per use')
+    am.options({ tag: 'y' })
+    assert.equal(runs, 1, 'options() must not re-run the plugin')
+  })
+})
