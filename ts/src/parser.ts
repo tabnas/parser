@@ -38,15 +38,12 @@ import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 import { makeRule, makeNoRule, makeRuleSpec } from './rules'
 
 
-// Top-level rule-driven parser. Holds the rule map, the current
-// config, and the Tabnas instance the rules belong to. `start()`
-// runs a parse from scratch; `clone()` produces a sibling for child
-// instances (Tabnas#make).
+// Rule-driven parser: start() parses from scratch, clone() makes a child sibling.
 class Parser {
-  options: TabnasOptions
-  cfg: Config
-  rsm: RuleSpecMap = {}
-  ji: Tabnas
+  options: TabnasOptions    // Raw user options.
+  cfg: Config               // Resolved configuration.
+  rsm: RuleSpecMap = {}     // Rule specs keyed by rule name.
+  ji: Tabnas                // Owning Tabnas instance.
 
   constructor(options: TabnasOptions, cfg: Config, j: Tabnas) {
     this.options = options

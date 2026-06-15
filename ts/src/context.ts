@@ -1,4 +1,4 @@
-/* Copyright (c) 2021-2026 Richard Rodger and other contributors, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  context.ts
  *  Per-parse Context — the state object passed to every rule action
@@ -22,66 +22,62 @@ import type {
 } from './types'
 
 
-// Fields the parser supplies up front when starting a parse. The
-// remaining Context fields (rule, NORULE, log, lex …) get filled in
-// after construction.
+// Fields the parser supplies up front to construct a Context (the rest are filled in later).
 export type ContextInit = {
-  opts: TabnasOptions
-  cfg: Config
-  meta: Record<string, any>
-  src: () => string
-  root: () => any
-  plgn: () => Plugin[]
-  inst: () => Tabnas
-  sub: { lex?: LexSub[]; rule?: RuleSub[] }
-  rsm: { [name: string]: RuleSpec }
-  F: (s: any) => string
-  NOTOKEN: Token
-  NORULE: Rule
+  opts:    TabnasOptions                       // Resolved instance options.
+  cfg:     Config                              // Resolved instance config.
+  meta:    Record<string, any>                 // Parse meta parameters.
+  src:     () => string                        // Returns the full source text.
+  root:    () => any                           // Returns the parse result root.
+  plgn:    () => Plugin[]                       // Returns the applied plugins.
+  inst:    () => Tabnas                         // Returns the owning Tabnas instance.
+  sub:     { lex?: LexSub[]; rule?: RuleSub[] } // Lex and rule subscriber callbacks.
+  rsm:     { [name: string]: RuleSpec }         // Rule specs by name.
+  F:       (s: any) => string                   // Value formatter for log/error text.
+  NOTOKEN: Token                                // Shared end/absent-token sentinel.
+  NORULE:  Rule                                 // Shared no-rule sentinel.
 }
 
 
+// Per-parse state object passed to every rule action and lex matcher.
 export class Context {
-  // Plugin / rule decoration — kept open so plugins can stash custom
-  // state without TypeScript complaints.
+  // Open index signature so plugins can stash custom state without TypeScript complaints.
   [key: string]: any
 
-  uI = 0           // Rule index.
-  opts!: TabnasOptions   // Tabnas instance options.
-  cfg!: Config     // Tabnas instance config.
-  meta!: Record<string, any>       // Parse meta parameters.
-  src!: () => string
-  root!: () => any
-  plgn!: () => Plugin[]
-  inst!: () => Tabnas
+  uI = 0                                       // Rule index.
+  opts!: TabnasOptions                         // Tabnas instance options.
+  cfg!: Config                                 // Tabnas instance config.
+  meta!: Record<string, any>                   // Parse meta parameters.
+  src!: () => string                           // Returns the full source text.
+  root!: () => any                             // Returns the parse result root.
+  plgn!: () => Plugin[]                         // Returns the applied plugins.
+  inst!: () => Tabnas                           // Returns the owning Tabnas instance.
 
-  rule!: Rule      // Current rule instance — set by parser.start().
-  sub!: { lex?: LexSub[]; rule?: RuleSub[] }
+  rule!: Rule                                  // Current rule instance — set by parser.start().
+  sub!: { lex?: LexSub[]; rule?: RuleSub[] }   // Lex and rule subscriber callbacks.
 
-  xs: Tin = -1 as Tin // Lex state tin.
+  xs: Tin = -1 as Tin                          // Lex state tin.
 
-  // Consumed-token history. v1 / v2 (below) read from the top of
-  // this stack. vAbs is the absolute count of pushed-not-rewound
-  // tokens since parse start; mark() returns it so ring-buffer
-  // eviction of old entries doesn't invalidate outstanding marks.
+  // Consumed-token history; v1 / v2 (below) read from the top of this stack.
   v: Token[] = []
+  // Absolute count of pushed-not-rewound tokens since parse start; mark()
+  // returns it so ring-buffer eviction of old entries doesn't invalidate marks.
   vAbs = 0
 
-  // Lookahead buffer. Seeded with two NOTOKEN slots; grows as alts
-  // request deeper positions via t[i].
+  // Lookahead buffer; seeded with two NOTOKEN slots, grows as alts request deeper positions via t[i].
   t!: Token[]
 
-  tC = -2          // Prepare count for lookahead (two seeded slots).
-  kI = -1          // Parser rule iteration count.
-  rs: Rule[] = []  // Rule stack.
-  rsI = 0
-  rsm!: { [name: string]: RuleSpec }
-  log?: (...rest: any) => void
-  F!: (s: any) => string
-  u: Record<string, any> = {}      // Custom meta data (for use by plugins).
-  NOTOKEN!: Token
-  NORULE!: Rule
-  lex?: any        // Attached by parser.start() once the lexer exists.
+  tC = -2                                      // Prepare count for lookahead (two seeded slots).
+  kI = -1                                      // Parser rule iteration count.
+  rs: Rule[] = []                              // Rule stack.
+  rsI = 0                                      // Rule stack index.
+  rsm!: { [name: string]: RuleSpec }           // Rule specs by name.
+  log?: (...rest: any) => void                 // Optional log callback.
+  F!: (s: any) => string                       // Value formatter for log/error text.
+  u: Record<string, any> = {}                  // Custom meta data (for use by plugins).
+  NOTOKEN!: Token                              // Shared end/absent-token sentinel.
+  NORULE!: Rule                                // Shared no-rule sentinel.
+  lex?: any                                    // Attached by parser.start() once the lexer exists.
 
 
   constructor(init: ContextInit) {

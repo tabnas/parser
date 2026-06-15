@@ -1,6 +1,6 @@
 # Options Reference
 
-Options are passed to `new Tabnas(options)` (or to `am.make(options)`
+Options are passed to `new Tabnas(options)` (or to `tn.make(options)`
 to derive a child) to configure a parser instance. All fields are
 optional — unset fields use defaults. The complete option type is
 `TabnasOptions` (see `src/types.ts`); the default values are in
@@ -9,7 +9,7 @@ optional — unset fields use defaults. The complete option type is
 ```js
 const { Tabnas } = require('tabnas')
 
-const am = new Tabnas({
+const tn = new Tabnas({
   plugins: [myGrammarPlugin],
   comment: { lex: false },
   number: { hex: false },
@@ -19,8 +19,8 @@ const am = new Tabnas({
 ## `plugins`
 
 Plugins to apply at construction time. Equivalent to calling
-`am.use(plugin)` in order after construction. Children of this
-instance (`am.make({ … })`) re-run every plugin in this list against
+`tn.use(plugin)` in order after construction. Children of this
+instance (`tn.make({ … })`) re-run every plugin in this list against
 their own merged options.
 
 ```js
@@ -28,22 +28,22 @@ new Tabnas({ plugins: [myGrammarPlugin, anotherPlugin] })
 ```
 
 `plugins` is consumed by the constructor — it's not stored back into
-`am.options.plugins`. Per-plugin options live under `options.plugin`
+`tn.options.plugins`. Per-plugin options live under `options.plugin`
 (below).
 
 ## `plugin`
 
 Per-plugin option bag, namespaced by plugin name (lowercased).
-`am.use(myPlugin, { x: 1 })` stores `{ x: 1 }` under
+`tn.use(myPlugin, { x: 1 })` stores `{ x: 1 }` under
 `options.plugin.myplugin`. Plugins read their own settings from there.
 
 ```js
-am.options.plugin.foo                 // foo's merged options
+tn.options.plugin.foo                 // foo's merged options
 ```
 
 ## `tag`
 
-A short label appended to `am.id` and shown in error diagnostics.
+A short label appended to `tn.id` and shown in error diagnostics.
 Default `'-'`.
 
 ## `fixed`
@@ -58,7 +58,7 @@ Controls recognition of fixed structural tokens (`{`, `}`, `[`, `]`,
 
 ## `tokenSet`
 
-Named groups of tokens, used by grammars and by `am.tokenSet(name)`.
+Named groups of tokens, used by grammars and by `tn.tokenSet(name)`.
 
 | Set | Default members |
 |---|---|
@@ -197,7 +197,7 @@ than pure tokens). For high-priority pattern values, use `match`
 (below) instead.
 
 ```js
-am.make({ value: { def: { yes: { val: true }, no: { val: false } } } })
+tn.make({ value: { def: { yes: { val: true }, no: { val: false } } } })
 ```
 
 ## `match`
@@ -325,7 +325,7 @@ afterwards has no effect.
 | `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (read by `configure`) |
 | `grammar$` | boolean | — | Reserved for plugins to opt out of registering grammar |
 
-`am.empty(opts)` is shorthand for `new Tabnas({ defaults$: false,
+`tn.empty(opts)` is shorthand for `new Tabnas({ defaults$: false,
 standard$: false, grammar$: false, ...opts })`.
 
 ## Advanced

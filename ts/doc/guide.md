@@ -13,19 +13,19 @@ registers tokens, then registers rules that act on them.
 ```js
 const { Tabnas } = require('tabnas')
 
-function myGrammar(am) {
-  am.options({ fixed: { token: { '#HI': 'hello' } } })
-  am.rule('val', (rs) => rs.open([
+function myGrammar(tn) {
+  tn.options({ fixed: { token: { '#HI': 'hello' } } })
+  tn.rule('val', (rs) => rs.open([
     { s: ['#HI'], a: (r) => { r.node = 'world' } },
   ]))
 }
 
-const am = new Tabnas({ plugins: [myGrammar] })
-am.parse('hello')                     // 'world'
+const tn = new Tabnas({ plugins: [myGrammar] })
+tn.parse('hello')                     // 'world'
 ```
 
 Apply at construction with `{ plugins: [...] }`, or afterwards with
-`am.use(myGrammar)`. See [Writing plugins](plugins.md) for structure
+`tn.use(myGrammar)`. See [Writing plugins](plugins.md) for structure
 and conventions.
 
 ## Add a keyword (literal value)
@@ -35,13 +35,13 @@ them under the `value.def` option; a grammar that matches the `#VL`
 value token will then resolve them:
 
 ```js
-const am = new Tabnas({
+const tn = new Tabnas({
   plugins: [myGrammar],
   value: { def: { yes: { val: true }, no: { val: false } } },
 })
 
-am.parse('yes')                       // true
-am.parse('no')                        // false
+tn.parse('yes')                       // true
+tn.parse('no')                        // false
 ```
 
 The built-in keywords are `true`, `false`, and `null`. See the
@@ -54,7 +54,7 @@ regex under `match.value`. The `match` regex must be anchored with
 `^`; `val` maps the match array to the parsed value:
 
 ```js
-const am = new Tabnas({
+const tn = new Tabnas({
   plugins: [myGrammar],
   match: {
     lex: true,
@@ -64,7 +64,7 @@ const am = new Tabnas({
   },
 })
 
-am.parse('2024-01-15')                // Date(2024-01-15)
+tn.parse('2024-01-15')                // Date(2024-01-15)
 ```
 
 Regex values are matched by the text matcher, so pure-token alternates
@@ -80,7 +80,7 @@ A failed parse throws a `TabnasError`. Catch it and read its fields:
 const { Tabnas, TabnasError } = require('tabnas')
 
 try {
-  am.parse(brokenSource)
+  tn.parse(brokenSource)
 } catch (err) {
   if (err instanceof TabnasError) {
     err.code                          // e.g. 'unexpected'
@@ -100,41 +100,41 @@ for customising messages via the `error` / `hint` options.
 
 ## Derive a configured child instance
 
-`am.make(options)` forks an instance: the child inherits the parent's
+`tn.make(options)` forks an instance: the child inherits the parent's
 config, plugins, and rules, then merges your overrides on top. The
 child re-runs each parent plugin against its own merged options, so
 option-conditional grammar is re-evaluated for the child.
 
 ```js
-const strict = am.make({ comment: { lex: false }, number: { hex: false } })
+const strict = tn.make({ comment: { lex: false }, number: { hex: false } })
 
 strict.parse(src)                     // parses with comments and hex disabled
-am.parse(src)                         // parent is unchanged
+tn.parse(src)                         // parent is unchanged
 ```
 
 Use `rule.exclude` / `rule.include` to strip or keep grammar
 alternates by group tag:
 
 ```js
-const trimmed = am.make({ rule: { exclude: 'experimental' } })
+const trimmed = tn.make({ rule: { exclude: 'experimental' } })
 ```
 
-See [`make()`](api.md#ammakeoptions).
+See [`make()`](api.md#tnmakeoptions).
 
 ## Subscribe to lex / rule events
 
-`am.sub({ lex, rule })` registers observers that fire as the parse
+`tn.sub({ lex, rule })` registers observers that fire as the parse
 runs. Multiple subscriptions are allowed and fire in registration
 order. Observers cannot change the parse — they just watch.
 
 ```js
-am.sub({
+tn.sub({
   lex: (token, rule, ctx) => { /* a token was produced */ },
   rule: (rule, ctx) => { /* a rule state was processed */ },
 })
 
-am.parse(src)
+tn.parse(src)
 ```
 
-See [`sub()`](api.md#amsub-lex-rule-) and, for plugin-side logging,
+See [`sub()`](api.md#tnsub-lex-rule-) and, for plugin-side logging,
 [subscribing to events](plugins.md#subscribing-to-events).

@@ -7,12 +7,12 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
 const { Tabnas } = require('..')
-const am = new Tabnas()
-const J = (src, meta, ctx) => am.parse(src, meta, ctx)
+const tn = new Tabnas()
+const J = (src, meta, ctx) => tn.parse(src, meta, ctx)
 
 
 function make_norules(opts) {
-  let j = am.make(opts)
+  let j = tn.make(opts)
   let rns = j.rule()
   Object.keys(rns).map((rn) => j.rule(rn, null))
   return j

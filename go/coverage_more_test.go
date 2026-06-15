@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Additional coverage for engine paths not exercised by the focused

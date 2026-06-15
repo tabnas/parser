@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // No-panic guarantee: every error-returning public API converts an

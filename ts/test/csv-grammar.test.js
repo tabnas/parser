@@ -15,19 +15,19 @@ const assert = require('node:assert')
 const { Tabnas } = require('..')
 
 function makeCSV() {
-  const am = new Tabnas()
+  const tn = new Tabnas()
 
   // Drop #LN from IGNORE so newlines survive into the rule stream;
   // keep #SP and #CM ignored. Select the custom start rule and exclude
   // the engine's implicit-structure groups.
-  am.options({
+  tn.options({
     rule: { start: 'csv', exclude: 'tabnas,imp' },
     lex: { emptyResult: [] },
     tokenSet: { IGNORE: ['#SP', null, '#CM'] },
   })
 
-  const { CA, LN, ZZ } = am.token
-  const { VAL } = am.tokenSet
+  const { CA, LN, ZZ } = tn.token
+  const { VAL } = tn.tokenSet
 
   // csv: outer list of rows. A fresh bo resets the node per parse.
   // After each row closes, bc appends its (non-empty) cells.
@@ -36,7 +36,7 @@ function makeCSV() {
     if (Array.isArray(cells) && 0 < cells.length) r.node.push(cells)
   }
 
-  am.rule('csv', (rs) =>
+  tn.rule('csv', (rs) =>
     rs
       .bo((r) => (r.node = []))
       .open([{ s: [ZZ] }, { p: 'row' }])
@@ -50,7 +50,7 @@ function makeCSV() {
 
   // csvcont: tail-call sibling of csv; inherits the outer-list node so
   // the replace chain carries the rows accumulated so far.
-  am.rule('csvcont', (rs) =>
+  tn.rule('csvcont', (rs) =>
     rs
       .open([{ s: [ZZ] }, { p: 'row' }])
       .close([
@@ -64,7 +64,7 @@ function makeCSV() {
   // row: initialises the row from its first cell, then hands the
   // continuation to rowcont. Row-ending tokens at open produce an empty
   // row, which csv.bc drops.
-  am.rule('row', (rs) =>
+  tn.rule('row', (rs) =>
     rs
       .open([
         { s: [VAL], a: (r) => (r.node = [r.o0.val]) },
@@ -81,7 +81,7 @@ function makeCSV() {
 
   // rowcont: appends further cells into the row. JS arrays are shared by
   // reference, so push mutates the node the parent rule reads.
-  am.rule('rowcont', (rs) =>
+  tn.rule('rowcont', (rs) =>
     rs
       .open([
         { s: [VAL], a: (r) => r.node.push(r.o0.val) },
@@ -96,7 +96,7 @@ function makeCSV() {
       ]),
   )
 
-  return am
+  return tn
 }
 
 describe('csv-grammar', () => {

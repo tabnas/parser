@@ -5,8 +5,8 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
 const { Tabnas } = require('..')
-const am = new Tabnas()
-const J = (src, meta, ctx) => am.parse(src, meta, ctx)
+const tn = new Tabnas()
+const J = (src, meta, ctx) => tn.parse(src, meta, ctx)
 
 describe('api', function () {
   it('standard', () => {
@@ -27,7 +27,7 @@ describe('api', function () {
     // Spot-check the instance shape. Plugins decorate instances
     // further; this just guards against accidental additions to the
     // core class.
-    assert.deepEqual(keys(am).sort(), [
+    assert.deepEqual(keys(tn).sort(), [
       'fixed',
       'id',
       'options',

@@ -14,14 +14,14 @@ A tiny taste — a one-token grammar defined inline:
 ```js
 const { Tabnas } = require('tabnas')
 
-const am = new Tabnas({ plugins: [(am) => {
-  am.options({ fixed: { token: { '#HI': 'hello' } } })
-  am.rule('val', (rs) => rs.open([
+const tn = new Tabnas({ plugins: [(tn) => {
+  tn.options({ fixed: { token: { '#HI': 'hello' } } })
+  tn.rule('val', (rs) => rs.open([
     { s: ['#HI'], a: (r) => { r.node = 'world' } },
   ]))
 }] })
 
-am.parse('hello')                     // 'world'
+tn.parse('hello')                     // 'world'
 ```
 
 ## Documentation
@@ -53,7 +53,7 @@ Shared design docs for both runtimes live at the top of the repo:
 Grammars and tooling ship as separate packages, not in this one:
 
 - `@tabnas/bnf` — compiles ABNF / BNF into engine rules and adds
-  `am.bnf(src)`.
+  `tn.bnf(src)`.
 - `@tabnas/debug` — tracing and `describe()` helpers.
 
 The strict-JSON grammar used by the conformance tests lives as a test

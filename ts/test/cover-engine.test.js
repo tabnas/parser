@@ -12,44 +12,44 @@ const assert = require('node:assert')
 const { Tabnas, makeRuleSpec, makeToken, makePoint } = require('..')
 const { Context } = require('../dist/context')
 
-const am = new Tabnas()
+const tn = new Tabnas()
 
 describe('cover-engine', () => {
   describe('tabnas-api', () => {
     it('parse-non-string-returns-input', () => {
-      assert.equal(am.parse(123), 123)
+      assert.equal(tn.parse(123), 123)
       let o = { a: 1 }
-      assert.equal(am.parse(o), o)
+      assert.equal(tn.parse(o), o)
     })
 
     it('config-accessor', () => {
-      let c = am.config()
+      let c = tn.config()
       assert.ok(c.fixed)
       assert.ok(c.t)
     })
 
     it('use-requires-function', () => {
-      assert.throws(() => am.use(123), /must be a function/)
+      assert.throws(() => tn.use(123), /must be a function/)
     })
 
     it('empty-instance', () => {
-      let e = am.empty()
+      let e = tn.empty()
       assert.equal(e.options.defaults$, false)
       assert.equal(e.options.standard$, false)
       assert.equal(typeof e.token, 'function')
 
-      let e2 = am.empty({ tag: 'em' })
+      let e2 = tn.empty({ tag: 'em' })
       assert.equal(e2.options.tag, 'em')
     })
 
     it('toString-is-id', () => {
-      assert.equal('' + am, am.id)
-      assert.match('' + am, /^Tabnas\//)
+      assert.equal('' + tn, tn.id)
+      assert.match('' + tn, /^Tabnas\//)
     })
 
     it('util-getter', () => {
-      assert.equal(am.util, Tabnas.util)
-      assert.equal(typeof am.util.deep, 'function')
+      assert.equal(tn.util, Tabnas.util)
+      assert.equal(typeof tn.util.deep, 'function')
     })
 
     it('token-create-new', () => {

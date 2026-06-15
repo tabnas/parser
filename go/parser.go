@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -7,54 +9,49 @@ import (
 	"strings"
 )
 
-// Context holds the parse state, matching the TypeScript Context type.
+// Mutable parse state threaded through every rule, matching the TS Context type.
 type Context struct {
-	UI int // Unique rule ID counter (TS: uI)
+	UI int // Unique rule ID counter (TS: uI).
 
-	// Generalized lookahead buffer. T[i] is the token at position i,
-	// or NoToken if that slot has not yet been fetched. This supersedes
-	// the legacy T0 / T1 two-slot fields, which are kept in sync for
-	// backward compatibility (plugins / grammars / debug.go that read
-	// ctx.T0 and ctx.T1 directly continue to work unchanged).
+	// Generalized lookahead buffer: T[i] is the token at position i, or NoToken
+	// if that slot is not yet fetched. Supersedes the legacy T0/T1 two-slot
+	// fields, which are kept in sync for backward compatibility.
 	T []*Token
 
-	T0 *Token // Alias of T[0] (legacy). Kept in sync with T[0].
-	T1 *Token // Alias of T[1] (legacy). Kept in sync with T[1].
-	V1 *Token // Previous token (TS: v1)
-	V2 *Token // Previous previous token (TS: v2)
+	T0 *Token // Alias of T[0] (legacy), kept in sync with T[0].
+	T1 *Token // Alias of T[1] (legacy), kept in sync with T[1].
+	V1 *Token // Previous token (TS: v1).
+	V2 *Token // Previous-previous token (TS: v2).
 
-	// Consumed-token rewind history. V holds the tokens consumed (not
-	// backtracked) so far, bounded by cfg.RewindHistory (a ring buffer
-	// trimmed from the front). VAbs is the absolute count of consumed
-	// tokens — used as the Mark() value, decoupled from len(V) so the
-	// ring-buffer cap can evict old tokens without invalidating
-	// outstanding marks. Mirrors TS ctx.v / ctx.vAbs.
-	V    []*Token
-	VAbs int
-	Lex  *Lex // Attached by parser.start(); used by Rewind to re-feed tokens.
+	// Consumed-token rewind history: V holds the tokens consumed so far, bounded
+	// by cfg.RewindHistory (a ring buffer trimmed from the front). VAbs is the
+	// absolute consumed count used as the Mark() value, decoupled from len(V) so
+	// the ring-buffer cap can evict old tokens without invalidating live marks.
+	V    []*Token // Retained consumed-token ring buffer (TS: v).
+	VAbs int      // Absolute count of consumed tokens; the Mark() value (TS: vAbs).
+	Lex  *Lex     // Attached by startParse; used by Rewind to re-feed tokens.
 
-	RS       []*Rule              // Rule stack (TS: rs)
-	RSI      int                  // Rule stack index (TS: rsI)
-	RSM      map[string]*RuleSpec // Rule spec map (TS: rsm)
-	KI       int                  // Iteration counter (TS: kI)
-	Rule     *Rule                // Current parsing rule (TS: rule)
-	Meta     map[string]any       // Parse metadata (TS: meta)
-	LexSubs  []LexSub             // Lex event subscribers (TS: sub.lex)
-	RuleSubs []RuleSub            // Rule event subscribers (TS: sub.rule)
-	ParseErr *Token               // Error token, halts parse
+	RS       []*Rule              // Rule stack (TS: rs).
+	RSI      int                  // Rule stack index (TS: rsI).
+	RSM      map[string]*RuleSpec // Rule spec map (TS: rsm).
+	KI       int                  // Iteration counter (TS: kI).
+	Rule     *Rule                // Current parsing rule (TS: rule).
+	Meta     map[string]any       // Parse metadata (TS: meta).
+	LexSubs  []LexSub             // Lex event subscribers (TS: sub.lex).
+	RuleSubs []RuleSub            // Rule event subscribers (TS: sub.rule).
+	ParseErr *Token               // Error token; when set, halts the parse.
 
-	// Fields matching TS Context:
-	Opts    *Options         // Tabnas instance options (TS: opts)
-	Cfg     *LexConfig       // Tabnas instance config (TS: cfg)
-	Src     string           // Source text being parsed (TS: src)
-	Inst    *Tabnas          // Current Tabnas instance (TS: inst)
-	U       map[string]any   // Custom plugin data bag (TS: u)
-	Root    *Rule            // Root rule (TS: root)
-	TC      int              // Token count (TS: tC)
-	F       func(any) string // Format value as string (TS: F)
-	Log     func(...any)     // Debug logger (TS: log)
-	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN)
-	NORULE  *Rule            // Sentinel no-rule (TS: NORULE)
+	Opts    *Options         // Tabnas instance options (TS: opts).
+	Cfg     *LexConfig       // Tabnas instance config (TS: cfg).
+	Src     string           // Source text being parsed (TS: src).
+	Inst    *Tabnas          // Current Tabnas instance (TS: inst).
+	U       map[string]any   // Custom plugin data bag (TS: u).
+	Root    *Rule            // Root rule (TS: root).
+	TC      int              // Token count (TS: tC).
+	F       func(any) string // Format a value as a string (TS: F).
+	Log     func(...any)     // Debug logger (TS: log).
+	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN).
+	NORULE  *Rule            // Sentinel no-rule (TS: NORULE).
 }
 
 // recordConsumed appends the leading `consumed` lookahead tokens to the
@@ -148,14 +145,14 @@ func (ctx *Context) Rewind(mark int) error {
 	return nil
 }
 
-// Parser orchestrates the parsing process.
+// Parser orchestrates the parsing process for one grammar configuration.
 type Parser struct {
-	Config        *LexConfig
-	RSM           map[string]*RuleSpec
-	MaxMul        int               // Max rule occurrence multiplier. Default: 3.
-	ErrorMessages map[string]string // Custom error message templates.
-	Hints         map[string]string // Explanatory hints per error code.
-	ErrTag        string            // Custom error tag (TS: errmsg.name). Default: "tabnas".
+	Config        *LexConfig           // Lexer/parser configuration.
+	RSM           map[string]*RuleSpec // Rule spec map, keyed by rule name.
+	MaxMul        int                  // Max rule occurrence multiplier. Default: 3.
+	ErrorMessages map[string]string    // Custom error message templates.
+	Hints         map[string]string    // Explanatory hints per error code.
+	ErrTag        string               // Custom error tag (TS: errmsg.name). Default: "tabnas".
 }
 
 // NewParser creates a parser with default configuration.

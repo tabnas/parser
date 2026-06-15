@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Shared .tsv conformance fixtures, run against the strict-JSON fixture.

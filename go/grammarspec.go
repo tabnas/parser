@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -9,37 +11,24 @@ import (
 // FuncRef is a string starting with "@" that references a function in a Ref map.
 type FuncRef = string
 
-// GrammarSpec defines a declarative grammar specification.
-// Mirrors the TypeScript GrammarSpec type.
+// Declarative grammar specification; mirrors the TypeScript GrammarSpec type.
 type GrammarSpec struct {
-	// Ref maps FuncRef strings (like "@finish") to Go functions.
-	Ref map[FuncRef]any
-
-	// Options to merge into the Tabnas instance before processing rules.
-	// Applied via SetOptions.
-	Options *Options
-
-	// OptionsMap is an alternative to Options that accepts a map[string]any.
-	// FuncRef strings in values are resolved via Ref before applying.
-	// Use for JSON-serializable grammars where function fields use "@name" refs.
-	OptionsMap map[string]any
-
-	// Rule defines open/close alternates per rule name.
-	Rule map[string]*GrammarRuleSpec
+	Ref        map[FuncRef]any             // Maps FuncRef strings (e.g. "@finish") to Go functions.
+	Options    *Options                    // Typed options merged in (via SetOptions) before rules are processed.
+	OptionsMap map[string]any              // Map-form options; FuncRef values resolved via Ref before applying.
+	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name.
 }
 
-// GrammarRuleSpec defines open and close alternates for a single rule.
-// Open and Close can be a plain []*GrammarAltSpec or a *GrammarAltListSpec
-// with inject modifiers (append, delete, move).
+// Open and close alternates for a single rule (each: []*GrammarAltSpec or *GrammarAltListSpec).
 type GrammarRuleSpec struct {
-	Open  any // []*GrammarAltSpec or *GrammarAltListSpec
-	Close any // []*GrammarAltSpec or *GrammarAltListSpec
+	Open  any // Opening alternates: []*GrammarAltSpec or *GrammarAltListSpec.
+	Close any // Closing alternates: []*GrammarAltSpec or *GrammarAltListSpec.
 }
 
-// GrammarAltListSpec wraps alt specs with injection modifiers.
+// Alt specs paired with injection modifiers controlling how they merge into a rule.
 type GrammarAltListSpec struct {
-	Alts   []*GrammarAltSpec
-	Inject *GrammarInjectSpec
+	Alts   []*GrammarAltSpec  // Alternates to install.
+	Inject *GrammarInjectSpec // How to merge Alts into existing alternates (nil = default prepend).
 }
 
 // GrammarInjectSpec controls how alts are merged into existing rule alternates.
@@ -50,47 +39,35 @@ type GrammarInjectSpec struct {
 	Move   []int // Pairs: [from, to, from, to, ...].
 }
 
-// GrammarSetting carries optional settings applied when a grammar
-// spec (Grammar/GrammarText) is installed. If Rule.Alt.G is defined,
-// its tag(s) are appended to every rule-alt G property in the grammar
-// before the alts are installed.
-//
-// G can be a comma-separated string or a []string of tag names.
+// Optional settings applied when a grammar spec is installed; its Rule.Alt.G tags are appended to every rule-alt G.
 type GrammarSetting struct {
-	Rule *GrammarSettingRule
+	Rule *GrammarSettingRule // Rule-level settings to apply across the grammar.
 }
 
-// GrammarSettingRule wraps alt-level settings.
+// Rule-level grammar settings, wrapping alt-level settings.
 type GrammarSettingRule struct {
-	Alt *GrammarSettingAlt
+	Alt *GrammarSettingAlt // Per-alt settings applied to every rule-alt.
 }
 
-// GrammarSettingAlt carries per-alt settings (currently only G).
-// G accepts string (comma-separated) or []string.
+// Per-alt grammar settings (currently only group tags).
 type GrammarSettingAlt struct {
-	G any
+	G any // Group tag(s) appended to each alt's G: string (comma-separated) or []string.
 }
 
-// GrammarAltSpec is a declarative alternate specification using string references.
-// Token fields use "#NAME" strings resolved via Token/TokenSet lookup.
-// Function fields use "@name" FuncRef strings resolved via the Ref map.
+// Declarative alternate spec: token fields use "#NAME" strings, function fields use "@name" FuncRefs.
 type GrammarAltSpec struct {
-	// Token spec. Either a string or []string.
-	//   string:   "#OB", "#KEY #CL" — each space-separated name is a slot.
-	//   []string: ["#CB #CS"] — each element is a slot; within an element,
-	//             space-separated names are alternatives for that slot.
-	S any
-	B any            // Backtrack: int or FuncRef string
-	P string         // Push rule name or FuncRef
-	R string         // Replace rule name or FuncRef
-	A FuncRef        // Action function ref
-	E FuncRef        // Error function ref
-	H FuncRef        // Modifier function ref
-	C any            // Condition: FuncRef string or map[string]any for declarative
-	N map[string]int // Counter increments
-	U map[string]any // Custom props
-	K map[string]any // Propagated custom props
-	G string         // Group tags (comma-separated)
+	S any            // Token spec: string ("#KEY #CL", each name a slot) or []string (per-element alternatives).
+	B any            // Backtrack: int or FuncRef string.
+	P string         // Push rule name or FuncRef.
+	R string         // Replace rule name or FuncRef.
+	A FuncRef        // Action function ref.
+	E FuncRef        // Error function ref.
+	H FuncRef        // Modifier function ref.
+	C any            // Condition: FuncRef string or map[string]any for declarative.
+	N map[string]int // Counter increments.
+	U map[string]any // Custom props.
+	K map[string]any // Propagated custom props.
+	G string         // Group tags (comma-separated).
 }
 
 // Grammar applies a declarative grammar specification to this Tabnas instance.

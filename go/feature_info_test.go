@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Go-only introspection features: MapRef, ListRef and Text. These have no

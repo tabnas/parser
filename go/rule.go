@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -37,8 +39,7 @@ const (
 	CLOSE RuleState = "c"
 )
 
-// Undefined is a sentinel value distinguishing "no value" from nil (null).
-// In TypeScript, undefined !== null. In Go, we use this sentinel.
+// undefinedType is the type of the Undefined sentinel, distinguishing "no value" from nil/null.
 type undefinedType struct{}
 
 var Undefined any = &undefinedType{}
@@ -49,8 +50,7 @@ func IsUndefined(v any) bool {
 	return ok
 }
 
-// Skip is a sentinel value that acts as undefined in deep merge — the base
-// value is preserved. Represented as "@SKIP" in grammar options.
+// skipType is the type of the Skip sentinel, which preserves the base value in deep merge ("@SKIP" in grammar options).
 type skipType struct{}
 
 var Skip any = &skipType{}
@@ -96,12 +96,10 @@ type AltModifier func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec
 // StateAction is a before/after action on a rule state transition.
 type StateAction func(r *Rule, ctx *Context)
 
-// CondOp represents a comparison operator with a value for declarative conditions.
-// Used in the CD field of AltSpec to define conditions declaratively,
-// matching the TypeScript c: { 'n.pk': { $lte: 0 } } syntax.
+// CondOp is a declarative comparison (operator + value) used in AltSpec.CD, e.g. { 'n.pk': { $lte: 0 } }.
 type CondOp struct {
-	Op  string
-	Val int
+	Op  string // Comparison operator ($eq, $ne, $lt, $lte, $gt, $gte).
+	Val int    // Value to compare the rule property against.
 }
 
 // Comparison operator constructors for declarative conditions (AltSpec.CD field).
@@ -114,7 +112,7 @@ func CGte(val int) CondOp { return CondOp{Op: "$gte", Val: val} }
 
 // AltSpec defines a parse alternate specification.
 type AltSpec struct {
-	S  [][]Tin                            // Token Tin sequences to match: s[0] for t0, s[1] for t1
+	S  [][]Tin                            // Per-position Tin sets to match: S[i] for lookahead token i (empty = wildcard)
 	P  string                             // Push rule name (create child)
 	R  string                             // Replace rule name (create sibling)
 	B  int                                // Move token pointer backward (backtrack)
@@ -122,8 +120,8 @@ type AltSpec struct {
 	CD map[string]any                     // Declarative condition (converted to C by NormAlt)
 	N  map[string]int                     // Counter increments
 	A  AltAction                          // Match action
-	U  map[string]any                     // Custom props added to Rule.u
-	K  map[string]any                     // Custom props added to Rule.k (propagated)
+	U  map[string]any                     // Custom props added to Rule.U
+	K  map[string]any                     // Custom props added to Rule.K (propagated)
 	G  string                             // Named group tags (comma-separated)
 	H  AltModifier                        // Alt modifier (called after match to potentially modify the alt)
 	E  AltError                           // Error generation
@@ -132,34 +130,24 @@ type AltSpec struct {
 	BF func(r *Rule, ctx *Context) int    // Dynamic backtrack
 }
 
-// RuleSpec defines the specification for a parsing rule.
-//
-// The alternate lists (open/close) and lifecycle action lists (bo/ao/bc/ac)
-// are unexported: like the TypeScript RuleSpec, they are mutated only
-// through methods (AddOpen/PrependOpen/ModifyOpen/ClearOpen, AddBO/PrependBO/
-// ClearActions, Fnref, …) and read through getters (OpenAlts/CloseAlts,
-// Actions, HasBO/…). This keeps the engine's exposed API aligned with TS,
-// where direct array assignment is not possible.
+// RuleSpec is the specification for a parsing rule; its alternate and action lists are unexported and mutated only via methods (mirroring the TS RuleSpec).
 type RuleSpec struct {
-	Name  string
-	open  []*AltSpec
-	close []*AltSpec
-	bo    []StateAction // Before-open actions
-	bc    []StateAction // Before-close actions
-	ao    []StateAction // After-open actions
-	ac    []StateAction // After-close actions
+	Name  string        // Rule name (key in the rule spec map).
+	open  []*AltSpec    // Open-phase alternates, tried in order.
+	close []*AltSpec    // Close-phase alternates, tried in order.
+	bo    []StateAction // Before-open actions.
+	bc    []StateAction // Before-close actions.
+	ao    []StateAction // After-open actions.
+	ac    []StateAction // After-close actions.
 
-	// fnrefInstalled tracks which StateAction functions have already
-	// been wired into each phase via wireStateActions, deduped by
-	// function pointer. Prevents multiple Grammar() calls from stacking
-	// duplicate state actions when they re-register the same handler
-	// for the same reserved `@<rulename>-<phase>` slot.
+	// fnrefInstalled tracks which StateAction functions are already wired into
+	// each phase via wireStateActions, deduped by function pointer, so repeated
+	// Grammar() calls don't stack duplicate handlers on a reserved slot.
 	fnrefInstalled map[string]map[uintptr]bool
 
-	// fnrefReplaced records phases an `@<rulename>-<phase>/replace` fnref
-	// has taken ownership of. Once replaced, the plain/prepend/append
-	// fnrefs for that phase are ignored so older handlers are not
-	// re-installed on subsequent wireStateActions calls or re-derivation.
+	// fnrefReplaced records phases an `@<rulename>-<phase>/replace` fnref has
+	// taken ownership of; thereafter the plain/prepend/append fnrefs for that
+	// phase are ignored so older handlers are not re-installed.
 	fnrefReplaced map[string]bool
 }
 
@@ -198,8 +186,7 @@ func (rs *RuleSpec) PrependClose(alts ...*AltSpec) *RuleSpec {
 	return rs
 }
 
-// AltModListOpts configures modifications for RuleSpec alternate lists.
-// Matches the TS ListMods parameter to rs.open(alts, mods)/rs.close(alts, mods).
+// AltModListOpts configures modifications to a RuleSpec alternate list (TS ListMods).
 type AltModListOpts struct {
 	Clear  bool                             // Empty the existing list before applying.
 	Delete []int                            // Indices to delete (supports negative).
@@ -524,47 +511,46 @@ func NormAlts(spec *RuleSpec) error {
 	return nil
 }
 
-// Rule represents a rule instance during parsing.
+// Rule is a rule instance created during parsing (the runtime counterpart of a RuleSpec).
 type Rule struct {
-	I      int
-	Name   string
-	Spec   *RuleSpec
-	Node   any
-	State  RuleState
-	D      int
-	Child  *Rule
-	Parent *Rule
-	Prev   *Rule
-	Next   *Rule
+	I      int       // Unique rule id within this parse run.
+	Name   string    // Rule name (matches its RuleSpec).
+	Spec   *RuleSpec // The RuleSpec this rule applies.
+	Node   any       // Value node this rule is building.
+	State  RuleState // Current phase: open ("o") or close ("c").
+	D      int       // Stack depth at which this rule was pushed.
+	Child  *Rule     // Rule pushed by this rule (NoRule if none).
+	Parent *Rule     // Rule that pushed this rule (NoRule if none).
+	Prev   *Rule     // Rule this one replaced (NoRule if none).
+	Next   *Rule     // Rule to process after this one.
 
 	// Generalized per-position matched tokens. O[i] holds the token
 	// matched at the i-th lookahead position during OPEN (mirroring C
 	// for CLOSE). ON / CN give the number of matched positions. This
 	// supersedes the legacy O0/O1/OS (and C0/C1/CS) two-slot fields,
 	// which are still maintained below for backward compatibility.
-	O  []*Token
-	ON int
-	C  []*Token
-	CN int
+	O  []*Token // Tokens matched in the open phase, by position.
+	ON int      // Count of tokens matched in the open phase.
+	C  []*Token // Tokens matched in the close phase, by position.
+	CN int      // Count of tokens matched in the close phase.
 
 	// Legacy two-slot aliases. Kept in sync with O[0..1] / C[0..1] by
 	// ParseAlts so existing grammar code and plugins that read r.O0,
 	// r.O1, r.C0, r.C1, r.OS, r.CS continue to work unchanged.
-	O0 *Token
-	O1 *Token
-	C0 *Token
-	C1 *Token
-	OS int
-	CS int
+	O0 *Token // Open token at position 0 (alias of O[0]).
+	O1 *Token // Open token at position 1 (alias of O[1]).
+	C0 *Token // Close token at position 0 (alias of C[0]).
+	C1 *Token // Close token at position 1 (alias of C[1]).
+	OS int    // Open match count (alias of ON).
+	CS int    // Close match count (alias of CN).
 
-	N   map[string]int
-	U   map[string]any
-	K   map[string]any
-	Why string
+	N   map[string]int // Named counters tracked across the rule.
+	U   map[string]any // Custom user props (not propagated to children).
+	K   map[string]any // Custom keep props (propagated via push/replace).
+	Why string         // Internal tracing field; set when a rule fails.
 }
 
-// NoRule is a sentinel rule.
-// Node is Undefined (like TS where NORULE.node = undefined).
+// NoRule is the sentinel "no rule" value; its Node is Undefined (TS NORULE.node === undefined).
 var NoRule *Rule
 
 func init() {

@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -7,43 +9,36 @@ import (
 	"unicode/utf8"
 )
 
-// MatchValueEntry holds a resolved match.value matcher entry.
-// Name carries the user-supplied name so the slice can be sorted
-// deterministically at configure time (independent of the map iteration
-// order that built it).
+// A resolved match.value matcher entry, sorted by Name for deterministic iteration.
 type MatchValueEntry struct {
-	Name  string
-	Match *regexp.Regexp
-	Val   func([]string) any
-	Fn    LexMatcher // Function-form matcher (TS LexMatcher branch); takes precedence over Match.
+	Name  string             // User-supplied name; the sort key.
+	Match *regexp.Regexp     // Regexp form; submatch groups fed to Val.
+	Val   func([]string) any // Builds the value from the regexp submatches.
+	Fn    LexMatcher         // Function-form matcher; takes precedence over Match.
 }
 
-// ValueDefEntry is a name-tagged wrapper around *ValueDef used to sort
-// regex-based value definitions at configure time so iteration during
-// lexing is deterministic (mirrors TS cfg.value.defre being a sorted array).
+// A name-tagged regex value definition, sorted by Name for deterministic lexing (TS: cfg.value.defre).
 type ValueDefEntry struct {
-	Name string
-	Def  *ValueDef
+	Name string    // The sort key.
+	Def  *ValueDef // The regex-based value definition.
 }
 
-// MatchTokenEntry pairs a Tin with its matcher — regexp or function form
-// (TS match.token: RegExp | LexMatcher) — pre-sorted by Tin at configure
-// time so MatchTokens iteration during lexing is deterministic.
+// A Tin paired with its matcher (regexp or function), sorted by Tin for deterministic lexing.
 type MatchTokenEntry struct {
-	Tin   Tin
-	Match *regexp.Regexp
-	Fn    LexMatcher // Function-form matcher; takes precedence over Match.
+	Tin   Tin            // The token type this matcher produces; the sort key.
+	Match *regexp.Regexp // Regexp form.
+	Fn    LexMatcher     // Function-form matcher; takes precedence over Match.
 }
 
-// Lex is the lexer that produces tokens from source text.
+// The lexer: produces tokens from source text.
 type Lex struct {
-	Src    string
-	Ctx    *Context // Parse context (includes Ctx.Rule for context-sensitive lexing)
-	pnt    Point
-	end    *Token   // End-of-source token (cached)
-	tokens []*Token // Lookahead token queue
-	Config *LexConfig
-	Err    error // First error encountered during lexing
+	Src    string     // Source text being lexed.
+	Ctx    *Context   // Parse context (includes Ctx.Rule for context-sensitive lexing).
+	pnt    Point      // Current scan position (offset, row, column).
+	end    *Token     // End-of-source token (cached once reached).
+	tokens []*Token   // Lookahead token queue.
+	Config *LexConfig // Resolved lexer configuration.
+	Err    error      // First error encountered during lexing.
 }
 
 // LexConfig holds lexer configuration.
@@ -58,25 +53,25 @@ type LexConfig struct {
 	StringLex  bool // Enable string matching. Default: true.
 	ValueLex   bool // Enable value keyword matching. Default: true.
 
-	StringChars        map[rune]bool // Quote characters
-	MultiChars         map[rune]bool // Multiline quote characters
-	EscapeChar         rune
+	StringChars        map[rune]bool     // Quote characters.
+	MultiChars         map[rune]bool     // Multiline quote characters.
+	EscapeChar         rune              // String escape lead character (backslash).
 	EscapeMap          map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
 	EscapeRemoved      map[string]bool   // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
 	EscapeStrict       bool              // Disable the non-standard \xHH and \u{...} structural escapes.
 	RewindHistory      int               // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
-	SpaceChars         map[rune]bool
-	LineChars          map[rune]bool
-	RowChars           map[rune]bool
-	CommentLine        []string    // Line comment starters: "#", "//"
-	CommentBlock       [][2]string // Block comment: [start, end] pairs
-	NumberHex          bool
-	NumberOct          bool
-	NumberBin          bool
-	NumberSep          rune // Separator char (underscore)
-	AllowUnknownEscape bool
-	StringAbandon      bool            // On string error, return nil instead of bad token.
-	StringReplace      map[rune]string // Character replacements during string scanning.
+	SpaceChars         map[rune]bool     // Characters lexed as space (#SP).
+	LineChars          map[rune]bool     // Characters lexed as line endings (#LN).
+	RowChars           map[rune]bool     // Line characters that increment the row counter.
+	CommentLine        []string          // Line comment starters: "#", "//".
+	CommentBlock       [][2]string       // Block comment [start, end] pairs.
+	NumberHex          bool              // Recognize hex literals (0x...).
+	NumberOct          bool              // Recognize octal literals (0o...).
+	NumberBin          bool              // Recognize binary literals (0b...).
+	NumberSep          rune              // Digit separator char (underscore).
+	AllowUnknownEscape bool              // Keep an unknown escape's char rather than erroring.
+	StringAbandon      bool              // On string error, return nil instead of bad token.
+	StringReplace      map[rune]string   // Character replacements during string scanning.
 
 	// Value definitions: keyword → value (e.g. "true" → true)
 	// If nil, uses built-in defaults (true, false, null).
@@ -230,14 +225,13 @@ type LexConfig struct {
 	MatchCheck   LexCheck
 }
 
-// ColorConfig is the resolved ANSI-escape palette used by the error
-// formatter. Active false means all codes are emitted as empty strings.
+// Resolved ANSI-escape palette for error formatting; when Active is false all codes emit as empty strings.
 type ColorConfig struct {
-	Active bool
-	Reset  string
-	Hi     string
-	Lo     string
-	Line   string
+	Active bool   // When false, Codes returns empty strings.
+	Reset  string // Reset/clear escape sequence.
+	Hi     string // High-emphasis (highlight) escape sequence.
+	Lo     string // Low-emphasis (dim) escape sequence.
+	Line   string // Line-number escape sequence.
 }
 
 // Codes returns the four escape sequences the formatter needs as plain
@@ -250,11 +244,10 @@ func (c ColorConfig) Codes() (hi, lo, line, reset string) {
 	return c.Hi, c.Lo, c.Line, c.Reset
 }
 
-// LexCheck is a function that can intercept a matcher before it runs.
-// Return nil to continue normal matching, or a LexCheckResult to override.
+// Hook that can intercept a matcher before it runs; nil continues normal matching, a result overrides.
 type LexCheck func(lex *Lex) *LexCheckResult
 
-// LexCheckResult controls matcher behavior from a LexCheck callback.
+// Outcome of a LexCheck hook controlling matcher behavior.
 type LexCheckResult struct {
 	Done  bool   // If true, use Token as the match result (even if nil).
 	Token *Token // The token to return (nil means "no match").

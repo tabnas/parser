@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Tin is a token identification number.
@@ -25,36 +27,33 @@ const (
 	TinMAX Tin = 18 // Next available Tin
 )
 
-// Token set constants
+// Named groupings of token Tins used by the lexer and parser.
 var (
-	// IGNORE tokens: space, line, comment
-	TinSetIGNORE = map[Tin]bool{TinSP: true, TinLN: true, TinCM: true}
-	// VAL tokens: text, number, string, value
-	TinSetVAL = []Tin{TinTX, TinNR, TinST, TinVL}
-	// KEY tokens: text, number, string, value (same as VAL)
-	TinSetKEY = []Tin{TinTX, TinNR, TinST, TinVL}
+	TinSetIGNORE = map[Tin]bool{TinSP: true, TinLN: true, TinCM: true} // Tokens skipped during parsing: space, line, comment.
+	TinSetVAL    = []Tin{TinTX, TinNR, TinST, TinVL}                   // Tins allowed as a value: text, number, string, value.
+	TinSetKEY    = []Tin{TinTX, TinNR, TinST, TinVL}                   // Tins allowed as a key (same set as VAL).
 )
 
-// Point tracks position in source text.
+// Cursor position within the source text.
 type Point struct {
-	Len int // Source length
-	SI  int // String index (0-based)
-	RI  int // Row index (1-based)
-	CI  int // Column index (1-based)
+	Len int // Total length of the source text.
+	SI  int // Source (string) index, 0-based.
+	RI  int // Row index, 1-based.
+	CI  int // Column index, 1-based.
 }
 
-// Token represents a lexical token.
+// A single lexical token produced by the lexer.
 type Token struct {
-	Name string         // Token name (#OB, #ST, etc.)
-	Tin  Tin            // Token identification number
-	Val  any            // Resolved value
-	Src  string         // Source text
-	SI   int            // Start position
-	RI   int            // Row
-	CI   int            // Column
-	Err  string         // Error code
-	Why  string         // Tracing/reason
-	Use  map[string]any // Custom plugin metadata (TS: token.use)
+	Name string         // Token name (#OB, #ST, etc.).
+	Tin  Tin            // Token identification number.
+	Val  any            // Resolved value, or a lazy TokenValFunc.
+	Src  string         // Matched source text.
+	SI   int            // Source index where the token starts.
+	RI   int            // Row index of the token.
+	CI   int            // Column index of the token.
+	Err  string         // Error code, empty when valid.
+	Why  string         // Reason/trace marker for debugging.
+	Use  map[string]any // Custom plugin metadata (TS: token.use).
 }
 
 // Bad converts this token to an error token with the given error code.
@@ -77,9 +76,7 @@ func (t *Token) IsNoToken() bool {
 	return t.Tin == -1
 }
 
-// TokenValFunc is the signature for a lazy token value. When Token.Val is
-// set to a TokenValFunc, ResolveVal invokes it with the current rule and
-// context to produce the value at parse time. Mirrors TS src/lexer.ts:115.
+// Signature for a lazy token value, evaluated at parse time by ResolveVal.
 type TokenValFunc func(r *Rule, ctx *Context) any
 
 // ResolveVal returns the token's value. If Val is a TokenValFunc, it is

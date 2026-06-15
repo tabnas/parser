@@ -29,22 +29,22 @@ callable and indexable at once.
 `options`, `token`, and `tokenSet` are each two things at once: a
 function and a map.
 
-- `am.options(change)` applies a partial change; `am.options()` returns
-  a fresh snapshot; `am.options.comment.lex` reads a single setting
+- `tn.options(change)` applies a partial change; `tn.options()` returns
+  a fresh snapshot; `tn.options.comment.lex` reads a single setting
   from the indexable view. The map view is refreshed after every set.
-- `am.token('#OB')` looks up or mints a Tin; `am.token.OB` reads it
+- `tn.token('#OB')` looks up or mints a Tin; `tn.token.OB` reads it
   from the map. The map is keyed by both `#XX` and bare `XX` forms, so
-  grammar code can destructure `const { ST, TX } = am.token`.
-- `am.tokenSet('VAL')` returns a set's Tin array; `am.tokenSet.VAL` is
+  grammar code can destructure `const { ST, TX } = tn.token`.
+- `tn.tokenSet('VAL')` returns a set's Tin array; `tn.tokenSet.VAL` is
   the map form.
 
 The dual shape exists so plugin code can read configuration ergonomically
-(`am.options.list.child`) while still having a setter, without two
+(`tn.options.list.child`) while still having a setter, without two
 separate members to keep in sync.
 
 ## `make()` re-runs plugins
 
-`am.make(options)` derives a child by constructing a new instance with
+`tn.make(options)` derives a child by constructing a new instance with
 the current one as parent. The child does not copy the parent's rules
 verbatim — it inherits the merged options, then **re-runs every plugin
 the parent registered** against the child's options, and finally
@@ -77,7 +77,7 @@ plugin list, subscriptions — in a single ECMAScript hash-private field,
 is invisible to `for...in`, `Object.keys`, `JSON.stringify`, and
 tests: the instance presents only its public surface
 (`fixed`, `id`, `options`, `parent`, `token`, `tokenSet`). The single
-public reader is `am.internal()`, which plugins use for the rare cases
+public reader is `tn.internal()`, which plugins use for the rare cases
 the public API doesn't cover.
 
 Errors lean on the platform too: `TabnasError` extends the built-in

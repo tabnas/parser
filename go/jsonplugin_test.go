@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Strict JSON grammar — kept here as a test fixture, the Go counterpart

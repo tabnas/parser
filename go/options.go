@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -9,213 +11,100 @@ import (
 	"strings"
 )
 
-// Options configures a Tabnas parser instance.
-// All fields use pointer types so that nil means "use default".
-// This matches the TypeScript pattern where unset options fall back to defaults.
+// Options configures a Tabnas parser instance; nil pointer fields mean "use default".
 type Options struct {
-	// Safe controls prototype-pollution-style key safety.
-	Safe *SafeOptions
-
-	// Fixed controls fixed token recognition ({, }, [, ], :, ,).
-	Fixed *FixedOptions
-
-	// Match controls custom regexp-based token and value matching.
-	// Matches TS options.match.
-	Match *MatchOptions
-
-	// TokenSet allows customizing token sets (VAL, KEY, etc.).
-	// Matches TS options.tokenSet.
-	TokenSet map[string][]string
-
-	// Space controls space/tab lexing.
-	Space *SpaceOptions
-
-	// Line controls line-ending lexing.
-	Line *LineOptions
-
-	// Text controls unquoted text lexing.
-	Text *TextOptions
-
-	// Number controls numeric literal lexing.
-	Number *NumberOptions
-
-	// Comment controls comment lexing.
-	Comment *CommentOptions
-
-	// String controls quoted string lexing.
-	String *StringOptions
-
-	// Map controls object/map merging behavior.
-	Map *MapOptions
-
-	// List controls array/list behavior.
-	List *ListOptions
-
-	// Value controls keyword literal matching (true, false, null, etc.).
-	Value *ValueOptions
-
-	// Ender lists additional characters that end text tokens.
-	Ender []string
-
-	// Rule controls parser rule behavior.
-	Rule *RuleOptions
-
-	// Lex controls global lexer behavior (empty source, etc.).
-	Lex *LexOptions
-
-	// Parse provides hooks invoked during parsing (distinct from Parser,
-	// which replaces the parser entrypoint). Mirrors TS `options.parse`.
-	Parse *ParseOptions
-
-	// Parser allows custom parser overrides.
-	Parser *ParserOptions
-
-	// Result controls parse result validation.
-	Result *ResultOptions
-
-	// Error provides custom error message templates keyed by error code.
-	// e.g. {"unexpected": "unexpected character(s): {src}"}
-	Error map[string]string
-
-	// Hint provides additional explanatory text per error code.
-	Hint map[string]string
-
-	// ErrMsg controls error message formatting.
-	ErrMsg *ErrMsgOptions
-
-	// Info controls metadata attachment to parsed output nodes.
-	// Matches TS options.info.
-	Info *InfoOptions
-
-	// Rewind bounds how many consumed tokens are retained for
-	// ctx.Rewind. Mirrors TS options.rewind.
-	Rewind *RewindOptions
-
-	// Property holds Go-specific options not present in the TypeScript version.
-	Property *PropertyOptions
-
-	// Color controls ANSI colour codes in formatted error messages.
-	// Mirrors TS `options.color`.
-	Color *ColorOptions
-
-	// Tag is an instance identifier tag.
-	Tag string
+	Safe     *SafeOptions        // Prototype-pollution-style key safety.
+	Fixed    *FixedOptions       // Fixed token recognition ({, }, [, ], :, ,).
+	Match    *MatchOptions       // Custom regexp/function token and value matching (TS options.match).
+	TokenSet map[string][]string // Custom token sets, VAL/KEY/etc. (TS options.tokenSet).
+	Space    *SpaceOptions       // Space/tab lexing.
+	Line     *LineOptions        // Line-ending lexing.
+	Text     *TextOptions        // Unquoted text lexing.
+	Number   *NumberOptions      // Numeric literal lexing.
+	Comment  *CommentOptions     // Comment lexing.
+	String   *StringOptions      // Quoted string lexing.
+	Map      *MapOptions         // Object/map merging behavior.
+	List     *ListOptions        // Array/list behavior.
+	Value    *ValueOptions       // Keyword literal matching (true, false, null, etc.).
+	Ender    []string            // Additional characters that end text tokens.
+	Rule     *RuleOptions        // Parser rule behavior.
+	Lex      *LexOptions         // Global lexer behavior (empty source, etc.).
+	Parse    *ParseOptions       // Parse-time hooks (TS options.parse); distinct from Parser.
+	Parser   *ParserOptions      // Custom parser entrypoint override.
+	Result   *ResultOptions      // Parse result validation.
+	Error    map[string]string   // Custom error message templates keyed by error code.
+	Hint     map[string]string   // Additional explanatory text per error code.
+	ErrMsg   *ErrMsgOptions      // Error message formatting.
+	Info     *InfoOptions        // Metadata attachment to parsed output nodes (TS options.info).
+	Rewind   *RewindOptions      // Consumed-token retention for ctx.Rewind (TS options.rewind).
+	Property *PropertyOptions    // Go-specific options not present in the TypeScript version.
+	Color    *ColorOptions       // ANSI colour codes in formatted error messages (TS options.color).
+	Tag      string              // Instance identifier tag.
 }
 
-// ColorOptions configures the ANSI escape codes used when formatting a
-// TabnasError. When Active is nil or *Active is true, the non-empty
-// codes are wrapped around the appropriate parts of the error output.
-// Setting *Active to false disables colour output entirely regardless
-// of the other fields. Mirrors TS `options.color`.
+// ColorOptions sets the ANSI escape codes used when formatting a TabnasError (TS options.color).
 type ColorOptions struct {
-	// Active toggles colour output. Default: true (matches TS).
-	Active *bool
-
-	// Reset clears all colour/style attributes. Default: ESC[0m.
-	Reset string
-
-	// Hi highlights the error header (`[tag/code]:`). Default: ESC[91m.
-	Hi string
-
-	// Lo dims trailing suffix material (internal diagnostics, links).
-	// Default: ESC[2m.
-	Lo string
-
-	// Line colours the source-location arrow and line-number gutter.
-	// Default: ESC[34m.
-	Line string
+	Active *bool  // Toggle colour output; *Active false disables it entirely. Default: true.
+	Reset  string // Clears all colour/style attributes. Default: ESC[0m.
+	Hi     string // Highlights the error header ([tag/code]:). Default: ESC[91m.
+	Lo     string // Dims trailing suffix material (diagnostics, links). Default: ESC[2m.
+	Line   string // Colours the source-location arrow and line-number gutter. Default: ESC[34m.
 }
 
-// ErrMsgOptions controls error message formatting.
-// Matches the TypeScript errmsg option.
+// ErrMsgOptions controls error message formatting (TS options.errmsg).
 type ErrMsgOptions struct {
 	// Name sets the error tag in formatted messages.
 	// Default: "tabnas". E.g. Name="bar" → "[bar/unexpected]: ..."
 	Name string
 
-	// Suffix controls the optional trailing text after an error message.
-	// Mirrors TS `options.errmsg.suffix` which accepts bool | string |
-	// function. In Go the permitted concrete types are:
+	// Suffix controls trailing text after an error message (TS bool|string|func).
+	// Permitted concrete types (stored as any for parity with the polymorphic TS field):
 	//   bool   — true (default) enables the standard suffix, false disables.
 	//   string — literal text appended to the error message.
 	//   func(code, src string) string — dynamic suffix computation.
-	// Stored as any because the TS field is also polymorphic.
 	Suffix any
 
-	// Link is an optional "see also" line (e.g. a docs URL) rendered
-	// inside the standard error suffix. Mirrors TS `options.errmsg.link`.
-	// Only shown when Suffix is unset or true.
+	// Link is an optional "see also" line (e.g. a docs URL) rendered inside
+	// the standard error suffix. Only shown when Suffix is unset or true.
 	Link string
 }
 
-// InfoOptions controls metadata attachment to parsed output nodes.
-// Matches TS options.info.
+// InfoOptions controls metadata attachment to parsed output nodes (TS options.info).
 type InfoOptions struct {
-	// Map enables returning maps as MapRef structs instead of map[string]any.
-	// When true, map values include an Implicit flag indicating whether
-	// the map was created implicitly (without braces). Default: false.
-	Map *bool
-
-	// List enables returning lists as ListRef structs instead of []any.
-	// When true, list values include an Implicit flag indicating whether
-	// the list was created implicitly (without brackets). Default: false.
-	List *bool
-
-	// Text enables extended text info in output.
-	// When true, string and text values are wrapped in Text structs
-	// that include the quote character used. Default: false.
-	Text *bool
-
-	// Marker is the key under which info metadata is stored on wrapped
-	// values. Mirrors TS `options.info.marker`. Default: "__info__".
-	Marker string
+	Map    *bool  // Return maps as MapRef (with Implicit flag) not map[string]any. Default: false.
+	List   *bool  // Return lists as ListRef (with Implicit flag) not []any. Default: false.
+	Text   *bool  // Wrap string/text values in Text structs carrying the quote char. Default: false.
+	Marker string // Key under which info metadata is stored on wrapped values. Default: "__info__".
 }
 
-// RewindOptions bounds the consumed-token history retained for
-// ctx.Rewind. Mirrors TS options.rewind.
+// RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
-	// History is the maximum number of consumed tokens retained for
-	// ctx.Rewind. A non-positive value means unbounded (TS Infinity).
-	// Default: 64. ctx.Rewind returns an error if its target mark has
-	// been evicted from the retained window.
+	// History caps consumed tokens retained for ctx.Rewind; non-positive means
+	// unbounded (TS Infinity). Default: 64. ctx.Rewind errors if its target mark
+	// has been evicted from the retained window.
 	History *int
 }
 
 // PropertyOptions holds Go-specific options not present in the TypeScript version.
 type PropertyOptions struct {
-	// ConfigModify callbacks, keyed by name.
-	// Called after config construction to allow dynamic customization.
-	ConfigModify map[string]ConfigModifier
+	ConfigModify map[string]ConfigModifier // Callbacks run after config construction, keyed by name.
 }
 
-// MatchOptions controls custom token and value matching.
-// Matches TS options.match, where each entry is RegExp | LexMatcher.
-// Go splits the union across two fields: Token/Value hold the regexp
-// forms, TokenFn and MatchValueSpec.Fn hold the function forms.
+// MatchOptions controls custom token and value matching (TS options.match: RegExp|LexMatcher per entry).
+// Go splits the union: Token/Value hold regexp forms; TokenFn and MatchValueSpec.Fn hold function forms.
 type MatchOptions struct {
-	Lex   *bool                      // Enable custom matching. Default: true.
-	Token map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
-	Value map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
-
-	// TokenFn registers function-form token matchers ("#NAME" → matcher),
-	// the LexMatcher branch of TS `match.token`. The matcher is invoked
-	// (lex, rule) and its non-nil Token returned as the match.
-	TokenFn map[string]LexMatcher
-
-	// Check is a LexCheck hook invoked before the match matcher runs.
-	// Mirrors TS `options.match.check`.
-	Check LexCheck
+	Lex     *bool                      // Enable custom matching. Default: true.
+	Token   map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
+	Value   map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
+	TokenFn map[string]LexMatcher      // "#NAME" → function-form token matcher (TS match.token LexMatcher branch).
+	Check   LexCheck                   // Hook invoked before the match matcher runs (TS options.match.check).
 }
 
-// MatchValueSpec defines a custom value matcher.
-// Matches TS options.match.value[name] (RegExp | LexMatcher).
+// MatchValueSpec defines a custom value matcher (TS options.match.value[name]: RegExp|LexMatcher).
 type MatchValueSpec struct {
 	Match *regexp.Regexp     // Regexp pattern to match against.
 	Val   func([]string) any // Optional value transformer, receives match groups.
-
-	// Fn is the function-form matcher (TS LexMatcher branch). When set,
-	// Match/Val are ignored and the function's non-nil Token is the match.
-	Fn LexMatcher
+	Fn    LexMatcher         // Function-form matcher; when set, Match/Val ignored, its non-nil Token is the match.
 }
 
 // SafeOptions controls key safety.
@@ -236,32 +125,25 @@ type FixedOptions struct {
 	//   - nil pointer: remove the name's fixed mapping(s) from the lexer.
 	Token map[string]*string
 
-	// Check is a LexCheck hook invoked before the fixed matcher runs.
-	// Return nil to continue normal matching or a LexCheckResult to
-	// override. Mirrors TS `options.fixed.check`.
+	// Check is a LexCheck hook invoked before the fixed matcher runs; return nil
+	// to continue normal matching or a LexCheckResult to override (TS options.fixed.check).
 	Check LexCheck
 }
 
 // SpaceOptions controls space lexing.
 type SpaceOptions struct {
-	Lex   *bool  // Enable space lexing. Default: true.
-	Chars string // Space characters. Default: " \t".
-
-	// Check is a LexCheck hook invoked before the space matcher runs.
-	// Mirrors TS `options.space.check`.
-	Check LexCheck
+	Lex   *bool    // Enable space lexing. Default: true.
+	Chars string   // Space characters. Default: " \t".
+	Check LexCheck // Hook invoked before the space matcher runs (TS options.space.check).
 }
 
 // LineOptions controls line-ending lexing.
 type LineOptions struct {
-	Lex      *bool  // Enable line lexing. Default: true.
-	Chars    string // Line characters. Default: "\r\n".
-	RowChars string // Row-counting characters. Default: "\n".
-	Single   *bool  // Generate separate tokens per newline. Default: false.
-
-	// Check is a LexCheck hook invoked before the line matcher runs.
-	// Mirrors TS `options.line.check`.
-	Check LexCheck
+	Lex      *bool    // Enable line lexing. Default: true.
+	Chars    string   // Line characters. Default: "\r\n".
+	RowChars string   // Row-counting characters. Default: "\n".
+	Single   *bool    // Generate separate tokens per newline. Default: false.
+	Check    LexCheck // Hook invoked before the line matcher runs (TS options.line.check).
 }
 
 // ValModifier transforms a text token value after lexing.
@@ -271,10 +153,7 @@ type ValModifier func(val any) any
 type TextOptions struct {
 	Lex    *bool         // Enable text matching. Default: true.
 	Modify []ValModifier // Pipeline of value modifiers applied after text matching.
-
-	// Check is a LexCheck hook invoked before the text matcher runs.
-	// Mirrors TS `options.text.check`.
-	Check LexCheck
+	Check  LexCheck      // Hook invoked before the text matcher runs (TS options.text.check).
 }
 
 // NumberOptions controls numeric literal lexing.
@@ -285,10 +164,7 @@ type NumberOptions struct {
 	Bin     *bool             // Support 0b binary format. Default: true.
 	Sep     string            // Number separator character. Default: "_". Empty string disables.
 	Exclude func(string) bool // Exclude certain number-like strings from number matching.
-
-	// Check is a LexCheck hook invoked before the number matcher runs.
-	// Mirrors TS `options.number.check`.
-	Check LexCheck
+	Check   LexCheck          // Hook invoked before the number matcher runs (TS options.number.check).
 }
 
 // CommentDef defines a single comment type.
@@ -299,33 +175,23 @@ type CommentDef struct {
 	Lex     *bool  // Enable this comment type. Default: true.
 	EatLine *bool  // Also consume trailing line chars. Default: false.
 
-	// Suffix terminates a comment body at an additional marker beyond
-	// its natural end (line char for line comments, End for block
-	// comments). When matched, the suffix is CONSUMED as the last part
-	// of the comment body.
-	//
+	// Suffix terminates a comment body at an extra marker beyond its natural end
+	// (line char for line comments, End for block); the matched suffix is CONSUMED
+	// as the last part of the body. EatLine only fires for line-char termination
+	// and does not stack with Suffix consumption (TS options.comment.def.<name>.suffix).
 	// Accepts one of:
-	//   string                — single suffix marker.
-	//   []string              — any of these markers terminates.
-	//   LexMatcher            — custom terminator probe: a non-nil
-	//                           returned token signals termination;
-	//                           len(token.Src) characters are consumed.
-	//
-	// EatLine still only fires for line-char termination; it does not
-	// stack with Suffix consumption.
-	//
-	// Mirrors TS `options.comment.def.<name>.suffix`.
+	//   string     — single suffix marker.
+	//   []string   — any of these markers terminates.
+	//   LexMatcher — custom terminator probe; a non-nil token terminates and
+	//                len(token.Src) characters are consumed.
 	Suffix any
 }
 
 // CommentOptions controls comment lexing.
 type CommentOptions struct {
-	Lex *bool                  // Enable all comment lexing. Default: true.
-	Def map[string]*CommentDef // Comment type definitions.
-
-	// Check is a LexCheck hook invoked before the comment matcher runs.
-	// Mirrors TS `options.comment.check`.
-	Check LexCheck
+	Lex   *bool                  // Enable all comment lexing. Default: true.
+	Def   map[string]*CommentDef // Comment type definitions.
+	Check LexCheck               // Hook invoked before the comment matcher runs (TS options.comment.check).
 }
 
 // StringOptions controls quoted string lexing.
@@ -337,17 +203,13 @@ type StringOptions struct {
 	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}. An entry mapped to "" removes a built-in escape (e.g. {"v": ""} rejects \v).
 	AllowUnknown *bool             // Allow unknown escapes. Default: true.
 
-	// EscapeStrict restricts escapes to the standard set: it disables the
-	// non-standard structural escapes \xHH and \u{...} (plain \uXXXX
-	// stays). Default: false. Combined with escape-map removals and
-	// AllowUnknown:false this yields JSON.parse-conformant handling.
+	// EscapeStrict disables the non-standard escapes \xHH and \u{...} (plain \uXXXX
+	// stays). Default: false. With escape-map removals and AllowUnknown:false this
+	// yields JSON.parse-conformant handling.
 	EscapeStrict *bool
 	Abandon      *bool           // On string error, return nil to let next matcher try. Default: false.
 	Replace      map[rune]string // Character replacements applied during string scanning.
-
-	// Check is a LexCheck hook invoked before the string matcher runs.
-	// Mirrors TS `options.string.check`.
-	Check LexCheck
+	Check        LexCheck        // Hook invoked before the string matcher runs (TS options.string.check).
 }
 
 // MapMergeFunc is a custom merge function for duplicate map keys.
@@ -370,21 +232,10 @@ type ListOptions struct {
 
 // ValueDef defines a keyword value.
 type ValueDef struct {
-	Val any // Value to produce for this keyword.
-
-	// Match is a RegExp pattern for regex-based value matching.
-	// When set, the value keyword is matched by regex instead of exact string.
-	// Matches TS options.value.def[name].match.
-	Match *regexp.Regexp
-
-	// ValFunc is a function that produces the value from regex match groups.
-	// Used when Match is set and the value depends on the match result.
-	// Matches TS value.def[name].val when val is a function.
-	ValFunc func(match []string) any
-
-	// Consume, when true, matches against the full forward source (not just
-	// the text token). The regexp should start with ^.
-	Consume bool
+	Val     any                      // Value to produce for this keyword.
+	Match   *regexp.Regexp           // Regexp matching the keyword instead of an exact string (TS value.def[name].match).
+	ValFunc func(match []string) any // Produces the value from regex match groups (TS value.def[name].val as function).
+	Consume bool                     // Match against full forward source, not just the text token; regexp should start with ^.
 }
 
 // ValueOptions controls keyword value matching.
@@ -395,51 +246,36 @@ type ValueOptions struct {
 
 // RuleOptions controls parser rule behavior.
 type RuleOptions struct {
-	Start  string // Starting rule name. Default: "val".
-	Finish *bool  // Auto-close unclosed structures at EOF. Default: true.
-	MaxMul *int   // Max rule occurrence multiplier. Default: 3.
-
-	// Include is a comma-separated list of group tags. When non-empty,
-	// only grammar alternates whose G field contains at least one of
-	// these tags survive; all other alts (including those with no tags)
-	// are dropped. Applied before Exclude.
-	Include string
-
-	// Exclude is a comma-separated list of group tags. Grammar
-	// alternates whose G field contains any of these tags are removed.
-	// Applied after Include.
-	Exclude string
+	Start   string // Starting rule name. Default: "val".
+	Finish  *bool  // Auto-close unclosed structures at EOF. Default: true.
+	MaxMul  *int   // Max rule occurrence multiplier. Default: 3.
+	Include string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
+	Exclude string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
 }
 
 // LexOptions controls global lex behavior.
 type LexOptions struct {
-	Empty       *bool // Allow empty source. Default: true.
-	EmptyResult any   // Result for empty source. Default: nil.
-
-	// Match defines custom lexer matchers, keyed by name.
-	// Matches the TypeScript pattern: tabnas.options({ lex: { match: { name: { order, make } } } })
-	Match map[string]*MatchSpec
+	Empty       *bool                 // Allow empty source. Default: true.
+	EmptyResult any                   // Result for empty source. Default: nil.
+	Match       map[string]*MatchSpec // Custom lexer matchers keyed by name (TS lex.match: { name: { order, make } }).
 }
 
 // ParserOptions allows custom parser overrides.
 type ParserOptions struct {
-	Start func(src string, j *Tabnas, meta map[string]any) (any, error)
+	Start func(src string, j *Tabnas, meta map[string]any) (any, error) // Replacement parser entrypoint.
 }
 
-// ParseOptions holds parse-time hooks. Mirrors TS `options.parse`.
+// ParseOptions holds parse-time hooks (TS options.parse).
 type ParseOptions struct {
-	// Prepare is a map of named callbacks invoked once at the start of
-	// every parse, in name order. The map form matches TS (which uses
-	// an object so plugins can replace each others' entries by name).
+	// Prepare holds named callbacks invoked once at the start of every parse, in
+	// name order. The map form matches TS so plugins can replace entries by name.
 	Prepare map[string]func(ctx *Context)
 }
 
-// ResultOptions controls parse result validation.
-// Matches the TypeScript result option.
+// ResultOptions controls parse result validation (TS options.result).
 type ResultOptions struct {
-	// Fail lists values that are treated as parse failures.
-	// If the parse result matches any of these, an "unexpected" error is returned.
-	// E.g. Fail: []any{nil} would make nil results fail.
+	// Fail lists values treated as parse failures: a result matching any of them
+	// yields an "unexpected" error. E.g. Fail: []any{nil} makes nil results fail.
 	Fail []any
 }
 
@@ -451,22 +287,22 @@ var idCounter int
 
 // Tabnas is a configured parser instance, equivalent to TypeScript's Tabnas.make().
 type Tabnas struct {
-	id              string // Unique instance identifier (TS: tabnas.id)
-	options         *Options
-	parser          *Parser
-	plugins         []pluginEntry     // Registered plugins
-	tinByName       map[string]Tin    // Custom token name → Tin
-	nameByTin       map[Tin]string    // Custom Tin → token name
-	nextTin         Tin               // Next available Tin for allocation
-	lexSubs         []LexSub          // Lex event subscribers
-	ruleSubs        []RuleSub         // Rule event subscribers
-	hints           map[string]string // Error hints per error code
-	emptyAllow      bool              // Allow empty source
-	emptyResult     any               // Result for empty source
-	parserStart     func(src string, j *Tabnas, meta map[string]any) (any, error)
-	decorations     map[string]any            // Plugin decorations (TS: tabnas.foo = value)
-	pluginOpts      map[string]map[string]any // Plugin options namespace (TS: options.plugin)
-	customTokenSets map[string][]Tin          // Custom token sets (TS: options.tokenSet)
+	id              string                                                        // Unique instance identifier (TS: tabnas.id).
+	options         *Options                                                      // Options used to build this instance.
+	parser          *Parser                                                       // Live parser holding the resolved config and rules.
+	plugins         []pluginEntry                                                 // Registered plugins, in order.
+	tinByName       map[string]Tin                                                // Custom token name → Tin.
+	nameByTin       map[Tin]string                                                // Custom Tin → token name.
+	nextTin         Tin                                                           // Next available Tin for allocation.
+	lexSubs         []LexSub                                                      // Lex event subscribers.
+	ruleSubs        []RuleSub                                                     // Rule event subscribers.
+	hints           map[string]string                                             // Error hints per error code.
+	emptyAllow      bool                                                          // Allow empty source.
+	emptyResult     any                                                           // Result for empty source.
+	parserStart     func(src string, j *Tabnas, meta map[string]any) (any, error) // Custom parser entrypoint, if set.
+	decorations     map[string]any                                                // Plugin decorations (TS: tabnas.foo = value).
+	pluginOpts      map[string]map[string]any                                     // Plugin options namespace (TS: options.plugin).
+	customTokenSets map[string][]Tin                                              // Custom token sets (TS: options.tokenSet).
 }
 
 // Decorate sets a named value on this instance. This is the Go equivalent of

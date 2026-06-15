@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -9,10 +11,8 @@ import (
 	"strings"
 )
 
-// Deep performs a recursive deep merge of multiple values.
-// Works on map[string]any, []any, and Go structs (via reflection),
-// matching the TypeScript deep() utility.
-// Zero/nil values in the overlay do not overwrite base values.
+// Deep recursively merges values (maps, slices, structs via reflection); zero/nil overlays preserve base.
+// Deep(map[string]any{"a":1}, map[string]any{"b":2}) // => {"a":1,"b":2}
 func Deep(base any, rest ...any) any {
 	for _, over := range rest {
 		base = deepMerge(base, over)
@@ -20,6 +20,8 @@ func Deep(base any, rest ...any) any {
 	return base
 }
 
+// deepMerge merges a single overlay onto base, the recursive core of Deep.
+// deepMerge(map[string]any{"a":1}, map[string]any{"a":2}) // => {"a":2}
 func deepMerge(base, over any) any {
 	// Match TS: undefined and Skip preserve base.
 	if IsUndefined(over) || IsSkip(over) {
@@ -124,10 +126,9 @@ func deepMerge(base, over any) any {
 	return deepClone(over)
 }
 
-// deepMergeStruct merges two struct values field-by-field via reflection.
-// Zero-value fields in over do not overwrite base, matching TS deep() where
-// undefined properties are skipped. Returns (merged, true) if both values
-// are structs of the same type, or (nil, false) if not applicable.
+// deepMergeStruct merges two same-type struct values field-by-field via reflection (zero over fields preserve base).
+// Returns (merged, true) when both are structs of the same type, else (nil, false).
+// deepMergeStruct(Options{Tag:"a"}, Options{}) // => (Options{Tag:"a"}, true)
 func deepMergeStruct(base, over any) (any, bool) {
 	if base == nil || over == nil {
 		return nil, false
@@ -228,7 +229,8 @@ func deepMergeStruct(base, over any) (any, bool) {
 	return result.Interface(), true
 }
 
-// cloneMeta creates a shallow copy of a Meta map.
+// cloneMeta returns a shallow copy of a Meta map (nil stays nil).
+// cloneMeta(map[string]any{"a":1}) // => {"a":1}
 func cloneMeta(meta map[string]any) map[string]any {
 	if meta == nil {
 		return nil
@@ -240,7 +242,8 @@ func cloneMeta(meta map[string]any) map[string]any {
 	return result
 }
 
-// mergeMeta merges two Meta maps. The over map's values take precedence.
+// mergeMeta merges two Meta maps; over values win on key collision.
+// mergeMeta(map[string]any{"a":1}, map[string]any{"a":2}) // => {"a":2}
 func mergeMeta(base, over map[string]any) map[string]any {
 	if base == nil && over == nil {
 		return nil
@@ -255,7 +258,8 @@ func mergeMeta(base, over map[string]any) map[string]any {
 	return result
 }
 
-// deepClone creates a deep copy of a value.
+// deepClone returns a recursive copy of a value (maps, slices, ListRef, MapRef); other types are returned as-is.
+// deepClone([]any{1, 2}) // => [1 2] (new slice)
 func deepClone(val any) any {
 	if val == nil {
 		return nil
@@ -290,8 +294,8 @@ func deepClone(val any) any {
 	}
 }
 
-// Snip returns the first maxlen characters of s, replacing \r, \n, \t with '.'.
-// Matches the TypeScript snip() utility used for debug/display output.
+// Snip truncates s to maxlen bytes and replaces \r, \n, \t with '.' (for debug/display output).
+// Snip("a\nbcd", 3) // => "a.b"
 func Snip(s string, maxlen int) string {
 	if maxlen <= 0 {
 		return ""
@@ -302,11 +306,9 @@ func Snip(s string, maxlen int) string {
 	return strings.NewReplacer("\r", ".", "\n", ".", "\t", ".").Replace(s)
 }
 
-// Str converts a value to a truncated string representation.
-// If maxlen is <= 0, returns empty string.
-// If the string representation exceeds maxlen, it is truncated with "..." appended.
-// Matches the TypeScript str() + snip() pipeline: converts to string, truncates,
-// then replaces \r\n\t with '.'.
+// Str renders a value to a string, truncating to maxlen ("..." marks truncation) then snipping \r\n\t.
+// Returns "" when maxlen <= 0. Mirrors the TypeScript str() + snip() pipeline.
+// Str("hello", 4) // => "h..."
 func Str(val any, maxlen int) string {
 	if maxlen <= 0 {
 		return ""
@@ -352,9 +354,8 @@ func Str(val any, maxlen int) string {
 	return Snip(s, maxlen)
 }
 
-// StrInject replaces template placeholders like {key} or {key.subkey} in a
-// template string with values from a map or array.
-// Returns the template unchanged if vals is not a map or array.
+// StrInject substitutes {key} / {key.subkey} placeholders in template from a map or array; unknown vals returns template unchanged.
+// StrInject("hi {n}", map[string]any{"n":"x"}) // => "hi x"
 func StrInject(template string, vals any) string {
 	if template == "" {
 		return ""
@@ -400,7 +401,8 @@ func StrInject(template string, vals any) string {
 	return result.String()
 }
 
-// resolvePath resolves a dotted path like "a.b.0" against a map or array.
+// resolvePath walks a dotted path like "a.b.0" through nested maps/arrays, returning (value, ok).
+// resolvePath("a", map[string]any{"a":1}, nil, true) // => (1, true)
 func resolvePath(path string, valsMap map[string]any, valsArr []any, isMap bool) (any, bool) {
 	parts := strings.Split(path, ".")
 	var current any
@@ -431,7 +433,8 @@ func resolvePath(path string, valsMap map[string]any, valsArr []any, isMap bool)
 	return current, true
 }
 
-// formatInjectValue formats a value for injection into a template.
+// formatInjectValue renders a resolved value for placeholder substitution (maps/arrays use compact form).
+// formatInjectValue(float64(2)) // => "2"
 func formatInjectValue(val any) string {
 	switch v := val.(type) {
 	case string:
@@ -457,8 +460,8 @@ func formatInjectValue(val any) string {
 	}
 }
 
-// formatCompactValue formats maps/arrays in a compact non-JSON format
-// similar to tabnas's output: {key:value} instead of {"key":"value"}.
+// formatCompactValue renders maps/arrays in compact unquoted form ({key:value}) like tabnas output.
+// formatCompactValue(map[string]any{"k":"v"}) // => "{k:v}"
 func formatCompactValue(val any) string {
 	switch v := val.(type) {
 	case map[string]any:
@@ -506,16 +509,15 @@ func formatCompactValue(val any) string {
 	}
 }
 
-// ModListOpts configures list modifications for ModList.
-// Matches the TypeScript ListMods type.
+// List modification options for ModList (mirrors the TypeScript ListMods type).
 type ModListOpts struct {
 	Delete []int                  // Indices to delete (supports negative indices).
-	Move   []int                  // Pairs: [from, to, from, to, ...].
+	Move   []int                  // Move pairs: [from, to, from, to, ...].
 	Custom func(list []any) []any // Custom modification callback, applied last.
 }
 
-// ModList modifies a list by applying delete, move, and custom operations.
-// Matches the TypeScript modlist() utility.
+// ModList applies delete, then move, then custom operations to a list (mirrors the TypeScript modlist()).
+// ModList([]any{"a","b"}, &ModListOpts{Delete: []int{0}}) // => ["b"]
 func ModList(list []any, opts *ModListOpts) []any {
 	if opts == nil || list == nil {
 		return list
@@ -583,12 +585,14 @@ func ModList(list []any, opts *ModListOpts) []any {
 	return list
 }
 
-// IsFuncRef checks if a string is a function reference (starts with "@").
+// IsFuncRef reports whether a string is a function reference (starts with "@").
+// IsFuncRef("@foo") // => true;  IsFuncRef("foo") // => false
 func IsFuncRef(s string) bool {
 	return len(s) > 0 && s[0] == '@'
 }
 
-// RequireRef looks up a FuncRef in the ref map and returns an error if not found.
+// RequireRef looks up a FuncRef by name, returning a grammar error when absent (kind labels the error).
+// RequireRef(map[FuncRef]any{"@f":fn}, "@f", "val") // => (fn, nil)
 func RequireRef(ref map[FuncRef]any, name string, kind string) (any, error) {
 	if ref == nil {
 		return nil, fmt.Errorf("Grammar: unknown %s function reference: %s (no ref map)", kind, name)
@@ -600,7 +604,8 @@ func RequireRef(ref map[FuncRef]any, name string, kind string) (any, error) {
 	return fn, nil
 }
 
-// LookupRef looks up a FuncRef in the ref map. Returns nil if not found.
+// LookupRef returns the FuncRef value for name, or nil when absent.
+// LookupRef(map[FuncRef]any{"@f":fn}, "@x") // => nil
 func LookupRef(ref map[FuncRef]any, name string) any {
 	if ref == nil {
 		return nil
@@ -608,8 +613,8 @@ func LookupRef(ref map[FuncRef]any, name string) any {
 	return ref[name]
 }
 
-// MapToOptions converts a map[string]any (with resolved FuncRefs) to an Options struct.
-// Only handles fields that are commonly set via grammar options.
+// MapToOptions builds an Options struct from a map[string]any (FuncRefs already resolved), covering common grammar option fields.
+// MapToOptions(map[string]any{"tag":"x"}) // => Options{Tag:"x"}
 func MapToOptions(m map[string]any) Options {
 	var opts Options
 
@@ -1021,11 +1026,13 @@ func MapToOptions(m map[string]any) Options {
 	return opts
 }
 
-// ResolveFuncRefs recursively resolves FuncRef strings in a map[string]any:
+// ResolveFuncRefs recursively rewrites FuncRef strings within nested maps/slices:
 //   - "@@prefix" → literal "@prefix"
 //   - "@SKIP" → Skip sentinel
 //   - "@/pattern/flags" → *regexp.Regexp
 //   - "@name" → function from ref map
+//
+// ResolveFuncRefs("@SKIP", nil) // => Skip
 func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 	if obj == nil {
 		return nil

@@ -155,12 +155,12 @@ const util: Record<string, any> = {
 
 // Internal state held by every Tabnas instance.
 type Internal = {
-  parser: Parser
-  config: Config
-  plugins: Plugin[]
-  sub: { lex?: LexSub[]; rule?: RuleSub[] }
-  mark: number
-  merged: Record<string, any>
+  parser:  Parser                                // Live parser instance.
+  config:  Config                                // Resolved configuration.
+  plugins: Plugin[]                              // Plugins applied, in order.
+  sub:     { lex?: LexSub[]; rule?: RuleSub[] }  // Event subscribers, by kind.
+  mark:    number                                // Random per-instance stamp.
+  merged:  Record<string, any>                   // Merged option tree.
 }
 
 
@@ -168,37 +168,34 @@ type Internal = {
 // including the optional `plugins` array. Nothing extra is added here.
 
 
+// Core parsing engine; grammar arrives only via plugins.
 class Tabnas {
-  // Methods like parse/use/rule are declared with the class. Plugins may
-  // attach extra properties; the index signature exposes that to TS.
+  // Index signature exposes plugin-attached properties and methods to TS.
   [key: string]: any
 
   // Public API surface — see types.ts for documentation.
-  token!: ((ref: string | Tin) => any) & { [k: string]: any }
-  tokenSet!: ((ref: string | Tin) => any) & { [k: string]: any }
-  fixed!: ((ref: string | Tin) => any) & { [k: string]: any }
-  // `options` is both a callable (set/get) and an indexable map of the
-  // merged option tree. Plugins may read individual settings via
-  // `am.options.<name>` and apply changes via `am.options({ ... })`.
+  token!: ((ref: string | Tin) => any) & { [k: string]: any }    // Token lookup/create, also a map.
+  tokenSet!: ((ref: string | Tin) => any) & { [k: string]: any } // Token-set lookup, also a map.
+  fixed!: ((ref: string | Tin) => any) & { [k: string]: any }    // Fixed-token lookup, also a map.
+  // `options` is both callable (set/get) and an indexable map of the merged
+  // option tree: read settings via `tn.options.<name>`, apply via `tn.options({...})`.
   options!: ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
-  id!: string
-  parent?: Tabnas
+  id!: string                                                    // Stamped per-instance identifier.
+  parent?: Tabnas                                                // Parent instance, if forked.
 
-  // Truly-private (ECMAScript hash-private) internal state. Inaccessible
-  // outside the class — for...in, Object.keys, JSON.stringify, and
-  // tests all see the instance as if this field didn't exist. Read it
-  // through the public `internal()` method.
+  // Hash-private internal state, invisible to for...in / Object.keys /
+  // JSON.stringify / tests. Read it through the public `internal()` method.
   #internal!: Internal
 
   // Static utility / constants for plugin code that holds the class.
-  static util = util
-  static S = S
-  static OPEN = OPEN
-  static CLOSE = CLOSE
-  static BEFORE = BEFORE
-  static AFTER = AFTER
-  static EMPTY = EMPTY
-  static SKIP = SKIP
+  static util = util      // Shared utility bag.
+  static S = S            // Interned string constants.
+  static OPEN = OPEN      // Rule-state: open phase.
+  static CLOSE = CLOSE    // Rule-state: close phase.
+  static BEFORE = BEFORE  // Rule-step: before the match.
+  static AFTER = AFTER    // Rule-step: after the match.
+  static EMPTY = EMPTY    // Empty-string constant.
+  static SKIP = SKIP      // Skip marker (Symbol).
 
 
   constructor(options?: TabnasOptions, parent?: Tabnas) {
@@ -302,8 +299,8 @@ class Tabnas {
       for (const rn of Object.keys(rsm)) {
         filtered[rn] = filterRules(rsm[rn], internal.config) as RuleSpec
       }
-      ;(internal.parser as any).rsm = filtered
-      ;(internal.parser as any).norm()
+      ; (internal.parser as any).rsm = filtered
+        ; (internal.parser as any).norm()
     } else {
       internal.config = configure(this, undefined, merged_options)
       internal.parser = makeParser(merged_options, internal.config, this)
@@ -354,15 +351,15 @@ class Tabnas {
   }
 
 
-  // Register and apply a plugin. Plugin is `(am, opts) => void | am`.
-  // If the plugin returns an Tabnas-like value (e.g. a Proxy wrapping
+  // Register and apply a plugin. Plugin is `(tn, opts) => void | tn`.
+  // If the plugin returns a Tabnas-like value (e.g. a Proxy wrapping
   // the instance), that's what `use()` returns — matches the upstream
   // contract and lets plugins decorate or wrap the instance.
   use(plugin: Plugin, plugin_options?: Record<string, any>): Tabnas {
     if (S.function !== typeof plugin) {
       throw new Error(
         'Tabnas.use: the first argument must be a function ' +
-          'defining a plugin.',
+        'defining a plugin.',
       )
     }
 
@@ -407,9 +404,9 @@ class Tabnas {
   }
 
 
-  // Create a sibling instance with no defaults, no standard tokens, and
-  // no grammar — for tests and for plugins that build everything from
-  // scratch.
+  // Create a fresh standalone instance (no parent) with no defaults, no
+  // standard tokens, and no grammar — for tests and for plugins that build
+  // everything from scratch.
   empty(options?: TabnasOptions): Tabnas {
     return new Tabnas({
       defaults$: false,
@@ -456,8 +453,8 @@ class Tabnas {
         : Array.isArray(altG)
           ? [...altG]
           : String(altG)
-              .split(/\s*,\s*/)
-              .filter((s) => s.length > 0)
+            .split(/\s*,\s*/)
+            .filter((s) => s.length > 0)
 
     const applyG = (alts: any): any => {
       if (null == altGArr || 0 === altGArr.length || !Array.isArray(alts)) {
@@ -471,8 +468,8 @@ class Tabnas {
             : Array.isArray(a.g)
               ? [...a.g]
               : String(a.g)
-                  .split(/\s*,\s*/)
-                  .filter((s: string) => s.length > 0)
+                .split(/\s*,\s*/)
+                .filter((s: string) => s.length > 0)
         return { ...a, g: [...existing, ...altGArr] }
       })
     }

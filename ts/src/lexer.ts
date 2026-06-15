@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2022 Richard Rodger, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  lexer.ts
  *  Lexer implementation, converts source text into tokens for the parser.
@@ -35,17 +35,14 @@ import {
   values,
 } from './utility'
 
-// Position tracking inside the source string. The lexer threads a
-// single Point through the parse — sI advances as characters are
-// consumed; rI/cI track the human-readable row/column for error
-// messages; token is the pending-token queue (rewind feeds it).
+// Scan position threaded through the parse: source index, row/column, and pending-token queue.
 class Point {
-  len = -1
-  sI = 0
-  rI = 1
-  cI = 1
-  token: Token[] = []
-  end?: Token
+  len = -1                 // Total source length.
+  sI = 0                   // Source index (chars consumed so far).
+  rI = 1                   // Row (1-based, for error messages).
+  cI = 1                   // Column (1-based, for error messages).
+  token: Token[] = []      // Pending-token queue (lookahead / rewind feed it).
+  end?: Token              // Cached end-of-source (#ZZ) token, once reached.
 
   constructor(len: number, sI?: number, rI?: number, cI?: number) {
     this.len = len
@@ -77,25 +74,21 @@ class Point {
 const makePoint = (...params: ConstructorParameters<typeof Point>) =>
   new Point(...params)
 
-// Tokens from the lexer.
-// A single lexed token. `tin` is the numeric token id (a Tin); `val`
-// is the JS-typed value (e.g. a number for #NR); `src` is the raw
-// matching source text. Match positions are kept on `pnt` for error
-// reporting and rewind.
+// A single lexed token: numeric token id, JS-typed value, raw source text, and match position.
 class Token {
-  isToken = true
-  name = EMPTY
-  tin: Tin = -1 as Tin
-  val: any = undefined
-  src = EMPTY
-  sI = -1
-  rI = -1
-  cI = -1
-  len = -1
-  use?: Record<string, any>
-  err?: string
-  why?: string
-  ignored?: Token
+  isToken = true             // Marker discriminating Tokens from other values.
+  name = EMPTY               // Token name (e.g. '#NR', '#ST').
+  tin: Tin = -1 as Tin       // Numeric token id corresponding to name.
+  val: any = undefined       // JS-typed value (e.g. a number for #NR).
+  src = EMPTY                // Raw matching source text.
+  sI = -1                    // Source index where the match started.
+  rI = -1                    // Row where the match started.
+  cI = -1                    // Column where the match started.
+  len = -1                   // Length of src.
+  use?: Record<string, any>  // Arbitrary user/plugin data attached to the token.
+  err?: string               // Error code, if this token is bad.
+  why?: string               // Diagnostic note explaining how the token arose.
+  ignored?: Token            // Optional attached ignored token (e.g. space/line/comment).
 
   constructor(
     name: string,
@@ -171,7 +164,7 @@ const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-
 // may short-circuit by returning `{ done: true, token }`.
 //
 // `mcfg` is captured once at matcher-build time. The matcher
-// factories are re-invoked on every `am.make()` clone (via
+// factories are re-invoked on every `tn.make()` clone (via
 // `configure()`), so a stale closure can never outlive the cfg
 // snapshot it was built from.
 function guardedMatcher(
@@ -220,14 +213,16 @@ const CI_RESET = 1 << 18 // cI = 1 without rI++ (line chars in multi-line string
 const STOP = 1 << 19
 const STATE_MASK = 0xffff
 
+// Immutable spec driving the single-character scan state machine (see driver above).
 type ScanSpec = {
-  readonly initialState: number
-  readonly nclasses: number
-  readonly classOf: Uint8Array
-  readonly fallback: (c: string) => number
-  readonly table: Int32Array
+  readonly initialState: number          // State the walk starts in.
+  readonly nclasses: number              // Number of byte-classes the spec uses.
+  readonly classOf: Uint8Array           // Per-byte class index (ASCII fast path).
+  readonly fallback: (c: string) => number  // Class for non-ASCII bytes.
+  readonly table: Int32Array             // Packed action keyed on state * nclasses + class.
 }
 
+// Caller-owned scratch holding the position the scan ended at (no per-call allocation).
 type ScanOut = { sI: number; rI: number; cI: number }
 
 // Walk `src` from `(startSI, startRI, startCI)` according to `spec`.
@@ -553,6 +548,7 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 // NOTE 2: matchers can place a second token onto the Point tokens,
 // supporting two token lookahead.
 
+// Resolved definition of one comment marker, extracted from the Config comment def map.
 type CommentDef = Config['comment']['def'] extends { [_: string]: infer T }
   ? T
   : never
@@ -1309,15 +1305,13 @@ function subMatchFixed(
   return out
 }
 
-// The lexer driver. Holds a Point for the current scan position and
-// runs the configured matchers in order. `next()` advances; `peek()`
-// looks ahead without consuming.
+// Lexer driver: holds the scan Point and runs the configured matchers in order via next().
 class Lex {
-  src = EMPTY
-  ctx = {} as Context
-  cfg = {} as Config
-  pnt = makePoint(-1)
-  fwd = EMPTY as string
+  src = EMPTY              // Full source text being lexed.
+  ctx = {} as Context     // Parse context (config, logging, subscribers).
+  cfg = {} as Config      // Resolved configuration.
+  pnt = makePoint(-1)     // Current scan position.
+  fwd = EMPTY as string   // Source from pnt.sI onward (the unconsumed remainder).
 
   refwd(): string {
     this.fwd = this.src.substring(this.pnt.sI) as string

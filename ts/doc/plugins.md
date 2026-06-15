@@ -22,8 +22,8 @@ function myPlugin(tabnas, options) {
 }
 
 const { Tabnas } = require('tabnas')
-const am = new Tabnas()
-am.use(myPlugin, { key: 'value' })
+const tn = new Tabnas()
+tn.use(myPlugin, { key: 'value' })
 ```
 
 `use()` returns the instance, so the idiomatic way to assemble a parser
@@ -43,7 +43,7 @@ const p = new Tabnas({ plugins: [jsonGrammar, csvGrammar, debugPlugin] })
 ```
 
 Plugins should be idempotent (or guard against re-application) because
-`am.make()` derives a child by re-running every plugin the parent has
+`tn.make()` derives a child by re-running every plugin the parent has
 registered, against the child's merged options. That re-run is what
 makes option-conditional alternates (e.g. `list.child`) work — the
 plugin's grammar registration sees the child's settings, not the
@@ -65,7 +65,7 @@ const p = new Tabnas()
 ```
 
 A plugin can fail fast if a required dependency is missing — inspect the
-instance (e.g. `am.token('#…')` or the rule set) in its body and throw a
+instance (e.g. `tn.token('#…')` or the rule set) in its body and throw a
 clear error rather than producing a confusing parse failure later.
 
 ### TypeScript signature
@@ -73,25 +73,25 @@ clear error rather than producing a confusing parse failure later.
 ```ts
 import type { Plugin, Tabnas } from 'tabnas'
 
-const myPlugin: Plugin = function myPlugin(am: Tabnas, options?: any) {
+const myPlugin: Plugin = function myPlugin(tn: Tabnas, options?: any) {
   // …
 }
 // Optionally attach plugin-author defaults; they merge with any options
-// passed to am.use(myPlugin, opts).
+// passed to tn.use(myPlugin, opts).
 myPlugin.defaults = { key: 'default' }
 ```
 
 ### Returning a wrapped instance
 
-`am.use(plugin)` returns whatever the plugin returns, falling back to
+`tn.use(plugin)` returns whatever the plugin returns, falling back to
 the instance. This lets a plugin wrap or proxy the instance:
 
 ```js
-function wrapping(am) {
+function wrapping(tn) {
   // Tabnas uses ES #private state; the wrapper Proxy must bind methods
   // to the underlying target so private-field access resolves to the
   // real instance.
-  return new Proxy(am, {
+  return new Proxy(tn, {
     get(target, prop) {
       const v = target[prop]
       return 'function' === typeof v ? v.bind(target) : v
@@ -99,7 +99,7 @@ function wrapping(am) {
   })
 }
 
-const wrapped = am.use(wrapping)
+const wrapped = tn.use(wrapping)
 ```
 
 ## Adding Tokens
@@ -108,9 +108,9 @@ Register a fixed token by name; the first lookup mints a new Tin (an
 opaque token id):
 
 ```js
-function tildePlugin(am) {
-  am.options({ fixed: { token: { '#TL': '~' } } })
-  const T_TILDE = am.token('#TL')
+function tildePlugin(tn) {
+  tn.options({ fixed: { token: { '#TL': '~' } } })
+  const T_TILDE = tn.token('#TL')
 }
 ```
 
@@ -142,10 +142,10 @@ alternate lists. An alternate matches a short token pattern (up to two
 tokens of lookahead) and fires actions.
 
 ```js
-function myPlugin(am) {
-  am.options({ fixed: { token: { '#TL': '~' } } })
+function myPlugin(tn) {
+  tn.options({ fixed: { token: { '#TL': '~' } } })
 
-  am.rule('val', (rs) => {
+  tn.rule('val', (rs) => {
     rs.open([
       { s: ['#TL'], a: (rule) => { rule.node = 42 } },
     ])
@@ -173,13 +173,13 @@ instead replace what earlier plugins contributed:
   use `rs.clearOpen()` / `rs.clearClose()` then re-add:
 
   ```js
-  am.rule('val', (rs) => rs.open([{ s: ['#OB'], p: 'map' }], { clear: true }))
+  tn.rule('val', (rs) => rs.open([{ s: ['#OB'], p: 'map' }], { clear: true }))
   ```
 
   Declaratively, the same via the alt-list `inject`:
 
   ```js
-  am.grammar({ rule: { val: { open: { alts: [...], inject: { clear: true } } } } })
+  tn.grammar({ rule: { val: { open: { alts: [...], inject: { clear: true } } } } })
   ```
 
 - **Lifecycle actions** — `rs.clearActions('bo', 'ao', …)` (no args clears
@@ -188,12 +188,12 @@ instead replace what earlier plugins contributed:
 
   ```js
   // drops every previously-registered `map` before-open action, installs this one
-  am.grammar({ ref: { '@map-bo/replace': resetMap }, rule: { map: {} } })
+  tn.grammar({ ref: { '@map-bo/replace': resetMap }, rule: { map: {} } })
   ```
 
 `/replace` takes ownership of the phase: once a phase is replaced, plain
 / `/prepend` / `/append` funcrefs for it are ignored, and the replacement
-wins deterministically across `am.make()` re-derivation. All of this is
+wins deterministically across `tn.make()` re-derivation. All of this is
 opt-in — existing grammars that use neither `clear` nor `/replace` keep
 the append behavior unchanged.
 
@@ -228,7 +228,7 @@ Each rule has four hook points:
 Register via the chainable API:
 
 ```js
-am.rule('map', (rs) => {
+tn.rule('map', (rs) => {
   rs.bo((rule, ctx) => {
     // runs once per map rule, before its open phase
   })
@@ -241,7 +241,7 @@ For syntax that doesn't fit the built-in matchers, add a custom lexer
 matcher via the `match` option. A regex value is the simplest form:
 
 ```js
-const am = new Tabnas({
+const tn = new Tabnas({
   plugins: [myGrammarPlugin],
   match: {
     lex: true,
@@ -251,7 +251,7 @@ const am = new Tabnas({
   },
 })
 
-am.parse('2024-01-15')              // Date(2024-01-15)
+tn.parse('2024-01-15')              // Date(2024-01-15)
 ```
 
 The regex must be anchored with `^`. For full control, register a
@@ -266,8 +266,8 @@ scan-spec primitives exposed via `Tabnas.util` (`scan`,
 A plugin can observe the parse without modifying it:
 
 ```js
-function loggingPlugin(am) {
-  am.sub({
+function loggingPlugin(tn) {
+  tn.sub({
     lex: (token, rule, ctx) => { console.log('lexed:', token.toString()) },
     rule: (rule, ctx) => { console.log('rule:', rule.name, rule.state) },
   })
@@ -279,24 +279,24 @@ function loggingPlugin(am) {
 Access groups of tokens by name (callable or as a map):
 
 ```js
-const ignoreTins = am.tokenSet('IGNORE')   // [#SP, #LN, #CM]
-const { VAL, KEY } = am.tokenSet           // map form
+const ignoreTins = tn.tokenSet('IGNORE')   // [#SP, #LN, #CM]
+const { VAL, KEY } = tn.tokenSet           // map form
 ```
 
 Define your own with the `tokenSet` option:
 
 ```js
-am.options({ tokenSet: { MYSET: ['#TX', '#NR'] } })
+tn.options({ tokenSet: { MYSET: ['#TX', '#NR'] } })
 ```
 
 ## Declarative grammar
 
 Instead of registering rules imperatively, a plugin can describe them
-as data via `am.grammar(spec)`. Function fields are supplied as
+as data via `tn.grammar(spec)`. Function fields are supplied as
 `@funcref` strings resolved against `spec.ref`. This is how the
 strict-JSON fixture is written — see
 [`test/json-plugin.ts`](../test/json-plugin.ts) and
-[`am.grammar`](api.md#amgrammarspec-settings).
+[`tn.grammar`](api.md#tngrammarspec-settings).
 
 ## Example: a tiny CSV plugin
 
@@ -309,18 +309,18 @@ custom matchers, and `sub` — are unit-tested in
 [`test/plugin.test.js`](../test/plugin.test.js).
 
 ```js
-function csvPlugin(am, opts) {
+function csvPlugin(tn, opts) {
   // Drop newlines from IGNORE so they survive into the rule stream.
-  am.options({
+  tn.options({
     tokenSet: { IGNORE: [undefined, null, undefined] },
     rule: { start: 'csv' },
     lex: { emptyResult: [] },
   })
 
-  const { CA, LN, ZZ } = am.token
-  const { VAL } = am.tokenSet
+  const { CA, LN, ZZ } = tn.token
+  const { VAL } = tn.tokenSet
 
-  am.rule('csv', (rs) => rs
+  tn.rule('csv', (rs) => rs
     .bo((r) => { r.node = [] })
     .open([
       { s: [VAL], p: 'row', b: 1 },
@@ -329,7 +329,7 @@ function csvPlugin(am, opts) {
     ])
   )
 
-  am.rule('row', (rs) => rs
+  tn.rule('row', (rs) => rs
     .bo((r) => { r.node = [] })
     .open([
       { s: [VAL], a: (r) => r.node.push(r.o0.val) },
@@ -345,7 +345,7 @@ function csvPlugin(am, opts) {
 }
 ```
 
-Apply with `am.use(csvPlugin)` on a bare instance, or via the
+Apply with `tn.use(csvPlugin)` on a bare instance, or via the
 `plugins` array at construction time.
 
 ## Packaging

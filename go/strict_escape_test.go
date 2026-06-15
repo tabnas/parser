@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Strict-escape mode (string.EscapeStrict) and escape-map removal.

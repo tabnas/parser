@@ -14,9 +14,9 @@ const assert = require('node:assert')
 
 const { Tabnas } = require('..')
 
-function tryParse(am, src) {
+function tryParse(tn, src) {
   try {
-    return { ok: true, val: am.parse(src) }
+    return { ok: true, val: tn.parse(src) }
   } catch (e) {
     return { ok: false, code: e.code }
   }
@@ -24,94 +24,94 @@ function tryParse(am, src) {
 
 describe('clear', () => {
   it('mods.clear replaces open alternates (imperative)', () => {
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
-    const { Ta, Tb } = am.token
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
+    const { Ta, Tb } = tn.token
     // Plugin A.
-    am.rule('top', (rs) =>
+    tn.rule('top', (rs) =>
       rs.open([{ s: [Ta], a: (r) => (r.node = 'A') }]).close([{ s: ['#ZZ'] }]),
     )
     // Plugin B replaces A's open alternates.
-    am.rule('top', (rs) => rs.open([{ s: [Tb], a: (r) => (r.node = 'B') }], { clear: true }))
+    tn.rule('top', (rs) => rs.open([{ s: [Tb], a: (r) => (r.node = 'B') }], { clear: true }))
 
-    assert.deepEqual(tryParse(am, 'a'), { ok: false, code: 'unexpected' })
-    assert.deepEqual(tryParse(am, 'b'), { ok: true, val: 'B' })
+    assert.deepEqual(tryParse(tn, 'a'), { ok: false, code: 'unexpected' })
+    assert.deepEqual(tryParse(tn, 'b'), { ok: true, val: 'B' })
   })
 
   it('clearOpen / clearClose remove alternates without touching the other phase', () => {
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
-    const { Ta, Tb } = am.token
-    am.rule('top', (rs) =>
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
+    const { Ta, Tb } = tn.token
+    tn.rule('top', (rs) =>
       rs.open([{ s: [Ta], a: (r) => (r.node = 'A') }]).close([{ s: ['#ZZ'] }]),
     )
-    am.rule('top', (rs) =>
+    tn.rule('top', (rs) =>
       rs.clearOpen().open([{ s: [Tb], a: (r) => (r.node = 'B') }]),
     )
-    assert.deepEqual(tryParse(am, 'a'), { ok: false, code: 'unexpected' })
-    assert.deepEqual(tryParse(am, 'b'), { ok: true, val: 'B' })
+    assert.deepEqual(tryParse(tn, 'a'), { ok: false, code: 'unexpected' })
+    assert.deepEqual(tryParse(tn, 'b'), { ok: true, val: 'B' })
     // Close untouched: 'b' still requires #ZZ to finish (it parsed fine).
   })
 
   it('clearActions replaces lifecycle actions', () => {
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
-    const { Ta } = am.token
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
+    const { Ta } = tn.token
     const log = []
-    am.rule('top', (rs) =>
+    tn.rule('top', (rs) =>
       rs.bo(() => log.push('A')).open([{ s: [Ta] }]).close([{ s: ['#ZZ'] }]),
     )
-    am.rule('top', (rs) => rs.clearActions('bo').bo(() => log.push('B')))
-    am.parse('a')
+    tn.rule('top', (rs) => rs.clearActions('bo').bo(() => log.push('B')))
+    tn.parse('a')
     assert.deepEqual(log, ['B'])
   })
 
   it('inject.clear replaces alternates (declarative grammar)', () => {
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
-    am.grammar({
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a', Tb: 'b' } } })
+    tn.grammar({
       ref: { '@a': (r) => (r.node = 'A'), '@b': (r) => (r.node = 'B') },
       rule: { top: { open: [{ s: 'Ta', a: '@a' }], close: [{ s: '#ZZ' }] } },
     })
-    am.grammar({
+    tn.grammar({
       ref: { '@b': (r) => (r.node = 'B') },
       rule: { top: { open: { alts: [{ s: 'Tb', a: '@b' }], inject: { clear: true } } } },
     })
-    assert.deepEqual(tryParse(am, 'a'), { ok: false, code: 'unexpected' })
-    assert.deepEqual(tryParse(am, 'b'), { ok: true, val: 'B' })
+    assert.deepEqual(tryParse(tn, 'a'), { ok: false, code: 'unexpected' })
+    assert.deepEqual(tryParse(tn, 'b'), { ok: true, val: 'B' })
   })
 
   it('@<rule>-<phase>/replace fnref replaces lifecycle actions', () => {
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
     const log = []
-    am.grammar({
+    tn.grammar({
       ref: { '@top-bo': () => log.push('A') },
       rule: { top: { open: [{ s: 'Ta' }], close: [{ s: '#ZZ' }] } },
     })
-    am.grammar({
+    tn.grammar({
       ref: { '@top-bo/replace': () => log.push('B') },
       rule: { top: {} },
     })
-    am.parse('a')
+    tn.parse('a')
     assert.deepEqual(log, ['B'])
   })
 
   it('/replace wins deterministically across make() re-derivation', () => {
     const log = []
-    const pluginA = (am) =>
-      am.rule('top', (rs) =>
+    const pluginA = (tn) =>
+      tn.rule('top', (rs) =>
         rs.fnref({ '@top-bo': () => log.push('A') })
           .open([{ s: ['Ta'] }])
           .close([{ s: ['#ZZ'] }]),
       )
-    const pluginB = (am) =>
-      am.rule('top', (rs) => rs.fnref({ '@top-bo/replace': () => log.push('B') }))
-    const am = new Tabnas({
+    const pluginB = (tn) =>
+      tn.rule('top', (rs) => rs.fnref({ '@top-bo/replace': () => log.push('B') }))
+    const tn = new Tabnas({
       rule: { start: 'top' },
       fixed: { token: { Ta: 'a' } },
       plugins: [pluginA, pluginB],
     })
     log.length = 0
-    am.parse('a')
+    tn.parse('a')
     assert.deepEqual(log, ['B'])
 
-    const child = am.make()
+    const child = tn.make()
     log.length = 0
     child.parse('a')
     assert.deepEqual(log, ['B'], 'replace must survive re-derivation')
@@ -121,14 +121,14 @@ describe('clear', () => {
     // Two plugins both contribute lifecycle actions and alternates; with
     // no clear/replace, all fire in registration order (the documented
     // append behavior).
-    const am = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
-    const { Ta } = am.token
+    const tn = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
+    const { Ta } = tn.token
     const log = []
-    am.rule('top', (rs) =>
+    tn.rule('top', (rs) =>
       rs.bo(() => log.push('A')).open([{ s: [Ta] }]).close([{ s: ['#ZZ'] }]),
     )
-    am.rule('top', (rs) => rs.bo(() => log.push('B')))
-    am.parse('a')
+    tn.rule('top', (rs) => rs.bo(() => log.push('B')))
+    tn.parse('a')
     assert.deepEqual(log, ['A', 'B'])
   })
 })

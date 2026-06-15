@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2024 Richard Rodger, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  error.ts
  *  Error handling functions and classes.
@@ -79,7 +79,7 @@ function trimstk(err: Error) {
   }
 }
 
-// Extract error site in source text and mark error point. */
+// Extract error site in source text and mark error point.
 function errsite(spec: {
   src: string
   sub?: string

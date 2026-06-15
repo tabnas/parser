@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import "unicode/utf8"
@@ -32,33 +34,31 @@ import "unicode/utf8"
 // Scan action flags and state mask (TS: CONSUME, IS_ROW, CI_RESET, STOP,
 // STATE_MASK).
 const (
-	ScanConsume   int32 = 1 << 16
+	ScanConsume   int32 = 1 << 16 // Consume the char and advance position.
 	ScanIsRow     int32 = 1 << 17 // rI++ and cI = 1
 	ScanCIReset   int32 = 1 << 18 // cI = 1 without rI++ (line chars in multi-line strings)
-	ScanStop      int32 = 1 << 19
-	ScanStateMask int32 = 0xffff
+	ScanStop      int32 = 1 << 19 // End the walk after applying this action.
+	ScanStateMask int32 = 0xffff  // Bits holding the next state.
 )
 
 // ScanSpec is a declarative byte-walk specification (TS: ScanSpec).
 type ScanSpec struct {
-	InitialState int
-	NClasses     int
-	ClassOf      [256]uint8
-	Table        []int32
+	InitialState int        // State the walk starts in.
+	NClasses     int        // Number of byte-classes the spec uses.
+	ClassOf      [256]uint8 // Per-ASCII-byte class index.
+	Table        []int32    // Packed action keyed on state*NClasses + class.
 
-	// Fallback classifies non-ASCII runes (lead byte >= 0x80). When set,
-	// the driver decodes the full UTF-8 rune, classifies it with this
-	// function, and consumes it as a single column. Mirrors the TS
-	// fallback class function for char codes >= 256.
+	// Fallback classifies non-ASCII runes (lead byte >= 0x80); when set, the
+	// driver decodes the full UTF-8 rune and consumes it as one column. Nil
+	// means pure byte mode. Mirrors the TS fallback class fn for codes >= 256.
 	Fallback func(r rune) uint8
 }
 
-// ScanOut receives the positions reached by a Scan (TS: ScanOut).
-// A caller-owned scratch value — no allocation per call.
+// ScanOut is caller-owned scratch holding the position a Scan ended at (TS: ScanOut).
 type ScanOut struct {
-	SI int
-	RI int
-	CI int
+	SI int // Source byte index reached.
+	RI int // Row index reached.
+	CI int // Column index reached.
 }
 
 // Scan walks src from (startSI, startRI, startCI) according to spec,
@@ -233,9 +233,9 @@ func hasKey(m map[rune]string, r rune) bool {
 	return ok
 }
 
-// Lazily built per-config scan specs. SetOptions replaces the LexConfig
-// contents wholesale (*cfg = *newcfg), which clears these caches so they
-// rebuild against the updated option values.
+// Lazily built per-config scan specs. SetOptions overwrites the LexConfig
+// contents in place (*j.parser.Config = *cfg) without preserving these
+// caches, so they rebuild against the updated option values.
 
 func (cfg *LexConfig) spaceRunSpec() *ScanSpec {
 	if cfg.spaceSpec == nil {

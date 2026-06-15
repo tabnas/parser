@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -6,45 +8,31 @@ import (
 	"strings"
 )
 
-// Plugin is a function that modifies a Tabnas instance.
-// Plugins can add custom tokens, matchers, and rule modifications.
-// Returns an error if the plugin fails to initialize.
+// Plugin modifies a Tabnas instance (tokens, matchers, rules); errors on init failure.
 type Plugin func(j *Tabnas, opts map[string]any) error
 
-// LexMatcher is a custom lexer matcher function.
-// It receives the lexer and the current parsing rule, and returns a Token
-// if matched, or nil to pass. The rule parameter allows context-sensitive
-// lexing (e.g. checking lex.Ctx.Rule, rule.K, rule.U, rule.N, or rule.State).
-// The matcher can read the current position via lex.Cursor() and must
-// advance the cursor if it produces a token.
+// LexMatcher is a custom lexer matcher: returns a Token (advancing the cursor) or nil to pass.
+// The rule parameter allows context-sensitive lexing (e.g. rule.K, rule.U, rule.N, rule.State).
 type LexMatcher func(lex *Lex, rule *Rule) *Token
 
-// MakeLexMatcher is a factory function that creates a LexMatcher.
-// It receives the lexer config and parser options, matching the TypeScript
-// pattern: (cfg: Config, opts: Options) => (lex: Lex) => Token | undefined.
+// MakeLexMatcher is a factory that builds a LexMatcher from the lex config and options.
 type MakeLexMatcher func(cfg *LexConfig, opts *Options) LexMatcher
 
-// MatchSpec defines a custom matcher to be registered via options.
-// This matches the TypeScript pattern: { order: number, make: MakeLexMatcher }.
+// MatchSpec is a custom matcher registered via options (TS: { order, make }).
 type MatchSpec struct {
-	Order int            // Priority order (lower runs first)
-	Make  MakeLexMatcher // Factory function that creates the matcher
+	Order int            // Priority order (lower runs first).
+	Make  MakeLexMatcher // Factory that builds the matcher.
 }
 
-// MatcherEntry holds a named custom matcher with a priority for ordering.
-// Lower priority numbers run first. Built-in matchers use:
-// fixed=2e6, space=3e6, line=4e6, string=5e6, comment=6e6, number=7e6, text=8e6.
-// Custom matchers at priority < 2e6 run before all built-ins (matching TS behavior).
+// MatcherEntry is a named custom matcher ordered by priority (lower runs first).
+// Built-ins: fixed=2e6, space=3e6, line=4e6, string=5e6, comment=6e6, number=7e6, text=8e6.
 type MatcherEntry struct {
-	Name     string
-	Priority int
-	Match    LexMatcher
+	Name     string     // Matcher name (unique key).
+	Priority int        // Ordering priority; < 2e6 runs before all built-ins.
+	Match    LexMatcher // The matcher function.
 }
 
-// RuleDefiner is a callback that modifies a RuleSpec.
-// Plugins use this to add alternates, actions, or conditions to grammar rules.
-// The parser is passed so definers can inspect or reference other rules.
-// Mirrors TS src/types.ts:841 `(rs: RuleSpec, p: Parser) => void`.
+// RuleDefiner modifies a RuleSpec, adding alternates, actions, or conditions to a grammar rule.
 type RuleDefiner func(rs *RuleSpec, p *Parser)
 
 // LexSub is a subscriber callback invoked after each token is lexed.
@@ -55,8 +43,16 @@ type RuleSub func(rule *Rule, ctx *Context)
 
 // pluginEntry stores a registered plugin and its options.
 type pluginEntry struct {
-	plugin Plugin
-	opts   map[string]any
+	plugin Plugin         // The registered plugin function.
+	opts   map[string]any // Options passed to the plugin.
+}
+
+// internalError converts a recovered panic value into an "internal"-code
+// *TabnasError, so error-returning public APIs uphold the no-panic
+// guarantee: any panic (including from plugin callbacks or grammar specs)
+// surfaces as a returned error rather than crashing the caller.
+func (j *Tabnas) internalError(api string, r any) error {
+	return j.parser.makeError("internal", fmt.Sprintf("%s: %v", api, r), "", 0, 1, 1)
 }
 
 // Use registers and invokes a plugin on this Tabnas instance.
@@ -67,15 +63,6 @@ type pluginEntry struct {
 //
 //	j := tabnas.Make()
 //	err := j.Use(myPlugin, map[string]any{"key": "value"})
-//
-// internalError converts a recovered panic value into an "internal"-code
-// *TabnasError, so error-returning public APIs uphold the no-panic
-// guarantee: any panic (including from plugin callbacks or grammar specs)
-// surfaces as a returned error rather than crashing the caller.
-func (j *Tabnas) internalError(api string, r any) error {
-	return j.parser.makeError("internal", fmt.Sprintf("%s: %v", api, r), "", 0, 1, 1)
-}
-
 func (j *Tabnas) Use(plugin Plugin, opts ...map[string]any) (err error) {
 	// Plugin code is arbitrary; a panic in it becomes an "internal" error.
 	defer func() {

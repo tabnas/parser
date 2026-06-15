@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2024 Richard Rodger, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  utility.ts
  *  Utility functions and constants.
@@ -30,18 +30,38 @@ import { TabnasError } from './error'
 // Null-safe object and array utilities
 // TODO: should use proper types:
 // https://github.com/microsoft/TypeScript/tree/main/src/lib
+
+// Own enumerable keys of an object, or [] for null/undefined.
+// keys({a:1}) // => ['a'];  keys(null) // => []
 const keys = (x: any) => (null == x ? [] : Object.keys(x))
+
+// Own enumerable values of an object, or [] for null/undefined.
+// values({a:1}) // => [1];  values(null) // => []
 const values = <T>(x: { [key: string]: T } | undefined | null): T[] =>
   null == x ? ([] as T[]) : Object.values(x)
+
+// Own enumerable [key,value] pairs of an object, or [] for null/undefined.
+// entries({a:1}) // => [['a',1]];  entries(null) // => []
 const entries = <T>(
   x: { [key: string]: T } | undefined | null,
 ): [string, T][] => (null == x ? ([] as [string, T][]) : Object.entries(x))
+
+// Merge sources into target, using a new {} when target is null/undefined.
+// assign({a:1},{b:2}) // => {a:1,b:2};  assign(null,{b:2}) // => {b:2}
 const assign = (x: any, ...r: any[]) => Object.assign(null == x ? {} : x, ...r)
+
+// True if value is an array.
+// isarr([1]) // => true;  isarr({}) // => false
 const isarr = (x: any) => Array.isArray(x)
+
+// Alias for Object.defineProperty.
+// defprop(o,'k',{value:1}) // => o (with o.k === 1)
 const defprop = Object.defineProperty
 
 
-// Map object properties using entries.
+// Rebuild an object by mapping each [key,value] entry; an undefined new
+// key drops the entry, and extra returned pairs set additional keys.
+// omap({a:1}, ([k,v])=>['x',v*2]) // => {x:2}
 const omap = (o: any, f?: (e: any) => any) => {
   return Object.entries(o || {}).reduce((o: any, e: any) => {
     let me = f ? f(e) : e
@@ -63,49 +83,49 @@ const omap = (o: any, f?: (e: any) => any) => {
 }
 
 // TODO: remove!
-// A bit pedantic, but let's be strict about strings.
-// Also improves minification a little.
+// Interned string constants used throughout the engine (strict, and helps
+// minification slightly).
 const S = {
-  indent: '. ',
-  logindent: '  ',
-  space: ' ',
-  gap: '  ',
-  Object: 'Object',
-  Array: 'Array',
-  object: 'object',
-  string: 'string',
-  function: 'function',
-  unexpected: 'unexpected',
-  map: 'map',
-  list: 'list',
-  elem: 'elem',
-  pair: 'pair',
-  val: 'val',
-  node: 'node',
-  no_re_flags: EMPTY,
-  unprintable: 'unprintable',
-  invalid_ascii: 'invalid_ascii',
-  invalid_unicode: 'invalid_unicode',
-  invalid_lex_state: 'invalid_lex_state',
-  unterminated_string: 'unterminated_string',
-  unterminated_comment: 'unterminated_comment',
-  lex: 'lex',
-  parse: 'parse',
-  error: 'error',
-  none: 'none',
-  imp_map: 'imp,map',
-  imp_list: 'imp,list',
-  imp_null: 'imp,null',
-  end: 'end',
-  open: 'open',
-  close: 'close',
-  rule: 'rule',
-  stack: 'stack',
-  nUll: 'null',
-  name: 'name',
-  make: 'make',
-  colon: ':',
-  step: 'step',
+  indent:               '. ',                   // Source-dump indent unit.
+  logindent:            '  ',                   // Debug-log indent unit.
+  space:                ' ',                    // Single space.
+  gap:                  '  ',                   // Two-space gap (log joins).
+  Object:               'Object',               // Constructor name "Object".
+  Array:                'Array',                // Constructor name "Array".
+  object:               'object',               // typeof "object".
+  string:               'string',               // typeof "string".
+  function:             'function',             // typeof "function".
+  unexpected:           'unexpected',           // Default error code.
+  map:                  'map',                  // Node kind: map.
+  list:                 'list',                 // Node kind: list.
+  elem:                 'elem',                 // List element label.
+  pair:                 'pair',                 // Map pair label.
+  val:                  'val',                  // Value label / start rule.
+  node:                 'node',                 // Generic node label.
+  no_re_flags:          EMPTY,                  // Empty RegExp flags.
+  unprintable:          'unprintable',          // Error code: unprintable char.
+  invalid_ascii:        'invalid_ascii',        // Error code: bad ASCII escape.
+  invalid_unicode:      'invalid_unicode',      // Error code: bad unicode escape.
+  invalid_lex_state:    'invalid_lex_state',    // Error code: bad lexer state.
+  unterminated_string:  'unterminated_string',  // Error code: unclosed string.
+  unterminated_comment: 'unterminated_comment', // Error code: unclosed comment.
+  lex:                  'lex',                  // Phase name: lex.
+  parse:                'parse',                // Phase name: parse.
+  error:                'error',                // Phase/label: error.
+  none:                 'none',                 // Sentinel "none".
+  imp_map:              'imp,map',              // Implicit map group tag.
+  imp_list:             'imp,list',             // Implicit list group tag.
+  imp_null:             'imp,null',             // Implicit null group tag.
+  end:                  'end',                  // Marker: end.
+  open:                 'open',                 // Rule state: open.
+  close:                'close',                // Rule state: close.
+  rule:                 'rule',                 // Label: rule.
+  stack:                'stack',                // Label: rule stack.
+  nUll:                 'null',                 // The literal string "null".
+  name:                 'name',                 // Label: name.
+  make:                 'make',                 // Label: make.
+  colon:                ':',                    // Colon separator.
+  step:                 'step',                 // Label: step.
 }
 
 
@@ -471,6 +491,7 @@ function configure(
 
 // Uniquely resolve or assign token by name (string) or identification number (Tin),
 // returning the associated Tin (for the name) or name (for the Tin).
+// tokenize('#AA', cfg) // => 4 (Tin);  tokenize(4, cfg) // => '#AA'
 function tokenize<
   R extends string | Tin,
   T extends R extends Tin ? string : Tin,
@@ -494,7 +515,8 @@ function tokenize<
   return token as T
 }
 
-// Find a tokenSet by name, or find the name of the TokenSet containing a given Tin.
+// Find a tokenSet's tins by name (leading # optional); undefined if absent.
+// findTokenSet('IGNORE', cfg) // => [tin,...];  findTokenSet('#IGNORE', cfg) // => [tin,...]
 function findTokenSet<
   R extends string | Tin,
   T extends R extends Tin ? string : Tin,
@@ -505,13 +527,15 @@ function findTokenSet<
   return found as T
 }
 
-// Mark a string for escaping by `util.regexp`.
+// Mark a string for escaping by `regexp` (wraps it as a String with esc=true).
+// mesc('a.b').esc // => true
 function mesc(s: string, _?: any) {
   return (_ = new String(s)), (_.esc = true), _
 }
 
-// Construct a RegExp. Use mesc to mark string for escaping.
+// Construct a RegExp from parts; mesc-marked parts are regex-escaped first.
 // NOTE: flags first allows concatenated parts to be rest.
+// regexp(null, 'a', 'b').source // => 'ab'
 function regexp(
   flags: string | null,
   ...parts: (string | (String & { esc?: boolean }))[]
@@ -529,6 +553,8 @@ function regexp(
   )
 }
 
+// Escape RegExp metacharacters (and tab/cr/lf) in a string; '' for null.
+// escre('a.b') // => 'a\\.b'
 function escre(s: string | undefined) {
   return null == s
     ? ''
@@ -543,6 +569,7 @@ function escre(s: string | undefined) {
 // Array merge by `over` index, `over` wins non-matching types, except:
 // `undefined` always loses, `over` plain objects inject into functions,
 // and `over` functions always win. Over always copied.
+// deep({a:1}, {b:2}) // => {a:1, b:2}
 function deep(base?: any, ...rest: any): any {
   let base_isf = S.function === typeof base
   let base_iso = null != base && (S.object === typeof base || base_isf)
@@ -581,6 +608,7 @@ function deep(base?: any, ...rest: any): any {
 }
 
 
+// Wrap a Lex so that emitting the BAD token (BD) throws a TabnasError.
 function badlex(lex: Lex, BD: Tin, ctx: Context) {
   let next = lex.next.bind(lex)
 
@@ -640,6 +668,8 @@ function makelog(ctx: Context, meta: any) {
   return ctx.log
 }
 
+// Build a source-formatter for debug output: a custom one if configured,
+// else a JSON stringifier truncated to config.debug.maxlen.
 function srcfmt(config: Config): (s: any) => string {
   return 'function' === typeof config.debug.print.src
     ? config.debug.print.src
@@ -669,6 +699,8 @@ function srcfmt(config: Config): (s: any) => string {
     }
 }
 
+// Stringify any value to at most `len` chars, appending '...' when truncated.
+// str({a:1}) // => '{"a":1}';  str('abcdef', 5) // => 'ab...'
 function str(o: any, len: number = 44) {
   let s
   try {
@@ -679,12 +711,16 @@ function str(o: any, len: number = 44) {
   return snip(len < s.length ? s.substring(0, len - 3) + '...' : s, len)
 }
 
+// First `len` chars of a value, with whitespace chars replaced by '.'; '' if undefined.
+// snip('ab\ncd') // => 'ab.cd';  snip(undefined) // => ''
 function snip(s: any, len: number = 5) {
   return undefined === s
     ? ''
     : ('' + s).substring(0, len).replace(/[\r\n\t]/g, '.')
 }
 
+// Deep clone a class instance, preserving its prototype.
+// clone(new Foo()) // => new Foo()-equivalent (same prototype, deep-copied data)
 function clone(class_instance: any) {
   return deep(
     Object.create(Object.getPrototypeOf(class_instance)),
@@ -692,7 +728,8 @@ function clone(class_instance: any) {
   )
 }
 
-// Lookup map for a set of chars.
+// Build a char->code-point lookup map from strings/objects (false parts skipped).
+// charset('ab') // => {a:97, b:98}
 function charset(...parts: (string | object | boolean | undefined)[]): Chars {
   return null == parts
     ? {}
@@ -710,6 +747,7 @@ function charset(...parts: (string | object | boolean | undefined)[]): Chars {
 // lookup keyed by a single-character string. Code-points >= 256 are
 // dropped; callers that need full-unicode chars must keep the original
 // `Chars` object as a fallback alongside the bitmap.
+// charsBitmap('a')[97] // => 1
 function charsBitmap(...parts: (string | object | boolean | undefined)[]): Uint8Array {
   const out = new Uint8Array(256)
   for (const p of parts) {
@@ -725,6 +763,7 @@ function charsBitmap(...parts: (string | object | boolean | undefined)[]): Uint8
 }
 
 // Remove all properties with values null or undefined. Note: mutates argument.
+// clean({a:1, b:null}) // => {a:1}
 function clean<T>(o: T): T {
   for (let p in o) {
     if (null == o[p]) {
@@ -778,6 +817,9 @@ function filterRules(rs: RuleSpec, cfg: Config): RuleSpec {
   return newRs
 }
 
+// Get or (when `val` given) set a dot-path property, creating intermediate
+// objects; rejects __proto__ for prototype-pollution safety.
+// prop({a:{b:1}}, 'a.b') // => 1;  prop({}, 'a.b', 2) // => 2 (sets a.b)
 function prop(obj: any, path: string, val?: any): any {
   let root = obj
   try {
@@ -812,7 +854,8 @@ function prop(obj: any, path: string, val?: any): any {
   }
 }
 
-// Mutates list based on ListMods.
+// Mutates list based on ListMods (delete-by-index, move pairs, then custom).
+// modlist(['a','b','c'], {delete:[1]}) // => ['a','c']
 function modlist(list: any[], mods?: ListMods) {
   if (mods && list) {
     if (0 < list.length) {
@@ -859,6 +902,7 @@ function modlist(list: any[], mods?: ListMods) {
   return list
 }
 
+// Wrap a parser's start() to convert a native JSON SyntaxError into a TabnasError.
 function parserwrap(parser: any) {
   return {
     start: function(
@@ -950,6 +994,8 @@ function parserwrap(parser: any) {
 }
 
 
+// Read a value at a dot-path (or path array); undefined if any segment is missing.
+// getpath({a:{b:1}}, 'a.b') // => 1;  getpath({}, 'a.b') // => undefined
 function getpath(root: any, path: string | string[]): any {
   path = 'string' === typeof path ? path.split('.') : path
   let node = root
@@ -962,6 +1008,7 @@ function getpath(root: any, path: string | string[]): any {
 
 // Recursively resolve FuncRef strings in an options object to actual functions,
 // and `@/pattern/flags` strings to RegExp instances.
+// resolveFuncRefs({r:'@/a/i'}) // => {r: /a/i};  resolveFuncRefs('@@x') // => '@x'
 function resolveFuncRefs(
   obj: any,
   ref?: Record<string, Function>,

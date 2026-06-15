@@ -12,11 +12,11 @@ const assert = require('node:assert')
 const Util = require('util')
 
 const { Tabnas, makeLex, makeToken, makePoint } = require('..')
-const am = new Tabnas()
+const tn = new Tabnas()
 
 // Collect all tokens of `src` lexed with options `opts`.
 function tokens(opts, src) {
-  let j = am.make(opts)
+  let j = tn.make(opts)
   let t = j.token
   let lex = makeLex({
     src: () => src,
@@ -51,7 +51,7 @@ describe('cover-lex', () => {
   })
 
   it('lex-refwd-and-tokenize', () => {
-    let j = am.make()
+    let j = tn.make()
     let lex = makeLex({
       src: () => 'abcd',
       cfg: j.internal().config,
@@ -410,7 +410,7 @@ describe('cover-lex', () => {
 
   it('number-value-def-and-sub-fixed', () => {
     // A number-shaped value definition wins over the number matcher.
-    let j = am.make({ value: { def: { 42: { val: 'forty-two' } } } })
+    let j = tn.make({ value: { def: { 42: { val: 'forty-two' } } } })
     let lex = makeLex({
       src: () => '42',
       cfg: j.internal().config,

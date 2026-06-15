@@ -13,16 +13,16 @@ const { Tabnas } = require('..')
 // A one-value grammar over the bare engine; "}" (an unmatched close
 // brace) triggers an "unexpected" error for the formatting tests.
 function vp(opts) {
-  const am = new Tabnas(Object.assign({ rule: { start: 'top' } }, opts))
-  am.rule('top', (rs) =>
+  const tn = new Tabnas(Object.assign({ rule: { start: 'top' } }, opts))
+  tn.rule('top', (rs) =>
     rs.open([{ s: ['#VAL'], a: (r) => (r.node = r.o0.val) }]).close([{ s: ['#ZZ'] }]),
   )
-  return am
+  return tn
 }
 
-function errOf(am, src) {
+function errOf(tn, src) {
   try {
-    am.parse(src)
+    tn.parse(src)
     return null
   } catch (e) {
     return e
@@ -70,47 +70,47 @@ describe('coverage', () => {
   })
 
   it('Tabnas API surface', () => {
-    const am = vp({})
+    const tn = vp({})
 
     // Derive a child and an empty instance.
-    assert.ok(am.make({ tag: 'child' }) instanceof Tabnas)
-    assert.ok(am.empty() instanceof Tabnas)
+    assert.ok(tn.make({ tag: 'child' }) instanceof Tabnas)
+    assert.ok(tn.empty() instanceof Tabnas)
 
     // toString / id.
-    assert.match('' + am, /^Tabnas\//)
-    assert.ok(am.id)
+    assert.match('' + tn, /^Tabnas\//)
+    assert.ok(tn.id)
 
     // config / internal / util.
-    assert.equal(typeof am.config(), 'object')
-    assert.equal(typeof am.internal(), 'object')
-    assert.equal(typeof am.util, 'object')
-    assert.equal(typeof am.util.deep, 'function')
+    assert.equal(typeof tn.config(), 'object')
+    assert.equal(typeof tn.internal(), 'object')
+    assert.equal(typeof tn.util, 'object')
+    assert.equal(typeof tn.util.deep, 'function')
 
     // token / tokenSet callables and map forms.
-    const tin = am.token('#COVNEW')
-    assert.equal(am.token('#COVNEW'), tin)
-    assert.ok(Array.isArray(am.tokenSet('VAL')))
-    assert.equal(typeof am.tokenSet, 'function')
+    const tin = tn.token('#COVNEW')
+    assert.equal(tn.token('#COVNEW'), tin)
+    assert.ok(Array.isArray(tn.tokenSet('VAL')))
+    assert.equal(typeof tn.tokenSet, 'function')
 
     // options accessor (callable + indexable).
-    am.options({ tag: 'tagged' })
-    assert.equal(am.options.tag, 'tagged')
+    tn.options({ tag: 'tagged' })
+    assert.equal(tn.options.tag, 'tagged')
 
     // parse of a non-string returns the input unchanged.
-    assert.equal(am.parse(123), 123)
+    assert.equal(tn.parse(123), 123)
     const obj = { a: 1 }
-    assert.equal(am.parse(obj), obj)
+    assert.equal(tn.parse(obj), obj)
 
     // parse with a meta.log callback (exercises the debug-log path).
     let logged = 0
-    am.parse('1', { log: () => logged++ })
+    tn.parse('1', { log: () => logged++ })
     assert.ok(0 <= logged)
   })
 
   it('sub returns the instance and chains', () => {
-    const am = vp({})
-    assert.equal(am.sub({ lex: () => {} }), am)
-    am.sub({ rule: () => {} })
-    am.parse('1')
+    const tn = vp({})
+    assert.equal(tn.sub({ lex: () => {} }), tn)
+    tn.sub({ rule: () => {} })
+    tn.parse('1')
   })
 })

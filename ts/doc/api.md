@@ -14,31 +14,31 @@ Create a parser instance. The class has no grammar by default; pass a
 ```js
 const { Tabnas } = require('tabnas')
 
-const am = new Tabnas({ plugins: [myGrammarPlugin] })
-am.parse(src)
+const tn = new Tabnas({ plugins: [myGrammarPlugin] })
+tn.parse(src)
 ```
 
 `options` is a [`TabnasOptions`](options.md) object — every field is
 optional and merges with the defaults. The `plugins` field is the only
-field that doesn't survive into `am.options` after construction (it's
+field that doesn't survive into `tn.options` after construction (it's
 consumed by the `use()` calls the constructor makes internally).
 
 For a bare instance with no defaults, no standard tokens, and no
 grammar — useful as a base for building a parser from scratch — use
-`am.empty()`:
+`tn.empty()`:
 
 ```js
-const blank = am.empty({ rule: { start: 'mything' } })
+const blank = tn.empty({ rule: { start: 'mything' } })
 ```
 
 ## Parsing
 
-### `am.parse(src, meta?, parent_ctx?)`
+### `tn.parse(src, meta?, parent_ctx?)`
 
 Parse a string and return the result.
 
 ```js
-am.parse(src)                         // depends on the active grammar
+tn.parse(src)                         // depends on the active grammar
 ```
 
 Non-string inputs are returned unchanged — handy when threading values
@@ -51,7 +51,7 @@ code.
 
 ## Instance Management
 
-### `am.make(options?)`
+### `tn.make(options?)`
 
 Derive a child instance with overridden options. The child inherits the
 parent's plugin list and re-runs each plugin against the merged options
@@ -59,7 +59,7 @@ parent's plugin list and re-runs each plugin against the merged options
 child's settings.
 
 ```js
-const restricted = am.make({
+const restricted = tn.make({
   rule: { exclude: 'experimental' }   // strip alts tagged 'experimental'
 })
 ```
@@ -67,7 +67,7 @@ const restricted = am.make({
 After re-running plugins the child applies `rule.include` /
 `rule.exclude` filtering on top.
 
-### `am.empty(options?)`
+### `tn.empty(options?)`
 
 Create a bare instance with `defaults$: false`, `standard$: false`,
 `grammar$: false`. No tokens, no rules, no anything. The starting
@@ -75,41 +75,41 @@ point for entirely custom parsers.
 
 ## Configuration
 
-### `am.options`
+### `tn.options`
 
 Dual-shape: callable as a setter, indexable as a snapshot of the
 merged option tree. Both forms work simultaneously.
 
 ```js
-am.options.comment.lex                // current setting (snapshot)
-am.options({ comment: { lex: false } })   // applies a partial change
-am.options()                          // returns a fresh copy of merged opts
+tn.options.comment.lex                // current setting (snapshot)
+tn.options({ comment: { lex: false } })   // applies a partial change
+tn.options()                          // returns a fresh copy of merged opts
 ```
 
 Calling `options(change)` deep-merges into the live options, re-runs
 `configure()`, and clones the parser with the new config. Reading
 property paths gives the snapshot at the most recent set call.
 
-### `am.config()`
+### `tn.config()`
 
 Returns a deep copy of the internal `Config` (the resolved, compiled
 form of the options). Useful for debugging.
 
 ## Grammar
 
-### `am.rule(name?, definer?)`
+### `tn.rule(name?, definer?)`
 
 Access or modify grammar rules.
 
-- `am.rule()` — returns the full `RuleSpec` map.
-- `am.rule(name)` — returns the `RuleSpec` for that rule name.
-- `am.rule(name, definer)` — calls `definer(rs, parser)` to modify or
+- `tn.rule()` — returns the full `RuleSpec` map.
+- `tn.rule(name)` — returns the `RuleSpec` for that rule name.
+- `tn.rule(name, definer)` — calls `definer(rs, parser)` to modify or
   create the rule. Use `rs.open([...])` / `rs.close([...])` to add
   alternates, and `bo` / `ao` / `bc` / `ac` for the state-action hooks.
-- `am.rule(name, null)` — delete a rule.
+- `tn.rule(name, null)` — delete a rule.
 
 ```js
-am.rule('val', (rs) => {
+tn.rule('val', (rs) => {
   rs.open([
     { s: ['#OB'], p: 'map', b: 1, g: 'map,custom' },
   ])
@@ -119,7 +119,7 @@ am.rule('val', (rs) => {
 See [Writing plugins](plugins.md) for the full alternate-spec and
 state-action field lists.
 
-### `am.grammar(spec, settings?)`
+### `tn.grammar(spec, settings?)`
 
 Apply a `GrammarSpec` — a JSON-shaped declarative representation of
 rule definitions, with function fields supplied as `@funcref` strings
@@ -127,21 +127,21 @@ resolved against `spec.ref`. Used by plugins that ship grammar as data
 rather than code. `settings.rule.alt.g` appends group tags to every
 alternate in the spec.
 
-### `am.token(ref)`
+### `tn.token(ref)`
 
 Dual-shape, like `options`: callable for lookup-or-create, and
 indexable as a name → Tin map.
 
 ```js
-am.token('#OB')                       // Tin for the open-brace token
-am.token(12)                          // name for Tin 12
-am.token('#TL')                       // mints and returns a fresh Tin
-am.token.ST                           // map access (bare name, no '#')
+tn.token('#OB')                       // Tin for the open-brace token
+tn.token(12)                          // name for Tin 12
+tn.token('#TL')                       // mints and returns a fresh Tin
+tn.token.ST                           // map access (bare name, no '#')
 ```
 
 The map is keyed by both `#XX` and bare `XX` forms.
 
-### `am.tokenSet(ref)`
+### `tn.tokenSet(ref)`
 
 Dual-shape: callable to look up a named set's Tin array, indexable as
 a name → Tin[] map. Built-in sets:
@@ -152,28 +152,28 @@ a name → Tin[] map. Built-in sets:
 | `VAL` | `#TX`, `#NR`, `#ST`, `#VL` (anything that can be a value) |
 | `KEY` | `#TX`, `#NR`, `#ST`, `#VL` (anything that can be a map key) |
 
-### `am.fixed(ref)`
+### `tn.fixed(ref)`
 
 Look up the source-string ↔ Tin mapping for fixed (punctuation /
 keyword) tokens.
 
 ## Plugins
 
-### `am.use(plugin, options?)`
+### `tn.use(plugin, options?)`
 
 Register a plugin and invoke it. The plugin receives the instance and
 the merged plugin options:
 
 ```js
-function foo(am, opts) { /* … */ }
-am.use(foo, { x: 1 })
+function foo(tn, opts) { /* … */ }
+tn.use(foo, { x: 1 })
 ```
 
 Plugins can return a wrapped instance (e.g. a `Proxy`) — `use()` will
 return whatever the plugin returns, falling back to the instance:
 
 ```js
-const wrapped = am.use((am) => new Proxy(am, {
+const wrapped = tn.use((tn) => new Proxy(tn, {
   // Tabnas uses ES #private state; bind methods to the underlying
   // instance so private-field access works through the Proxy.
   get(target, prop) {
@@ -183,19 +183,19 @@ const wrapped = am.use((am) => new Proxy(am, {
 }))
 ```
 
-When `am.make()` derives a child, the child re-runs every plugin
+When `tn.make()` derives a child, the child re-runs every plugin
 applied to the parent. Plugins should be idempotent (or guard
 themselves against re-application).
 
 ## Events
 
-### `am.sub({ lex?, rule? })`
+### `tn.sub({ lex?, rule? })`
 
 Subscribe to lex and rule events. Multiple subscriptions are allowed
 and fire in registration order.
 
 ```js
-am.sub({
+tn.sub({
   lex: (token, rule, ctx) => { /* … */ },
   rule: (rule, ctx)       => { /* … */ },
 })
@@ -205,13 +205,13 @@ am.sub({
 
 | Property | Description |
 |---|---|
-| `am.id` | Unique-per-instance string id (`'Tabnas/<ts>/<rand>[/<tag>]'`). |
-| `am.parent` | Parent instance, if this was created via `parent.make()`. |
-| `am.toString()` | Returns `am.id`. |
+| `tn.id` | Unique-per-instance string id (`'Tabnas/<ts>/<rand>[/<tag>]'`). |
+| `tn.parent` | Parent instance, if this was created via `parent.make()`. |
+| `tn.toString()` | Returns `tn.id`. |
 
 ## Internals
 
-### `am.internal()`
+### `tn.internal()`
 
 Returns the internal-state record: `{ parser, config, plugins, sub,
 mark, merged }`. The state itself lives in a hash-private field
@@ -223,7 +223,7 @@ for things the public API doesn't surface; user code rarely needs it.
 ### `Tabnas.util` (static)
 
 Bag of helpers for plugin authors. Also reachable per-instance via
-`am.util`. Members:
+`tn.util`. Members:
 
 - **Object / merge** — `deep`, `clone`, `keys`, `values`, `entries`,
   `omap`, `clean`, `prop`.
@@ -265,7 +265,7 @@ the main module. Notable shapes:
 |---|---|
 | `Tabnas` | Class type of the engine instance. |
 | `TabnasOptions` | The full option shape (with `plugins?: Plugin[]`). |
-| `TabnasInternal` | Shape returned by `am.internal()`. |
+| `TabnasInternal` | Shape returned by `tn.internal()`. |
 | `Plugin` | `(tabnas, options?) => void \| Tabnas`, plus optional `defaults`. |
 | `Tin` | Branded `number` for token ids. |
 | `Token`, `Lex`, `Point` | Lexer types (also classes). |

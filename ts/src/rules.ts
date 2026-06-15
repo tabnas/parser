@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2023 Richard Rodger, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  rules.ts
  *  Parser rules.
@@ -41,44 +41,40 @@ import {
 
 import { TabnasError } from './error'
 
-// Represents the application of a parsing rule. An instance is created
-// for each attempt to match tokens based on the RuleSpec, and pushed
-// onto the main parser rule stack. A Rule can be in two states:
-// "open" when first placed on the stack, and "close" when it needs
-// to be removed from the stack.
+// A single application of a RuleSpec on the parser stack; lives through an "open" then "close" pass.
 class Rule {
-  i = -1
-  name = EMPTY
-  node: any = null
-  state: RuleState = OPEN
-  n: Counters = Object.create(null)
-  d = -1
-  u: Record<string, any> = Object.create(null)
-  k: Record<string, any> = Object.create(null)
-  bo = false
-  ao = false
-  bc = false
-  ac = false
+  i = -1                                  // Unique rule id within this parse run.
+  name = EMPTY                            // Rule name (matches its RuleSpec).
+  node: any = null                        // Value node this rule is building.
+  state: RuleState = OPEN                 // Current phase: open ('o') or close ('c').
+  n: Counters = Object.create(null)       // Named counters tracked across the rule.
+  d = -1                                  // Stack depth at which this rule was pushed.
+  u: Record<string, any> = Object.create(null) // Custom user props (not propagated to children).
+  k: Record<string, any> = Object.create(null) // Custom keep props (propagated via push/replace).
+  bo = false                              // Has before-open actions.
+  ao = false                              // Has after-open actions.
+  bc = false                              // Has before-close actions.
+  ac = false                              // Has after-close actions.
 
-  oN = 0
-  cN = 0
+  oN = 0                                  // Count of tokens matched in the open phase.
+  cN = 0                                  // Count of tokens matched in the close phase.
 
-  spec: RuleSpec
-  child: Rule
-  parent: Rule
-  prev: Rule
-  next: Rule
+  spec: RuleSpec                          // The RuleSpec this rule applies.
+  child: Rule                             // Rule pushed by this rule (NORULE if none).
+  parent: Rule                            // Rule that pushed this rule (NORULE if none).
+  prev: Rule                              // Rule this one replaced (NORULE if none).
+  next: Rule                              // Rule to process after this one.
 
   // Canonical storage for matched tokens at each lookahead position.
-  o: Token[]
-  c: Token[]
+  o: Token[]                              // Tokens matched in the open phase.
+  c: Token[]                              // Tokens matched in the close phase.
 
   // Per-rule NOTOKEN reference (from ctx), used by legacy accessors.
   // Optional so the structural type stays compatible with consumers
   // that don't know about it.
   _NOTOKEN?: Token
 
-  need = 0
+  need = 0                                // Reserved counter for grammar/plugin use.
 
   // Internal tracing field — set by the parser when a rule fails.
   why?: string
@@ -161,22 +157,19 @@ const makeRule = (...params: ConstructorParameters<typeof Rule>) =>
 
 const makeNoRule = (j: Tabnas, ctx: Context) => makeRule(makeRuleSpec(j, ctx.cfg, {}), ctx)
 
-// Parse-alternate match (built from current tokens and AltSpec).
-// The string/number fields default to falsy sentinels so the parser
-// can normalise them via `(alt.X && alt.X(...)) || out.X`-style
-// expressions without TypeScript flagging the broader union types.
+// Result of matching one parse alternate against the current tokens (built from current tokens and AltSpec).
 class AltMatch {
-  p: string | null | false | 0 = EMPTY // Push rule (by name).
-  r: string | null | false | 0 = EMPTY // Replace rule (by name).
-  b: number | null | false = 0 // Move token position backward.
-  c?: AltCond // Custom alt match condition.
-  n?: Counters // increment named counters.
-  a?: AltAction // Match actions.
-  h?: AltModifier // Modify alternate match.
-  u?: Record<string, any> // Custom props to add to Rule.use.
-  k?: Record<string, any> // Custom props to add to Rule.keep and keep via push and replace.
-  g?: string[] // Named group tags (allows plugins to find alts).
-  e?: Token // Errored on this token.
+  p: string | null | false | 0 = EMPTY  // Push rule (by name).
+  r: string | null | false | 0 = EMPTY  // Replace rule (by name).
+  b: number | null | false = 0          // Backtrack: move token position backward.
+  c?: AltCond                           // Custom alt match condition.
+  n?: Counters                          // Named counters to increment.
+  a?: AltAction                         // Action to run on match.
+  h?: AltModifier                       // Modifier for this alternate match.
+  u?: Record<string, any>               // Custom props to add to Rule.u.
+  k?: Record<string, any>               // Custom props to add to Rule.k (propagated via push/replace).
+  g?: string[]                          // Named group tags (lets plugins find alts).
+  e?: Token                             // Token the match errored on.
 }
 
 const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
@@ -185,20 +178,21 @@ const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
 const PALT: AltMatch = makeAltMatch() // Only one alt object is created.
 const EMPTY_ALT = makeAltMatch()
 
+// Reusable definition of a rule: its open/close alternates, lifecycle actions, and collated token lookups.
 class RuleSpec {
-  name = EMPTY // Set by Parser.rule
+  name = EMPTY                          // Rule name (set by Parser.rule).
   def = {
-    open: [] as AltSpec[],
-    close: [] as AltSpec[],
-    bo: [] as StateAction[],
-    bc: [] as StateAction[],
-    ao: [] as StateAction[],
-    ac: [] as StateAction[],
-    tcol: [] as Tin[][][],
-    fnref: {} as FuncRefMap<Function>,
+    open: [] as AltSpec[],              // Open-phase alternates.
+    close: [] as AltSpec[],             // Close-phase alternates.
+    bo: [] as StateAction[],            // Before-open actions.
+    bc: [] as StateAction[],            // Before-close actions.
+    ao: [] as StateAction[],            // After-open actions.
+    ac: [] as StateAction[],            // After-close actions.
+    tcol: [] as Tin[][][],              // Collated lookahead tins: [stateI][tokenI][tins].
+    fnref: {} as FuncRefMap<Function>,  // Named function references (@name handlers).
   }
-  cfg: Config
-  ji: Tabnas
+  cfg: Config                           // Resolved configuration.
+  ji: Tabnas                            // Owning Tabnas instance.
 
 
   constructor(j: Tabnas, cfg: Config, def: any) {
@@ -460,9 +454,9 @@ class RuleSpec {
       this.def.close.reduce(...collate(1, tI, columns))
     }
 
-    // Ensure tcol[stateI] exists with enough slots so lexer.ts:264-268
-    // can always index `tcol[oc][tI]` safely for any tI the parser
-    // passes (bounded by this rule's own maxS).
+    // Ensure tcol[stateI] exists with enough slots so the lexer's
+    // tcol gating can always index `tcol[oc][tI]` safely for any tI
+    // the parser passes (bounded by this rule's own maxS).
     columns[0] = columns[0] || []
     columns[1] = columns[1] || []
     for (let tI = 0; tI < maxOpen; tI++) columns[0][tI] = columns[0][tI] || []

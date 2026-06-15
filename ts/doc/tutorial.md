@@ -20,8 +20,8 @@ parse something:
 ```js
 const { Tabnas } = require('tabnas')
 
-const am = new Tabnas()
-am.parse('hello')                     // throws — no grammar yet
+const tn = new Tabnas()
+tn.parse('hello')                     // throws — no grammar yet
 ```
 
 The bare instance knows how to *lex* (split text into tokens) but has
@@ -34,13 +34,13 @@ A grammar is a plugin — a function that receives the instance and
 configures it. The smallest useful grammar recognises a single word.
 
 ```js
-function helloPlugin(am) {
+function helloPlugin(tn) {
   // Teach the lexer a fixed token: the source `hello` becomes `#HI`.
-  am.options({ fixed: { token: { '#HI': 'hello' } } })
+  tn.options({ fixed: { token: { '#HI': 'hello' } } })
 
   // Teach the parser what to do when it opens the start rule (`val`)
   // and sees that token: set the result node to the string 'world'.
-  am.rule('val', (rs) => rs.open([
+  tn.rule('val', (rs) => rs.open([
     { s: ['#HI'], a: (r) => { r.node = 'world' } },
   ]))
 }
@@ -48,10 +48,10 @@ function helloPlugin(am) {
 
 Two things happened here:
 
-- `am.options({ fixed: { token: ... } })` registered a **fixed token**.
+- `tn.options({ fixed: { token: ... } })` registered a **fixed token**.
   Fixed tokens are exact source strings; `'hello'` in the input now
   lexes as the token named `#HI`.
-- `am.rule('val', ...)` modified the start rule. Each rule has an
+- `tn.rule('val', ...)` modified the start rule. Each rule has an
   **open** phase holding a list of **alternates**. The one alternate
   here says: if the next token sequence (`s`) is `['#HI']`, run the
   **action** (`a`), which assigns the result to `r.node`.
@@ -64,8 +64,8 @@ parse begins there.
 Apply the plugin at construction time and parse:
 
 ```js
-const am = new Tabnas({ plugins: [helloPlugin] })
-am.parse('hello')                     // 'world'
+const tn = new Tabnas({ plugins: [helloPlugin] })
+tn.parse('hello')                     // 'world'
 ```
 
 You wrote a parser. It accepts exactly one input, but the machinery is
@@ -78,18 +78,18 @@ A rule alternate's `s` can hold a list of token names; an alternate
 fires when the whole sequence matches, so add a second alternate:
 
 ```js
-function helloPlugin(am) {
-  am.options({ fixed: { token: { '#HI': 'hello', '#BY': 'bye' } } })
+function helloPlugin(tn) {
+  tn.options({ fixed: { token: { '#HI': 'hello', '#BY': 'bye' } } })
 
-  am.rule('val', (rs) => rs.open([
+  tn.rule('val', (rs) => rs.open([
     { s: ['#HI'], a: (r) => { r.node = 'world' } },
     { s: ['#BY'], a: (r) => { r.node = 'farewell' } },
   ]))
 }
 
-const am = new Tabnas({ plugins: [helloPlugin] })
-am.parse('hello')                     // 'world'
-am.parse('bye')                       // 'farewell'
+const tn = new Tabnas({ plugins: [helloPlugin] })
+tn.parse('hello')                     // 'world'
+tn.parse('bye')                       // 'farewell'
 ```
 
 The parser tries each open alternate in order and takes the first whose

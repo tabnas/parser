@@ -60,14 +60,14 @@ const JSON_OPTIONS = {
 // Install the pure JSON rule set (val / map / list / pair / elem) on
 // the given Tabnas instance. Exposed so other grammar plugins can layer
 // its extensions on top without re-declaring the JSON core.
-export function registerJsonGrammar(am: Tabnas): void {
+export function registerJsonGrammar(tn: Tabnas): void {
   const {
     // Complex tokens
     TX, // Text (unquoted character sequence)
     ST, // String (quoted character sequence)
-  } = am.token
+  } = tn.token
 
-  am.grammar({
+  tn.grammar({
     ref: {
       '@finish': (_rule: Rule, ctx: Context) => {
         if (!ctx.cfg.rule.finish) {
@@ -243,7 +243,7 @@ export function registerJsonGrammar(am: Tabnas): void {
 }
 
 
-export const json: Plugin = function json(am: Tabnas, _options?: any) {
-  am.options(JSON_OPTIONS)
-  registerJsonGrammar(am)
+export const json: Plugin = function json(tn: Tabnas, _options?: any) {
+  tn.options(JSON_OPTIONS)
+  registerJsonGrammar(tn)
 }

@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Fuzz the no-panic guarantee: public Parse must never panic, even on

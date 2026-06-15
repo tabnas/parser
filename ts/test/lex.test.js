@@ -5,8 +5,8 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
 const { Tabnas, makeLex, TabnasError } = require('..')
-const am = new Tabnas()
-const J = (src, meta, ctx) => am.parse(src, meta, ctx)
+const tn = new Tabnas()
+const J = (src, meta, ctx) => tn.parse(src, meta, ctx)
 
 describe('lex', function () {
   let j, t, config
@@ -29,7 +29,7 @@ describe('lex', function () {
   }
 
   function lexstart(src) {
-    j = am.make()
+    j = tn.make()
     config = j.internal().config
     t = j.token
 

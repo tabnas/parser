@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 // Engine-mechanics tests, adapted from the former jsonic/plugin_test.go

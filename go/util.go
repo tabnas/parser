@@ -1,39 +1,34 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import "sort"
 
-// Util exposes helper functions that plugins commonly need, mirroring
-// TS tabnas.util (src/tabnas.ts:109). The fields point at package-level
-// functions so plugin authors porting from TS can keep calls shaped like
-// `j.Util().Deep(a, b)` instead of re-importing each helper.
+// Bag of helper functions exposed to plugins, mirroring TS tabnas.util.
 type UtilBag struct {
-	Deep      func(base any, rest ...any) any
-	Keys      func(m map[string]any) []string
-	Values    func(m map[string]any) []any
-	Entries   func(m map[string]any) []Entry
-	Omap      func(m map[string]any, fn func(Entry) []any) map[string]any
-	Str       func(val any, maxlen int) string
-	StrInject func(template string, vals any) string
+	Deep      func(base any, rest ...any) any                             // Recursive deep merge.
+	Keys      func(m map[string]any) []string                             // Sorted map keys.
+	Values    func(m map[string]any) []any                                // Values in key-sorted order.
+	Entries   func(m map[string]any) []Entry                              // Key/value pairs, key-sorted.
+	Omap      func(m map[string]any, fn func(Entry) []any) map[string]any // Map over object entries.
+	Str       func(val any, maxlen int) string                            // Value to truncated string.
+	StrInject func(template string, vals any) string                      // Fill {key} placeholders.
 
-	// Lex scan primitives — exposed so plugin authors can build their
-	// own matchers on the same state-machine driver (TS exposes scan,
-	// guardedMatcher, and the spec builders via the util bag; see
-	// scan.go for the action flag constants ScanConsume etc.).
-	Scan                func(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOut) bool
-	BuildCharRunSpec    func(chars map[rune]bool) *ScanSpec
-	BuildLineRunSpec    func(lineChars, rowChars map[rune]bool) *ScanSpec
-	BuildStringBodySpec func(cfg *LexConfig, q rune) *ScanSpec
+	// Lex scan primitives, for building matchers on the same driver.
+	Scan                func(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOut) bool // Run the scan state machine.
+	BuildCharRunSpec    func(chars map[rune]bool) *ScanSpec                                                // Spec matching a run of chars.
+	BuildLineRunSpec    func(lineChars, rowChars map[rune]bool) *ScanSpec                                  // Spec matching line whitespace.
+	BuildStringBodySpec func(cfg *LexConfig, q rune) *ScanSpec                                             // Spec matching a quoted string body.
 }
 
-// Entry is a (key, value) pair returned by Entries. Matches the 2-tuple
-// shape of TS Object.entries(), but as a struct for Go ergonomics.
+// A (key, value) pair returned by Entries; the struct form of a TS 2-tuple.
 type Entry struct {
-	Key   string
-	Value any
+	Key   string // The map key.
+	Value any    // The value at that key.
 }
 
-// Keys returns the map's keys in sorted order. Matches TS Object.keys()
-// with null-safety — a nil map returns an empty slice.
+// Keys returns the map's keys in sorted order; a nil map returns an empty slice.
+// Keys(map[string]any{"b":2,"a":1}) // => ["a","b"];  Keys(nil) // => []
 func Keys(m map[string]any) []string {
 	if m == nil {
 		return []string{}
@@ -46,8 +41,8 @@ func Keys(m map[string]any) []string {
 	return out
 }
 
-// Values returns the map's values in key-sorted order. Matches TS
-// Object.values() with null-safety.
+// Values returns the map's values in key-sorted order; a nil map returns an empty slice.
+// Values(map[string]any{"b":2,"a":1}) // => [1,2];  Values(nil) // => []
 func Values(m map[string]any) []any {
 	if m == nil {
 		return []any{}
@@ -59,8 +54,8 @@ func Values(m map[string]any) []any {
 	return out
 }
 
-// Entries returns (key, value) pairs in key-sorted order. Matches TS
-// Object.entries() with null-safety.
+// Entries returns (key, value) pairs in key-sorted order; a nil map returns an empty slice.
+// Entries(map[string]any{"a":1}) // => [{Key:"a",Value:1}];  Entries(nil) // => []
 func Entries(m map[string]any) []Entry {
 	if m == nil {
 		return []Entry{}
@@ -72,10 +67,9 @@ func Entries(m map[string]any) []Entry {
 	return out
 }
 
-// Omap maps over an object's entries. For each entry, fn returns a slice
-// of alternating key/value items: `[k, v]` renames/rewrites the pair;
-// `[k, v, k2, v2, ...]` adds extra keys; `[nil, _]` drops the entry.
-// Mirrors TS omap (src/utility.ts:44).
+// Omap maps over an object's entries, where fn returns alternating key/value
+// items: [k,v] rewrites the pair, [k,v,k2,v2,...] adds keys, [nil,_] drops it.
+// Omap(map[string]any{"a":1}, func(e Entry) []any { return []any{e.Key, 9} }) // => {"a":9}
 func Omap(m map[string]any, fn func(Entry) []any) map[string]any {
 	out := map[string]any{}
 	if m == nil {
@@ -104,9 +98,8 @@ func Omap(m map[string]any, fn func(Entry) []any) map[string]any {
 	return out
 }
 
-// Util returns a UtilBag of helper functions. Matches TS tabnas.util.
-// The returned bag is a thin pointer wrapper over the package-level
-// helpers — safe to cache and call from any goroutine.
+// Util returns a UtilBag wiring the package-level helpers, mirroring TS tabnas.util.
+// The helpers are stateless, so the bag is safe to cache and call concurrently.
 func (j *Tabnas) Util() UtilBag {
 	return UtilBag{
 		Deep:      Deep,

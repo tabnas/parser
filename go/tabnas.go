@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 // Package tabnas provides a lenient JSON parser that supports relaxed syntax
 // including unquoted keys, implicit objects/arrays, comments, trailing commas,
 // single-quoted strings, path diving (nested object shorthand), and more.
@@ -53,10 +55,9 @@ var defaultHints = map[string]string{
 	"internal": "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input.",
 }
 
-// TabnasError is the error type returned by Parse when parsing fails.
-// It includes structured details about the error location and cause.
+// Structured error returned by Parse, carrying the failure location, cause, and formatting context.
 type TabnasError struct {
-	Code   string // Error code: "unterminated_string", "unterminated_comment", "unexpected"
+	Code   string // Error code keying errorMessages/defaultHints, e.g. "unexpected", "unterminated_string".
 	Detail string // Human-readable detail message (e.g. "unterminated string: \"abc")
 	Pos    int    // 0-based character position in source
 	Row    int    // 1-based line number

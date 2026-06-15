@@ -1,3 +1,5 @@
+// Copyright (c) 2013-2026 Richard Rodger, MIT License
+
 package tabnas
 
 import (
@@ -40,7 +42,7 @@ func addTrace(j *Tabnas) {
 }
 
 // Describe returns a human-readable description of a Tabnas instance's configuration.
-// It lists tokens, fixed tokens, rules, matchers, plugins, and key config settings.
+// It lists tokens, fixed tokens, rules, custom matchers, plugins, subscriptions, and key config settings.
 func Describe(j *Tabnas) string {
 	var b strings.Builder
 

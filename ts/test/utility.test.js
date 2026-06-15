@@ -11,8 +11,8 @@ const { strinject } = require('../dist/error')
 
 const { util, Tabnas, makeToken, makePoint } = require('..')
 const { json } = require('../dist-test/json-plugin')
-const am = new Tabnas({ plugins: [json] })
-const J = (src, meta, ctx) => am.parse(src, meta, ctx)
+const tn = new Tabnas({ plugins: [json] })
+const J = (src, meta, ctx) => tn.parse(src, meta, ctx)
 const { loadTSV } = require('./utility')
 
 const {
@@ -302,7 +302,7 @@ describe('utility', () => {
 
     log = []
     dir = []
-    let j = am.make(cfg)
+    let j = tn.make(cfg)
     j.parse('{"a":1}', { log: -1 })
     assert.deepEqual(dir[0].debug.print.config, true)
   })

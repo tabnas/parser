@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2023 Richard Rodger, MIT License */
+/* Copyright (c) 2013-2026 Richard Rodger, MIT License */
 
 /*  defaults.ts
  *  Default option values.
@@ -101,7 +101,7 @@ const defaults: TabnasOptions = {
     // Recognize octal numbers (eg. 10 === 0o12).
     oct: true,
 
-    // Recognize ninary numbers (eg. 10 === 0b1010).
+    // Recognize binary numbers (eg. 10 === 0b1010).
     bin: true,
 
     // All possible number chars. |+-|0|xob|0-9a-fA-F|.e|+-|0-9a-fA-F|
@@ -341,7 +341,7 @@ Unexpected end of source.`,
     // Automatically close remaining structures at EOF.
     finish: true,
 
-    // Multiplier to increase the maximum number of rule occurences.
+    // Multiplier to increase the maximum number of rule occurrences.
     maxmul: 3,
 
     // Include only those alts with matching group tags (comma sep).
