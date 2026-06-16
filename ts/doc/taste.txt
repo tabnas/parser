@@ -4,3 +4,8 @@ val:
 │ "hello" │
 ╰────┬────╯
      │
+
+Ignored tokens:
+  CM = comment
+  LN = newline (line break)
+  SP = whitespace (spaces or tabs)
