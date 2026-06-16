@@ -111,6 +111,9 @@ func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map
 // alternates, and BO/BC/AO/AC state actions.
 //
 // If the rule does not exist, a new empty RuleSpec is created.
+// A nil definer deletes the rule from the rule-spec map, if present
+// (mirrors the TypeScript rule(name, null) idiom). Deleting an absent
+// rule is a no-op.
 // Returns the Tabnas instance for chaining.
 //
 // Example:
@@ -122,6 +125,11 @@ func (j *Tabnas) UseDefaults(plugin Plugin, defaults map[string]any, opts ...map
 //	    }}, rs.open...)
 //	})
 func (j *Tabnas) Rule(name string, definer RuleDefiner) *Tabnas {
+	// A nil definer deletes the rule (mirrors TS rule(name, null)).
+	if definer == nil {
+		delete(j.parser.RSM, name)
+		return j
+	}
 	rs := j.parser.RSM[name]
 	if rs == nil {
 		rs = &RuleSpec{Name: name}
