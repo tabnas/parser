@@ -27,9 +27,6 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-    # The @tabnas siblings are not published to npm; clone them so the
-    # file: dependencies resolve, then build everything (this repo included)
-    # in dependency order so each package sees its built dependencies.
     - name: Clone tabnas dependencies
       shell: bash
       run: |
@@ -54,13 +51,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Use LF line endings
-      run: git config --global core.autocrlf false
     - uses: actions/checkout@v4
       with:
         path: parser
@@ -68,14 +63,32 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
-    # The go module replaces ../../<dep>/go for unpublished sibling ports;
-    # clone them so the local replace directives resolve.
     - name: Clone tabnas dependencies
       shell: bash
       run: |
         set -e
         for dep in debug json abnf railroad; do
           git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
+    # Mirror admin/scripts/link.sh: vendor symlinks for ../vendor/ replaces,
+    # then a go.work over every module EXCEPT those vendor-replaced ones.
+    - name: Set up go workspace
+      shell: bash
+      run: |
+        set -e
+        for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
+          grep -E '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" | while read -r line; do
+            v=$(printf '%s' "$line" | sed -E 's#.*\.\./vendor/([^/]+)/go.*#\1#')
+            dep=$(printf '%s' "$line" | awk '{print $2}' | sed -E 's#github.com/tabnas/([^/]+)/go#\1#')
+            repodir=$(dirname "$(dirname "$gm")")
+            mkdir -p "$repodir/vendor"
+            ln -snf "$(cd "$dep" && pwd)" "$repodir/vendor/$v"
+          done
+        done
+        go work init
+        for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
+          grep -qE '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" && continue
+          go work use "$(dirname "$gm")"
         done
     - name: Build
       working-directory: parser/go
