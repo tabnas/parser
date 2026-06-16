@@ -16,3 +16,8 @@ add:
 
 Tokens:
   NR = number literal (e.g. 42, -1.5, 1e3)
+
+Ignored tokens:
+  CM = comment
+  LN = newline (line break)
+  SP = whitespace (spaces or tabs)
