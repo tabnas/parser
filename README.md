@@ -200,7 +200,9 @@ flowchart TD
 Every package depends only on others above it. Runtime (`prod`) dependencies on
 other tabnas packages are declared as **peerDependencies** (npm ≥ 7 / Node ≥ 20
 installs them automatically). `@tabnas/debug` (structured-output tests) and
-`@tabnas/railroad` (diagram generation) are **dev-only** in every package.
+`@tabnas/railroad` (diagram generation) are **dev-only** in every package —
+except `jsonic-cli`, which has no grammar to diagram (no `railroad`) and uses
+`@tabnas/debug` at runtime for its `--debug` flag (a prod peer).
 
 | Package | Description | Prod (peer) | Dev-only |
 | ------- | ----------- | ----------- | -------- |
@@ -208,6 +210,7 @@ installs them automatically). `@tabnas/debug` (structured-output tests) and
 | [debug](https://github.com/tabnas/debug) | Trace logging and structured `describe()` / `model()` helpers | [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
 | [json](https://github.com/tabnas/json) | Strict-JSON grammar plugin | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [jsonic](https://github.com/tabnas/jsonic) | Relaxed-JSON (jsonic) grammar — the callable façade | [debug](https://github.com/tabnas/debug), [json](https://github.com/tabnas/json), [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
+| [jsonic-cli](https://github.com/tabnas/jsonic-cli) | The `jsonic` command-line interface (parses relaxed-JSON from args, files or stdin) | [debug](https://github.com/tabnas/debug), [jsonic](https://github.com/tabnas/jsonic) | [parser](https://github.com/tabnas/parser) |
 | [abnf](https://github.com/tabnas/abnf) | Compiles ABNF / BNF into engine rules (`@tabnas/bnf`) | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [hoover](https://github.com/tabnas/hoover) | Whitespace / block-text lexer helper | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [path](https://github.com/tabnas/path) | Path / segment utilities | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
