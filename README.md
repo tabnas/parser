@@ -195,6 +195,37 @@ flowchart TD
   back to `val`, which closes returning the total.
 
 
+## Package dependencies
+
+Every package depends only on others above it. Runtime (`prod`) dependencies on
+other tabnas packages are declared as **peerDependencies** (npm ≥ 7 / Node ≥ 20
+installs them automatically). `@tabnas/debug` (structured-output tests) and
+`@tabnas/railroad` (diagram generation) are **dev-only** in every package.
+
+| Package | Description | Prod (peer) | Dev-only |
+| ------- | ----------- | ----------- | -------- |
+| [parser](https://github.com/tabnas/parser) | Pluggable parsing engine (rule machine + matcher lexer) | — | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [debug](https://github.com/tabnas/debug) | Trace logging and structured `describe()` / `model()` helpers | [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
+| [json](https://github.com/tabnas/json) | Strict-JSON grammar plugin | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [jsonic](https://github.com/tabnas/jsonic) | Relaxed-JSON (jsonic) grammar — the callable façade | [debug](https://github.com/tabnas/debug), [json](https://github.com/tabnas/json), [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
+| [abnf](https://github.com/tabnas/abnf) | Compiles ABNF / BNF into engine rules (`@tabnas/bnf`) | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [hoover](https://github.com/tabnas/hoover) | Whitespace / block-text lexer helper | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [path](https://github.com/tabnas/path) | Path / segment utilities | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [directive](https://github.com/tabnas/directive) | `@`-directive processing plugin | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [railroad](https://github.com/tabnas/railroad) | Railroad / syntax-diagram generator | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [json](https://github.com/tabnas/json) |
+| [csv](https://github.com/tabnas/csv) | CSV grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [expr](https://github.com/tabnas/expr) | Pratt expression-operator plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [json5](https://github.com/tabnas/json5) | JSON5 grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [jsonc](https://github.com/tabnas/jsonc) | JSONC (JSON-with-comments) grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [toml](https://github.com/tabnas/toml) | TOML grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [xml](https://github.com/tabnas/xml) | XML grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [yaml](https://github.com/tabnas/yaml) | YAML grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [zon](https://github.com/tabnas/zon) | Zig Object Notation grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [ini](https://github.com/tabnas/ini) | INI grammar plugin | [hoover](https://github.com/tabnas/hoover), [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [feed](https://github.com/tabnas/feed) | RSS / Atom feed grammar (built on xml) | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser), [xml](https://github.com/tabnas/xml) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [markdown](https://github.com/tabnas/markdown) | Markdown record/field grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [multisource](https://github.com/tabnas/multisource) | Multi-source / include resolution plugin | [directive](https://github.com/tabnas/directive), [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser), [path](https://github.com/tabnas/path) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+
 ## TypeScript is canonical; Go follows
 
 The **TypeScript implementation is the original and canonical** engine —

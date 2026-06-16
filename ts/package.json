@@ -47,7 +47,12 @@
     "./error": "./dist/error.js"
   },
   "devDependencies": {
+    "@tabnas/debug": "file:../../debug/ts",
+    "@tabnas/railroad": "file:../../railroad/ts",
     "@types/node": "25.6.0",
     "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
