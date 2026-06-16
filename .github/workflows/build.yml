@@ -17,20 +17,35 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    defaults:
-      run:
-        working-directory: ./ts
-
     steps:
     - uses: actions/checkout@v4
+      with:
+        path: parser
     - name: Use Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-    - run: npm i
-    - run: npm run build --if-present
-    - run: npm test
-
+    # The @tabnas siblings are not published to npm; clone them so the
+    # file: dependencies resolve, then build everything (this repo included)
+    # in dependency order so each package sees its built dependencies.
+    - name: Clone tabnas dependencies
+      shell: bash
+      run: |
+        set -e
+        for dep in debug json railroad; do
+          git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
+    - name: Build (dependencies, then this repo)
+      shell: bash
+      run: |
+        set -e
+        for pkg in parser debug json railroad; do
+          ( cd "$pkg/ts" && npm i && npm run build --if-present )
+        done
+    - name: Test
+      shell: bash
+      working-directory: parser/ts
+      run: npm test
 
   build-go:
 
@@ -48,9 +63,8 @@ jobs:
       with:
         go-version: '1.24'
     - name: Build
+      working-directory: go
       run: go build ./...
-      working-directory: ./go
     - name: Test
-      run: go test ./...
-      working-directory: ./go
-
+      working-directory: go
+      run: go test -v ./...
