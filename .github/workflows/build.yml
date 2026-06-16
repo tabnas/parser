@@ -77,13 +77,14 @@ jobs:
       run: |
         set -e
         for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
-          grep -E '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" | while read -r line; do
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
             v=$(printf '%s' "$line" | sed -E 's#.*\.\./vendor/([^/]+)/go.*#\1#')
             dep=$(printf '%s' "$line" | awk '{print $2}' | sed -E 's#github.com/tabnas/([^/]+)/go#\1#')
             repodir=$(dirname "$(dirname "$gm")")
             mkdir -p "$repodir/vendor"
             ln -snf "$(cd "$dep" && pwd)" "$repodir/vendor/$v"
-          done
+          done < <(grep -E '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" || true)
         done
         go work init
         for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
