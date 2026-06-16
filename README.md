@@ -68,13 +68,13 @@ tn.grammar({
           // An "action" - set the counter to 0.
           a: (r) => { r.node = 0 } 
         }
-       ]
+       ],
        
       // Define the "closing" phase of the rule.
       close: [
         {} // Ending "alternate" - does nothing.
       ]
-    }
+    },
     
     // The 'add' rule performs the addition.
     add: {
