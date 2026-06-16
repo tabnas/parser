@@ -59,14 +59,27 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+    - name: Use LF line endings
+      run: git config --global core.autocrlf false
     - uses: actions/checkout@v4
+      with:
+        path: parser
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+    # The go module replaces ../../<dep>/go for unpublished sibling ports;
+    # clone them so the local replace directives resolve.
+    - name: Clone tabnas dependencies
+      shell: bash
+      run: |
+        set -e
+        for dep in debug json abnf railroad; do
+          git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
     - name: Build
-      working-directory: go
+      working-directory: parser/go
       run: go build ./...
     - name: Test
-      working-directory: go
+      working-directory: parser/go
       run: go test -v ./...
