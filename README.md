@@ -195,7 +195,7 @@ flowchart TD
   back to `val`, which closes returning the total.
 
 
-## Package dependencies
+## Parser Plugins
 
 Every package depends only on others above it. Runtime (`prod`) dependencies on
 other tabnas packages are declared as **peerDependencies** (npm ≥ 7 / Node ≥ 20
