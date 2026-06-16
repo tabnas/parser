@@ -18,6 +18,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+    - name: Use LF line endings
+      run: git config --global core.autocrlf false
     - uses: actions/checkout@v4
       with:
         path: parser
@@ -32,14 +34,14 @@ jobs:
       shell: bash
       run: |
         set -e
-        for dep in debug json railroad; do
+        for dep in debug json abnf railroad; do
           git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
         done
     - name: Build (dependencies, then this repo)
       shell: bash
       run: |
         set -e
-        for pkg in parser debug json railroad; do
+        for pkg in parser debug json abnf railroad; do
           ( cd "$pkg/ts" && npm i && npm run build --if-present )
         done
     - name: Test
