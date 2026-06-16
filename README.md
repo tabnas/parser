@@ -108,6 +108,13 @@ tn.parse('1+2+3')   // => 6
 tn.parse('10+20')   // => 30
 ```
 
+That grammar as a railroad/syntax diagram, generated from the live parser
+with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+
+![tabnas addition-grammar railroad diagram](ts/doc/grammar.svg)
+
+A vertical ASCII version is in [`ts/doc/grammar.txt`](ts/doc/grammar.txt).
+
 
 You can debug the parser using the  [`@tabnas/debug`](https://github.com/tabnas/debug)) plugin:
 

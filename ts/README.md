@@ -24,6 +24,13 @@ const tn = new Tabnas({ plugins: [(tn) => {
 tn.parse('hello')                     // 'world'
 ```
 
+That grammar as a railroad/syntax diagram, generated from the live parser
+with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+
+![tabnas taste-grammar railroad diagram](doc/taste.svg)
+
+A vertical ASCII version is in [`doc/taste.txt`](doc/taste.txt).
+
 ## Documentation
 
 - [Tutorial](doc/tutorial.md) — build your first parser, step by step.
