@@ -93,11 +93,12 @@ type PropertyOptions struct {
 // MatchOptions controls custom token and value matching (TS options.match: RegExp|LexMatcher per entry).
 // Go splits the union: Token/Value hold regexp forms; TokenFn and MatchValueSpec.Fn hold function forms.
 type MatchOptions struct {
-	Lex     *bool                      // Enable custom matching. Default: true.
-	Token   map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
-	Value   map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
-	TokenFn map[string]LexMatcher      // "#NAME" → function-form token matcher (TS match.token LexMatcher branch).
-	Check   LexCheck                   // Hook invoked before the match matcher runs (TS options.match.check).
+	Lex        *bool                      // Enable custom matching. Default: true.
+	Token      map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
+	TokenEager map[string]bool            // "#NAME" → true when eager (skips the rule-position gate; from @~/…/).
+	Value      map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
+	TokenFn    map[string]LexMatcher      // "#NAME" → function-form token matcher (TS match.token LexMatcher branch).
+	Check      LexCheck                   // Hook invoked before the match matcher runs (TS options.match.check).
 }
 
 // MatchValueSpec defines a custom value matcher (TS options.match.value[name]: RegExp|LexMatcher).

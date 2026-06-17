@@ -945,7 +945,14 @@ func MapToOptions(m map[string]any) Options {
 		if tok, ok := mm["token"].(map[string]any); ok {
 			opts.Match.Token = make(map[string]*regexp.Regexp, len(tok))
 			for name, v := range tok {
-				if re, ok := v.(*regexp.Regexp); ok {
+				switch re := v.(type) {
+				case *EagerRegexp:
+					opts.Match.Token[name] = re.Re
+					if opts.Match.TokenEager == nil {
+						opts.Match.TokenEager = make(map[string]bool)
+					}
+					opts.Match.TokenEager[name] = true
+				case *regexp.Regexp:
 					opts.Match.Token[name] = re
 				}
 			}
@@ -1033,6 +1040,14 @@ func MapToOptions(m map[string]any) Options {
 //   - "@name" → function from ref map
 //
 // ResolveFuncRefs("@SKIP", nil) // => Skip
+// EagerRegexp wraps a match-token regexp flagged eager: it opts out of
+// the lexer's "expected at this rule position" gating, firing whenever
+// its pattern matches. Produced by the @~/pattern/flags ref form; carried
+// into Options.Match.TokenEager by MapToOptions.
+type EagerRegexp struct {
+	Re *regexp.Regexp
+}
+
 func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 	if obj == nil {
 		return nil
@@ -1057,6 +1072,23 @@ func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 				re, err := regexp.Compile(pattern)
 				if err == nil {
 					return re
+				}
+			}
+		}
+		// Eager regex: @~/pattern/flags → *EagerRegexp. The match token
+		// opts out of the lexer's "expected at this rule position" gating
+		// (e.g. ABNF case-insensitive literals). Disjoint from @/ above
+		// (s[1] is '~', not '/').
+		if len(s) > 3 && s[1] == '~' && s[2] == '/' {
+			if idx := strings.LastIndex(s, "/"); idx > 2 {
+				pattern := s[3:idx]
+				flags := s[idx+1:]
+				if flags != "" {
+					pattern = "(?" + flags + ")" + pattern
+				}
+				re, err := regexp.Compile(pattern)
+				if err == nil {
+					return &EagerRegexp{Re: re}
 				}
 			}
 		}
