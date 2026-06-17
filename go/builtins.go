@@ -29,7 +29,7 @@ import "reflect"
 // BUILTIN_SCHEMA_VERSION is the config-schema version these builtins
 // implement. A serialized grammar declaring GrammarSpec.V greater than
 // this is refused at load. Absent (zero) ⇒ treated as version 1.
-const BUILTIN_SCHEMA_VERSION = 1
+const BUILTIN_SCHEMA_VERSION = 2
 
 // mkNode builds the AST node shape produced by the tree builtins:
 // `{rule?, src, kids}`. `user` rules carry a `rule` tag; others omit it
@@ -170,8 +170,104 @@ func builtinProbePhase0(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 func builtinProbePhase1(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"]) == 1 }
 func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"]) == 2 }
 
-// BUILTIN_REFS is the standard builtin library. Tree/probe actions are
-// registered as AltAction; the phase guards as AltCond — the resolver
+// ---- Native-value builders ----------------------------------------
+// Build NATIVE JSON values (objects/arrays/scalars), not the
+// {rule,src,kids} syntax tree. v1 emits plain map[string]any / []any
+// (info-marking deferred to the consuming plugin). Schema family v2.
+//
+// Go reads config from r.K (alt.K is merged before the action), and r.K
+// propagates to children — so the config-reading builders (@key$/
+// @setval$/@value$) DELETE their own key right after reading it, before
+// the push/replace K-copy, so a config set on one alt can never leak into
+// a child rule and mis-fire. The open- and close-side builders use
+// disjoint keys, so unconditional delete-after-read is safe.
+
+// @object$ — allocate a fresh empty object.
+func builtinObject(r *Rule, _ *Context) {
+	r.Node = map[string]any{}
+}
+
+// @array$ — allocate a fresh empty array.
+func builtinArray(r *Rule, _ *Context) {
+	r.Node = make([]any, 0)
+}
+
+// @reset$ — clear the parent-seeded node back to the no-value sentinel.
+func builtinReset(r *Rule, _ *Context) {
+	r.Node = Undefined
+}
+
+// @key$ — capture the matched key token's value into a (non-propagated)
+// r.U slot for a later @setval$ on the same rule.
+func builtinKey(r *Rule, _ *Context) {
+	cfg := mapConfig(r, "key$")
+	delete(r.K, "key$")
+	slot := cfgStr(cfg["slot"])
+	if slot == "" {
+		slot = "key"
+	}
+	from := cfgInt(cfg["from"])
+	if r.U == nil {
+		r.U = map[string]any{}
+	}
+	if from >= 0 && from < len(r.O) {
+		r.U[slot] = r.O[from].Val
+	}
+}
+
+// @setval$ — assign the just-returned child node under the captured key.
+func builtinSetval(r *Rule, _ *Context) {
+	cfg := mapConfig(r, "setval$")
+	delete(r.K, "setval$")
+	slot := cfgStr(cfg["slot"])
+	if slot == "" {
+		slot = "key"
+	}
+	m, ok := r.Node.(map[string]any)
+	if !ok || r.Child == nil {
+		return
+	}
+	key, _ := r.U[slot].(string)
+	m[key] = r.Child.Node
+}
+
+// @push$ — append the child node to the array (skips the no-value child).
+// Go slices are value types, so the grown header is re-published to the
+// parent (mirrors the json plugin's parent write-back).
+func builtinPush(r *Rule, _ *Context) {
+	if r.Child == nil || IsUndefined(r.Child.Node) {
+		return
+	}
+	s, ok := r.Node.([]any)
+	if !ok {
+		return
+	}
+	r.Node = append(s, r.Child.Node)
+	if r.Parent != nil && r.Parent != NoRule {
+		r.Parent.Node = r.Node
+	}
+}
+
+// @value$ — coalesce a value: a built child node wins; otherwise resolve
+// the matched scalar token. (The text/info marking is deferred to the
+// plugin in v1.)
+func builtinValue(r *Rule, ctx *Context) {
+	cfg := mapConfig(r, "value$")
+	delete(r.K, "value$")
+	if r.Child != nil && !IsUndefined(r.Child.Node) {
+		r.Node = r.Child.Node
+		return
+	}
+	from := cfgInt(cfg["from"])
+	if from >= 0 && from < len(r.O) {
+		r.Node = r.O[from].ResolveVal(r, ctx)
+	} else {
+		r.Node = Undefined
+	}
+}
+
+// BUILTIN_REFS is the standard builtin library. Tree/probe/value actions
+// are registered as AltAction; the phase guards as AltCond — the resolver
 // type-asserts the concrete type per field.
 var BUILTIN_REFS = map[FuncRef]any{
 	"@node$":        AltAction(builtinNode),
@@ -182,6 +278,15 @@ var BUILTIN_REFS = map[FuncRef]any{
 	"@probePhase0$": AltCond(builtinProbePhase0),
 	"@probePhase1$": AltCond(builtinProbePhase1),
 	"@probePhase2$": AltCond(builtinProbePhase2),
+
+	// Native-value builders (schema v2).
+	"@object$": AltAction(builtinObject),
+	"@array$":  AltAction(builtinArray),
+	"@reset$":  AltAction(builtinReset),
+	"@key$":    AltAction(builtinKey),
+	"@setval$": AltAction(builtinSetval),
+	"@push$":   AltAction(builtinPush),
+	"@value$":  AltAction(builtinValue),
 }
 
 // mergeBuiltinRefs returns BUILTIN_REFS overlaid with the spec's own refs

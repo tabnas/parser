@@ -42,7 +42,7 @@ import type { Rule, Context, AltMatch, AltAction, AltCond } from './types'
 // The config-schema version implemented by these builtins. A serialized
 // grammar that declares `GrammarSpec.v` greater than this is refused at
 // load (see Tabnas.grammar). Absent ⇒ treated as version 1.
-export const BUILTIN_SCHEMA_VERSION = 1
+export const BUILTIN_SCHEMA_VERSION = 2
 
 
 // A builtin ref is either an alternate action (tree builders + probe
@@ -73,6 +73,20 @@ interface NodeConfig {
 interface CaptureConfig {
   rule?: string
   kind?: string
+}
+
+// Per-alt config for the native-value builders. `slot` is the r.u key the
+// pair key is stashed under (default 'key'); `from` is the matched-token
+// index a key/scalar is read from (default 0).
+interface KeyConfig {
+  slot?: string
+  from?: number
+}
+interface SetvalConfig {
+  slot?: string
+}
+interface ValueConfig {
+  from?: number
 }
 
 
@@ -147,6 +161,70 @@ const probePhase1$: AltCond = (r: Rule) => 1 === r.k.pd_phase
 const probePhase2$: AltCond = (r: Rule) => 2 === r.k.pd_phase
 
 
+// ---- Native-value builders (config in `alt.k.<name>`) -------------
+// Build NATIVE JSON values (objects/arrays/scalars), as opposed to the
+// `{rule,src,kids}` syntax tree of the tree builders above. A grammar
+// whose rules thread a node from parent to child (the engine seeds a
+// pushed child's node from the parent — see makeRule) can assemble plain
+// objects/arrays with these as alt actions. v1 emits PLAIN nodes; any
+// introspection marking (jsonic's `info` mode) stays with the consuming
+// plugin as a thin post-pass. Schema family v2.
+
+// Allocate a fresh empty object into r.node (no prototype, like JSON).
+const object$: AltAction = (r: Rule) => {
+  r.node = Object.create(null)
+}
+
+// Allocate a fresh empty array into r.node.
+const array$: AltAction = (r: Rule) => {
+  r.node = []
+}
+
+// Clear r.node back to "no value" — undoes the parent-seeded node so a
+// scalar value (or fresh container) doesn't inherit the parent container.
+const reset$: AltAction = (r: Rule) => {
+  r.node = undefined
+}
+
+// Capture the matched key token's value into a (non-propagated) r.u slot,
+// for a later @setval$ on the same rule to consume.
+const key$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
+  const cfg: KeyConfig = (alt && alt.k && alt.k.key$) || {}
+  r.u[cfg.slot || 'key'] = r.o[cfg.from || 0]?.val
+}
+
+// Assign the just-returned child node under the captured key: the object-
+// property set. No-op if r.node isn't an object.
+const setval$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
+  const cfg: SetvalConfig = (alt && alt.k && alt.k.setval$) || {}
+  const n = r.node as any
+  if (null != n && 'object' === typeof n) {
+    n[r.u[cfg.slot || 'key']] = r.child.node
+  }
+}
+
+// Append the just-returned child node to the array (skips the no-value
+// child). No-op if r.node isn't an array.
+const push$: AltAction = (r: Rule) => {
+  if (undefined !== r.child.node && Array.isArray(r.node)) {
+    r.node.push(r.child.node)
+  }
+}
+
+// Coalesce a value: a built child node wins; otherwise resolve the
+// matched scalar token. (The text/info marking json's @val-bc adds is
+// deferred to the plugin in v1.)
+const value$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+  if (undefined !== r.child.node) {
+    r.node = r.child.node
+    return
+  }
+  const cfg: ValueConfig = (alt && alt.k && alt.k.value$) || {}
+  const tok = r.o[cfg.from || 0]
+  r.node = tok ? tok.resolveVal(r, ctx) : undefined
+}
+
+
 // The standard builtin library, frozen so a grammar that (illegally)
 // overrides a `$` ref cannot mutate the shared map for other instances.
 export const BUILTIN_REFS: Readonly<Record<string, BuiltinRef>> = Object.freeze({
@@ -158,4 +236,13 @@ export const BUILTIN_REFS: Readonly<Record<string, BuiltinRef>> = Object.freeze(
   '@probePhase0$': probePhase0$,
   '@probePhase1$': probePhase1$,
   '@probePhase2$': probePhase2$,
+
+  // Native-value builders (schema v2).
+  '@object$': object$,
+  '@array$': array$,
+  '@reset$': reset$,
+  '@key$': key$,
+  '@setval$': setval$,
+  '@push$': push$,
+  '@value$': value$,
 })
