@@ -16,6 +16,7 @@ import type {
   Config,
   Context,
   Counters,
+  EagerRegExp,
   FuncRef,
   GrammarSetting,
   GrammarSpec,
@@ -68,6 +69,8 @@ import {
   tokenize,
   values,
 } from './utility'
+
+import { BUILTIN_REFS, BUILTIN_SCHEMA_VERSION } from './builtins'
 
 import {
   TabnasError,
@@ -474,8 +477,46 @@ class Tabnas {
       })
     }
 
+    // Refuse a grammar that requires a newer builtin config-schema than
+    // this engine implements (absent ⇒ current). The version field is a
+    // forward-compatibility hatch for the `$`-builtin wire format, so it
+    // must be a well-formed positive integer (a relational compare alone
+    // would silently accept a malformed/NaN/string `v`).
+    if (null != gs.v) {
+      if ('number' !== typeof gs.v || !Number.isInteger(gs.v) || gs.v < 1) {
+        throw new Error(
+          `Grammar: invalid builtin schema version: ${gs.v} ` +
+          `(expected a positive integer)`)
+      }
+      if (gs.v > BUILTIN_SCHEMA_VERSION) {
+        throw new Error(
+          `Grammar: requires builtin schema version ${gs.v}, but this ` +
+          `engine supports up to ${BUILTIN_SCHEMA_VERSION}`)
+      }
+    }
+
+    // The `$` ref-namespace is reserved for engine builtins; a user
+    // ref key may not contain `$` (it would silently shadow, or be
+    // shadowed by, a builtin in the merge below).
+    if (gs.ref) {
+      for (const key of Object.keys(gs.ref)) {
+        if (key.includes('$')) {
+          throw new Error(
+            `Grammar: '$' is reserved for engine builtins; user ref ` +
+            `key '${key}' may not contain '$'`)
+        }
+      }
+    }
+
+    // Merge the standard `$`-suffixed builtins UNDER any spec-supplied
+    // refs (the spec wins on collision, though `$` is reserved above).
+    // This lets a serialized, function-free GrammarSpec reference engine
+    // builtins (e.g. `@probeInit$`) by name. See builtins.ts.
+    const ref: Record<string, any> =
+      Object.assign(Object.create(null), BUILTIN_REFS, gs.ref || {})
+
     if (gs.options) {
-      const resolved = resolveFuncRefs(gs.options, gs.ref)
+      const resolved = resolveFuncRefs(gs.options, ref)
       this.options(resolved)
     }
 
@@ -483,9 +524,7 @@ class Tabnas {
       for (const rulename of Object.keys(gs.rule)) {
         const rulespec = gs.rule[rulename]
         this.rule(rulename, (rs: RuleSpec) => {
-          if (gs.ref) {
-            rs.fnref(gs.ref)
-          }
+          rs.fnref(ref)
           if (rulespec.open) {
             const isarr = Array.isArray(rulespec.open)
             const alts = isarr
@@ -527,6 +566,7 @@ export type {
   Config,
   Context,
   Counters,
+  EagerRegExp,
   FuncRef,
   GrammarSetting,
   GrammarSpec,
@@ -553,9 +593,13 @@ export type {
 
 export type { ScanSpec, ScanOut } from './lexer'
 
+export type { BuiltinRef } from './builtins'
+
 export {
   Tabnas,
   TabnasError,
+  BUILTIN_REFS,
+  BUILTIN_SCHEMA_VERSION,
   OPEN,
   CLOSE,
   BEFORE,

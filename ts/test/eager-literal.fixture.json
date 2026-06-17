@@ -1,0 +1,1 @@
+{"options":{"fixed":{"token":{}},"rule":{"start":"__start__"},"match":{"token":{"#HI":"@~/^hi/i"}}},"rule":{"g":{"open":[{"g":"bnf","s":"#HI","m":"HI"}]},"__start__":{"open":[{"p":"g","g":"bnf"}],"close":[{"s":"#ZZ","g":"bnf"}]}}}

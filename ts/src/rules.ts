@@ -1074,6 +1074,41 @@ function resolveFunctionRef(
 ) {
   const val = a[k]
 
+  // An action (`a`) may be a list of refs/functions, run in order when
+  // the alt matches: the matched alt's own action first, then composed
+  // user actions. This lets a serialized, function-free grammar carry
+  // `a: ['@node$', '@my-user-action']` and resolve each by name. The
+  // array is collapsed here to a single function so `process()` keeps
+  // invoking one `alt.a`. Gated to `a` only — the other fields are
+  // single-valued.
+  if ('a' === k && Array.isArray(val)) {
+    if (0 === val.length) {
+      a[k] = null as any
+      return
+    }
+    const fns: AltAction[] = val.map((v: any) => {
+      if (isfnref(v)) {
+        const f = r.def.fnref[v as FuncRef] as AltAction
+        if (null == f) {
+          throw new Error(`Grammar: unknown ${fkind} function reference: ` + v +
+            ` for rule ${r.name} (${rs}) and alt ${a.s} (${a.g})`)
+        }
+        return f
+      }
+      return v as AltAction
+    })
+    a[k] = function composedAction(rule: Rule, ctx: Context, alt: AltMatch) {
+      let out: any
+      for (const f of fns) {
+        out = f(rule, ctx, alt)
+        // Preserve the error-token short-circuit semantics of process().
+        if (out && out.isToken && out.err) return out
+      }
+      return out
+    } as any
+    return
+  }
+
   if (isfnref(val)) {
     const func = r.def.fnref[val as FuncRef] as Function
     if (null == func) {

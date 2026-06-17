@@ -44,7 +44,8 @@
     ".": "./dist/tabnas.js",
     "./lexer": "./dist/lexer.js",
     "./utility": "./dist/utility.js",
-    "./error": "./dist/error.js"
+    "./error": "./dist/error.js",
+    "./builtins": "./dist/builtins.js"
   },
   "devDependencies": {
     "@tabnas/debug": "file:../../debug/ts",
