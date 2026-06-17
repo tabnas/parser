@@ -465,6 +465,79 @@ func TestNativeValueLeakageFix(t *testing.T) {
 	}
 }
 
+func TestNativeValueBuildersInfo(t *testing.T) {
+	// With the info options on, the builders allocate the engine's info
+	// carriers (MapRef / ListRef / Text) — the Go counterpart of the TS
+	// hidden marker property. Info-off behaviour is covered above.
+
+	// @object$ → MapRef; implicit defaults false and is static alt config.
+	mapCtx := &Context{Cfg: &LexConfig{MapRef: true}}
+	ro := &Rule{Node: "seed"}
+	builtinObject(ro, mapCtx)
+	mr, ok := ro.Node.(MapRef)
+	if !ok {
+		t.Fatalf("@object$ info: got %T, want MapRef", ro.Node)
+	}
+	if mr.Implicit || mr.Val == nil || mr.Meta == nil {
+		t.Errorf("@object$ info: implicit=%v val=%v meta=%v", mr.Implicit, mr.Val, mr.Meta)
+	}
+	ro2 := &Rule{K: map[string]any{"object$": map[string]any{"implicit": true}}}
+	builtinObject(ro2, mapCtx)
+	if mr2, _ := ro2.Node.(MapRef); !mr2.Implicit {
+		t.Error("@object$ info: implicit config not honoured")
+	}
+	if _, present := ro2.K["object$"]; present {
+		t.Error("@object$ must delete its r.K config key after reading")
+	}
+
+	// @array$ → ListRef.
+	listCtx := &Context{Cfg: &LexConfig{ListRef: true}}
+	ra := &Rule{Node: "seed"}
+	builtinArray(ra, listCtx)
+	if lr, ok := ra.Node.(ListRef); !ok || lr.Val == nil || lr.Meta == nil {
+		t.Errorf("@array$ info: got %T", ra.Node)
+	}
+
+	// @setval$ writes into a MapRef via NodeMapSet; node stays a MapRef.
+	rs := &Rule{K: map[string]any{}, U: map[string]any{"key": "a"},
+		Node:  MapRef{Val: map[string]any{}, Meta: map[string]any{}},
+		Child: &Rule{Node: 42}}
+	builtinSetval(rs, nil)
+	srm, ok := rs.Node.(MapRef)
+	if !ok || srm.Val["a"] != 42 {
+		t.Errorf("@setval$ info: got %#v", rs.Node)
+	}
+
+	// @push$ appends into a ListRef via NodeListAppend and re-publishes.
+	parent := &Rule{}
+	rp := &Rule{Node: ListRef{Val: []any{1}, Meta: map[string]any{}}, Parent: parent,
+		Child: &Rule{Node: 2}}
+	builtinPush(rp, nil)
+	prl, ok := rp.Node.(ListRef)
+	if !ok || len(prl.Val) != 2 || prl.Val[1] != 2 {
+		t.Errorf("@push$ info: got %#v", rp.Node)
+	}
+	if ppl, _ := parent.Node.(ListRef); len(ppl.Val) != 2 {
+		t.Errorf("@push$ info parent re-publish: got %#v", parent.Node)
+	}
+
+	// @value$ wraps a string token in a Text carrying the source quote.
+	textCtx := &Context{Cfg: &LexConfig{TextInfo: true}}
+	rv := &Rule{K: map[string]any{}, Child: &Rule{Node: Undefined},
+		O: []*Token{{Tin: TinST, Val: "hi", Src: `"hi"`}}}
+	builtinValue(rv, textCtx)
+	if tx, ok := rv.Node.(Text); !ok || tx.Str != "hi" || tx.Quote != `"` {
+		t.Errorf("@value$ info: got %#v", rv.Node)
+	}
+	// A non-string-token value (number) is left bare.
+	rv2 := &Rule{K: map[string]any{}, Child: &Rule{Node: Undefined},
+		O: []*Token{{Tin: TinNR, Val: 5, Src: "5"}}}
+	builtinValue(rv2, textCtx)
+	if rv2.Node != 5 {
+		t.Errorf("@value$ info number: got %#v", rv2.Node)
+	}
+}
+
 func TestJsonBuilderFixtureParity(t *testing.T) {
 	// The SAME serialized function-free json-core grammar the TS suite
 	// uses, here on the Go engine; built values must match encoding/json
