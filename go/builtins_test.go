@@ -23,7 +23,8 @@ import (
 
 func TestBuiltinRefsLibrary(t *testing.T) {
 	want := []string{"@bubble$", "@capture$", "@node$", "@probeDecide$",
-		"@probeInit$", "@probePhase0$", "@probePhase1$", "@probePhase2$"}
+		"@probeInit$", "@probePhase0$", "@probePhase1$", "@probePhase2$",
+		"@object$", "@array$", "@reset$", "@key$", "@setval$", "@push$", "@value$"}
 	got := make([]string, 0, len(BUILTIN_REFS))
 	for k := range BUILTIN_REFS {
 		got = append(got, k)
@@ -36,8 +37,8 @@ func TestBuiltinRefsLibrary(t *testing.T) {
 			t.Errorf("missing builtin %q", k)
 		}
 	}
-	if BUILTIN_SCHEMA_VERSION != 1 {
-		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 1", BUILTIN_SCHEMA_VERSION)
+	if BUILTIN_SCHEMA_VERSION != 2 {
+		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 2", BUILTIN_SCHEMA_VERSION)
 	}
 }
 
@@ -381,6 +382,113 @@ func TestEagerFixtureParity(t *testing.T) {
 	for input, want := range cases {
 		if got := fixtureAccepts(t, "eager-literal.fixture.json", input); got != want {
 			t.Errorf("eager %q: got accept=%v, want %v", input, got, want)
+		}
+	}
+}
+
+// --- native-value builders ---
+
+func TestNativeValueBuilders(t *testing.T) {
+	// @object$ / @array$ / @reset$
+	ro := &Rule{Node: "seed"}
+	builtinObject(ro, nil)
+	if _, ok := ro.Node.(map[string]any); !ok {
+		t.Errorf("@object$: got %T", ro.Node)
+	}
+	ra := &Rule{Node: "seed"}
+	builtinArray(ra, nil)
+	if s, ok := ra.Node.([]any); !ok || len(s) != 0 {
+		t.Errorf("@array$: got %v", ra.Node)
+	}
+	rr := &Rule{Node: map[string]any{"a": 1}}
+	builtinReset(rr, nil)
+	if !IsUndefined(rr.Node) {
+		t.Errorf("@reset$: got %v, want Undefined", rr.Node)
+	}
+
+	// @key$ captures the token value into r.U
+	rk := &Rule{K: map[string]any{}, U: map[string]any{}, O: []*Token{{Val: "name"}}}
+	builtinKey(rk, nil)
+	if rk.U["key"] != "name" {
+		t.Errorf("@key$: got %v", rk.U["key"])
+	}
+
+	// @setval$ assigns child under captured key
+	rs := &Rule{K: map[string]any{}, Node: map[string]any{}, U: map[string]any{"key": "a"},
+		Child: &Rule{Node: 42}}
+	builtinSetval(rs, nil)
+	if m, _ := rs.Node.(map[string]any); m["a"] != 42 {
+		t.Errorf("@setval$: got %v", rs.Node)
+	}
+
+	// @push$ appends and re-publishes to parent (Go slice value-type)
+	parent := &Rule{}
+	rp := &Rule{Node: []any{1}, Parent: parent, Child: &Rule{Node: 2}}
+	builtinPush(rp, nil)
+	if s, _ := rp.Node.([]any); len(s) != 2 || s[1] != 2 {
+		t.Errorf("@push$: got %v", rp.Node)
+	}
+	if ps, _ := parent.Node.([]any); len(ps) != 2 {
+		t.Errorf("@push$ parent re-publish: got %v", parent.Node)
+	}
+	// no-value child is skipped
+	rp2 := &Rule{Node: []any{1}, Parent: parent, Child: &Rule{Node: Undefined}}
+	builtinPush(rp2, nil)
+	if s, _ := rp2.Node.([]any); len(s) != 1 {
+		t.Errorf("@push$ skip-undef: got %v", rp2.Node)
+	}
+
+	// @value$ prefers child node, else nothing-to-resolve → child wins
+	rv := &Rule{K: map[string]any{}, Node: "old", Child: &Rule{Node: map[string]any{"built": true}}}
+	builtinValue(rv, &Context{})
+	if m, _ := rv.Node.(map[string]any); m["built"] != true {
+		t.Errorf("@value$ child-wins: got %v", rv.Node)
+	}
+}
+
+func TestNativeValueLeakageFix(t *testing.T) {
+	// The config-reading builders delete their own r.K key after reading,
+	// so a config set on one alt can't propagate to a child and mis-fire.
+	rk := &Rule{K: map[string]any{"key$": map[string]any{"slot": "k"}}, U: map[string]any{},
+		O: []*Token{{Val: "v"}}}
+	builtinKey(rk, nil)
+	if rk.U["k"] != "v" {
+		t.Errorf("@key$ custom slot: got %v", rk.U["k"])
+	}
+	if _, present := rk.K["key$"]; present {
+		t.Error("@key$ must delete its r.K config key after reading (leakage fix)")
+	}
+	rv := &Rule{K: map[string]any{"value$": map[string]any{}}, Child: &Rule{Node: "x"}}
+	builtinValue(rv, &Context{})
+	if _, present := rv.K["value$"]; present {
+		t.Error("@value$ must delete its r.K config key after reading")
+	}
+}
+
+func TestJsonBuilderFixtureParity(t *testing.T) {
+	// The SAME serialized function-free json-core grammar the TS suite
+	// uses, here on the Go engine; built values must match encoding/json
+	// (the language-neutral oracle), pinning Go↔TS value parity.
+	spec := fixtureSpec(t, "json-builder.fixture.json")
+	if spec.Options == nil {
+		spec.Options = &Options{}
+	}
+	spec.Options.Rule = &RuleOptions{Start: "val"}
+	for _, input := range []string{"1", `"x"`, "true", "false", "null", "{}", "[]",
+		`{"a":1}`, "[1,2,3]", `{"a":{"b":[true,null,"x"]}}`, `{"a":1,"b":2}`} {
+		j := Make()
+		if err := j.Grammar(spec); err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		got, err := j.Parse(input)
+		if err != nil {
+			t.Errorf("parse %q: %v", input, err)
+			continue
+		}
+		var oracle any
+		_ = json.Unmarshal([]byte(input), &oracle)
+		if !reflect.DeepEqual(UnwrapUndefined(got), oracle) {
+			t.Errorf("build %q: got %#v, want %#v", input, UnwrapUndefined(got), oracle)
 		}
 	}
 }

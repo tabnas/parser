@@ -20,8 +20,9 @@ describe('builtins', () => {
     it('exports the expected frozen ref set', () => {
       assert.deepEqual(
         Object.keys(BUILTIN_REFS).sort(),
-        ['@bubble$', '@capture$', '@node$', '@probeDecide$', '@probeInit$',
-          '@probePhase0$', '@probePhase1$', '@probePhase2$'])
+        ['@array$', '@bubble$', '@capture$', '@key$', '@node$', '@object$',
+          '@probeDecide$', '@probeInit$', '@probePhase0$', '@probePhase1$',
+          '@probePhase2$', '@push$', '@reset$', '@setval$', '@value$'])
       assert.equal(Object.isFrozen(BUILTIN_REFS), true)
     })
 
@@ -358,6 +359,79 @@ describe('builtins', () => {
       // Non-matches still rejected.
       assert.equal(accepts('ho'), false)
       assert.equal(accepts('h'), false)
+    })
+
+    it('the native-value builders build values byte-identical to JSON.parse', () => {
+      // A function-free json-core grammar wired to @object$/@array$/@key$/
+      // @setval$/@push$/@value$/@reset$. JSON.parse is the oracle; pinning
+      // both to it pins the engine to it.
+      const jsonSpec = require('./json-builder.fixture.json')
+      assert.deepEqual(jsonSpec.ref || {}, {})
+      assert.ok(!JSON.stringify(jsonSpec).includes('Ref'), 'v1 plain-node contract: no MapRef/ListRef')
+      const build = (input) => {
+        const j = new Tabnas({ rule: { start: 'val' } })
+        j.grammar(clone(jsonSpec))
+        return j.parse(input)
+      }
+      for (const input of ['1', '"x"', 'true', 'false', 'null', '{}', '[]',
+        '{"a":1}', '[1,2,3]', '{"a":{"b":[true,null,"x"]}}', '{"a":1,"b":2}']) {
+        assert.deepEqual(build(input), JSON.parse(input), `build(${input})`)
+      }
+    })
+  })
+
+  describe('native-value builders (direct invocation)', () => {
+    const object$ = BUILTIN_REFS['@object$']
+    const array$ = BUILTIN_REFS['@array$']
+    const reset$ = BUILTIN_REFS['@reset$']
+    const key$ = BUILTIN_REFS['@key$']
+    const setval$ = BUILTIN_REFS['@setval$']
+    const push$ = BUILTIN_REFS['@push$']
+    const value$ = BUILTIN_REFS['@value$']
+
+    it('@object$ / @array$ / @reset$ set the node', () => {
+      const ro = { node: 'seed' }; object$(ro)
+      assert.equal(typeof ro.node, 'object'); assert.deepEqual(ro.node, {})
+      const ra = { node: 'seed' }; array$(ra)
+      assert.ok(Array.isArray(ra.node)); assert.equal(ra.node.length, 0)
+      const rr = { node: { a: 1 } }; reset$(rr)
+      assert.equal(rr.node, undefined)
+    })
+
+    it('@key$ captures the matched token value into r.u.key', () => {
+      const r = { u: {}, o: [{ val: 'name' }] }
+      key$(r, null, { k: {} })
+      assert.equal(r.u.key, 'name')
+      // custom slot/from.
+      const r2 = { u: {}, o: [{ val: 'x' }, { val: 'y' }] }
+      key$(r2, null, { k: { key$: { slot: 'k2', from: 1 } } })
+      assert.equal(r2.u.k2, 'y')
+    })
+
+    it('@setval$ assigns child node under the captured key', () => {
+      const r = { node: {}, u: { key: 'a' }, child: { node: 42 } }
+      setval$(r, null, { k: {} })
+      assert.deepEqual(r.node, { a: 42 })
+      // no-op when node is not an object.
+      const r2 = { node: 7, u: { key: 'a' }, child: { node: 1 } }
+      assert.doesNotThrow(() => setval$(r2, null, { k: {} }))
+      assert.equal(r2.node, 7)
+    })
+
+    it('@push$ appends the child node (skips the no-value child)', () => {
+      const r = { node: [1], child: { node: 2 } }
+      push$(r); assert.deepEqual(r.node, [1, 2])
+      const r2 = { node: [1], child: { node: undefined } }
+      push$(r2); assert.deepEqual(r2.node, [1])
+    })
+
+    it('@value$ prefers the child node, else resolves the scalar token', () => {
+      const childWins = { node: 'old', child: { node: { built: true } }, o: [{ resolveVal: () => 'scalar' }] }
+      value$(childWins, {}, { k: {} })
+      assert.deepEqual(childWins.node, { built: true })
+      const scalar = { node: 'old', child: { node: undefined }, o: [{ resolveVal: () => 99 }] }
+      value$(scalar, {}, { k: {} })
+      assert.equal(scalar.node, 99)
     })
   })
 })
