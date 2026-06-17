@@ -636,6 +636,20 @@ func MapToOptions(m map[string]any) Options {
 		if lex, ok := fm["lex"].(bool); ok {
 			opts.Fixed.Lex = &lex
 		}
+		// fixed.token: name → src (e.g. {"#T": "@"}). A serialized grammar
+		// declares its fixed punctuation here; applying it registers the
+		// token so the lexer recognizes it (a nil value removes a mapping).
+		if tok, ok := fm["token"].(map[string]any); ok {
+			opts.Fixed.Token = make(map[string]*string, len(tok))
+			for name, v := range tok {
+				if s, ok := v.(string); ok {
+					sv := s
+					opts.Fixed.Token[name] = &sv
+				} else if v == nil {
+					opts.Fixed.Token[name] = nil
+				}
+			}
+		}
 	}
 
 	// space
@@ -954,6 +968,18 @@ func MapToOptions(m map[string]any) Options {
 					opts.Match.TokenEager[name] = true
 				case *regexp.Regexp:
 					opts.Match.Token[name] = re
+				case string:
+					// A leftover @/…/ or @~/…/ string means its regex did
+					// not compile (an unsupported RE2 construct) — fail loud
+					// rather than silently drop the token, which would make
+					// the lexer mis-recognize input (recovered by Grammar()
+					// into an install error). Any other non-regex string is
+					// ignored, as before.
+					if strings.HasPrefix(re, "@/") || strings.HasPrefix(re, "@~/") {
+						panic(fmt.Sprintf(
+							"tabnas: match token %q regex did not compile (got %q) — "+
+								"unsupported regex construct for Go RE2", name, re))
+					}
 				}
 			}
 		}
@@ -1048,6 +1074,24 @@ type EagerRegexp struct {
 	Re *regexp.Regexp
 }
 
+// jsUnicodeEscape matches the JS/TS regex unicode escapes \u{H...} and
+// \uHHHH (the form @tabnas/bnf emits for ABNF char classes, e.g.
+// `[A-Z]`). Go's regexp (RE2) uses \x{H...} instead.
+var jsUnicodeEscape = regexp.MustCompile(`\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})`)
+
+// jsRegexToGo rewrites JS/TS unicode escapes (\uHHHH, \u{H...}) in a regex
+// pattern to Go RE2 syntax (\x{H...}), so a serialized grammar's regex
+// match tokens compile on the Go engine the same way they do in TS. Other
+// JS-only constructs (lookahead, backreferences) remain unsupported by RE2
+// and will still fail to compile — surfaced loudly by MapToOptions rather
+// than silently dropped.
+func jsRegexToGo(pattern string) string {
+	return jsUnicodeEscape.ReplaceAllStringFunc(pattern, func(m string) string {
+		hex := strings.Trim(m[2:], "{}") // m is \uHHHH or \u{H...}
+		return `\x{` + hex + `}`
+	})
+}
+
 func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 	if obj == nil {
 		return nil
@@ -1064,7 +1108,7 @@ func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 		// Regex: @/pattern/flags → *regexp.Regexp
 		if len(s) > 2 && s[1] == '/' {
 			if idx := strings.LastIndex(s, "/"); idx > 1 {
-				pattern := s[2:idx]
+				pattern := jsRegexToGo(s[2:idx])
 				flags := s[idx+1:]
 				if flags != "" {
 					pattern = "(?" + flags + ")" + pattern
@@ -1081,7 +1125,7 @@ func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 		// (s[1] is '~', not '/').
 		if len(s) > 3 && s[1] == '~' && s[2] == '/' {
 			if idx := strings.LastIndex(s, "/"); idx > 2 {
-				pattern := s[3:idx]
+				pattern := jsRegexToGo(s[3:idx])
 				flags := s[idx+1:]
 				if flags != "" {
 					pattern = "(?" + flags + ")" + pattern
