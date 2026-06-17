@@ -45,6 +45,20 @@ import type { Rule, Context, AltMatch, AltAction, AltCond } from './types'
 export const BUILTIN_SCHEMA_VERSION = 2
 
 
+const defprop = Object.defineProperty
+
+// Attach the engine's info marker as a hidden (non-enumerable) property on
+// a node, so a grammar running with `info` on can introspect a container's
+// origin (implicit flag, meta bag) or a string's quote without the marker
+// leaking into JSON output. The TS info carrier (the marker property) is
+// the counterpart of Go's MapRef/ListRef/Text wrapper structs.
+function markNode(node: any, marker: string, data: any): void {
+  if (node != null && 'object' === typeof node) {
+    defprop(node, marker, { value: data, writable: true })
+  }
+}
+
+
 // A builtin ref is either an alternate action (tree builders + probe
 // actions) or an alternate condition (the phase guards).
 export type BuiltinRef = AltAction | AltCond
@@ -77,7 +91,15 @@ interface CaptureConfig {
 
 // Per-alt config for the native-value builders. `slot` is the r.u key the
 // pair key is stashed under (default 'key'); `from` is the matched-token
-// index a key/scalar is read from (default 0).
+// index a key/scalar is read from (default 0). `implicit` (containers)
+// records whether the container was created without delimiters — static
+// config, not computed at close (see doc/value-builtins.md).
+interface ObjectConfig {
+  implicit?: boolean
+}
+interface ArrayConfig {
+  implicit?: boolean
+}
 interface KeyConfig {
   slot?: string
   from?: number
@@ -166,18 +188,35 @@ const probePhase2$: AltCond = (r: Rule) => 2 === r.k.pd_phase
 // `{rule,src,kids}` syntax tree of the tree builders above. A grammar
 // whose rules thread a node from parent to child (the engine seeds a
 // pushed child's node from the parent — see makeRule) can assemble plain
-// objects/arrays with these as alt actions. v1 emits PLAIN nodes; any
-// introspection marking (jsonic's `info` mode) stays with the consuming
-// plugin as a thin post-pass. Schema family v2.
+// objects/arrays with these as alt actions. Schema family v2.
+//
+// These are INFO-AWARE: with `cfg.info` off they emit PLAIN nodes
+// (byte-identical to v1); with `cfg.info.{map,list,text}` on they attach
+// the engine's introspection marker (origin/quote metadata) — the same
+// info model the Go engine carries via MapRef/ListRef/Text. The info
+// logic lives here, in the engine, instead of each JSON-family plugin
+// re-hand-writing it. See doc/value-builtins.md.
 
 // Allocate a fresh empty object into r.node (no prototype, like JSON).
-const object$: AltAction = (r: Rule) => {
-  r.node = Object.create(null)
+// When info.map is on, attach the marker with the static `implicit` flag.
+const object$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+  const node = Object.create(null)
+  r.node = node
+  if (ctx.cfg.info.map) {
+    const cfg: ObjectConfig = (alt && alt.k && alt.k.object$) || {}
+    markNode(node, ctx.cfg.info.marker, { implicit: !!cfg.implicit, meta: {} })
+  }
 }
 
-// Allocate a fresh empty array into r.node.
-const array$: AltAction = (r: Rule) => {
-  r.node = []
+// Allocate a fresh empty array into r.node. When info.list is on, attach
+// the marker with the static `implicit` flag.
+const array$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+  const node: any[] = []
+  r.node = node
+  if (ctx.cfg.info.list) {
+    const cfg: ArrayConfig = (alt && alt.k && alt.k.array$) || {}
+    markNode(node, ctx.cfg.info.marker, { implicit: !!cfg.implicit, meta: {} })
+  }
 }
 
 // Clear r.node back to "no value" — undoes the parent-seeded node so a
@@ -194,12 +233,17 @@ const key$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
 }
 
 // Assign the just-returned child node under the captured key: the object-
-// property set. No-op if r.node isn't an object.
-const setval$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
+// property set. No-op if r.node isn't an object. When info.map is on, a
+// key that collides with the marker is dropped (the marker rides as a
+// hidden property, so a literal `"__info__"` key must not overwrite it) —
+// this guard is TS-only; Go's field-based metadata has no key collision.
+const setval$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
   const cfg: SetvalConfig = (alt && alt.k && alt.k.setval$) || {}
   const n = r.node as any
   if (null != n && 'object' === typeof n) {
-    n[r.u[cfg.slot || 'key']] = r.child.node
+    const key = r.u[cfg.slot || 'key']
+    if (ctx.cfg.info.map && key === ctx.cfg.info.marker) return
+    n[key] = r.child.node
   }
 }
 
@@ -212,8 +256,10 @@ const push$: AltAction = (r: Rule) => {
 }
 
 // Coalesce a value: a built child node wins; otherwise resolve the
-// matched scalar token. (The text/info marking json's @val-bc adds is
-// deferred to the plugin in v1.)
+// matched scalar token. When info.text is on and the resolved scalar is a
+// string from a string/text token, box it as a `String` carrying the
+// quote char (the leaf whose output type changes under info — it has no
+// container to hang the marker on). The Go counterpart wraps in a `Text`.
 const value$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
   if (undefined !== r.child.node) {
     r.node = r.child.node
@@ -221,7 +267,20 @@ const value$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
   }
   const cfg: ValueConfig = (alt && alt.k && alt.k.value$) || {}
   const tok = r.o[cfg.from || 0]
-  r.node = tok ? tok.resolveVal(r, ctx) : undefined
+  let val = tok ? tok.resolveVal(r, ctx) : undefined
+  const info = ctx.cfg.info
+  if (
+    info.text &&
+    'string' === typeof val &&
+    tok &&
+    (tok.tin === ctx.cfg.t.ST || tok.tin === ctx.cfg.t.TX)
+  ) {
+    const quote = tok.tin === ctx.cfg.t.ST && tok.src.length > 0 ? tok.src[0] : ''
+    const sv = new String(val)
+    markNode(sv, info.marker, { quote })
+    val = sv as any
+  }
+  r.node = val
 }
 
 

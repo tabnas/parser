@@ -389,10 +389,15 @@ describe('builtins', () => {
     const push$ = BUILTIN_REFS['@push$']
     const value$ = BUILTIN_REFS['@value$']
 
+    // Info-off context: the builders emit plain nodes (v1 behaviour).
+    const offCtx = {
+      cfg: { info: { map: false, list: false, text: false, marker: '__info__' }, t: { ST: 9, TX: 10 } },
+    }
+
     it('@object$ / @array$ / @reset$ set the node', () => {
-      const ro = { node: 'seed' }; object$(ro)
+      const ro = { node: 'seed' }; object$(ro, offCtx, { k: {} })
       assert.equal(typeof ro.node, 'object'); assert.deepEqual(ro.node, {})
-      const ra = { node: 'seed' }; array$(ra)
+      const ra = { node: 'seed' }; array$(ra, offCtx, { k: {} })
       assert.ok(Array.isArray(ra.node)); assert.equal(ra.node.length, 0)
       const rr = { node: { a: 1 } }; reset$(rr)
       assert.equal(rr.node, undefined)
@@ -410,11 +415,11 @@ describe('builtins', () => {
 
     it('@setval$ assigns child node under the captured key', () => {
       const r = { node: {}, u: { key: 'a' }, child: { node: 42 } }
-      setval$(r, null, { k: {} })
+      setval$(r, offCtx, { k: {} })
       assert.deepEqual(r.node, { a: 42 })
       // no-op when node is not an object.
       const r2 = { node: 7, u: { key: 'a' }, child: { node: 1 } }
-      assert.doesNotThrow(() => setval$(r2, null, { k: {} }))
+      assert.doesNotThrow(() => setval$(r2, offCtx, { k: {} }))
       assert.equal(r2.node, 7)
     })
 
@@ -427,11 +432,69 @@ describe('builtins', () => {
 
     it('@value$ prefers the child node, else resolves the scalar token', () => {
       const childWins = { node: 'old', child: { node: { built: true } }, o: [{ resolveVal: () => 'scalar' }] }
-      value$(childWins, {}, { k: {} })
+      value$(childWins, offCtx, { k: {} })
       assert.deepEqual(childWins.node, { built: true })
       const scalar = { node: 'old', child: { node: undefined }, o: [{ resolveVal: () => 99 }] }
-      value$(scalar, {}, { k: {} })
+      value$(scalar, offCtx, { k: {} })
       assert.equal(scalar.node, 99)
+    })
+  })
+
+  describe('native-value builders (info-aware, direct invocation)', () => {
+    const object$ = BUILTIN_REFS['@object$']
+    const array$ = BUILTIN_REFS['@array$']
+    const setval$ = BUILTIN_REFS['@setval$']
+    const value$ = BUILTIN_REFS['@value$']
+
+    // Info-on context: the builders attach the hidden marker (the TS info
+    // carrier — counterpart of Go's MapRef/ListRef/Text wrappers).
+    const onCtx = {
+      cfg: { info: { map: true, list: true, text: true, marker: '__info__' }, t: { ST: 9, TX: 10 } },
+    }
+    const marker = (node) => Object.getOwnPropertyDescriptor(node, '__info__')
+
+    it('@object$ attaches a non-enumerable marker with the static implicit flag', () => {
+      const r = { node: 'seed' }; object$(r, onCtx, { k: {} })
+      const d = marker(r.node)
+      assert.ok(d, 'marker present')
+      assert.equal(d.enumerable, false, 'marker is hidden')
+      assert.deepEqual(r.node['__info__'], { implicit: false, meta: {} })
+      // implicit comes from static alt config, not a close hook.
+      const r2 = { node: 'seed' }; object$(r2, onCtx, { k: { object$: { implicit: true } } })
+      assert.equal(r2.node['__info__'].implicit, true)
+      // marker is non-enumerable, so JSON output is unaffected.
+      assert.equal(JSON.stringify(r.node), '{}')
+    })
+
+    it('@array$ attaches the marker (info.list)', () => {
+      const r = { node: 'seed' }; array$(r, onCtx, { k: {} })
+      assert.ok(Array.isArray(r.node))
+      assert.deepEqual(r.node['__info__'], { implicit: false, meta: {} })
+      assert.equal(marker(r.node).enumerable, false)
+    })
+
+    it('@setval$ drops a key colliding with the marker (TS-only marker-key-drop)', () => {
+      const r = { node: {}, u: { key: '__info__' }, child: { node: 'overwrite' } }
+      setval$(r, onCtx, { k: {} })
+      // The literal "__info__" key is dropped, not assigned.
+      assert.equal(Object.prototype.hasOwnProperty.call(r.node, '__info__'), false)
+      // A normal key still assigns.
+      const r2 = { node: {}, u: { key: 'a' }, child: { node: 1 } }
+      setval$(r2, onCtx, { k: {} })
+      assert.deepEqual(r2.node, { a: 1 })
+    })
+
+    it('@value$ boxes a string/text token value as a String carrying the quote', () => {
+      const r = { node: 'old', child: { node: undefined }, o: [{ tin: 9, src: '"hi"', resolveVal: () => 'hi' }] }
+      value$(r, onCtx, { k: {} })
+      assert.equal(typeof r.node, 'object')
+      assert.equal(String(r.node), 'hi')
+      assert.deepEqual(r.node['__info__'], { quote: '"' })
+      // A non-string scalar (number) is left bare.
+      const r2 = { node: 'old', child: { node: undefined }, o: [{ tin: 8, src: '5', resolveVal: () => 5 }] }
+      value$(r2, onCtx, { k: {} })
+      assert.equal(r2.node, 5)
+      assert.equal(typeof r2.node, 'number')
     })
   })
 })

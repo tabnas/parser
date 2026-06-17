@@ -172,23 +172,43 @@ func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 
 // ---- Native-value builders ----------------------------------------
 // Build NATIVE JSON values (objects/arrays/scalars), not the
-// {rule,src,kids} syntax tree. v1 emits plain map[string]any / []any
-// (info-marking deferred to the consuming plugin). Schema family v2.
+// {rule,src,kids} syntax tree. Schema family v2.
+//
+// These are INFO-AWARE: with the info options off they emit plain
+// map[string]any / []any / scalar (byte-identical to v1); with
+// ctx.Cfg.MapRef / .ListRef / .TextInfo on they allocate the engine's
+// MapRef / ListRef / Text wrappers (the Go info carriers — the
+// counterpart of the TS marker property). The info logic lives here, in
+// the engine, instead of each JSON-family plugin re-hand-writing it.
 //
 // Go reads config from r.K (alt.K is merged before the action), and r.K
-// propagates to children — so the config-reading builders (@key$/
-// @setval$/@value$) DELETE their own key right after reading it, before
-// the push/replace K-copy, so a config set on one alt can never leak into
-// a child rule and mis-fire. The open- and close-side builders use
-// disjoint keys, so unconditional delete-after-read is safe.
+// propagates to children — so the config-reading builders (@object$/
+// @array$/@key$/@setval$/@value$) DELETE their own key right after
+// reading it, before the push/replace K-copy, so a config set on one alt
+// can never leak into a child rule and mis-fire. The open- and close-side
+// builders use disjoint keys, so unconditional delete-after-read is safe.
 
-// @object$ — allocate a fresh empty object.
-func builtinObject(r *Rule, _ *Context) {
+// @object$ — allocate a fresh empty object. With MapRef info on, allocate
+// a MapRef carrying the static `implicit` flag and an empty Meta bag.
+func builtinObject(r *Rule, ctx *Context) {
+	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.MapRef {
+		cfg := mapConfig(r, "object$")
+		delete(r.K, "object$")
+		r.Node = MapRef{Val: make(map[string]any), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		return
+	}
 	r.Node = map[string]any{}
 }
 
-// @array$ — allocate a fresh empty array.
-func builtinArray(r *Rule, _ *Context) {
+// @array$ — allocate a fresh empty array. With ListRef info on, allocate
+// a ListRef carrying the static `implicit` flag and an empty Meta bag.
+func builtinArray(r *Rule, ctx *Context) {
+	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.ListRef {
+		cfg := mapConfig(r, "array$")
+		delete(r.K, "array$")
+		r.Node = ListRef{Val: make([]any, 0), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		return
+	}
 	r.Node = make([]any, 0)
 }
 
@@ -216,6 +236,9 @@ func builtinKey(r *Rule, _ *Context) {
 }
 
 // @setval$ — assign the just-returned child node under the captured key.
+// Works on either a plain map[string]any or a MapRef wrapper (info mode)
+// via NodeMapSet. Go's metadata lives in MapRef struct fields, so there
+// is no marker-key collision to guard against (unlike the TS side).
 func builtinSetval(r *Rule, _ *Context) {
 	cfg := mapConfig(r, "setval$")
 	delete(r.K, "setval$")
@@ -223,34 +246,37 @@ func builtinSetval(r *Rule, _ *Context) {
 	if slot == "" {
 		slot = "key"
 	}
-	m, ok := r.Node.(map[string]any)
-	if !ok || r.Child == nil {
+	if r.Child == nil {
 		return
 	}
 	key, _ := r.U[slot].(string)
-	m[key] = r.Child.Node
+	switch r.Node.(type) {
+	case map[string]any, MapRef:
+		r.Node = NodeMapSet(r.Node, key, r.Child.Node)
+	}
 }
 
 // @push$ — append the child node to the array (skips the no-value child).
-// Go slices are value types, so the grown header is re-published to the
-// parent (mirrors the json plugin's parent write-back).
+// Works on a plain []any or a ListRef wrapper (info mode) via
+// NodeListAppend. Go slices are value types, so the grown header is
+// re-published to the parent (mirrors the json plugin's parent write-back).
 func builtinPush(r *Rule, _ *Context) {
 	if r.Child == nil || IsUndefined(r.Child.Node) {
 		return
 	}
-	s, ok := r.Node.([]any)
-	if !ok {
-		return
-	}
-	r.Node = append(s, r.Child.Node)
-	if r.Parent != nil && r.Parent != NoRule {
-		r.Parent.Node = r.Node
+	switch r.Node.(type) {
+	case []any, ListRef:
+		r.Node = NodeListAppend(r.Node, r.Child.Node)
+		if r.Parent != nil && r.Parent != NoRule {
+			r.Parent.Node = r.Node
+		}
 	}
 }
 
 // @value$ — coalesce a value: a built child node wins; otherwise resolve
-// the matched scalar token. (The text/info marking is deferred to the
-// plugin in v1.)
+// the matched scalar token. With TextInfo on, a string/text token's value
+// is wrapped in a Text carrying its source quote char (the leaf whose
+// output type changes under info — the TS counterpart boxes a String).
 func builtinValue(r *Rule, ctx *Context) {
 	cfg := mapConfig(r, "value$")
 	delete(r.K, "value$")
@@ -259,11 +285,22 @@ func builtinValue(r *Rule, ctx *Context) {
 		return
 	}
 	from := cfgInt(cfg["from"])
-	if from >= 0 && from < len(r.O) {
-		r.Node = r.O[from].ResolveVal(r, ctx)
-	} else {
+	if from < 0 || from >= len(r.O) {
 		r.Node = Undefined
+		return
 	}
+	tok := r.O[from]
+	val := tok.ResolveVal(r, ctx)
+	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.TextInfo &&
+		(tok.Tin == TinST || tok.Tin == TinTX) {
+		quote := ""
+		if tok.Tin == TinST && len(tok.Src) > 0 {
+			quote = string(tok.Src[0])
+		}
+		str, _ := val.(string)
+		val = Text{Quote: quote, Str: str}
+	}
+	r.Node = val
 }
 
 // BUILTIN_REFS is the standard builtin library. Tree/probe/value actions
