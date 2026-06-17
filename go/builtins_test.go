@@ -285,6 +285,41 @@ func TestEagerSentinelResolve(t *testing.T) {
 	}
 }
 
+func TestUnicodeRegexDialect(t *testing.T) {
+	// JS/TS \uHHHH escapes (the form @tabnas/bnf emits for ABNF char
+	// classes) must compile on Go's RE2 via the \x{} rewrite.
+	v := ResolveFuncRefs("@/^[\\u0041-\\u005a]/", nil)
+	re, ok := v.(*regexp.Regexp)
+	if !ok {
+		t.Fatalf("\\u char class should compile to *regexp.Regexp, got %T (%v)", v, v)
+	}
+	if !re.MatchString("A") || re.MatchString("a") {
+		t.Error("[A-Z] char class mismatch after dialect rewrite")
+	}
+	// eager variant and \u{...} braced form.
+	ev := ResolveFuncRefs("@~/^[\\u{61}-\\u{7a}]/", nil)
+	er, ok := ev.(*EagerRegexp)
+	if !ok {
+		t.Fatalf("eager \\u{} should compile, got %T", ev)
+	}
+	if !er.Re.MatchString("a") || er.Re.MatchString("A") {
+		t.Error("[a-z] char class mismatch after dialect rewrite")
+	}
+}
+
+func TestUncompilableRegexFailsLoud(t *testing.T) {
+	// A regex that RE2 cannot compile (lookahead) must surface as a clear
+	// install error, not be silently dropped (which would leave the lexer
+	// with no match token and mis-recognize input).
+	j := Make()
+	gs := &GrammarSpec{OptionsMap: map[string]any{
+		"match": map[string]any{"token": map[string]any{"#X": "@/(?=foo)/"}}}}
+	err := j.Grammar(gs)
+	if err == nil || !strings.Contains(err.Error(), "did not compile") {
+		t.Errorf("expected a loud compile error, got %v", err)
+	}
+}
+
 // --- cross-engine fixtures (TS↔Go parity on the same serialized grammars) ---
 
 func loadFixture(t *testing.T, name string) string {
@@ -329,21 +364,15 @@ func fixtureAccepts(t *testing.T, name, input string) bool {
 }
 
 func TestProbeFixtureParity(t *testing.T) {
-	// KNOWN GAP (diagnosed): a serialized probe grammar installs cleanly
-	// and the probe builtins run (verified by tracing @probeInit$/
-	// @probeDecide$), but recognition diverges from TS because the
-	// grammar's char classes (X/Y = 1*ALPHA) sit behind a rule push
-	// (`*( ALPHA )` → a synthetic group rule). The Go lexer's match-token
-	// "expected" gate only inspects the immediate rule's alt positions and
-	// does NOT expand across pushes (no FIRST-set computation), so ALPHA is
-	// not recognized at the probe position — the text fallback lexes the
-	// run as a single `#TX` token. @probeDecide$ then peeks `#TX` (not the
-	// `#T` disambiguator), the dispatcher commits to the wrong branch, and
-	// the parse fails. This is a pre-existing Go lexer/parser parity gap
-	// (match-token expected-set across pushes), independent of the
-	// builtins, which are unit-tested in isolation
-	// (TestBuiltinProbeInitDecide). Tracked as the Go-parity follow-up.
-	t.Skip("probe needs Go-lexer match-token expected-set across pushes (follow-up)")
+	// Full phase-retry recognition parity with TS: disambiguator present
+	// (X "@" Y) and absent (Y) both accept; a dangling disambiguator with
+	// no following Y rejects, proving the phase decision gates the parse.
+	cases := map[string]bool{"abc": true, "ab@cd": true, "a@b": true, "@": false, "ab@": false}
+	for input, want := range cases {
+		if got := fixtureAccepts(t, "probe-grammar.fixture.json", input); got != want {
+			t.Errorf("probe %q: got accept=%v, want %v", input, got, want)
+		}
+	}
 }
 
 func TestEagerFixtureParity(t *testing.T) {
