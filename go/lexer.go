@@ -28,6 +28,7 @@ type MatchTokenEntry struct {
 	Tin   Tin            // The token type this matcher produces; the sort key.
 	Match *regexp.Regexp // Regexp form.
 	Fn    LexMatcher     // Function-form matcher; takes precedence over Match.
+	Eager bool           // When true, fire regardless of the rule-position gate.
 }
 
 // The lexer: produces tokens from source text.
@@ -84,6 +85,7 @@ type LexConfig struct {
 	// Match options (TS: cfg.match)
 	MatchLex          bool                   // Enable custom matching. Default: false.
 	MatchTokens       map[Tin]*regexp.Regexp // Custom token tin → regexp (storage).
+	MatchTokensEager  map[Tin]bool           // Custom token tin → eager (skips the rule-position gate).
 	MatchTokenFns     map[Tin]LexMatcher     // Custom token tin → function matcher (storage).
 	MatchTokensSorted []*MatchTokenEntry     // Sorted-by-tin view for deterministic iteration.
 	MatchValues       []*MatchValueEntry     // Custom value matchers, sorted by name.
@@ -326,7 +328,8 @@ func (cfg *LexConfig) RebuildMatchTokensSorted() {
 		if cfg.MatchTokenFns != nil && cfg.MatchTokenFns[tin] != nil {
 			continue
 		}
-		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Match: re})
+		sorted = append(sorted, &MatchTokenEntry{
+			Tin: tin, Match: re, Eager: cfg.MatchTokensEager[tin]})
 	}
 	for tin, fn := range cfg.MatchTokenFns {
 		sorted = append(sorted, &MatchTokenEntry{Tin: tin, Fn: fn})
@@ -644,8 +647,13 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				continue
 			}
 			// Check if this Tin is expected at position 0 in any alt.
-			expected := false
+			// An eager matcher fires regardless (the downstream parser
+			// rejects tokens it doesn't expect at the current position).
+			expected := mt.Eager
 			for _, alt := range alts {
+				if expected {
+					break
+				}
 				if len(alt.S) > 0 && tinMatch(tin, alt.S[0]) {
 					expected = true
 					break

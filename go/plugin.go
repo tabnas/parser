@@ -261,6 +261,12 @@ func (j *Tabnas) applyMatchTokens(opts *Options) {
 	for name, re := range opts.Match.Token {
 		tin := j.Token(name)
 		cfg.MatchTokens[tin] = re
+		if opts.Match.TokenEager[name] {
+			if cfg.MatchTokensEager == nil {
+				cfg.MatchTokensEager = make(map[Tin]bool)
+			}
+			cfg.MatchTokensEager[tin] = true
+		}
 	}
 	for name, fn := range opts.Match.TokenFn {
 		tin := j.Token(name)

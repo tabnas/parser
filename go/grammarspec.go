@@ -17,6 +17,7 @@ type GrammarSpec struct {
 	Options    *Options                    // Typed options merged in (via SetOptions) before rules are processed.
 	OptionsMap map[string]any              // Map-form options; FuncRef values resolved via Ref before applying.
 	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name.
+	V          int                         // Builtin config-schema version; engine refuses V > BUILTIN_SCHEMA_VERSION. Zero ⇒ 1.
 }
 
 // Open and close alternates for a single rule (each: []*GrammarAltSpec or *GrammarAltListSpec).
@@ -60,7 +61,7 @@ type GrammarAltSpec struct {
 	B any            // Backtrack: int or FuncRef string.
 	P string         // Push rule name or FuncRef.
 	R string         // Replace rule name or FuncRef.
-	A FuncRef        // Action function ref.
+	A any            // Action: FuncRef string, or []any of refs/AltActions run in order.
 	E FuncRef        // Error function ref.
 	H FuncRef        // Modifier function ref.
 	C any            // Condition: FuncRef string or map[string]any for declarative.
@@ -82,6 +83,31 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 			err = fmt.Errorf("Grammar: internal error: %v", r)
 		}
 	}()
+	// Refuse a grammar that requires a newer builtin config-schema than
+	// this engine implements (zero ⇒ current). Mirrors the TS version gate.
+	if gs.V != 0 {
+		if gs.V < 0 {
+			return fmt.Errorf("Grammar: invalid builtin schema version: %d (expected a positive integer)", gs.V)
+		}
+		if gs.V > BUILTIN_SCHEMA_VERSION {
+			return fmt.Errorf("Grammar: requires builtin schema version %d, but this engine supports up to %d", gs.V, BUILTIN_SCHEMA_VERSION)
+		}
+	}
+
+	// The `$` ref-namespace is reserved for engine builtins; a user ref
+	// key may not contain `$` (it would shadow, or be shadowed by, a
+	// builtin in the merge below).
+	for key := range gs.Ref {
+		if strings.Contains(key, "$") {
+			return fmt.Errorf("Grammar: '$' is reserved for engine builtins; user ref key %q may not contain '$'", key)
+		}
+	}
+
+	// Merge the standard `$`-suffixed builtins under any spec-supplied
+	// refs (spec wins). Lets a serialized, function-free GrammarSpec
+	// reference engine builtins (e.g. @probeInit$) by name. See builtins.go.
+	ref := mergeBuiltinRefs(gs.Ref)
+
 	// Apply typed Options directly.
 	if gs.Options != nil {
 		j.SetOptions(*gs.Options)
@@ -89,7 +115,7 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 
 	// Apply OptionsMap with FuncRef resolution.
 	if gs.OptionsMap != nil {
-		resolved := ResolveFuncRefs(gs.OptionsMap, gs.Ref)
+		resolved := ResolveFuncRefs(gs.OptionsMap, ref)
 		if resolvedMap, ok := resolved.(map[string]any); ok {
 			opts := MapToOptions(resolvedMap)
 			j.SetOptions(opts)
@@ -101,7 +127,6 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 
 	if gs.Rule != nil {
 		for rulename, rulespec := range gs.Rule {
-			ref := gs.Ref
 			var resolveErr error
 			j.Rule(rulename, func(rs *RuleSpec, _ *Parser) {
 				// Process Open alts.
@@ -228,6 +253,10 @@ func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) (err error
 	if ruleMap, ok := gsMap["rule"].(map[string]any); ok {
 		gs.Rule = mapToGrammarRules(ruleMap)
 	}
+	// Builtin config-schema version (parsed numbers arrive as float64).
+	if v, ok := gsMap["v"]; ok {
+		gs.V = cfgInt(v)
+	}
 	return j.Grammar(gs, setting...)
 }
 
@@ -325,8 +354,8 @@ func mapToGrammarAltSpec(m map[string]any) *GrammarAltSpec {
 	if v, ok := m["r"].(string); ok {
 		alt.R = v
 	}
-	if v, ok := m["a"].(string); ok {
-		alt.A = v
+	if v, ok := m["a"]; ok {
+		alt.A = v // FuncRef string or []any of refs (array-`a`)
 	}
 	if v, ok := m["e"].(string); ok {
 		alt.E = v
@@ -432,6 +461,85 @@ func (j *Tabnas) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) 
 }
 
 // resolveGrammarAlt converts a single GrammarAltSpec to a concrete AltSpec.
+// resolveActionField resolves a GrammarAltSpec.A value — a FuncRef
+// string, an AltAction, or an array of either — into a single AltAction
+// (or nil for none). An array is collapsed to one ordered call that
+// short-circuits when a prior action sets ctx.ParseErr (the engine's
+// equivalent of the TS error-token short-circuit).
+func resolveActionField(a any, ref map[FuncRef]any) (AltAction, error) {
+	switch av := a.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		if av == "" {
+			return nil, nil
+		}
+		return requireAction(ref, av)
+	case AltAction:
+		return av, nil
+	case func(*Rule, *Context):
+		return AltAction(av), nil
+	case []any:
+		return resolveActionList(av, ref)
+	case []string:
+		items := make([]any, len(av))
+		for i, s := range av {
+			items[i] = s
+		}
+		return resolveActionList(items, ref)
+	}
+	return nil, fmt.Errorf("Grammar: invalid action field type %T", a)
+}
+
+func requireAction(ref map[FuncRef]any, name string) (AltAction, error) {
+	fn, err := RequireRef(ref, name, "action")
+	if err != nil {
+		return nil, err
+	}
+	af, ok := fn.(AltAction)
+	if !ok {
+		if raw, ok2 := fn.(func(*Rule, *Context)); ok2 {
+			return AltAction(raw), nil
+		}
+		return nil, fmt.Errorf("Grammar: ref %q is not an AltAction", name)
+	}
+	return af, nil
+}
+
+func resolveActionList(items []any, ref map[FuncRef]any) (AltAction, error) {
+	fns := make([]AltAction, 0, len(items))
+	for _, el := range items {
+		switch ev := el.(type) {
+		case string:
+			af, err := requireAction(ref, ev)
+			if err != nil {
+				return nil, err
+			}
+			fns = append(fns, af)
+		case AltAction:
+			fns = append(fns, ev)
+		case func(*Rule, *Context):
+			fns = append(fns, AltAction(ev))
+		default:
+			return nil, fmt.Errorf("Grammar: invalid action list element type %T", el)
+		}
+	}
+	if len(fns) == 0 {
+		return nil, nil
+	}
+	if len(fns) == 1 {
+		return fns[0], nil
+	}
+	return func(r *Rule, ctx *Context) {
+		for _, f := range fns {
+			f(r, ctx)
+			if ctx.ParseErr != nil {
+				return
+			}
+		}
+	}, nil
+}
+
 func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*AltSpec, error) {
 	alt := &AltSpec{}
 
@@ -492,17 +600,13 @@ func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*Al
 		}
 	}
 
-	// Resolve A (action)
-	if ga.A != "" {
-		fn, err := RequireRef(ref, ga.A, "action")
-		if err != nil {
-			return nil, err
-		}
-		if af, ok := fn.(AltAction); ok {
-			alt.A = af
-		} else {
-			return nil, fmt.Errorf("Grammar: ref %q is not an AltAction", ga.A)
-		}
+	// Resolve A (action): a FuncRef string, or an array of refs/AltActions
+	// run in order (matched alt's own action first, then composed user
+	// actions), short-circuiting if a prior action sets ctx.ParseErr.
+	if action, err := resolveActionField(ga.A, ref); err != nil {
+		return nil, err
+	} else if action != nil {
+		alt.A = action
 	}
 
 	// Resolve E (error)
@@ -831,10 +935,8 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 		}
 	}
 
-	if ga.A != "" {
-		if fn := LookupRef(ref, ga.A); fn != nil {
-			alt.A = fn.(AltAction)
-		}
+	if action, err := resolveActionField(ga.A, ref); err == nil && action != nil {
+		alt.A = action
 	}
 	if ga.E != "" {
 		if fn := LookupRef(ref, ga.E); fn != nil {
