@@ -231,9 +231,14 @@ export type TabnasOptions = {
   }
   rewind?: {                        // Token rewind history.
     // Maximum number of consumed tokens retained in ctx.v for
-    // ctx.rewind(). Defaults to Infinity (unbounded). Set a finite
-    // value to cap parse-time memory; ctx.rewind(mark) will throw
-    // if the mark has been evicted from the retained window.
+    // ctx.rewind(). Defaults to 64 (see defaults.ts) to keep parse-time
+    // memory bounded; set to Infinity for unbounded retention, or a
+    // larger finite value as needed. ctx.rewind(mark) throws if the
+    // mark has been evicted from the retained window — so a grammar
+    // that probes/rewinds across a long span (e.g. the `$`-builtin
+    // probe dispatcher scanning a long optional prefix) must raise
+    // this above the longest prefix it can encounter, or it will throw
+    // on otherwise-valid input.
     history?: number
   }
   config?: {                        // Config post-processing.
@@ -516,7 +521,11 @@ export interface AltSpec {
   c?: AltCond | null
 
   n?: Counters                    // Increment counters by specified amounts.
-  a?: AltAction | FuncRef | null  // Perform an action if this alternate matches.
+  // Action(s) on match. An array runs each in order (the matched alt's
+  // own action first, then composed user actions); each element is a
+  // function or a FuncRef string. The array is collapsed to a single
+  // function at normalization time, so the normalized form stays scalar.
+  a?: AltAction | FuncRef | (AltAction | FuncRef)[] | null
   h?: AltModifier | null          // Modify current Alt to customize parser.
   u?: Record<string, any>         // Key-value custom data.
   k?: Record<string, any>         // Key-value custom data (propagated).
@@ -657,6 +666,13 @@ export type AltModifier = (
 // Execute an action when alternate matches.
 export type AltAction = (rule: Rule, ctx: Context, alt: AltMatch) => any
 
+// A RegExp token matcher with the engine's matcher annotations. `tin$`
+// is the matcher's own token id; `eager$` opts the matcher out of the
+// lexer's tcol gating (it fires whenever its regex matches, regardless
+// of the active rule's token column). Serialized grammars carry the
+// eager flag via the `@~/pattern/flags` ref form (see resolveFuncRefs).
+export type EagerRegExp = RegExp & { tin$?: number; eager$?: boolean }
+
 // Determine next rule name (for AltSpec r or p properties).
 export type AltNext = (
   rule: Rule,
@@ -710,6 +726,11 @@ export type { Parser }
 export type GrammarSpec = {
   ref?: Record<FuncRef, Function>           // Functions resolved from FuncRef strings.
 
+  // Builtin config-schema version this grammar was compiled against. The
+  // engine refuses a grammar whose `v` exceeds the schema it implements
+  // (see BUILTIN_SCHEMA_VERSION). Absent ⇒ version 1.
+  v?: number
+
   // JSON-serializable options. Function-valued fields use FuncRef strings
   // that are resolved against `ref` before being applied.
   options?: Record<string, any>
@@ -737,7 +758,7 @@ export type GrammarAltSpec = {
   b?: FuncRef | number,                     // Token push back count.
   p?: FuncRef | string,                     // Push child rule.
   r?: FuncRef | string,                     // Replace with sibling rule.
-  a?: FuncRef,                              // Action on match.
+  a?: FuncRef | FuncRef[],                  // Action(s) on match (array runs in order).
   e?: FuncRef,                              // Error token generator.
   h?: FuncRef,                              // Alternate modifier.
   c?: FuncRef | Record<string, any>,        // Match condition.

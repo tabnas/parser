@@ -20,6 +20,7 @@ import type {
   Token,
   ValModifier,
   ListMods,
+  EagerRegExp,
 } from './types'
 
 import { EMPTY, SKIP, STRING } from './types'
@@ -1027,6 +1028,18 @@ function resolveFuncRefs(
       const m = obj.match(/^@\/(.*)\/([\w]*)$/)
       if (m) {
         return new RegExp(m[1], m[2])
+      }
+      // Eager variant `@~/pattern/flags` — a RegExp matcher flagged
+      // `eager$`, which opts out of the lexer's tcol gating. Serialized
+      // grammars use this for match tokens that must fire even when the
+      // active rule's token column is narrower (e.g. ABNF case-
+      // insensitive literals). Placed after `@/.../` so a `@~/` string
+      // (char[1] === '~') cannot be captured by that branch.
+      const me = obj.match(/^@~\/(.*)\/([\w]*)$/)
+      if (me) {
+        const re: EagerRegExp = new RegExp(me[1], me[2])
+        re.eager$ = true
+        return re
       }
       if (ref) {
         const fn = ref[obj]
