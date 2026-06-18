@@ -641,36 +641,19 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 			alts = rule.Spec.close
 		}
 
-		for _, mt := range l.Config.MatchTokensSorted {
-			tin, re := mt.Tin, mt.Match
-			if re == nil && mt.Fn == nil {
-				continue
-			}
-			// Check if this Tin is expected at position 0 in any alt.
-			// An eager matcher fires regardless (the downstream parser
-			// rejects tokens it doesn't expect at the current position).
-			expected := mt.Eager
-			for _, alt := range alts {
-				if expected {
-					break
-				}
-				if len(alt.S) > 0 && tinMatch(tin, alt.S[0]) {
-					expected = true
-					break
-				}
-			}
-			if !expected {
-				continue
-			}
-
-			// Function-form matcher (TS: LexMatcher branch).
+		// Two passes so a token EXPECTED at this rule position wins over a
+		// merely-eager token that happens to match the same text. When
+		// several eager match tokens overlap on the same input (e.g. an
+		// ABNF case-insensitive literal `#A` and a range regex `#RX[a-z]`
+		// both matching "a"), the position-expected one must be produced
+		// so the active rule's alt can advance — mirroring the TS lexer's
+		// tcol gating, which only emits tokens listed at the current slot.
+		// Pass 0 considers only position-0-expected tokens; pass 1 adds
+		// the eager-only fallbacks.
+		runMatch := func(mt *MatchTokenEntry, tin Tin, re *regexp.Regexp) *Token {
 			if mt.Fn != nil {
-				if tkn := mt.Fn(l, rule); tkn != nil {
-					return tkn
-				}
-				continue
+				return mt.Fn(l, rule)
 			}
-
 			res := re.FindString(fwd)
 			if res != "" {
 				name := l.tinNameFor(tin)
@@ -678,6 +661,37 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				l.pnt.SI += len(res)
 				l.pnt.CI += utf8.RuneCountInString(res)
 				return tkn
+			}
+			return nil
+		}
+		for pass := 0; pass < 2; pass++ {
+			for _, mt := range l.Config.MatchTokensSorted {
+				tin, re := mt.Tin, mt.Match
+				if re == nil && mt.Fn == nil {
+					continue
+				}
+				positionExpected := false
+				for _, alt := range alts {
+					if len(alt.S) > 0 && tinMatch(tin, alt.S[0]) {
+						positionExpected = true
+						break
+					}
+				}
+				if pass == 0 {
+					// Pass 0: only tokens expected at this rule position.
+					if !positionExpected {
+						continue
+					}
+				} else {
+					// Pass 1: eager-only fallbacks (position-expected ones
+					// were already tried in pass 0).
+					if positionExpected || !mt.Eager {
+						continue
+					}
+				}
+				if tkn := runMatch(mt, tin, re); tkn != nil {
+					return tkn
+				}
 			}
 		}
 	}

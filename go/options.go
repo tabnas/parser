@@ -96,6 +96,14 @@ type MatchOptions struct {
 	Lex        *bool                      // Enable custom matching. Default: true.
 	Token      map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
 	TokenEager map[string]bool            // "#NAME" → true when eager (skips the rule-position gate; from @~/…/).
+	// TokenOrder fixes the Tin-allocation order of Token entries so the
+	// lexer's deterministic (Tin-ascending) match-token iteration reflects
+	// a caller-chosen precedence. Names listed here are allocated first, in
+	// order; any remaining Token keys are allocated afterwards (sorted by
+	// name for determinism). Mirrors the TS engine, where match.token is an
+	// ordered object and the first matching matcher wins. Optional; when
+	// nil the previous (map-iteration) behaviour applies but sorted by name.
+	TokenOrder []string
 	Value      map[string]*MatchValueSpec // name → {Match, Val} for custom value matchers.
 	TokenFn    map[string]LexMatcher      // "#NAME" → function-form token matcher (TS match.token LexMatcher branch).
 	Check      LexCheck                   // Hook invoked before the match matcher runs (TS options.match.check).
