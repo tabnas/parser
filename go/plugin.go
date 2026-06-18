@@ -258,7 +258,29 @@ func (j *Tabnas) applyMatchTokens(opts *Options) {
 		return
 	}
 	cfg := j.parser.Config
-	for name, re := range opts.Match.Token {
+	// Allocate Tins in a deterministic order so the lexer's Tin-ascending
+	// match-token iteration reflects a stable precedence (overlapping eager
+	// tokens — e.g. a range regex vs a single-char case-insensitive literal
+	// — otherwise resolve by random map-iteration order). TokenOrder names
+	// come first in caller order; remaining keys follow, sorted by name.
+	var order []string
+	seen := map[string]bool{}
+	for _, name := range opts.Match.TokenOrder {
+		if _, ok := opts.Match.Token[name]; ok && !seen[name] {
+			order = append(order, name)
+			seen[name] = true
+		}
+	}
+	rest := make([]string, 0, len(opts.Match.Token))
+	for name := range opts.Match.Token {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	order = append(order, rest...)
+	for _, name := range order {
+		re := opts.Match.Token[name]
 		tin := j.Token(name)
 		cfg.MatchTokens[tin] = re
 		if opts.Match.TokenEager[name] {
@@ -610,6 +632,17 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	if len(j.parser.Config.MatchTokens) > 0 {
 		for k, v := range j.parser.Config.MatchTokens {
 			cfg.MatchTokens[k] = v
+		}
+	}
+	// Preserve the per-tin eager flags alongside the tokens, so an eager
+	// match token registered at Make() (or an earlier SetOptions) keeps
+	// firing at non-leading slots after a later SetOptions rebuilds cfg.
+	if len(j.parser.Config.MatchTokensEager) > 0 {
+		if cfg.MatchTokensEager == nil {
+			cfg.MatchTokensEager = make(map[Tin]bool, len(j.parser.Config.MatchTokensEager))
+		}
+		for k, v := range j.parser.Config.MatchTokensEager {
+			cfg.MatchTokensEager[k] = v
 		}
 	}
 	if len(j.parser.Config.MatchTokenFns) > 0 {
