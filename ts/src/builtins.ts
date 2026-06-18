@@ -14,7 +14,7 @@
  *  Two families:
  *
  *  1. Tree builders (`@node$`, `@capture$`, `@bubble$`) — rebuild the
- *     `{rule?, src, kids}` AST that the hand-written `@tabnas/bnf` plugin
+ *     `{rule?, src, kids}` AST that the hand-written `@tabnas/abnf` plugin
  *     produces. Per-alt config rides in `alt.k.<name>` (the propagated
  *     `k` field), read from the action's 3rd argument so child rules are
  *     not polluted.
@@ -30,7 +30,7 @@
  *     specific data is config, never closed-over state.
  *
  *  CONTRACT: the AST shape and merge algorithm below MUST stay
- *  byte-identical to `@tabnas/bnf`'s `mkAstNode` / `segmentToAlt` /
+ *  byte-identical to `@tabnas/abnf`'s `mkAstNode` / `segmentToAlt` /
  *  `captureChildFields`. The `BUILTIN_SCHEMA_VERSION` versions that
  *  contract; a serialized grammar may declare the schema it was compiled
  *  against and `grammar()` refuses a grammar that needs a newer one.
@@ -113,7 +113,7 @@ interface ValueConfig {
 
 
 // ---- Tree builders (config in `alt.k.<name>`) ---------------------
-// These mirror @tabnas/bnf's emitter closures so a serialized,
+// These mirror @tabnas/abnf's emitter closures so a serialized,
 // function-free grammar builds the identical `{rule,src,kids}` tree.
 
 // Allocate (when `init`) and/or accumulate matched terminals' src.

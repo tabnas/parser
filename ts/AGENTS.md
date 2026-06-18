@@ -64,6 +64,6 @@ claim against `src/` and `package.json` before writing.
   json-plugin, and `test/utility.test.js` runs the `utility-*.tsv`
   ones. Prefer adding a shared fixture over a one-off assertion when
   the case is expressible as input → output.
-- Companion plugins (`@tabnas/bnf`, `@tabnas/debug`) live in separate
+- Companion plugins (`@tabnas/abnf`, `@tabnas/debug`) live in separate
   repos — don't reintroduce grammar or debug tooling into this
   package.

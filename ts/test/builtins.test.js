@@ -4,7 +4,7 @@
 // Engine-owned tests for the `$`-builtin stdlib, array-`a` action
 // composition, the `@~/` eager RegExp sentinel, the `$`-namespace
 // reservation, and the builtin config-schema version gate. These do NOT
-// depend on @tabnas/bnf — the engine is self-tested against hand-written
+// depend on @tabnas/abnf — the engine is self-tested against hand-written
 // function-free specs and direct builtin invocation.
 
 const { describe, it } = require('node:test')
@@ -308,16 +308,16 @@ describe('builtins', () => {
   })
 
   // End-to-end: load REAL serialized, function-free grammars (captured
-  // from @tabnas/bnf, but loaded here as static JSON so the engine stays
+  // from @tabnas/abnf, but loaded here as static JSON so the engine stays
   // self-tested) and drive the probe + eager paths through the real
   // ctx.mark/ctx.rewind and lexer machinery — not hand-stubbed.
   describe('serialized grammar round-trip (function-free fixtures)', () => {
-    // Provenance: bnfCompile('top = [ X "@" ] Y\nX = 1*ALPHA\nY = 1*ALPHA',
+    // Provenance: abnfCompile('top = [ X "@" ] Y\nX = 1*ALPHA\nY = 1*ALPHA',
     // {strict:true}) — the canonical optional-prefix `[X D] Y` ambiguity,
     // recognition mode. Carries @probeInit$/@probeDecide$/@probePhase* and
     // an empty ref map.
     const probeSpec = require('./probe-grammar.fixture.json')
-    // Provenance: bnfCompile('g = "hi"', {strict:true}) — a case-
+    // Provenance: abnfCompile('g = "hi"', {strict:true}) — a case-
     // insensitive literal, which serializes its match token as the eager
     // sentinel `@~/^hi/i`.
     const eagerSpec = require('./eager-literal.fixture.json')

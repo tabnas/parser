@@ -34,7 +34,7 @@ const BUILTIN_SCHEMA_VERSION = 2
 // mkNode builds the AST node shape produced by the tree builtins:
 // `{rule?, src, kids}`. `user` rules carry a `rule` tag; others omit it
 // so they flatten into the enclosing user node. MUST stay byte-identical
-// to @tabnas/bnf's mkAstNode (the cross-package AST-shape contract).
+// to @tabnas/abnf's mkAstNode (the cross-package AST-shape contract).
 func mkNode(rule string, kind string) map[string]any {
 	if kind == "user" {
 		return map[string]any{"rule": rule, "src": "", "kids": []any{}}

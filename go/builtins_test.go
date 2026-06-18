@@ -287,7 +287,7 @@ func TestEagerSentinelResolve(t *testing.T) {
 }
 
 func TestUnicodeRegexDialect(t *testing.T) {
-	// JS/TS \uHHHH escapes (the form @tabnas/bnf emits for ABNF char
+	// JS/TS \uHHHH escapes (the form @tabnas/abnf emits for ABNF char
 	// classes) must compile on Go's RE2 via the \x{} rewrite.
 	v := ResolveFuncRefs("@/^[\\u0041-\\u005a]/", nil)
 	re, ok := v.(*regexp.Regexp)
