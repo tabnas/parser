@@ -1075,7 +1075,7 @@ type EagerRegexp struct {
 }
 
 // jsUnicodeEscape matches the JS/TS regex unicode escapes \u{H...} and
-// \uHHHH (the form @tabnas/bnf emits for ABNF char classes, e.g.
+// \uHHHH (the form @tabnas/abnf emits for ABNF char classes, e.g.
 // `[A-Z]`). Go's regexp (RE2) uses \x{H...} instead.
 var jsUnicodeEscape = regexp.MustCompile(`\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})`)
 

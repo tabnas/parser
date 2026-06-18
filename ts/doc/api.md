@@ -320,5 +320,5 @@ The package also exposes subpath exports for direct access to internal
 modules: `@tabnas/parser/lexer`, `@tabnas/parser/utility`, and `@tabnas/parser/error`.
 
 There is no bundled grammar export. Companion grammars and tooling are
-separate packages (`@tabnas/bnf`, `@tabnas/debug`); the strict-JSON
+separate packages (`@tabnas/abnf`, `@tabnas/debug`); the strict-JSON
 grammar used by the tests is the fixture at `test/json-plugin.ts`.

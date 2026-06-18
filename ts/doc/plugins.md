@@ -8,7 +8,7 @@ into the [API reference](api.md) and [options reference](options.md).
 
 The strict-JSON fixture at [`test/json-plugin.ts`](../test/json-plugin.ts)
 is a complete, non-trivial example to read alongside this guide.
-Companion plugins (`@tabnas/bnf`, `@tabnas/debug`) live in their own
+Companion plugins (`@tabnas/abnf`, `@tabnas/debug`) live in their own
 packages.
 
 ## Plugin Structure
@@ -352,5 +352,5 @@ Apply with `tn.use(csvPlugin)` on a bare instance, or via the
 
 If you ship a plugin as its own npm package, the convention is
 `tabnas-<name>` or `@<scope>/tabnas-<name>` (as the companion
-`@tabnas/bnf` and `@tabnas/debug` packages do). The package itself
+`@tabnas/abnf` and `@tabnas/debug` packages do). The package itself
 holds no grammar — yours is the grammar.
