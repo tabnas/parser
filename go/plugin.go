@@ -245,8 +245,15 @@ func (j *Tabnas) registerMatchSpecs(opts *Options) {
 			byName[name] = len(j.parser.Config.CustomMatchers) - 1
 		}
 	}
-	sort.Slice(j.parser.Config.CustomMatchers, func(i, k int) bool {
-		return j.parser.Config.CustomMatchers[i].Priority < j.parser.Config.CustomMatchers[k].Priority
+	// Tie-break equal priorities by name: map iteration order is random,
+	// so without this the order of same-priority matchers would vary
+	// between runs (and between merge directions in (*Tabnas).Merge).
+	sort.SliceStable(j.parser.Config.CustomMatchers, func(i, k int) bool {
+		mi, mk := j.parser.Config.CustomMatchers[i], j.parser.Config.CustomMatchers[k]
+		if mi.Priority != mk.Priority {
+			return mi.Priority < mk.Priority
+		}
+		return mi.Name < mk.Name
 	})
 }
 

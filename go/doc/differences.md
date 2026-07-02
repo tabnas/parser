@@ -108,6 +108,23 @@ Full custom matchers (with lexer ordering control) are available in both via
 | Plugin defaults | `.defaults` property on the function | `UseDefaults(plugin, defaults)` |
 | Option namespacing | Plugin options merged by name | `PluginOptions` / `SetPluginOptions` |
 
+## Merge
+
+Both runtimes implement instance merging (`a.merge(b)` / `a.Merge(b)`)
+with the same commutative semantics: options conflict-check rather than
+override, all rules carry over, shared rules interleave their
+alternates deterministically, and both instances need distinct tags.
+Differences:
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Signature / failure | `merge(other): Tabnas`, throws | `Merge(other *Tabnas) (*Tabnas, error)`, never panics |
+| Named-action (fnref) renaming | fnref keys renamed `@x` → `@<tag>:x` (`$`-builtins kept) | none — Go persists no fnref map (`Grammar()` Ref maps are transient); lifecycle action slices carry the wired handlers |
+| "Non-default" option detection | compared against the shared defaults tree — an explicitly-set default value still merges cleanly | nil/zero field = default; a field explicitly set to the default value on both sides with different values still conflicts (indistinguishable from intent) |
+| Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`) — each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer) — the natural Go equivalent of source equality | 
+| Conditioned-alt dedupe | only when the condition is reference-equal (or absent) | never (a condition cannot be proven identical across closures); unconditioned duplicates are unreachable, so both rules are behavior-safe |
+| Option conflict paths | TS option names (`lex.match.same.make`) | lowercased Go field names, which coincide for most paths (`rule.maxmul`, `lex.match.same.make`) |
+
 ## Go-Specific Features
 
 These are available only in the Go version. They exist for Go client code

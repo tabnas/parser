@@ -76,6 +76,50 @@ child, err := j.Derive(tabnas.Options{
 })
 ```
 
+### `(*Tabnas) Merge(other *Tabnas) (*Tabnas, error)`
+
+Combine this instance's grammar with another's, returning a **new**
+instance; neither original is modified. Commutative: `a.Merge(b)` and
+`b.Merge(a)` produce instances with the same options, the same rule
+alternates in the same order, and the same parse behavior. Returns an
+error (never panics) on conflicts.
+
+Both instances must carry distinct, non-empty `Tag` options; the
+result's tag is the sorted join (e.g. `"A~B"`).
+
+Options merge symmetrically — a field set on only one side (nil/zero
+means "default") merges cleanly; a field set to different values on
+both sides errors with the option path (`merge: conflicting option
+values at rule.maxmul`). Custom tokens and fixed-token sources are
+unified by name (two names claiming one source, or one name claiming
+two non-default sources, error). All rules appear in the result;
+alternates of a rule defined on both sides interleave
+deterministically: token-name order at the first differing position,
+longer sequences before their own prefix, identical sequences by
+complexity (condition first) then group tags. Identical unconditioned
+alts (shared-base-plugin case) are emitted once. Lifecycle actions
+concatenate in tag order; lex matchers order by `(Order, Name)`.
+
+```go
+a := tabnas.Make(tabnas.Options{Tag: "A"})
+at := a.Token("#AT", "@")
+a.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
+	rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tabnas.TinTX}, {at}}})
+})
+
+b := tabnas.Make(tabnas.Options{Tag: "B"})
+pc := b.Token("#PC", "%")
+b.Rule("val", func(rs *tabnas.RuleSpec, p *tabnas.Parser) {
+	rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{tabnas.TinTX}, {pc}}})
+})
+
+ab, err := a.Merge(b)   // val: [TX AT], [TX PC] — parses both forms
+```
+
+Merge is defined over the option trees and per-instance token/rule
+state; matchers appended directly to `Config.CustomMatchers` (rather
+than via `Options.Lex.Match`) do not transfer.
+
 ### `(*Tabnas) SetOptions(opts Options) *Tabnas`
 
 Deep-merge `opts` into the instance and rebuild the configuration.
