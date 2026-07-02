@@ -6,7 +6,9 @@ package tabnas
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -555,5 +557,278 @@ func TestMergeLexMatchers(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("shared matcher entry duplicated: %d", count)
+	}
+}
+
+// --- Grammar-permutation scenario (mirrors ts/test/merge.test.js
+// "merge-permutations"): four small real-world grammars — emails,
+// urls, file paths, semvers — each lexing its form with a match token
+// and building a structured map in its own pushed rule. Merging any
+// 2, 3, or 4 of them must parse the same inputs to the same
+// structured results regardless of merge order. ---
+
+func TestMergeGrammarPermutations(t *testing.T) {
+	// Shared by all four grammars (same code pointer, so merges dedupe
+	// it): hoist the child rule's structured map into val.
+	hoist := StateAction(func(r *Rule, ctx *Context) {
+		if (r.Node == nil || IsUndefined(r.Node)) &&
+			r.Child.Node != nil && !IsUndefined(r.Child.Node) {
+			r.Node = r.Child.Node
+		}
+	})
+
+	makeEmailG := func() *Tabnas {
+		j := Make(Options{Tag: "email", Match: &MatchOptions{
+			Token: map[string]*regexp.Regexp{
+				"#EM": regexp.MustCompile(`^[a-z][a-z0-9._-]*@[a-z0-9.-]+\.[a-z]{2,}`),
+			},
+		}})
+		em := j.Token("#EM")
+		j.Rule("val", func(rs *RuleSpec, p *Parser) {
+			rs.AddBC(hoist)
+			rs.AddOpen(&AltSpec{S: [][]Tin{{em}}, B: 1, P: "email"})
+		})
+		j.Rule("email", func(rs *RuleSpec, p *Parser) {
+			rs.AddBO(func(r *Rule, ctx *Context) {
+				r.Node = map[string]any{"kind": "email"}
+			})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{em}}, A: func(r *Rule, ctx *Context) {
+				parts := strings.SplitN(r.O0.Src, "@", 2)
+				m := r.Node.(map[string]any)
+				m["user"] = parts[0]
+				m["domain"] = parts[1]
+			}})
+		})
+		return j
+	}
+
+	urlRe := regexp.MustCompile(`^([a-z][a-z0-9+.-]*)://([^/\s]+)(/[^\s]*)?`)
+	makeUrlG := func() *Tabnas {
+		j := Make(Options{Tag: "url", Match: &MatchOptions{
+			Token: map[string]*regexp.Regexp{
+				"#UR": regexp.MustCompile(`^[a-z][a-z0-9+.-]*://[^\s]+`),
+			},
+		}})
+		ur := j.Token("#UR")
+		j.Rule("val", func(rs *RuleSpec, p *Parser) {
+			rs.AddBC(hoist)
+			rs.AddOpen(&AltSpec{S: [][]Tin{{ur}}, B: 1, P: "url"})
+		})
+		j.Rule("url", func(rs *RuleSpec, p *Parser) {
+			rs.AddBO(func(r *Rule, ctx *Context) {
+				r.Node = map[string]any{"kind": "url"}
+			})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{ur}}, A: func(r *Rule, ctx *Context) {
+				g := urlRe.FindStringSubmatch(r.O0.Src)
+				m := r.Node.(map[string]any)
+				m["protocol"] = g[1]
+				m["host"] = g[2]
+				if g[3] == "" {
+					m["path"] = "/"
+				} else {
+					m["path"] = g[3]
+				}
+			}})
+		})
+		return j
+	}
+
+	makePathG := func() *Tabnas {
+		j := Make(Options{Tag: "path", Match: &MatchOptions{
+			Token: map[string]*regexp.Regexp{
+				"#FP": regexp.MustCompile(`^/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*`),
+			},
+		}})
+		fp := j.Token("#FP")
+		j.Rule("val", func(rs *RuleSpec, p *Parser) {
+			rs.AddBC(hoist)
+			rs.AddOpen(&AltSpec{S: [][]Tin{{fp}}, B: 1, P: "path"})
+		})
+		j.Rule("path", func(rs *RuleSpec, p *Parser) {
+			rs.AddBO(func(r *Rule, ctx *Context) {
+				r.Node = map[string]any{"kind": "path"}
+			})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{fp}}, A: func(r *Rule, ctx *Context) {
+				var segs []string
+				for _, s := range strings.Split(r.O0.Src, "/") {
+					if s != "" {
+						segs = append(segs, s)
+					}
+				}
+				m := r.Node.(map[string]any)
+				m["base"] = segs[len(segs)-1]
+				m["dir"] = "/" + strings.Join(segs[:len(segs)-1], "/")
+			}})
+		})
+		return j
+	}
+
+	semverRe := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
+	makeSemverG := func() *Tabnas {
+		j := Make(Options{Tag: "semver", Match: &MatchOptions{
+			Token: map[string]*regexp.Regexp{
+				"#SV": regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?`),
+			},
+		}})
+		sv := j.Token("#SV")
+		j.Rule("val", func(rs *RuleSpec, p *Parser) {
+			rs.AddBC(hoist)
+			rs.AddOpen(&AltSpec{S: [][]Tin{{sv}}, B: 1, P: "semver"})
+		})
+		j.Rule("semver", func(rs *RuleSpec, p *Parser) {
+			rs.AddBO(func(r *Rule, ctx *Context) {
+				r.Node = map[string]any{"kind": "semver"}
+			})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{sv}}, A: func(r *Rule, ctx *Context) {
+				g := semverRe.FindStringSubmatch(r.O0.Src)
+				major, _ := strconv.Atoi(g[1])
+				minor, _ := strconv.Atoi(g[2])
+				patch, _ := strconv.Atoi(g[3])
+				m := r.Node.(map[string]any)
+				m["major"] = major
+				m["minor"] = minor
+				m["patch"] = patch
+				m["prerelease"] = g[4]
+			}})
+		})
+		return j
+	}
+
+	input := map[string]string{
+		"email":  "alice@example.com",
+		"url":    "https://example.com/a/b",
+		"path":   "/usr/local/bin/node",
+		"semver": "1.2.3-beta.1",
+	}
+	expected := map[string]map[string]any{
+		"email": {"kind": "email", "user": "alice", "domain": "example.com"},
+		"url": {"kind": "url", "protocol": "https",
+			"host": "example.com", "path": "/a/b"},
+		"path": {"kind": "path", "base": "node", "dir": "/usr/local/bin"},
+		"semver": {"kind": "semver", "major": 1, "minor": 2, "patch": 3,
+			"prerelease": "beta.1"},
+	}
+
+	var permute func(items []string) [][]string
+	permute = func(items []string) [][]string {
+		if len(items) <= 1 {
+			return [][]string{append([]string{}, items...)}
+		}
+		var out [][]string
+		for i := range items {
+			rest := make([]string, 0, len(items)-1)
+			rest = append(rest, items[:i]...)
+			rest = append(rest, items[i+1:]...)
+			for _, p := range permute(rest) {
+				out = append(out, append([]string{items[i]}, p...))
+			}
+		}
+		return out
+	}
+	var subsets func(items []string, k int) [][]string
+	subsets = func(items []string, k int) [][]string {
+		if k == 0 {
+			return [][]string{{}}
+		}
+		if len(items) < k {
+			return nil
+		}
+		var out [][]string
+		for _, s := range subsets(items[1:], k-1) {
+			out = append(out, append([]string{items[0]}, s...))
+		}
+		out = append(out, subsets(items[1:], k)...)
+		return out
+	}
+
+	g := map[string]*Tabnas{
+		"email": makeEmailG(), "url": makeUrlG(),
+		"path": makePathG(), "semver": makeSemverG(),
+	}
+	names := []string{"email", "url", "path", "semver"}
+
+	// Each singleton parses its own input.
+	for _, n := range names {
+		got, err := g[n].Parse(input[n])
+		if err != nil {
+			t.Fatalf("singleton %s: %v", n, err)
+		}
+		if !reflect.DeepEqual(got, map[string]any(expected[n])) {
+			t.Fatalf("singleton %s = %v, want %v", n, got, expected[n])
+		}
+	}
+
+	permCount := 0
+	for k := 2; k <= len(names); k++ {
+		for _, subset := range subsets(names, k) {
+			refKeys := ""
+			for _, perm := range permute(subset) {
+				permCount++
+				// Chained merge in this permutation's order. Merge never
+				// modifies its operands, so the singletons are reusable
+				// across all 60 permutations.
+				merged := g[perm[0]]
+				for _, n := range perm[1:] {
+					var err error
+					merged, err = merged.Merge(g[n])
+					if err != nil {
+						t.Fatalf("merge %v: %v", perm, err)
+					}
+				}
+
+				// Every grammar in the subset parses to the same
+				// structured map as its singleton.
+				inSubset := map[string]bool{}
+				for _, n := range subset {
+					inSubset[n] = true
+					got, err := merged.Parse(input[n])
+					if err != nil {
+						t.Fatalf("parse %s via %v: %v", n, perm, err)
+					}
+					if !reflect.DeepEqual(got, map[string]any(expected[n])) {
+						t.Fatalf("parse %s via %v = %v, want %v",
+							n, perm, got, expected[n])
+					}
+				}
+
+				// Inputs from grammars outside the subset are rejected.
+				for _, n := range names {
+					if !inSubset[n] {
+						if _, err := merged.Parse(input[n]); err == nil {
+							t.Fatalf("input %s should not parse via %v", n, perm)
+						}
+					}
+				}
+
+				// The interleaved alt order is identical for every merge
+				// order of the same grammar subset.
+				keys := strings.Join(mergeAltKeys(merged, "val"), ";")
+				if refKeys == "" {
+					refKeys = keys
+				} else if keys != refKeys {
+					t.Fatalf("alt order differs for %v: %q vs %q",
+						perm, keys, refKeys)
+				}
+			}
+		}
+	}
+
+	// P(4,2) + P(4,3) + P(4,4) = 12 + 24 + 24.
+	if permCount != 60 {
+		t.Fatalf("permutation count = %d, want 60", permCount)
+	}
+
+	// The singletons are still intact after 60 merges.
+	for _, n := range names {
+		got, err := g[n].Parse(input[n])
+		if err != nil {
+			t.Fatalf("singleton %s corrupted by merges: %v", n, err)
+		}
+		if !reflect.DeepEqual(got, map[string]any(expected[n])) {
+			t.Fatalf("singleton %s result changed after merges: %v", n, got)
+		}
+		if len(g[n].RSM()["val"].OpenAlts()) != 1 {
+			t.Fatalf("singleton %s rule alts modified", n)
+		}
 	}
 }

@@ -457,3 +457,252 @@ describe('merge', () => {
   })
 
 })
+
+
+// Four small real-world grammars — emails, urls, file paths, semvers —
+// each lexing its form with a match token and building a structured
+// map in its own pushed rule. Merging any 2, 3, or 4 of them must
+// parse the same inputs to the same structured results regardless of
+// merge order.
+describe('merge-permutations', () => {
+
+  // Shared by all four grammars (same reference, so merges dedupe it):
+  // hoist the child rule's structured map into val.
+  const hoist = (r) => {
+    if (undefined === r.node) {
+      r.node = r.child.node
+    }
+  }
+
+  function makeEmailGrammar() {
+    const tn = new Tabnas({
+      tag: 'email',
+      match: {
+        token: { '#EM': /^[a-z][a-z0-9._-]*@[a-z0-9.-]+\.[a-z]{2,}/ },
+      },
+    })
+    tn.rule('val', (rs) => {
+      rs.bc(hoist)
+      rs.open([{ s: ['#EM'], b: 1, p: 'email' }])
+    })
+    tn.rule('email', (rs) => {
+      rs.bo((r) => (r.node = { kind: 'email' }))
+      rs.open([
+        {
+          s: ['#EM'],
+          a: (r) => {
+            const [user, domain] = r.o0.src.split('@')
+            r.node.user = user
+            r.node.domain = domain
+          },
+        },
+      ])
+    })
+    return tn
+  }
+
+  function makeUrlGrammar() {
+    const tn = new Tabnas({
+      tag: 'url',
+      match: { token: { '#UR': /^[a-z][a-z0-9+.-]*:\/\/[^\s]+/ } },
+    })
+    tn.rule('val', (rs) => {
+      rs.bc(hoist)
+      rs.open([{ s: ['#UR'], b: 1, p: 'url' }])
+    })
+    tn.rule('url', (rs) => {
+      rs.bo((r) => (r.node = { kind: 'url' }))
+      rs.open([
+        {
+          s: ['#UR'],
+          a: (r) => {
+            const m = r.o0.src.match(
+              /^([a-z][a-z0-9+.-]*):\/\/([^/\s]+)(\/[^\s]*)?/,
+            )
+            r.node.protocol = m[1]
+            r.node.host = m[2]
+            r.node.path = m[3] || '/'
+          },
+        },
+      ])
+    })
+    return tn
+  }
+
+  function makePathGrammar() {
+    const tn = new Tabnas({
+      tag: 'path',
+      match: {
+        token: { '#FP': /^\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)*/ },
+      },
+    })
+    tn.rule('val', (rs) => {
+      rs.bc(hoist)
+      rs.open([{ s: ['#FP'], b: 1, p: 'path' }])
+    })
+    tn.rule('path', (rs) => {
+      rs.bo((r) => (r.node = { kind: 'path' }))
+      rs.open([
+        {
+          s: ['#FP'],
+          a: (r) => {
+            const segs = r.o0.src.split('/').filter((s) => s.length)
+            r.node.base = segs[segs.length - 1]
+            r.node.dir = '/' + segs.slice(0, -1).join('/')
+          },
+        },
+      ])
+    })
+    return tn
+  }
+
+  function makeSemverGrammar() {
+    const tn = new Tabnas({
+      tag: 'semver',
+      match: { token: { '#SV': /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?/ } },
+    })
+    tn.rule('val', (rs) => {
+      rs.bc(hoist)
+      rs.open([{ s: ['#SV'], b: 1, p: 'semver' }])
+    })
+    tn.rule('semver', (rs) => {
+      rs.bo((r) => (r.node = { kind: 'semver' }))
+      rs.open([
+        {
+          s: ['#SV'],
+          a: (r) => {
+            const m = r.o0.src.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/)
+            r.node.major = +m[1]
+            r.node.minor = +m[2]
+            r.node.patch = +m[3]
+            r.node.prerelease = m[4] || ''
+          },
+        },
+      ])
+    })
+    return tn
+  }
+
+  const INPUT = {
+    email: 'alice@example.com',
+    url: 'https://example.com/a/b',
+    path: '/usr/local/bin/node',
+    semver: '1.2.3-beta.1',
+  }
+
+  const EXPECTED = {
+    email: { kind: 'email', user: 'alice', domain: 'example.com' },
+    url: {
+      kind: 'url',
+      protocol: 'https',
+      host: 'example.com',
+      path: '/a/b',
+    },
+    path: { kind: 'path', base: 'node', dir: '/usr/local/bin' },
+    semver: {
+      kind: 'semver',
+      major: 1,
+      minor: 2,
+      patch: 3,
+      prerelease: 'beta.1',
+    },
+  }
+
+  function permutations(items) {
+    if (items.length <= 1) {
+      return [items]
+    }
+    const out = []
+    for (let i = 0; i < items.length; i++) {
+      const rest = [...items.slice(0, i), ...items.slice(i + 1)]
+      for (const p of permutations(rest)) {
+        out.push([items[i], ...p])
+      }
+    }
+    return out
+  }
+
+  function subsets(items, k) {
+    if (0 === k) {
+      return [[]]
+    }
+    if (items.length < k) {
+      return []
+    }
+    const [head, ...rest] = items
+    return [
+      ...subsets(rest, k - 1).map((s) => [head, ...s]),
+      ...subsets(rest, k),
+    ]
+  }
+
+
+  it('all-merge-orders-parse-identically', () => {
+    const g = {
+      email: makeEmailGrammar(),
+      url: makeUrlGrammar(),
+      path: makePathGrammar(),
+      semver: makeSemverGrammar(),
+    }
+    const names = Object.keys(g)
+
+    // Each singleton parses its own input.
+    for (const n of names) {
+      assert.deepStrictEqual(g[n].parse(INPUT[n]), EXPECTED[n])
+    }
+
+    let permCount = 0
+    for (let k = 2; k <= names.length; k++) {
+      for (const subset of subsets(names, k)) {
+        let refKeys = null
+        for (const perm of permutations(subset)) {
+          permCount++
+          // Chained merge in this permutation's order. Merge never
+          // modifies its operands, so the singletons are reusable
+          // across all 60 permutations.
+          const merged = perm
+            .map((n) => g[n])
+            .reduce((m, tn) => m.merge(tn))
+
+          // Every grammar in the subset parses to the same structured
+          // map as its singleton, whatever the merge order was.
+          for (const n of subset) {
+            assert.deepStrictEqual(
+              merged.parse(INPUT[n]),
+              EXPECTED[n],
+              `parse ${n} via merge order [${perm}]`,
+            )
+          }
+
+          // Inputs from grammars outside the subset are rejected.
+          for (const n of names.filter((x) => !subset.includes(x))) {
+            assert.throws(
+              () => merged.parse(INPUT[n]),
+              undefined,
+              `input ${n} should not parse via [${perm}]`,
+            )
+          }
+
+          // The interleaved alt order is identical for every merge
+          // order of the same grammar subset.
+          const keys = JSON.stringify(openKeys(merged, 'val'))
+          if (null === refKeys) {
+            refKeys = keys
+          } else {
+            assert.equal(keys, refKeys, `alt order differs for [${perm}]`)
+          }
+        }
+      }
+    }
+
+    // P(4,2) + P(4,3) + P(4,4) = 12 + 24 + 24.
+    assert.equal(permCount, 60)
+
+    // The singletons are still intact after 60 merges.
+    for (const n of names) {
+      assert.deepStrictEqual(g[n].parse(INPUT[n]), EXPECTED[n])
+      assert.equal(g[n].rule('val').def.open.length, 1)
+    }
+  })
+
+})

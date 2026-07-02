@@ -156,6 +156,42 @@ function checkFixedTokenSources(options: Record<string, any>): void {
 }
 
 
+// De-share match.token matcher objects. configure() annotates each
+// matcher (RegExp or function) in place with the instance's `tin$`
+// (utility.ts) — a matcher object shared between the merged options
+// and a source instance would have its annotation overwritten when
+// the merged instance configures, silently corrupting the source's
+// lexer. RegExps are cloned (keeping the user-set `eager$` opt-out);
+// function-form matchers get a delegating wrapper.
+function deshareMatchTokens(options: Record<string, any>): void {
+  const token = options.match?.token
+  if (null == token) {
+    return
+  }
+  const fresh: Record<string, any> = {}
+  for (const name of Object.keys(token)) {
+    const m = token[name]
+    if (m instanceof RegExp) {
+      const re: any = new RegExp(m.source, m.flags)
+      if ((m as any).eager$) {
+        re.eager$ = true
+      }
+      fresh[name] = re
+    } else if ('function' === typeof m) {
+      const wrapped: any = (lex: any, rule: any, tI?: number) =>
+        m(lex, rule, tI)
+      if ((m as any).eager$) {
+        wrapped.eager$ = true
+      }
+      fresh[name] = wrapped
+    } else {
+      fresh[name] = m
+    }
+  }
+  options.match.token = fresh
+}
+
+
 // Rebuild the lex matcher registry with keys inserted in (order, name)
 // order. configure() sorts matchers by `order` with a stable sort, so
 // insertion order decides ties — this makes the merged matcher
@@ -503,6 +539,7 @@ function mergeInstances(
   mergedOptions.tag = tagX + '~' + tagY
 
   checkFixedTokenSources(mergedOptions)
+  deshareMatchTokens(mergedOptions)
   orderLexMatch(mergedOptions)
 
   const xRecords = ruleRecords(x, tagX)
