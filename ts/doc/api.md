@@ -73,6 +73,76 @@ Create a bare instance with `defaults$: false`, `standard$: false`,
 `grammar$: false`. No tokens, no rules, no anything. The starting
 point for entirely custom parsers.
 
+### `tn.merge(other)`
+
+Combine this instance's grammar with another's, returning a **new**
+instance; neither original is modified. The operation is commutative:
+`a.merge(b)` and `b.merge(a)` produce instances with the same options,
+the same rule alternates in the same order, and the same parse
+behavior.
+
+Both instances must carry distinct, non-default `tag` options (throws
+otherwise). The result's tag is the sorted join, e.g. `'A~B'`.
+
+**Options** are deep merged commutatively: a value present in only one
+instance, equal in both, or differing only from the shared defaults
+merges cleanly; a leaf set to *different non-default* values in both
+throws naming the option path
+(`merge: conflicting option values at rule.maxmul`). Two fixed-token
+names claiming the same source string also throw. Lexer matchers
+(`lex.match`) union by name and run in `(order, name)` order, so ties
+are deterministic.
+
+**Rules** from both instances are all present in the result. Alternates
+of a rule defined on both sides are interleaved deterministically
+(each side's alts keep their order relative to each other):
+
+1. at the first differing lookahead position, token-name order decides;
+2. when one token sequence is a prefix of the other, the longer sorts
+   first (so empty-`s` catch-alls sort last);
+3. identical sequences order by complexity — presence of `c`, `e`,
+   `h`, `b`, counters, `a`, `u`, `k`, `p`, `r`, more complex first;
+4. then by `g` group tags; a final tie falls to tag order.
+
+Alts that are *identical* are emitted once — the shared-base-plugin
+case, where both instances installed the same grammar plugin. Fields
+compare by reference or, since each plugin run creates fresh closures,
+by function source text; the source-based comparison applies only to
+unconditioned alts (where the duplicate is unreachable anyway, so the
+dedupe cannot change behavior). Lifecycle handlers dedupe the same way
+— note a handler whose behavior differs *only* through its closure
+environment (e.g. built by a shared helper factory on both sides)
+dedupes to one copy. Token references are translated by name into the
+merged instance's tin space; actions that captured raw tin *values*
+from their source instance are not translatable and should read tokens
+via `ctx.cfg` instead.
+
+**Named actions** (`@ref` entries in each rule's fnref map) are renamed
+with the source instance's tag — `@pairkey` from tag `A` becomes
+`@A:pairkey` — so the two grammars' names cannot collide. `$`-suffixed
+engine builtins stay unprefixed. Already-installed lifecycle handlers
+(`bo`/`ao`/`bc`/`ac`) are carried as installed actions (concatenated in
+tag order, deduped by identity); the renamed `@<tag>:<rule>-<phase>`
+entries never re-trigger lifecycle auto-install. Note that a later
+`@<rule>-<phase>/replace` fnref on a merged rule replaces the
+concatenated handlers from *both* sides.
+
+```js
+const a = new Tabnas({ tag: 'A', fixed: { token: { '#AT': '@' } } })
+a.rule('val', (rs) => rs.open([{ s: ['#TX', '#AT'] }]))
+
+const b = new Tabnas({ tag: 'B', fixed: { token: { '#PC': '%' } } })
+b.rule('val', (rs) => rs.open([{ s: ['#TX', '#PC'] }]))
+
+const ab = a.merge(b)   // val: [TX AT], [TX PC] — parses both forms
+```
+
+Caveats: merge is defined over the option trees and rule maps —
+grammar state injected outside options (direct config mutation,
+hand-appended matchers) does not transfer. Merged instances are
+runtime artifacts: alt actions are carried as resolved functions, so
+the result is not re-serializable to a `GrammarSpec`.
+
 ## Configuration
 
 ### `tn.options`

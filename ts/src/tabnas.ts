@@ -111,6 +111,8 @@ import {
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
 
+import { mergeInstances } from './merge'
+
 
 // Utility bag re-exported on Tabnas.util for plugin convenience.
 const util: Record<string, any> = {
@@ -404,6 +406,21 @@ class Tabnas {
   // parent.
   make(options?: TabnasOptions): Tabnas {
     return new Tabnas(options, this)
+  }
+
+
+  // Combine this instance's grammar with another's, returning a new
+  // instance (both originals are unmodified). Commutative: options are
+  // conflict-checked rather than overridden, shared rules interleave
+  // their alternates deterministically, and each side's named actions
+  // are renamed with its tag as prefix. Both instances must have
+  // distinct `tag` options. See src/merge.ts for the exact semantics.
+  merge(other: Tabnas): Tabnas {
+    return mergeInstances(
+      this,
+      other,
+      (options: TabnasOptions) => new Tabnas(options),
+    )
   }
 
 

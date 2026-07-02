@@ -121,6 +121,32 @@ const trimmed = tn.make({ rule: { exclude: 'experimental' } })
 
 See [`make()`](api.md#tnmakeoptions).
 
+## Combine two grammars
+
+`a.merge(b)` builds a new instance carrying both grammars; the
+originals are untouched and the operation is commutative. Give each
+instance a distinct `tag` — it identifies the grammar, prefixes its
+named actions in the result, and breaks ordering ties.
+
+```js
+const a = new Tabnas({ tag: 'A', fixed: { token: { '#AT': '@' } } })
+a.rule('val', (rs) => rs.open([{ s: ['#TX', '#AT'] }]))
+
+const b = new Tabnas({ tag: 'B', fixed: { token: { '#PC': '%' } } })
+b.rule('val', (rs) => rs.open([{ s: ['#TX', '#PC'] }]))
+
+const ab = a.merge(b)
+ab.parse('x@')                        // grammar A's form
+ab.parse('y%')                        // grammar B's form
+```
+
+Shared rules interleave their alternates deterministically so the
+combined grammar parses unambiguously; options deep-merge, and a
+genuine conflict (both sides set the same option to different
+non-default values) throws naming the option path.
+
+See [`merge()`](api.md#tnmergeother) for the exact ordering rules.
+
 ## Subscribe to lex / rule events
 
 `tn.sub({ lex, rule })` registers observers that fire as the parse
