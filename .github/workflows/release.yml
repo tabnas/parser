@@ -34,7 +34,7 @@ jobs:
 
   publish-npm:
     needs: release-please
-    if: needs.release-please.outputs.ts_release == 'true'
+    if: needs.release-please.outputs.ts_release == 'true' && vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
