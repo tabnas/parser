@@ -47,6 +47,10 @@ type Lex struct {
 	// replacing the map) are picked up by the next parse's Lex.
 	ignoreDense []bool
 
+	// Per-parse intern pool for short string token values (see
+	// internAny). Lazily created on first interned value.
+	intern map[string]any
+
 	// Byte-indexed dispatch tables (see lexTables). Engine-built configs
 	// carry a shared prebuilt set (LexConfig.tables, rebuilt by
 	// buildConfig / SortFixedTokens / Derive); hand-built configs get a
@@ -447,6 +451,29 @@ func NewLex(src string, cfg *LexConfig) *Lex {
 		ignoreDense: ignoreDense,
 		tables:      tables,
 	}
+}
+
+// internMaxLen caps the length of string values that go through the
+// per-parse intern pool: long strings are rarely repeated, so they keep
+// the zero-copy slice instead of paying a lookup.
+const internMaxLen = 32
+
+// internAny returns a canonical boxed value for the string s, cloning
+// the backing bytes on first sight. Repeated occurrences (JSON object
+// keys, enum-like values) then share one string and one boxed interface
+// value — no per-occurrence allocation — and, because the pool stores
+// clones, interned values never pin the parsed source's backing array.
+func (l *Lex) internAny(s string) any {
+	if v, ok := l.intern[s]; ok {
+		return v
+	}
+	c := strings.Clone(s)
+	if l.intern == nil {
+		l.intern = make(map[string]any, 8)
+	}
+	var v any = c
+	l.intern[c] = v
+	return v
 }
 
 // buildLexTables derives the byte-indexed dispatch tables from a config
@@ -1503,11 +1530,15 @@ func (l *Lex) matchString() *Token {
 		return l.bad("unterminated_string", l.pnt.SI, sI)
 	}
 
-	var val string
+	var val any
 	if dirty {
 		val = sb.String()
+	} else if s := src[valStart:valEnd]; len(s) <= internMaxLen {
+		// Clean short strings (typically object keys) are interned:
+		// deduped across the parse and unpinned from the source.
+		val = l.internAny(s)
 	} else {
-		val = src[valStart:valEnd]
+		val = s
 	}
 	ssrc := src[l.pnt.SI:sI]
 	tkn := l.Token("#ST", TinST, val, ssrc)
@@ -1868,7 +1899,14 @@ func (l *Lex) matchText() *Token {
 		return nil
 	}
 
-	var textVal any = msrc
+	// Short unquoted text (typically keys and enum-like values) is
+	// interned: deduped across the parse and unpinned from the source.
+	var textVal any
+	if len(msrc) <= internMaxLen {
+		textVal = l.internAny(msrc)
+	} else {
+		textVal = msrc
+	}
 	// Run text.modify pipeline
 	if len(l.Config.TextModify) > 0 {
 		for _, mod := range l.Config.TextModify {

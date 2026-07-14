@@ -16,7 +16,11 @@ describe('lex', function () {
     let out = []
     do {
       // console.log(out[out.length-1])
-      out.push({ ...lex() })
+      // NOTE: tokens are collected directly (not spread-copied):
+      // Token.src is a prototype accessor (materialized lazily from the
+      // token's span), so it is not an own enumerable property and a
+      // {...tkn} copy would lose it.
+      out.push(lex())
     } while (t.ZZ != out[out.length - 1].tin && t.BD != out[out.length - 1].tin)
     return out.map((t) => st(t))
   }

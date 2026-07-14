@@ -46,10 +46,7 @@ class Rule {
   name = EMPTY                            // Rule name (matches its RuleSpec).
   node: any = null                        // Value node this rule is building.
   state: RuleState = OPEN                 // Current phase: open ('o') or close ('c').
-  n: Counters = Object.create(null)       // Named counters tracked across the rule.
   d = -1                                  // Stack depth at which this rule was pushed.
-  u: Record<string, any> = Object.create(null) // Custom user props (not propagated to children).
-  k: Record<string, any> = Object.create(null) // Custom keep props (propagated via push/replace).
   bo = false                              // Has before-open actions.
   ao = false                              // Has after-open actions.
   bc = false                              // Has before-close actions.
@@ -74,6 +71,28 @@ class Rule {
   _NOTOKEN?: Token
 
   need = 0                                // Reserved counter for grammar/plugin use.
+
+  // Counter (n), user-prop (u), and keep-prop (k) objects are created
+  // lazily on first access — most rules in value-building grammars
+  // never touch them, and three per-rule allocations were measurable
+  // GC pressure. The public r.n / r.u / r.k API is unchanged (the
+  // accessors materialize on demand); engine hot paths read the
+  // non-materializing rawn()/rawu()/rawk() views instead.
+  #n?: Counters
+  #u?: Record<string, any>
+  #k?: Record<string, any>
+
+  get n(): Counters { return (this.#n ??= Object.create(null)) }
+  set n(v: Counters) { this.#n = v }
+  get u(): Record<string, any> { return (this.#u ??= Object.create(null)) }
+  set u(v: Record<string, any>) { this.#u = v }
+  get k(): Record<string, any> { return (this.#k ??= Object.create(null)) }
+  set k(v: Record<string, any>) { this.#k = v }
+
+  // Non-materializing views: undefined until the map has been created.
+  rawn(): Counters | undefined { return this.#n }
+  rawu(): Record<string, any> | undefined { return this.#u }
+  rawk(): Record<string, any> | undefined { return this.#k }
 
   // Internal tracing field — set by the parser when a rule fails.
   why?: string
@@ -122,27 +141,27 @@ class Rule {
   }
 
   eq(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value === limit
   }
 
   lt(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value < limit
   }
 
   gt(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value > limit
   }
 
   lte(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value <= limit
   }
 
   gte(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value >= limit
   }
 
@@ -538,16 +557,17 @@ class RuleSpec {
 
     // Update counters.
     if (alt.n) {
+      const rn = rule.n
       for (let cn in alt.n) {
-        rule.n[cn] =
+        rn[cn] =
           // 0 reverts counter to 0.
           0 === alt.n[cn]
             ? 0
             : // First seen, set to 0.
-            (null == rule.n[cn]
+            (null == rn[cn]
               ? 0
               : // Increment counter.
-              rule.n[cn]) + alt.n[cn]
+              rn[cn]) + alt.n[cn]
       }
     }
 
@@ -610,11 +630,19 @@ class RuleSpec {
       if (rulespec) {
         next = rule.child = makeRule(rulespec, ctx, rule.node)
         next.parent = rule
-        // Copy counters/keeps into the child's constructor-allocated
-        // null-proto objects instead of spreading fresh objects — no
-        // allocation, and the child keeps a null prototype.
-        for (let cn in rule.n) next.n[cn] = rule.n[cn]
-        for (let kn in rule.k) next.k[kn] = rule.k[kn]
+        // Copy counters/keeps through the non-materializing views: a
+        // parent that never touched them costs the child nothing, and
+        // the child's object is created only when there is content.
+        const pn = rule.rawn()
+        if (undefined !== pn) {
+          let nn: Counters | undefined = undefined
+          for (let cn in pn) (nn ??= next.n)[cn] = pn[cn]
+        }
+        const pk = rule.rawk()
+        if (undefined !== pk) {
+          let nk: Record<string, any> | undefined = undefined
+          for (let kn in pk) (nk ??= next.k)[kn] = pk[kn]
+        }
         if (logging) why += 'P`' + alt.p + '`'
       }
       else {
@@ -629,8 +657,16 @@ class RuleSpec {
         next = makeRule(rulespec, ctx, rule.node)
         next.parent = rule.parent
         next.prev = rule
-        for (let cn in rule.n) next.n[cn] = rule.n[cn]
-        for (let kn in rule.k) next.k[kn] = rule.k[kn]
+        const pn = rule.rawn()
+        if (undefined !== pn) {
+          let nn: Counters | undefined = undefined
+          for (let cn in pn) (nn ??= next.n)[cn] = pn[cn]
+        }
+        const pk = rule.rawk()
+        if (undefined !== pk) {
+          let nk: Record<string, any> | undefined = undefined
+          for (let kn in pk) (nk ??= next.k)[kn] = pk[kn]
+        }
         if (logging) why += 'R`' + alt.r + '`'
       }
       else {

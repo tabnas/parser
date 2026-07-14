@@ -544,10 +544,43 @@ type Rule struct {
 	OS int    // Open match count (alias of ON).
 	CS int    // Close match count (alias of CN).
 
+	// N/U/K are allocated lazily: nil until first written (a Go nil-map
+	// READ is safe and returns the zero value, so read-only access needs
+	// no guard). Plugins writing to a fresh rule must go through
+	// EnsureN/EnsureU/EnsureK (or nil-guard themselves) — before v0.3
+	// these maps were always allocated, costing three heap allocations
+	// per rule instance whether or not the grammar used them.
 	N   map[string]int // Named counters tracked across the rule.
 	U   map[string]any // Custom user props (not propagated to children).
 	K   map[string]any // Custom keep props (propagated via push/replace).
 	Why string         // Internal tracing field; set when a rule fails.
+}
+
+// EnsureN returns the rule's named-counter map, allocating it on first
+// use. Required before writing r.N on a fresh rule (nil until written).
+func (r *Rule) EnsureN() map[string]int {
+	if r.N == nil {
+		r.N = make(map[string]int, 4)
+	}
+	return r.N
+}
+
+// EnsureU returns the rule's user-prop map, allocating it on first use.
+// Required before writing r.U on a fresh rule (nil until written).
+func (r *Rule) EnsureU() map[string]any {
+	if r.U == nil {
+		r.U = make(map[string]any, 4)
+	}
+	return r.U
+}
+
+// EnsureK returns the rule's keep-prop map, allocating it on first use.
+// Required before writing r.K on a fresh rule (nil until written).
+func (r *Rule) EnsureK() map[string]any {
+	if r.K == nil {
+		r.K = make(map[string]any, 4)
+	}
+	return r.K
 }
 
 // NoRule is the sentinel "no rule" value; its Node is Undefined (TS NORULE.node === undefined).
@@ -590,13 +623,14 @@ func (r *Rule) Gte(counter string, limit int) bool {
 
 // MakeRule creates a new Rule from a RuleSpec.
 func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
+	// N/U/K stay nil until first written (see the field docs / Ensure
+	// helpers) — most rules in value-building grammars never touch them.
 	r := &Rule{
 		I: ctx.UI, Name: spec.Name, Spec: spec, Node: node,
 		State: OPEN, D: ctx.RSI,
 		Child: NoRule, Parent: NoRule, Prev: NoRule, Next: NoRule,
 		O: nil, ON: 0, C: nil, CN: 0,
 		O0: NoToken, O1: NoToken, C0: NoToken, C1: NoToken,
-		N: make(map[string]int), U: make(map[string]any), K: make(map[string]any),
 	}
 	ctx.UI++
 	return r
@@ -655,28 +689,31 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	// Update counters
-	if alt != nil && alt.N != nil {
+	if alt != nil && alt.N != nil && 0 < len(alt.N) {
+		rn := r.EnsureN()
 		for cn, cv := range alt.N {
 			if cv == 0 {
-				r.N[cn] = 0
+				rn[cn] = 0
 			} else {
-				if _, ok := r.N[cn]; !ok {
-					r.N[cn] = 0
+				if _, ok := rn[cn]; !ok {
+					rn[cn] = 0
 				}
-				r.N[cn] += cv
+				rn[cn] += cv
 			}
 		}
 	}
 
 	// Set custom properties
-	if alt != nil && alt.U != nil {
+	if alt != nil && alt.U != nil && 0 < len(alt.U) {
+		ru := r.EnsureU()
 		for k, v := range alt.U {
-			r.U[k] = v
+			ru[k] = v
 		}
 	}
-	if alt != nil && alt.K != nil {
+	if alt != nil && alt.K != nil && 0 < len(alt.K) {
+		rk := r.EnsureK()
 		for k, v := range alt.K {
-			r.K[k] = v
+			rk[k] = v
 		}
 	}
 
@@ -732,12 +769,16 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next = MakeRule(rulespec, ctx, r.Node)
 				r.Child = next
 				next.Parent = r
-				for k, v := range r.N {
-					next.N[k] = v
+				if len(r.N) > 0 {
+					nn := next.EnsureN()
+					for k, v := range r.N {
+						nn[k] = v
+					}
 				}
 				if len(r.K) > 0 {
+					nk := next.EnsureK()
 					for k, v := range r.K {
-						next.K[k] = v
+						nk[k] = v
 					}
 				}
 			} else {
@@ -753,12 +794,16 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next = MakeRule(rulespec, ctx, r.Node)
 				next.Parent = r.Parent
 				next.Prev = r
-				for k, v := range r.N {
-					next.N[k] = v
+				if len(r.N) > 0 {
+					nn := next.EnsureN()
+					for k, v := range r.N {
+						nn[k] = v
+					}
 				}
 				if len(r.K) > 0 {
+					nk := next.EnsureK()
 					for k, v := range r.K {
-						next.K[k] = v
+						nk[k] = v
 					}
 				}
 			} else {

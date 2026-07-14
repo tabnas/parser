@@ -75,12 +75,20 @@ const makePoint = (...params: ConstructorParameters<typeof Point>) =>
   new Point(...params)
 
 // A single lexed token: numeric token id, JS-typed value, raw source text, and match position.
+//
+// NOTE: `src` is a prototype accessor over a lazily-materialized backing
+// field — matchers that only know the token's span (space, line,
+// comment, quoted-string raw text) defer the substring until someone
+// actually reads it, so ignored tokens never allocate one. Reading
+// tkn.src always yields the correct string; the one observable
+// difference from a plain data property is that `src` is not an OWN
+// enumerable property, so Object.keys(tkn), {...tkn}, and
+// JSON.stringify(tkn) do not include it.
 class Token {
   isToken = true             // Marker discriminating Tokens from other values.
   name = EMPTY               // Token name (e.g. '#NR', '#ST').
   tin: Tin = -1 as Tin       // Numeric token id corresponding to name.
   val: any = undefined       // JS-typed value (e.g. a number for #NR).
-  src = EMPTY                // Raw matching source text.
   sI = -1                    // Source index where the match started.
   rI = -1                    // Row where the match started.
   cI = -1                    // Column where the match started.
@@ -90,18 +98,24 @@ class Token {
   why?: string               // Diagnostic note explaining how the token arose.
   ignored?: Token            // Optional attached ignored token (e.g. space/line/comment).
 
+  #src: string | null | undefined  // Materialized source text (undefined = not yet).
+  #ref?: string                    // Full source backing the [sI, sI+len) span.
+
   constructor(
     name: string,
     tin: Tin,
     val: any,
-    src: string,
+    src: string | undefined,
     pnt: Point,
     use?: any,
     why?: string,
+    ref?: string,
+    len?: number,
   ) {
     this.name = name
     this.tin = tin
-    this.src = src
+    this.#src = src
+    this.#ref = ref
     this.val = val
     this.sI = pnt.sI
     this.rI = pnt.rI
@@ -109,7 +123,21 @@ class Token {
     this.use = use
     this.why = why
 
-    this.len = null == src ? 0 : src.length
+    this.len = null != len ? len : null == src ? 0 : src.length
+  }
+
+  get src(): string {
+    let s = this.#src
+    if (undefined === s) {
+      const ref = this.#ref
+      s = this.#src =
+        undefined === ref ? EMPTY : ref.substring(this.sI, this.sI + this.len)
+    }
+    return s as string
+  }
+
+  set src(s: string) {
+    this.#src = s
   }
 
   resolveVal(rule: Rule, ctx: Context): any {
@@ -683,8 +711,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           aI = scanOut.sI
         }
 
-        let csrc = src.substring(pnt.sI, aI)
-        let tkn = lex.token('#CM', undefined, csrc, pnt)
+        let tkn = lex.token(
+          '#CM', undefined, undefined, pnt,
+          undefined, undefined, aI - pnt.sI)
 
         pnt.sI = aI
         pnt.cI = cI
@@ -729,8 +758,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             }
             cI++
           }
-          let csrc = src.substring(pnt.sI, aI + suffixLen)
-          let tkn = lex.token('#CM', undefined, csrc, pnt)
+          let tkn = lex.token(
+            '#CM', undefined, undefined, pnt,
+            undefined, undefined, aI + suffixLen - pnt.sI)
           pnt.sI = aI + suffixLen
           pnt.rI = rI
           pnt.cI = cI
@@ -746,8 +776,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             aI = scanOut.sI
           }
 
-          let csrc = src.substring(pnt.sI, aI + end.length)
-          let tkn = lex.token('#CM', undefined, csrc, pnt)
+          let tkn = lex.token(
+            '#CM', undefined, undefined, pnt,
+            undefined, undefined, aI + end.length - pnt.sI)
 
           pnt.sI = aI + end.length
           pnt.rI = rI
@@ -1136,7 +1167,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           undefined === buf ? src.substring(startSI + 1, sI) : buf.join(EMPTY)
         sI++
         const tkn = lex.token('#ST', val,
-          src.substring(startSI, sI), pnt)
+          undefined, pnt, undefined, undefined, sI - startSI)
         pnt.sI = sI
         pnt.rI = rI
         pnt.cI = cI + 1
@@ -1286,8 +1317,9 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
         sI++
       }
       if (pnt.sI < sI) {
-        const msrc = src.substring(pnt.sI, sI)
-        const tkn = lex.token('#LN', undefined, msrc, pnt)
+        const tkn = lex.token(
+          '#LN', undefined, undefined, pnt,
+          undefined, undefined, sI - pnt.sI)
         pnt.sI = sI
         pnt.rI = rI
         pnt.cI = 1
@@ -1297,8 +1329,9 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     }
 
     if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
-      const msrc = src.substring(pnt.sI, out.sI)
-      const tkn = lex.token('#LN', undefined, msrc, pnt)
+      const tkn = lex.token(
+        '#LN', undefined, undefined, pnt,
+        undefined, undefined, out.sI - pnt.sI)
       pnt.sI = out.sI
       pnt.rI = out.rI
       pnt.cI = 1
@@ -1318,8 +1351,9 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   return guardedMatcher(cfg.space, function spaceBody(lex) {
     const { pnt, src } = lex
     if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
-      const msrc = src.substring(pnt.sI, out.sI)
-      const tkn = lex.token('#SP', undefined, msrc, pnt)
+      const tkn = lex.token(
+        '#SP', undefined, undefined, pnt,
+        undefined, undefined, out.sI - pnt.sI)
       pnt.sI = out.sI
       pnt.rI = out.rI
       pnt.cI = out.cI
@@ -1396,13 +1430,17 @@ class Lex {
     this.pnt = makePoint(this.src.length)
   }
 
+  // Create a token. Pass `src` when the matcher already holds the
+  // matched text; pass src=undefined with an explicit `len` to defer
+  // the substring to first read (a span over this lexer's source).
   token(
     ref: Tin | string,
     val: any,
-    src: string,
+    src: string | undefined,
     pnt?: Point,
     use?: any,
     why?: string,
+    len?: number,
   ): Token {
     let tin: Tin
     let name: string
@@ -1414,7 +1452,9 @@ class Lex {
       name = tokenize(ref, this.cfg)
     }
 
-    let tkn = makeToken(name, tin, val, src, pnt || this.pnt, use, why)
+    let tkn = makeToken(
+      name, tin, val, src, pnt || this.pnt, use, why, this.src, len,
+    )
 
     return tkn
   }
