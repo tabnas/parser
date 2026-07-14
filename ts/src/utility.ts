@@ -455,6 +455,12 @@ function configure(
     )
   }
 
+  // First-char dispatch table over the matcher pipeline. Built after
+  // the matcher factories (which populate the quote bitmaps and comment
+  // defs the candidate sets need) AND after the config modifiers, so
+  // modifier changes to those structures are reflected in the table.
+  buildLexDispatch(cfg)
+
   // Debug the config - useful for plugin authors.
   if (cfg.debug.print.config) {
     cfg.debug.get_console().dir(cfg, { depth: null })
@@ -667,6 +673,66 @@ function makelog(ctx: Context, meta: any) {
     }
   }
   return ctx.log
+}
+
+// Build the first-char matcher dispatch table (cfg.lex.dispatch): for
+// each char code (plus slot 256 for all non-Latin-1 chars), the ordered
+// subset of cfg.lex.match that could produce a token starting there.
+// Candidate sets are derived structurally per built-in matcher; any
+// matcher that can fire on arbitrary input — the match matcher, the
+// text matcher, custom matchers, or a built-in carrying a check hook —
+// is listed at every slot. Slot 256 always holds the full pipeline.
+// NOTE: like the matcher factories themselves, this snapshot is rebuilt
+// by configure(); mutating matcher-relevant config (fixed tokens, quote
+// chars, check hooks) outside options()/configure() is unsupported.
+function buildLexDispatch(cfg: Config) {
+  const table: LexMatcher[][] = new Array(257)
+  for (let c = 0; c <= 256; c++) table[c] = []
+
+  const all = (mat: LexMatcher) => {
+    for (let c = 0; c <= 256; c++) table[c].push(mat)
+  }
+  const bytes = (mat: LexMatcher, test: (c: number) => boolean) => {
+    for (let c = 0; c < 256; c++) if (test(c)) table[c].push(mat)
+    table[256].push(mat)
+  }
+
+  for (const mat of cfg.lex.match) {
+    const name = (mat as any).matcher
+    if ('fixed' === name && !cfg.fixed.check) {
+      const first: Record<number, boolean> = {}
+      for (const fsrc of keys(cfg.fixed.token)) {
+        if (0 < fsrc.length) {
+          const cc = fsrc.charCodeAt(0)
+          if (cc < 256) first[cc] = true
+        }
+      }
+      bytes(mat, (c) => true === first[c])
+    } else if ('space' === name && !cfg.space.check) {
+      bytes(mat, (c) => 0 !== cfg.space.charsBitmap[c])
+    } else if ('line' === name && !cfg.line.check) {
+      bytes(mat, (c) => 0 !== cfg.line.charsBitmap[c])
+    } else if ('string' === name && !cfg.string.check) {
+      bytes(mat, (c) => 0 !== cfg.string.quoteBitmap[c])
+    } else if ('comment' === name && !cfg.comment.check) {
+      const first: Record<number, boolean> = {}
+      for (const cm of values(cfg.comment.def || {})) {
+        const start = (cm as any).start
+        if ('string' === typeof start && 0 < start.length) {
+          const cc = start.charCodeAt(0)
+          if (cc < 256) first[cc] = true
+        }
+      }
+      bytes(mat, (c) => true === first[c])
+    } else if ('number' === name && !cfg.number.check) {
+      // Sign, dot, digits — the only chars the number ender can start on.
+      bytes(mat, (c) => 43 === c || 45 === c || 46 === c || (48 <= c && c <= 57))
+    } else {
+      all(mat)
+    }
+  }
+
+  cfg.lex.dispatch = table
 }
 
 // Build a source-formatter for debug output: a custom one if configured,

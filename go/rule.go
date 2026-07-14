@@ -740,6 +740,12 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 						next.K[k] = v
 					}
 				}
+			} else {
+				// Unknown rule name: raise unknown_rule instead of
+				// silently ignoring the push (TS parity — rules.ts
+				// throws via unknownRule + bad when the alt fires).
+				markUnknownRule(ctx, pushName)
+				return next
 			}
 		} else if replaceName != "" {
 			rulespec, ok := ctx.RSM[replaceName]
@@ -755,6 +761,9 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 						next.K[k] = v
 					}
 				}
+			} else {
+				markUnknownRule(ctx, replaceName)
+				return next
 			}
 		} else if !isOpen {
 			// Pop
@@ -843,6 +852,24 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 // Supports arbitrary N-token lookahead: an alt's S slice may declare
 // any number of positions (previously capped at 2). Tokens are fetched
 // lazily - position i is only requested after position i-1 matches.
+// markUnknownRule flags an unknown push/replace rule name as a parse
+// error carrying the unknown_rule code and the offending name (TS
+// parity: rules.ts unknownRule token + bad throw). The current
+// lookahead token supplies the source location; it is copied, not
+// mutated, since it may be the shared NoToken sentinel.
+func markUnknownRule(ctx *Context, name string) {
+	at := ctx.T0
+	if at == nil {
+		at = NoToken
+	}
+	ctx.ParseErr = &Token{
+		Name: at.Name, Tin: at.Tin, Val: at.Val, Src: at.Src,
+		SI: at.SI, RI: at.RI, CI: at.CI,
+		Err: "unknown_rule",
+		Use: map[string]any{"rulename": name},
+	}
+}
+
 func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context) (*AltSpec, bool) {
 	if len(alts) == 0 {
 		return nil, false

@@ -955,10 +955,12 @@ func buildConfig(o *Options) *LexConfig {
 		}
 	}
 
-	// Scan specs derive purely from the char sets resolved above (and by
-	// the modifiers), so build them here — the config is then read-only
-	// during parsing instead of being written on first use.
+	// Scan specs and dispatch tables derive purely from the char sets
+	// resolved above (and by the modifiers), so build them here — the
+	// config is then read-only during parsing instead of being written
+	// on first use.
 	cfg.buildScanSpecs()
+	cfg.refreshLexTables()
 
 	return cfg
 }

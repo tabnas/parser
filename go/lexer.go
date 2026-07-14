@@ -46,6 +46,61 @@ type Lex struct {
 	// The exported map stays authoritative: mutations (SetTokenSet, tests
 	// replacing the map) are picked up by the next parse's Lex.
 	ignoreDense []bool
+
+	// Byte-indexed dispatch tables (see lexTables). Engine-built configs
+	// carry a shared prebuilt set (LexConfig.tables, rebuilt by
+	// buildConfig / SortFixedTokens / Derive); hand-built configs get a
+	// fresh per-Lex build in NewLex so direct config mutation before a
+	// parse is always honored.
+	tables *lexTables
+}
+
+// lexTables bundles the byte-indexed lexer dispatch tables derived from
+// a LexConfig:
+//   - text classifies a byte for the unquoted-text scan: textContinue
+//     (plain text), textStop (definitely ends text), textVerify (might
+//     end text — run the full checks).
+//   - fixedFirst marks first bytes of fixed tokens; fixedTin holds the
+//     tin when that byte alone IS a fixed token and no longer token
+//     shares the byte (the common all-single-char case), making the
+//     fixed-token match one array load. Both are populated only when
+//     FixedSorted is non-empty — the standalone-lexer fallback paths
+//     keep their original behavior.
+//   - start holds one bit per matcher class marking bytes that could
+//     START that token kind, so each matcher body rejects a
+//     non-candidate position with a single array load instead of rune
+//     decoding, map probes, or prefix scans. When a class's config set
+//     contains non-ASCII chars, its bit is set on all bytes >= 0x80.
+type lexTables struct {
+	text       [256]uint8
+	fixedFirst [256]bool
+	fixedTin   [256]int32
+	start      [256]uint8
+}
+
+// startTable matcher-class bits.
+const (
+	startSpace   uint8 = 1 << 0
+	startLine    uint8 = 1 << 1
+	startString  uint8 = 1 << 2
+	startComment uint8 = 1 << 3
+)
+
+// textTable byte classes (see Lex.textTable).
+const (
+	textContinue uint8 = 0
+	textStop     uint8 = 1
+	textVerify   uint8 = 2
+)
+
+// Single-byte strings indexed by byte value, built once. Used as the
+// Src of fast-path fixed tokens so no conversion runs per token.
+var asciiByteStr [256]string
+
+func init() {
+	for i := range asciiByteStr {
+		asciiByteStr[i] = string([]byte{byte(i)})
+	}
 }
 
 // LexConfig holds lexer configuration.
@@ -154,6 +209,12 @@ type LexConfig struct {
 	spaceSpec   *ScanSpec
 	lineSpec    *ScanSpec
 	stringSpecs map[rune]*ScanSpec
+
+	// Shared byte-indexed lexer dispatch tables (see lexTables), built
+	// by refreshLexTables from buildConfig, SortFixedTokens, and Derive
+	// so every parse reads them without a per-parse rebuild. Nil for
+	// hand-built configs — NewLex then builds a fresh per-Lex set.
+	tables *lexTables
 
 	// Map/List options
 	MapExtend    bool         // Deep-merge duplicate keys. Default: true.
@@ -325,6 +386,14 @@ func (cfg *LexConfig) SortFixedTokens() {
 		return sorted[i] < sorted[j] // stable tie-break
 	})
 	cfg.FixedSorted = sorted
+	cfg.refreshLexTables()
+}
+
+// refreshLexTables rebuilds the shared byte-indexed dispatch tables.
+// Called wherever the engine mutates table-relevant config (fixed
+// tokens via SortFixedTokens, buildConfig, Derive's ender-char merge).
+func (cfg *LexConfig) refreshLexTables() {
+	cfg.tables = buildLexTables(cfg)
 }
 
 // RebuildMatchTokensSorted projects MatchTokens and MatchTokenFns into
@@ -367,12 +436,162 @@ func NewLex(src string, cfg *LexConfig) *Lex {
 			}
 		}
 	}
+	tables := cfg.tables
+	if tables == nil {
+		tables = buildLexTables(cfg)
+	}
 	return &Lex{
 		Src:         src,
 		pnt:         Point{Len: len(src), SI: 0, RI: 1, CI: 1},
 		Config:      cfg,
 		ignoreDense: ignoreDense,
+		tables:      tables,
 	}
+}
+
+// buildLexTables derives the byte-indexed dispatch tables from a config
+// (see lexTables). Engine paths cache the result on the config
+// (refreshLexTables); NewLex falls back to a fresh build for hand-built
+// configs.
+func buildLexTables(cfg *LexConfig) *lexTables {
+	l := &lexTables{}
+
+	// Non-ASCII stop chars (or multi-byte-leading comment/fixed starters
+	// outside ASCII) force bytes >= 0x80 through the verify path so the
+	// scan advances rune-wise exactly like the original loop.
+	wide := false
+
+	stops := func(on bool, m map[rune]bool) {
+		if !on {
+			return
+		}
+		for r, ok := range m {
+			if !ok {
+				continue
+			}
+			if r < 128 {
+				l.text[r] = textStop
+			} else {
+				wide = true
+			}
+		}
+	}
+	stops(cfg.SpaceLex, cfg.SpaceChars)
+	stops(cfg.LineLex, cfg.LineChars)
+	stops(cfg.StringLex, cfg.StringChars)
+	stops(true, cfg.EnderChars)
+
+	if len(cfg.FixedSorted) > 0 {
+		var multi [256]bool
+		for _, fs := range cfg.FixedSorted {
+			if 0 == len(fs) {
+				continue
+			}
+			b := fs[0]
+			l.fixedFirst[b] = true
+			if 1 < len(fs) {
+				multi[b] = true
+			}
+			if b >= 128 {
+				wide = true
+			}
+		}
+		for _, fs := range cfg.FixedSorted {
+			if 0 == len(fs) {
+				continue
+			}
+			b := fs[0]
+			if 1 == len(fs) {
+				// A single-byte token always terminates text.
+				if b < 128 {
+					l.text[b] = textStop
+				}
+				// Direct-emit only when no longer token shares the byte
+				// (longest-match-first must win otherwise).
+				if !multi[b] && b < 128 {
+					l.fixedTin[b] = int32(cfg.FixedTokens[fs])
+				}
+			} else if b < 128 && l.text[b] == textContinue {
+				// Multi-byte token: might terminate text — verify.
+				l.text[b] = textVerify
+			}
+		}
+	} else {
+		// Standalone-lexer fallback: matchText hardcodes these six stop
+		// chars when no sorted fixed list exists (fixedFirst/fixedTin
+		// stay empty so the fixed matcher keeps its map-lookup fallback).
+		for _, c := range "{}[]:," {
+			l.text[c] = textStop
+		}
+	}
+
+	if cfg.CommentLex {
+		mark := func(s string) {
+			if 0 == len(s) {
+				return
+			}
+			if b := s[0]; b >= 128 {
+				wide = true
+			} else if l.text[b] == textContinue {
+				l.text[b] = textVerify
+			}
+		}
+		for _, cs := range cfg.CommentLine {
+			mark(cs)
+		}
+		for _, cb := range cfg.CommentBlock {
+			mark(cb[0])
+		}
+	}
+
+	if wide {
+		for c := 128; c < 256; c++ {
+			if l.text[c] == textContinue {
+				l.text[c] = textVerify
+			}
+		}
+	}
+
+	// Matcher-class start bits (see startTable). Class flags (SpaceLex
+	// etc.) are NOT baked in — guardedMatch consults them per call.
+	starts := func(bit uint8, m map[rune]bool) {
+		wideSet := false
+		for r, ok := range m {
+			if !ok {
+				continue
+			}
+			if r < 128 {
+				l.start[r] |= bit
+			} else if !wideSet {
+				wideSet = true
+				for c := 128; c < 256; c++ {
+					l.start[c] |= bit
+				}
+			}
+		}
+	}
+	starts(startSpace, cfg.SpaceChars)
+	starts(startLine, cfg.LineChars)
+	starts(startString, cfg.StringChars)
+	markComment := func(s string) {
+		if 0 == len(s) {
+			return
+		}
+		if b := s[0]; b < 128 {
+			l.start[b] |= startComment
+		} else {
+			for c := 128; c < 256; c++ {
+				l.start[c] |= startComment
+			}
+		}
+	}
+	for _, cs := range cfg.CommentLine {
+		markComment(cs)
+	}
+	for _, cb := range cfg.CommentBlock {
+		markComment(cb[0])
+	}
+	return l
 }
 
 // Cursor returns a pointer to the lexer's current position.
@@ -744,11 +963,23 @@ func (l *Lex) matchFixed() *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
 	}
-	remaining := l.Src[l.pnt.SI:]
 
 	// Use sorted list for longest-match-first. Fall back to single-char lookup
 	// if no sorted list (e.g. standalone lexer without Tabnas).
 	if len(l.Config.FixedSorted) > 0 {
+		c := l.Src[l.pnt.SI]
+		// First-byte reject: most positions are not fixed tokens.
+		if !l.tables.fixedFirst[c] {
+			return nil
+		}
+		// Single-byte token with no longer competitor: direct emit.
+		if tin := Tin(l.tables.fixedTin[c]); tin != 0 {
+			tkn := l.Token(l.tinNameFor(tin), tin, nil, asciiByteStr[c])
+			l.pnt.SI++
+			l.pnt.CI++
+			return tkn
+		}
+		remaining := l.Src[l.pnt.SI:]
 		for _, fs := range l.Config.FixedSorted {
 			if strings.HasPrefix(remaining, fs) {
 				tin := l.Config.FixedTokens[fs]
@@ -775,6 +1006,9 @@ func (l *Lex) matchFixed() *Token {
 
 // matchSpace matches space and tab characters.
 func (l *Lex) matchSpace() *Token {
+	if l.pnt.SI >= l.pnt.Len || l.tables.start[l.Src[l.pnt.SI]]&startSpace == 0 {
+		return nil
+	}
 	var out ScanOut
 	if !Scan(l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config.spaceRunSpec(), &out) {
 		return nil
@@ -791,6 +1025,9 @@ func (l *Lex) matchSpace() *Token {
 func (l *Lex) matchLine() *Token {
 	sI := l.pnt.SI
 	if sI >= l.pnt.Len {
+		return nil
+	}
+	if l.tables.start[l.Src[sI]]&startLine == 0 {
 		return nil
 	}
 	ch, chSize := utf8.DecodeRuneInString(l.Src[sI:])
@@ -834,6 +1071,9 @@ func (l *Lex) matchLine() *Token {
 
 // matchComment matches line comments (# //) and block comments (/* */).
 func (l *Lex) matchComment() *Token {
+	if l.pnt.SI >= l.pnt.Len || l.tables.start[l.Src[l.pnt.SI]]&startComment == 0 {
+		return nil
+	}
 	fwd := l.Src[l.pnt.SI:]
 
 	// Line comments
@@ -1007,6 +1247,9 @@ func commentSuffixFnMatch(lex *Lex, fI int, fn LexMatcher) int {
 // matchString matches quoted strings: "...", '...', `...`
 func (l *Lex) matchString() *Token {
 	if l.pnt.SI >= l.pnt.Len {
+		return nil
+	}
+	if l.tables.start[l.Src[l.pnt.SI]]&startString == 0 {
 		return nil
 	}
 	q, qlen := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
@@ -1487,16 +1730,25 @@ func (l *Lex) matchNumber() *Token {
 	l.pnt.CI += sI - start
 
 	// subMatchFixed: push trailing fixed token as lookahead (matching TS)
-	if l.pnt.SI < l.pnt.Len {
-		remaining := src[l.pnt.SI:]
-		for _, fs := range l.Config.FixedSorted {
-			if strings.HasPrefix(remaining, fs) {
-				tin := l.Config.FixedTokens[fs]
-				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
-				l.pnt.SI += len(fs)
-				l.pnt.CI += utf8.RuneCountInString(fs)
+	if l.pnt.SI < l.pnt.Len && len(l.Config.FixedSorted) > 0 {
+		if c := src[l.pnt.SI]; l.tables.fixedFirst[c] {
+			if tin := Tin(l.tables.fixedTin[c]); tin != 0 {
+				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, asciiByteStr[c])
+				l.pnt.SI++
+				l.pnt.CI++
 				l.tokens = append(l.tokens, fixTkn)
-				break
+			} else {
+				remaining := src[l.pnt.SI:]
+				for _, fs := range l.Config.FixedSorted {
+					if strings.HasPrefix(remaining, fs) {
+						tin := l.Config.FixedTokens[fs]
+						fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
+						l.pnt.SI += len(fs)
+						l.pnt.CI += utf8.RuneCountInString(fs)
+						l.tokens = append(l.tokens, fixTkn)
+						break
+					}
+				}
 			}
 		}
 	}
@@ -1515,58 +1767,26 @@ func (l *Lex) matchText() *Token {
 	sI := l.pnt.SI
 	start := sI
 
+	// Table-driven scan: one byte load and branch per plain text byte
+	// (the dominant case), with the full per-position checks reserved
+	// for bytes that might terminate the run (multi-byte fixed tokens,
+	// comment starters, non-ASCII when the config has non-ASCII stops).
 	for sI < len(src) {
-		ch, chSize := utf8.DecodeRuneInString(src[sI:])
-		// Stop at characters whose lexers are enabled, plus ender chars.
-		// When a lexer is disabled, its characters are consumed as text
-		// (matching TS behavior where enderRE is built conditionally).
-		if (l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
-			(l.Config.LineLex && l.Config.LineChars[ch]) ||
-			(l.Config.StringLex && l.Config.StringChars[ch]) ||
-			l.Config.EnderChars[ch] {
-			break
-		}
-		// Stop at fixed tokens (check multi-char first, then single-char)
-		rest := src[sI:]
-		isFixed := false
-		for _, fs := range l.Config.FixedSorted {
-			if strings.HasPrefix(rest, fs) {
-				isFixed = true
-				break
+		switch l.tables.text[src[sI]] {
+		case textContinue:
+			sI++
+			continue
+		case textStop:
+			// Definite terminator (enabled space/line/string char, ender
+			// char, or single-byte fixed token).
+		default: // textVerify
+			if !l.textStopBase(sI) && !l.textStopComment(sI) {
+				_, chSize := utf8.DecodeRuneInString(src[sI:])
+				sI += chSize
+				continue
 			}
 		}
-		if !isFixed && len(l.Config.FixedSorted) == 0 {
-			// Fallback for standalone lexer without sorted list
-			if ch == '{' || ch == '}' || ch == '[' || ch == ']' ||
-				ch == ':' || ch == ',' {
-				isFixed = true
-			}
-		}
-		if isFixed {
-			break
-		}
-		// Comment starters (only stop text if comment lexing is enabled)
-		if l.Config.CommentLex {
-			isComment := false
-			for _, cs := range l.Config.CommentLine {
-				if strings.HasPrefix(rest, cs) {
-					isComment = true
-					break
-				}
-			}
-			if !isComment {
-				for _, cb := range l.Config.CommentBlock {
-					if strings.HasPrefix(rest, cb[0]) {
-						isComment = true
-						break
-					}
-				}
-			}
-			if isComment {
-				break
-			}
-		}
-		sI += chSize
+		break
 	}
 
 	if sI == start {
@@ -1661,20 +1881,28 @@ func (l *Lex) matchText() *Token {
 
 	// Check if next chars are a fixed token - push as lookahead (subMatchFixed)
 	if l.pnt.SI < l.pnt.Len {
-		remaining := src[l.pnt.SI:]
-		matched := false
-		for _, fs := range l.Config.FixedSorted {
-			if strings.HasPrefix(remaining, fs) {
-				tin := l.Config.FixedTokens[fs]
-				fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
-				l.pnt.SI += len(fs)
-				l.pnt.CI += utf8.RuneCountInString(fs)
-				l.tokens = append(l.tokens, fixTkn)
-				matched = true
-				break
+		if len(l.Config.FixedSorted) > 0 {
+			if c := src[l.pnt.SI]; l.tables.fixedFirst[c] {
+				if tin := Tin(l.tables.fixedTin[c]); tin != 0 {
+					fixTkn := l.Token(l.tinNameFor(tin), tin, nil, asciiByteStr[c])
+					l.pnt.SI++
+					l.pnt.CI++
+					l.tokens = append(l.tokens, fixTkn)
+				} else {
+					remaining := src[l.pnt.SI:]
+					for _, fs := range l.Config.FixedSorted {
+						if strings.HasPrefix(remaining, fs) {
+							tin := l.Config.FixedTokens[fs]
+							fixTkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
+							l.pnt.SI += len(fs)
+							l.pnt.CI += utf8.RuneCountInString(fs)
+							l.tokens = append(l.tokens, fixTkn)
+							break
+						}
+					}
+				}
 			}
-		}
-		if !matched && len(l.Config.FixedSorted) == 0 {
+		} else {
 			// Fallback for standalone lexer
 			nextCh := string(src[l.pnt.SI])
 			if tin, ok := l.Config.FixedTokens[nextCh]; ok {
@@ -1728,67 +1956,88 @@ func isHexDigitByte(ch byte) bool {
 	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
 }
 
+// textStopBase reports whether the rune at pos terminates a text run for
+// reasons other than a comment starter: enabled space/line/string chars,
+// ender chars, and fixed tokens (with the standalone-lexer fallback).
+func (l *Lex) textStopBase(pos int) bool {
+	src := l.Src
+	ch, _ := utf8.DecodeRuneInString(src[pos:])
+	// Stop at characters whose lexers are enabled, plus ender chars.
+	// When a lexer is disabled, its characters are consumed as text
+	// (matching TS behavior where enderRE is built conditionally).
+	if (l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
+		(l.Config.LineLex && l.Config.LineChars[ch]) ||
+		(l.Config.StringLex && l.Config.StringChars[ch]) ||
+		l.Config.EnderChars[ch] {
+		return true
+	}
+	// Stop at fixed tokens (longest-first sorted list).
+	rest := src[pos:]
+	for _, fs := range l.Config.FixedSorted {
+		if strings.HasPrefix(rest, fs) {
+			return true
+		}
+	}
+	// Fallback for standalone lexer without sorted list.
+	if len(l.Config.FixedSorted) == 0 {
+		if ch == '{' || ch == '}' || ch == '[' || ch == ']' ||
+			ch == ':' || ch == ',' {
+			return true
+		}
+	}
+	return false
+}
+
+// textStopComment reports whether a comment starts at pos (only when
+// comment lexing is enabled).
+func (l *Lex) textStopComment(pos int) bool {
+	if !l.Config.CommentLex {
+		return false
+	}
+	rest := l.Src[pos:]
+	for _, cs := range l.Config.CommentLine {
+		if strings.HasPrefix(rest, cs) {
+			return true
+		}
+	}
+	for _, cb := range l.Config.CommentBlock {
+		if strings.HasPrefix(rest, cb[0]) {
+			return true
+		}
+	}
+	return false
+}
+
 // isTextChar returns true if the character can continue a text token,
 // checking against the config's fixed tokens, ender chars, and string chars.
 func (l *Lex) isTextChar(pos int) bool {
 	if pos >= len(l.Src) {
 		return false
 	}
-	ch := l.Src[pos]
-	r, _ := utf8.DecodeRuneInString(l.Src[pos:])
-	// Only treat whitespace as non-text if the corresponding lexer is enabled.
-	if l.Config.SpaceLex && l.Config.SpaceChars[r] {
+	switch l.tables.text[l.Src[pos]] {
+	case textContinue:
+		return true
+	case textStop:
 		return false
 	}
-	if l.Config.LineLex && l.Config.LineChars[r] {
-		return false
-	}
-	// Check string chars (only when string lexing is enabled)
-	if l.Config.StringLex && l.Config.StringChars[r] {
-		return false
-	}
-	// Check ender chars
-	if l.Config.EnderChars[r] {
-		return false
-	}
-	// Check fixed tokens (multi-char: check if any fixed token starts here)
-	rest := l.Src[pos:]
-	for _, fs := range l.Config.FixedSorted {
-		if strings.HasPrefix(rest, fs) {
-			return false
-		}
-	}
-	// Fallback for standalone lexer without sorted list
-	if len(l.Config.FixedSorted) == 0 {
-		if ch == '{' || ch == '}' || ch == '[' || ch == ']' ||
-			ch == ':' || ch == ',' {
-			return false
-		}
-	}
-	return true
+	// textVerify: comment starters do NOT stop isTextChar (only
+	// isFollowingText considers them), so check the base stops only.
+	return !l.textStopBase(pos)
 }
 
 // isFollowingText returns true if the character at pos would continue a text token,
 // taking into account fixed tokens, ender chars, and comment starters.
 func (l *Lex) isFollowingText(pos int) bool {
-	if !l.isTextChar(pos) {
+	if pos >= len(l.Src) {
 		return false
 	}
-	// Comment starters are not text continuation (only when comment lexing is enabled)
-	if l.Config.CommentLex {
-		rest := l.Src[pos:]
-		for _, cs := range l.Config.CommentLine {
-			if strings.HasPrefix(rest, cs) {
-				return false
-			}
-		}
-		for _, cb := range l.Config.CommentBlock {
-			if strings.HasPrefix(rest, cb[0]) {
-				return false
-			}
-		}
+	switch l.tables.text[l.Src[pos]] {
+	case textContinue:
+		return true
+	case textStop:
+		return false
 	}
-	return true
+	return !l.textStopBase(pos) && !l.textStopComment(pos)
 }
 
 func parseHexInt(s string) int {

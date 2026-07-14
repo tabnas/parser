@@ -522,6 +522,8 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		for k, v := range j.parser.Config.EnderChars {
 			child.parser.Config.EnderChars[k] = v
 		}
+		// Ender chars feed the text dispatch table — rebuild it.
+		child.parser.Config.refreshLexTables()
 	}
 
 	// Copy parent's escape map.
@@ -674,6 +676,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// the new config values. This matches TS behavior where configure()
 	// mutates the existing config and parser.clone() inherits the rules.
 	*j.parser.Config = *cfg
+
+	// The dispatch tables baked into cfg by buildConfig predate the
+	// preserved-state merges above (fixed tokens, ender chars) — rebuild
+	// them against the final merged config.
+	j.parser.Config.refreshLexTables()
 
 	// Do NOT rebuild grammar — preserve existing RSM with user rule
 	// modifications. This matches TS where options() calls parser.clone()

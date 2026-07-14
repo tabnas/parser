@@ -32,7 +32,6 @@ import { OPEN, CLOSE, BEFORE, AFTER, EMPTY, STRING } from './types'
 import {
   S,
   defprop,
-  filterRules,
   getpath,
   isarr,
   modlist,
@@ -175,7 +174,6 @@ class AltMatch {
 const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
   new AltMatch(...params)
 
-const PALT: AltMatch = makeAltMatch() // Only one alt object is created.
 const EMPTY_ALT = makeAltMatch()
 
 // Reusable definition of a rule: its open/close alternates, lifecycle actions, and collated token lookups.
@@ -318,7 +316,11 @@ class RuleSpec {
 
     alts = this.def[altState] = modlist(alts, mods)
 
-    filterRules(this, this.cfg)
+    // NOTE: an earlier version called filterRules(this, this.cfg) here
+    // and discarded the result — filterRules clones the whole def, so
+    // that was pure dead work on every open()/close() call. Rule
+    // include/exclude filtering happens at clone/derive time
+    // (Parser.clone), not during registration.
 
     this.norm()
 
@@ -498,6 +500,12 @@ class RuleSpec {
     let why = is_open ? 'O' : 'C'
     let def = this.def
 
+    // The `why` trace string is only appended to when logging is active:
+    // the concatenations otherwise allocate rope fragments on every step
+    // that nothing reads (error formatting uses token.why, not rule.why,
+    // and the Go runtime never builds a per-step why at all).
+    const logging = null != ctx.log
+
     // Match alternates for current state.
     let alts = (is_open ? def.open : def.close) as NormAltSpec[]
 
@@ -520,7 +528,7 @@ class RuleSpec {
     // Custom alt handler.
     if (alt.h) {
       alt = alt.h(rule, ctx, alt, next) || alt
-      why += 'H'
+      if (logging) why += 'H'
     }
 
     // Unconditional error.
@@ -588,7 +596,7 @@ class RuleSpec {
     // (breaks Expr! - fix first)
     // Action call.
     if (alt.a) {
-      why += 'A'
+      if (logging) why += 'A'
       let tout = alt.a(rule, ctx, alt)
       if (tout && tout.isToken && tout.err) {
         return this.bad(tout, rule, ctx, { is_open })
@@ -602,11 +610,12 @@ class RuleSpec {
       if (rulespec) {
         next = rule.child = makeRule(rulespec, ctx, rule.node)
         next.parent = rule
-        next.n = { ...rule.n }
-        if (0 < Object.keys(rule.k).length) {
-          next.k = { ...rule.k }
-        }
-        why += 'P`' + alt.p + '`'
+        // Copy counters/keeps into the child's constructor-allocated
+        // null-proto objects instead of spreading fresh objects — no
+        // allocation, and the child keeps a null prototype.
+        for (let cn in rule.n) next.n[cn] = rule.n[cn]
+        for (let kn in rule.k) next.k[kn] = rule.k[kn]
+        if (logging) why += 'P`' + alt.p + '`'
       }
       else {
         return this.bad(this.unknownRule(ctx.t0, alt.p), rule, ctx, { is_open })
@@ -620,11 +629,9 @@ class RuleSpec {
         next = makeRule(rulespec, ctx, rule.node)
         next.parent = rule.parent
         next.prev = rule
-        next.n = { ...rule.n }
-        if (0 < Object.keys(rule.k).length) {
-          next.k = { ...rule.k }
-        }
-        why += 'R`' + alt.r + '`'
+        for (let cn in rule.n) next.n[cn] = rule.n[cn]
+        for (let kn in rule.k) next.k[kn] = rule.k[kn]
+        if (logging) why += 'R`' + alt.r + '`'
       }
       else {
         return this.bad(this.unknownRule(ctx.t0, alt.r), rule, ctx, { is_open })
@@ -713,7 +720,11 @@ function parse_alts(
   rule: Rule,
   ctx: Context,
 ): AltMatch {
-  let out = PALT
+  // One reusable scratch AltMatch per parse Context (allocated lazily on
+  // first use). Scoping it to the Context — rather than a module global —
+  // keeps nested parses (a plugin action parsing with another instance)
+  // from clobbering each other's in-flight match state.
+  let out: AltMatch = (ctx as any)._palt || ((ctx as any)._palt = makeAltMatch())
   out.b = 0 // Backtrack n tokens.
   out.p = EMPTY // Push named rule onto stack.
   out.r = EMPTY // Replace current rule with named rule.
@@ -731,15 +742,9 @@ function parse_alts(
   let bitAA = 1 << (t.AA - 1)
 
   let IGNORE = ctx.cfg.tokenSetTins.IGNORE
-
-  function next(r: Rule, alt: NormAltSpec, altI: number, tI: number) {
-    let tkn
-    do {
-      tkn = lex.next(r, alt, altI, tI)
-      ctx.tC++
-    } while (IGNORE[tkn.tin])
-    return tkn
-  }
+  let BD = t.BD
+  // S (the string table) is shadowed by alt.S inside the loop below.
+  const UNEXPECTED = S.unexpected
 
   // TODO: replace with lookup map
   let len = alts.length
@@ -769,7 +774,28 @@ function parse_alts(
     for (let i = 0; i < sN; i++) {
       let tkn = tbuf[i]
       if (null == tkn || NOTOKEN === tkn) {
-        tkn = tbuf[i] = next(rule, alt, altI, i)
+        // Fetch (skipping IGNORE tokens) inline — a nested function here
+        // would allocate a closure on every parse_alts call.
+        do {
+          tkn = lex.next(rule, alt, altI, i)
+          ctx.tC++
+          // Bad tokens abort the parse with their own error code
+          // (formerly done by the badlex wrapper around lex.next).
+          if (BD === tkn.tin) {
+            let details: any = {}
+            if (null != tkn.use) {
+              details.use = tkn.use
+            }
+            throw new TabnasError(
+              tkn.why || UNEXPECTED,
+              details,
+              tkn,
+              rule,
+              ctx,
+            )
+          }
+        } while (IGNORE[tkn.tin])
+        tbuf[i] = tkn
       }
 
       const Si = S ? S[i] : null

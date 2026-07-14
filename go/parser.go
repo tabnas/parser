@@ -292,7 +292,22 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 				return nil, p.finishErr(lex.Err, ctx, meta, nil)
 			}
 			tkn := ctx.ParseErr
-			return nil, p.finishErr(p.makeError("unexpected", tkn.Src, src, tkn.SI, tkn.RI, tkn.CI), ctx, meta, tkn)
+			// Use the token's own error code when set (TS parity:
+			// rules.ts bad() throws TabnasError(tkn.err || unexpected))
+			// and inject its Use details (e.g. rulename) into the
+			// message and hint templates.
+			code := "unexpected"
+			if tkn.Err != "" {
+				code = tkn.Err
+			}
+			je := p.makeError(code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI)
+			if len(tkn.Use) > 0 {
+				je.Detail = StrInject(je.Detail, tkn.Use)
+				if je.Hint != "" {
+					je.Hint = StrInject(je.Hint, tkn.Use)
+				}
+			}
+			return nil, p.finishErr(je, ctx, meta, tkn)
 		}
 
 		kI++

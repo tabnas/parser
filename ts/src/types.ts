@@ -291,6 +291,11 @@ export type Config = {
   }
   lex: {                            // Lexer state.
     match: LexMatcher[]             // Active matchers, in priority order.
+    // First-char dispatch: dispatch[charCode] (or [256] for non-Latin-1
+    // positions) lists the matchers, in priority order, that could
+    // produce a token starting with that char. Built by configure();
+    // when absent the full match list runs at every position.
+    dispatch?: LexMatcher[][]
     empty: boolean                  // Allow empty source.
     emptyResult: any                // Result for empty source.
   }
