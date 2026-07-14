@@ -14,7 +14,7 @@ import (
 )
 
 // Version is the current version of the tabnas Go module.
-const Version = "0.3.1"
+const Version = "0.3.2"
 
 // Error message templates matching TypeScript defaults (ts/src/defaults.ts).
 // Values are injected with StrInject using {key} placeholders.
