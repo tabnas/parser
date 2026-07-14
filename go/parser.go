@@ -215,7 +215,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		T1:       NoToken,
 		V1:       NoToken,
 		V2:       NoToken,
-		RS:       make([]*Rule, len(src)*4+100),
+		// Rule stack depth is bounded by grammar nesting (typically tens),
+		// not source length; start small and let the push path's append
+		// grow it (matches the TS runtime, whose stack starts empty).
+		RS:       make([]*Rule, 0, 64),
 		RSI:      0,
 		RSM:      p.RSM,
 		Meta:     meta,
@@ -433,8 +436,12 @@ func parseNumericString(s string) float64 {
 		}
 	}
 
-	// Remove underscores if present
-	ns = strings.ReplaceAll(s, "_", "")
+	// Remove underscores, scanning first: most numbers have none and
+	// skip the ReplaceAll machinery entirely.
+	ns = s
+	if strings.IndexByte(s, '_') >= 0 {
+		ns = strings.ReplaceAll(s, "_", "")
+	}
 
 	val, err := strconv.ParseFloat(ns, 64)
 	if err != nil {

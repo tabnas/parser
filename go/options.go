@@ -684,8 +684,13 @@ func buildConfig(o *Options) *LexConfig {
 	cfg.NumberBin = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Bin }), true)
 	if o.Number != nil && o.Number.Sep != "" {
 		cfg.NumberSep = rune(o.Number.Sep[0])
-	} else if o.Number != nil && o.Number.Sep == "" && o.Number.Lex != nil {
-		// Explicitly set to empty: disable separator
+	} else if o.Number != nil {
+		// Number options present with an empty Sep: separator disabled,
+		// as the NumberOptions.Sep doc promises ("Empty string disables").
+		// This branch previously also required Number.Lex to be set, so a
+		// plugin passing {Sep: ""} alone (the strict-JSON grammars do)
+		// silently kept the '_' default and paid separator comparisons
+		// on every number byte plus ReplaceAll scans per number token.
 		cfg.NumberSep = 0
 	} else {
 		cfg.NumberSep = '_'
@@ -949,6 +954,11 @@ func buildConfig(o *Options) *LexConfig {
 			mod(cfg, o)
 		}
 	}
+
+	// Scan specs derive purely from the char sets resolved above (and by
+	// the modifiers), so build them here — the config is then read-only
+	// during parsing instead of being written on first use.
+	cfg.buildScanSpecs()
 
 	return cfg
 }

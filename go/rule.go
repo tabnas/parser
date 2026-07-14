@@ -892,59 +892,66 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			matched = i + 1
 		}
 
-		// Record the matched tokens on the rule. Both the generalized
-		// O / ON (or C / CN) slice form and the legacy O0 / O1 / OS
-		// (or C0 / C1 / CS) two-slot form are populated.
-		if isOpen {
-			if cap(rule.O) < matched {
-				rule.O = make([]*Token, matched)
-			} else {
-				rule.O = rule.O[:matched]
-			}
-			for i := 0; i < matched; i++ {
-				rule.O[i] = ctx.T[i]
-			}
-			rule.ON = matched
-			rule.OS = matched
-			if matched >= 1 {
-				rule.O0 = rule.O[0]
-			} else {
-				rule.O0 = NoToken
-			}
-			if matched >= 2 {
-				rule.O1 = rule.O[1]
-			} else {
-				rule.O1 = NoToken
-			}
-		} else {
-			if cap(rule.C) < matched {
-				rule.C = make([]*Token, matched)
-			} else {
-				rule.C = rule.C[:matched]
-			}
-			for i := 0; i < matched; i++ {
-				rule.C[i] = ctx.T[i]
-			}
-			rule.CN = matched
-			rule.CS = matched
-			if matched >= 1 {
-				rule.C0 = rule.C[0]
-			} else {
-				rule.C0 = NoToken
-			}
-			if matched >= 2 {
-				rule.C1 = rule.C[1]
-			} else {
-				rule.C1 = NoToken
-			}
-		}
-
-		if cond && alt.C != nil {
-			cond = alt.C(rule, ctx)
-		}
-
+		// Record the matched tokens on the rule only when the tin
+		// positions matched — failed alts left partial recordings that
+		// nothing could observe (custom conditions only run on tin
+		// success, and the next candidate overwrote them). Recording
+		// stays BEFORE the alt.C condition call so conditions observe
+		// the candidate's tokens. Both the generalized O / ON (or C /
+		// CN) slice form and the legacy O0 / O1 / OS (or C0 / C1 / CS)
+		// two-slot form are populated.
 		if cond {
-			return alt, true
+			if isOpen {
+				if cap(rule.O) < matched {
+					rule.O = make([]*Token, matched)
+				} else {
+					rule.O = rule.O[:matched]
+				}
+				for i := 0; i < matched; i++ {
+					rule.O[i] = ctx.T[i]
+				}
+				rule.ON = matched
+				rule.OS = matched
+				if matched >= 1 {
+					rule.O0 = rule.O[0]
+				} else {
+					rule.O0 = NoToken
+				}
+				if matched >= 2 {
+					rule.O1 = rule.O[1]
+				} else {
+					rule.O1 = NoToken
+				}
+			} else {
+				if cap(rule.C) < matched {
+					rule.C = make([]*Token, matched)
+				} else {
+					rule.C = rule.C[:matched]
+				}
+				for i := 0; i < matched; i++ {
+					rule.C[i] = ctx.T[i]
+				}
+				rule.CN = matched
+				rule.CS = matched
+				if matched >= 1 {
+					rule.C0 = rule.C[0]
+				} else {
+					rule.C0 = NoToken
+				}
+				if matched >= 2 {
+					rule.C1 = rule.C[1]
+				} else {
+					rule.C1 = NoToken
+				}
+			}
+
+			if alt.C != nil {
+				cond = alt.C(rule, ctx)
+			}
+
+			if cond {
+				return alt, true
+			}
 		}
 	}
 

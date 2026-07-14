@@ -40,6 +40,12 @@ type Lex struct {
 	tokens []*Token   // Lookahead token queue.
 	Config *LexConfig // Resolved lexer configuration.
 	Err    error      // First error encountered during lexing.
+
+	// Dense Tin-indexed snapshot of Config.IgnoreSet, taken at NewLex so
+	// the per-token IGNORE check is an array load instead of a map probe.
+	// The exported map stays authoritative: mutations (SetTokenSet, tests
+	// replacing the map) are picked up by the next parse's Lex.
+	ignoreDense []bool
 }
 
 // LexConfig holds lexer configuration.
@@ -255,7 +261,11 @@ type LexCheckResult struct {
 	Token *Token // The token to return (nil means "no match").
 }
 
-// DefaultLexConfig returns the default lexer configuration matching tabnas defaults.
+// DefaultLexConfig returns the default lexer configuration matching tabnas
+// defaults. Scan specs are NOT pre-built here: direct consumers (NewParser,
+// standalone lexing, tests) may still mutate the char sets before first
+// use, so the lazy spec getters handle this path. Engine-built configs go
+// through buildConfig, which does pre-build them.
 func DefaultLexConfig() *LexConfig {
 	return &LexConfig{
 		FixedLex:   true,
@@ -342,10 +352,26 @@ func (cfg *LexConfig) RebuildMatchTokensSorted() {
 
 // NewLex creates a new lexer for the given source.
 func NewLex(src string, cfg *LexConfig) *Lex {
+	var ignoreDense []bool
+	if len(cfg.IgnoreSet) > 0 {
+		max := 0
+		for tin, on := range cfg.IgnoreSet {
+			if on && max < tin {
+				max = tin
+			}
+		}
+		ignoreDense = make([]bool, max+1)
+		for tin, on := range cfg.IgnoreSet {
+			if on && 0 <= tin {
+				ignoreDense[tin] = true
+			}
+		}
+	}
 	return &Lex{
-		Src:    src,
-		pnt:    Point{Len: len(src), SI: 0, RI: 1, CI: 1},
-		Config: cfg,
+		Src:         src,
+		pnt:         Point{Len: len(src), SI: 0, RI: 1, CI: 1},
+		Config:      cfg,
+		ignoreDense: ignoreDense,
 	}
 }
 
@@ -432,8 +458,9 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: tkn.SI, RI: tkn.RI, CI: tkn.CI}
 		}
-		// Skip IGNORE tokens (per-instance set, matching TS cfg.tokenSetTins.IGNORE)
-		if l.Config.IgnoreSet[tkn.Tin] {
+		// Skip IGNORE tokens (per-instance set, matching TS
+		// cfg.tokenSetTins.IGNORE; dense snapshot built in NewLex)
+		if tin := tkn.Tin; 0 <= tin && tin < len(l.ignoreDense) && l.ignoreDense[tin] {
 			continue
 		}
 		return tkn
@@ -996,6 +1023,14 @@ func (l *Lex) matchString() *Token {
 	srclen := len(src)
 	foundClose := false
 
+	// Escape-free fast path: until the first escape or replace is
+	// processed the value is the contiguous source run [valStart, valEnd)
+	// and the segment Builder is never touched, so a clean quoted string
+	// costs no copy beyond the token itself (a source view, like #TX).
+	valStart := sI
+	valEnd := -1
+	dirty := false
+
 	// Per-quote body spec (TS buildStringBodySpec): consumes plain body
 	// chars and, for multi-line quotes, line chars (advancing rI and
 	// resetting cI). Stops on the quote, the escape char, replace chars,
@@ -1005,7 +1040,9 @@ func (l *Lex) matchString() *Token {
 
 	for sI < srclen {
 		if Scan(src, sI, rI, cI, bodySpec, &out) {
-			sb.WriteString(src[sI:out.SI])
+			if dirty {
+				sb.WriteString(src[sI:out.SI])
+			}
 			sI, rI, cI = out.SI, out.RI, out.CI
 			if sI >= srclen {
 				break
@@ -1017,6 +1054,7 @@ func (l *Lex) matchString() *Token {
 
 		// End quote
 		if c == q {
+			valEnd = sI
 			sI += csize
 			foundClose = true
 			break
@@ -1024,6 +1062,10 @@ func (l *Lex) matchString() *Token {
 
 		// Escape character (all string types process escapes)
 		if c == l.Config.EscapeChar {
+			if !dirty {
+				dirty = true
+				sb.WriteString(src[valStart:sI])
+			}
 			sI += csize
 			cI++
 			if sI >= srclen {
@@ -1197,6 +1239,10 @@ func (l *Lex) matchString() *Token {
 
 		// Replace chars stop the body run; emit the replacement.
 		if rep, ok := l.Config.StringReplace[c]; ok {
+			if !dirty {
+				dirty = true
+				sb.WriteString(src[valStart:sI])
+			}
 			sb.WriteString(rep)
 			sI += csize
 			continue
@@ -1214,7 +1260,12 @@ func (l *Lex) matchString() *Token {
 		return l.bad("unterminated_string", l.pnt.SI, sI)
 	}
 
-	val := sb.String()
+	var val string
+	if dirty {
+		val = sb.String()
+	} else {
+		val = src[valStart:valEnd]
+	}
 	ssrc := src[l.pnt.SI:sI]
 	tkn := l.Token("#ST", TinST, val, ssrc)
 	l.pnt.SI = sI
@@ -1270,8 +1321,8 @@ func (l *Lex) matchNumber() *Token {
 		}
 		msrc := src[start:sI]
 		nstr := msrc
-		if l.Config.NumberSep != 0 {
-			nstr = strings.ReplaceAll(nstr, string(l.Config.NumberSep), "")
+		if sep := l.Config.NumberSep; sep != 0 && strings.ContainsRune(nstr, sep) {
+			nstr = strings.ReplaceAll(nstr, string(sep), "")
 		}
 		num := parseNumericString(nstr)
 		if num != num { // NaN check
@@ -1298,8 +1349,8 @@ func (l *Lex) matchNumber() *Token {
 		}
 		msrc := src[start:sI]
 		nstr := msrc
-		if l.Config.NumberSep != 0 {
-			nstr = strings.ReplaceAll(nstr, string(l.Config.NumberSep), "")
+		if sep := l.Config.NumberSep; sep != 0 && strings.ContainsRune(nstr, sep) {
+			nstr = strings.ReplaceAll(nstr, string(sep), "")
 		}
 		num := parseNumericString(nstr)
 		if num != num {
@@ -1326,8 +1377,8 @@ func (l *Lex) matchNumber() *Token {
 		}
 		msrc := src[start:sI]
 		nstr := msrc
-		if l.Config.NumberSep != 0 {
-			nstr = strings.ReplaceAll(nstr, string(l.Config.NumberSep), "")
+		if sep := l.Config.NumberSep; sep != 0 && strings.ContainsRune(nstr, sep) {
+			nstr = strings.ReplaceAll(nstr, string(sep), "")
 		}
 		num := parseNumericString(nstr)
 		if num != num {
@@ -1422,8 +1473,8 @@ func (l *Lex) matchNumber() *Token {
 	}
 
 	nstr := msrc
-	if l.Config.NumberSep != 0 {
-		nstr = strings.ReplaceAll(nstr, string(l.Config.NumberSep), "")
+	if sep := l.Config.NumberSep; sep != 0 && strings.ContainsRune(nstr, sep) {
+		nstr = strings.ReplaceAll(nstr, string(sep), "")
 	}
 
 	num := parseNumericString(nstr)

@@ -924,6 +924,7 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let numberSep = mcfg.sep
     ? regexp('g', escre(mcfg.sepChar as string))
     : undefined
+  let numberSepChar = mcfg.sep ? (mcfg.sepChar as string) : undefined
 
   return guardedMatcher(cfg.number, function numberBody(lex) {
     mcfg = cfg.number
@@ -949,7 +950,12 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
           if (cfg.value.lex && undefined !== (vs = valdef[msrc])) {
             out = lex.token('#VL', vs.val, msrc, pnt)
           } else {
-            let nstr = numberSep ? msrc.replace(numberSep, '') : msrc
+            // Strip separators only when one is actually present — the
+            // common separator-free number skips the regex replace.
+            let nstr =
+              numberSep && numberSepChar && -1 < msrc.indexOf(numberSepChar)
+                ? msrc.replace(numberSep, '')
+                : msrc
             let num = +nstr
 
             // Special case: +- prefix of 0x... format
@@ -1066,7 +1072,11 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     let rI = startRI
     let cI = pnt.cI + 1
 
-    const buf: string[] = []
+    // Escape-free fast path: until the first escape or replace is
+    // processed the value is the contiguous source run after the opening
+    // quote, so no segment buffer is needed — a clean quoted string costs
+    // one substring instead of a buffer, per-segment pushes, and a join.
+    let buf: string[] | undefined = undefined
 
     while (sI < srclen) {
       // Body scan: consume body chars (and multi-line newlines)
@@ -1076,7 +1086,8 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       sI = scanOut.sI
       rI = scanOut.rI
       cI = scanOut.cI
-      if (bodyStart < sI) buf.push(src.substring(bodyStart, sI))
+      if (undefined !== buf && bodyStart < sI)
+        buf.push(src.substring(bodyStart, sI))
 
       if (sI >= srclen) break
 
@@ -1084,8 +1095,10 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 
       // Closing quote — string done.
       if (cc === qcc) {
+        const val =
+          undefined === buf ? src.substring(startSI + 1, sI) : buf.join(EMPTY)
         sI++
-        const tkn = lex.token('#ST', buf.join(EMPTY),
+        const tkn = lex.token('#ST', val,
           src.substring(startSI, sI), pnt)
         pnt.sI = sI
         pnt.rI = rI
@@ -1097,6 +1110,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       if (hasReplace) {
         const rs = replaceCodeMap[cc]
         if (rs !== undefined) {
+          if (undefined === buf) {
+            buf = startSI + 1 < sI ? [src.substring(startSI + 1, sI)] : []
+          }
           buf.push(rs)
           sI++
           cI++
@@ -1106,6 +1122,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 
       // Escape sequence.
       if (cc === escCharCode) {
+        if (undefined === buf) {
+          buf = startSI + 1 < sI ? [src.substring(startSI + 1, sI)] : []
+        }
         sI++
         cI++
         if (sI >= srclen) break // unterminated

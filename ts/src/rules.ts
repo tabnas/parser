@@ -790,21 +790,28 @@ function parse_alts(
       matched = i + 1
     }
 
-    if (is_open) {
-      rule.oN = matched
-      for (let i = 0; i < matched; i++) rule.o[i] = tbuf[i]
-      // Clear trailing slots so stale matches from earlier alts are
-      // not observed via rule.o[i] / rule.o0 / rule.o1 accessors.
-      for (let i = matched; i < rule.o.length; i++) rule.o[i] = NOTOKEN
-    } else {
-      rule.cN = matched
-      for (let i = 0; i < matched; i++) rule.c[i] = tbuf[i]
-      for (let i = matched; i < rule.c.length; i++) rule.c[i] = NOTOKEN
-    }
+    // Record matched tokens only when the tin positions matched —
+    // failed alts left partial recordings that nothing could observe
+    // (custom conditions only run on tin success, and the next
+    // candidate overwrote them). Recording stays BEFORE the alt.c
+    // condition call so conditions observe the candidate's tokens.
+    if (cond) {
+      if (is_open) {
+        rule.oN = matched
+        for (let i = 0; i < matched; i++) rule.o[i] = tbuf[i]
+        // Clear trailing slots so stale matches from earlier alts are
+        // not observed via rule.o[i] / rule.o0 / rule.o1 accessors.
+        for (let i = matched; i < rule.o.length; i++) rule.o[i] = NOTOKEN
+      } else {
+        rule.cN = matched
+        for (let i = 0; i < matched; i++) rule.c[i] = tbuf[i]
+        for (let i = matched; i < rule.c.length; i++) rule.c[i] = NOTOKEN
+      }
 
-    // Optional custom condition
-    if (cond && alt.c) {
-      cond = cond && alt.c(rule, ctx, out)
+      // Optional custom condition
+      if (alt.c) {
+        cond = alt.c(rule, ctx, out)
+      }
     }
 
     if (cond) {

@@ -262,3 +262,18 @@ func (cfg *LexConfig) stringBodySpec(q rune) *ScanSpec {
 	cfg.stringSpecs[q] = spec
 	return spec
 }
+
+// buildScanSpecs eagerly populates the per-config scan specs (space run,
+// line run, one string-body spec per configured quote char). Called at
+// config build time so the shared LexConfig is read-only while parsing —
+// left to the lazy getters above, the specs are built during the FIRST
+// parse, which races when concurrent parses share one instance. The lazy
+// getters remain as a fallback for hand-built configs.
+func (cfg *LexConfig) buildScanSpecs() {
+	cfg.spaceSpec = BuildCharRunSpec(cfg.SpaceChars)
+	cfg.lineSpec = BuildLineRunSpec(cfg.LineChars, cfg.RowChars)
+	cfg.stringSpecs = make(map[rune]*ScanSpec, len(cfg.StringChars))
+	for q := range cfg.StringChars {
+		cfg.stringSpecs[q] = BuildStringBodySpec(cfg, q)
+	}
+}
