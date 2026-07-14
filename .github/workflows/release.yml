@@ -1,40 +1,20 @@
-# Staged release workflow (Release Please pilot) — promoted via
-# tabnas/admin rollout/apply-ci-folders.sh.
-#
-# ts/ releases tag vX.Y.Z and publish @tabnas/parser to npm via Trusted
-# Publishing (OIDC) — configure the trusted publisher once at
-# npmjs.com > @tabnas/parser > Settings > Trusted publisher
-# (repo: tabnas/parser, workflow: release.yml) before the first release.
-# go/ releases tag go/vX.Y.Z; the Go module proxy picks tags up directly.
-#
-# TODO(pilot): wire the go Version const bump via release-please
-# extra-files generic updater annotations.
-
+# Publishes this repo's @tabnas/* package to npm on a `ts/v*` tag push, via
+# GitHub OIDC Trusted Publishing (no token). Build + test run against the
+# ALREADY-PUBLISHED dependency versions — this is the publication gate, so a
+# failing build never publishes. Go modules are served by the module proxy
+# from the `go/v*` tag directly (no step here). Driven by admin/publish.sh.
 name: release
 
 on:
   push:
-    branches: [ main ]
+    tags:
+      - 'ts/v*'
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
-    outputs:
-      ts_release: ${{ steps.rp.outputs['ts--release_created'] }}
-    steps:
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
-        id: rp
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
   publish-npm:
-    needs: release-please
-    if: needs.release-please.outputs.ts_release == 'true' && vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -45,10 +25,11 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Publish @tabnas/parser (OIDC trusted publishing)
+      - name: Build, test, and publish to npm (OIDC trusted publishing)
         working-directory: ts
         run: |
           npm install -g npm@latest
           npm i
           npm run build --if-present
+          npm test
           npm publish --access public
