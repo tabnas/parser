@@ -32,7 +32,6 @@ import { OPEN, CLOSE, BEFORE, AFTER, EMPTY, STRING } from './types'
 import {
   S,
   defprop,
-  filterRules,
   getpath,
   isarr,
   modlist,
@@ -47,10 +46,7 @@ class Rule {
   name = EMPTY                            // Rule name (matches its RuleSpec).
   node: any = null                        // Value node this rule is building.
   state: RuleState = OPEN                 // Current phase: open ('o') or close ('c').
-  n: Counters = Object.create(null)       // Named counters tracked across the rule.
   d = -1                                  // Stack depth at which this rule was pushed.
-  u: Record<string, any> = Object.create(null) // Custom user props (not propagated to children).
-  k: Record<string, any> = Object.create(null) // Custom keep props (propagated via push/replace).
   bo = false                              // Has before-open actions.
   ao = false                              // Has after-open actions.
   bc = false                              // Has before-close actions.
@@ -75,6 +71,28 @@ class Rule {
   _NOTOKEN?: Token
 
   need = 0                                // Reserved counter for grammar/plugin use.
+
+  // Counter (n), user-prop (u), and keep-prop (k) objects are created
+  // lazily on first access — most rules in value-building grammars
+  // never touch them, and three per-rule allocations were measurable
+  // GC pressure. The public r.n / r.u / r.k API is unchanged (the
+  // accessors materialize on demand); engine hot paths read the
+  // non-materializing rawn()/rawu()/rawk() views instead.
+  #n?: Counters
+  #u?: Record<string, any>
+  #k?: Record<string, any>
+
+  get n(): Counters { return (this.#n ??= Object.create(null)) }
+  set n(v: Counters) { this.#n = v }
+  get u(): Record<string, any> { return (this.#u ??= Object.create(null)) }
+  set u(v: Record<string, any>) { this.#u = v }
+  get k(): Record<string, any> { return (this.#k ??= Object.create(null)) }
+  set k(v: Record<string, any>) { this.#k = v }
+
+  // Non-materializing views: undefined until the map has been created.
+  rawn(): Counters | undefined { return this.#n }
+  rawu(): Record<string, any> | undefined { return this.#u }
+  rawk(): Record<string, any> | undefined { return this.#k }
 
   // Internal tracing field — set by the parser when a rule fails.
   why?: string
@@ -123,27 +141,27 @@ class Rule {
   }
 
   eq(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value === limit
   }
 
   lt(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value < limit
   }
 
   gt(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value > limit
   }
 
   lte(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value <= limit
   }
 
   gte(counter: string, limit: number = 0): boolean {
-    let value = this.n[counter]
+    let value = this.#n?.[counter]
     return null == value || value >= limit
   }
 
@@ -175,7 +193,6 @@ class AltMatch {
 const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
   new AltMatch(...params)
 
-const PALT: AltMatch = makeAltMatch() // Only one alt object is created.
 const EMPTY_ALT = makeAltMatch()
 
 // Reusable definition of a rule: its open/close alternates, lifecycle actions, and collated token lookups.
@@ -318,7 +335,11 @@ class RuleSpec {
 
     alts = this.def[altState] = modlist(alts, mods)
 
-    filterRules(this, this.cfg)
+    // NOTE: an earlier version called filterRules(this, this.cfg) here
+    // and discarded the result — filterRules clones the whole def, so
+    // that was pure dead work on every open()/close() call. Rule
+    // include/exclude filtering happens at clone/derive time
+    // (Parser.clone), not during registration.
 
     this.norm()
 
@@ -498,6 +519,12 @@ class RuleSpec {
     let why = is_open ? 'O' : 'C'
     let def = this.def
 
+    // The `why` trace string is only appended to when logging is active:
+    // the concatenations otherwise allocate rope fragments on every step
+    // that nothing reads (error formatting uses token.why, not rule.why,
+    // and the Go runtime never builds a per-step why at all).
+    const logging = null != ctx.log
+
     // Match alternates for current state.
     let alts = (is_open ? def.open : def.close) as NormAltSpec[]
 
@@ -520,7 +547,7 @@ class RuleSpec {
     // Custom alt handler.
     if (alt.h) {
       alt = alt.h(rule, ctx, alt, next) || alt
-      why += 'H'
+      if (logging) why += 'H'
     }
 
     // Unconditional error.
@@ -530,16 +557,17 @@ class RuleSpec {
 
     // Update counters.
     if (alt.n) {
+      const rn = rule.n
       for (let cn in alt.n) {
-        rule.n[cn] =
+        rn[cn] =
           // 0 reverts counter to 0.
           0 === alt.n[cn]
             ? 0
             : // First seen, set to 0.
-            (null == rule.n[cn]
+            (null == rn[cn]
               ? 0
               : // Increment counter.
-              rule.n[cn]) + alt.n[cn]
+              rn[cn]) + alt.n[cn]
       }
     }
 
@@ -588,7 +616,7 @@ class RuleSpec {
     // (breaks Expr! - fix first)
     // Action call.
     if (alt.a) {
-      why += 'A'
+      if (logging) why += 'A'
       let tout = alt.a(rule, ctx, alt)
       if (tout && tout.isToken && tout.err) {
         return this.bad(tout, rule, ctx, { is_open })
@@ -602,11 +630,20 @@ class RuleSpec {
       if (rulespec) {
         next = rule.child = makeRule(rulespec, ctx, rule.node)
         next.parent = rule
-        next.n = { ...rule.n }
-        if (0 < Object.keys(rule.k).length) {
-          next.k = { ...rule.k }
+        // Copy counters/keeps through the non-materializing views: a
+        // parent that never touched them costs the child nothing, and
+        // the child's object is created only when there is content.
+        const pn = rule.rawn()
+        if (undefined !== pn) {
+          let nn: Counters | undefined = undefined
+          for (let cn in pn) (nn ??= next.n)[cn] = pn[cn]
         }
-        why += 'P`' + alt.p + '`'
+        const pk = rule.rawk()
+        if (undefined !== pk) {
+          let nk: Record<string, any> | undefined = undefined
+          for (let kn in pk) (nk ??= next.k)[kn] = pk[kn]
+        }
+        if (logging) why += 'P`' + alt.p + '`'
       }
       else {
         return this.bad(this.unknownRule(ctx.t0, alt.p), rule, ctx, { is_open })
@@ -620,11 +657,17 @@ class RuleSpec {
         next = makeRule(rulespec, ctx, rule.node)
         next.parent = rule.parent
         next.prev = rule
-        next.n = { ...rule.n }
-        if (0 < Object.keys(rule.k).length) {
-          next.k = { ...rule.k }
+        const pn = rule.rawn()
+        if (undefined !== pn) {
+          let nn: Counters | undefined = undefined
+          for (let cn in pn) (nn ??= next.n)[cn] = pn[cn]
         }
-        why += 'R`' + alt.r + '`'
+        const pk = rule.rawk()
+        if (undefined !== pk) {
+          let nk: Record<string, any> | undefined = undefined
+          for (let kn in pk) (nk ??= next.k)[kn] = pk[kn]
+        }
+        if (logging) why += 'R`' + alt.r + '`'
       }
       else {
         return this.bad(this.unknownRule(ctx.t0, alt.r), rule, ctx, { is_open })
@@ -713,7 +756,11 @@ function parse_alts(
   rule: Rule,
   ctx: Context,
 ): AltMatch {
-  let out = PALT
+  // One reusable scratch AltMatch per parse Context (allocated lazily on
+  // first use). Scoping it to the Context — rather than a module global —
+  // keeps nested parses (a plugin action parsing with another instance)
+  // from clobbering each other's in-flight match state.
+  let out: AltMatch = (ctx as any)._palt || ((ctx as any)._palt = makeAltMatch())
   out.b = 0 // Backtrack n tokens.
   out.p = EMPTY // Push named rule onto stack.
   out.r = EMPTY // Replace current rule with named rule.
@@ -731,15 +778,9 @@ function parse_alts(
   let bitAA = 1 << (t.AA - 1)
 
   let IGNORE = ctx.cfg.tokenSetTins.IGNORE
-
-  function next(r: Rule, alt: NormAltSpec, altI: number, tI: number) {
-    let tkn
-    do {
-      tkn = lex.next(r, alt, altI, tI)
-      ctx.tC++
-    } while (IGNORE[tkn.tin])
-    return tkn
-  }
+  let BD = t.BD
+  // S (the string table) is shadowed by alt.S inside the loop below.
+  const UNEXPECTED = S.unexpected
 
   // TODO: replace with lookup map
   let len = alts.length
@@ -769,7 +810,28 @@ function parse_alts(
     for (let i = 0; i < sN; i++) {
       let tkn = tbuf[i]
       if (null == tkn || NOTOKEN === tkn) {
-        tkn = tbuf[i] = next(rule, alt, altI, i)
+        // Fetch (skipping IGNORE tokens) inline — a nested function here
+        // would allocate a closure on every parse_alts call.
+        do {
+          tkn = lex.next(rule, alt, altI, i)
+          ctx.tC++
+          // Bad tokens abort the parse with their own error code
+          // (formerly done by the badlex wrapper around lex.next).
+          if (BD === tkn.tin) {
+            let details: any = {}
+            if (null != tkn.use) {
+              details.use = tkn.use
+            }
+            throw new TabnasError(
+              tkn.why || UNEXPECTED,
+              details,
+              tkn,
+              rule,
+              ctx,
+            )
+          }
+        } while (IGNORE[tkn.tin])
+        tbuf[i] = tkn
       }
 
       const Si = S ? S[i] : null
@@ -790,21 +852,28 @@ function parse_alts(
       matched = i + 1
     }
 
-    if (is_open) {
-      rule.oN = matched
-      for (let i = 0; i < matched; i++) rule.o[i] = tbuf[i]
-      // Clear trailing slots so stale matches from earlier alts are
-      // not observed via rule.o[i] / rule.o0 / rule.o1 accessors.
-      for (let i = matched; i < rule.o.length; i++) rule.o[i] = NOTOKEN
-    } else {
-      rule.cN = matched
-      for (let i = 0; i < matched; i++) rule.c[i] = tbuf[i]
-      for (let i = matched; i < rule.c.length; i++) rule.c[i] = NOTOKEN
-    }
+    // Record matched tokens only when the tin positions matched —
+    // failed alts left partial recordings that nothing could observe
+    // (custom conditions only run on tin success, and the next
+    // candidate overwrote them). Recording stays BEFORE the alt.c
+    // condition call so conditions observe the candidate's tokens.
+    if (cond) {
+      if (is_open) {
+        rule.oN = matched
+        for (let i = 0; i < matched; i++) rule.o[i] = tbuf[i]
+        // Clear trailing slots so stale matches from earlier alts are
+        // not observed via rule.o[i] / rule.o0 / rule.o1 accessors.
+        for (let i = matched; i < rule.o.length; i++) rule.o[i] = NOTOKEN
+      } else {
+        rule.cN = matched
+        for (let i = 0; i < matched; i++) rule.c[i] = tbuf[i]
+        for (let i = matched; i < rule.c.length; i++) rule.c[i] = NOTOKEN
+      }
 
-    // Optional custom condition
-    if (cond && alt.c) {
-      cond = cond && alt.c(rule, ctx, out)
+      // Optional custom condition
+      if (alt.c) {
+        cond = alt.c(rule, ctx, out)
+      }
     }
 
     if (cond) {

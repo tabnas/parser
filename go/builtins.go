@@ -139,8 +139,9 @@ func asAnySlice(v any) []any {
 
 // @probeInit$ — phase-0 open: mark the position and reset phase.
 func builtinProbeInit(r *Rule, ctx *Context) {
-	r.K["pd_phase"] = 0
-	r.K["pd_mark"] = ctx.Mark()
+	rk := r.EnsureK()
+	rk["pd_phase"] = 0
+	rk["pd_mark"] = ctx.Mark()
 }
 
 // @probeDecide$ — phase-0 close: peek the un-consumed token, rewind, and
@@ -160,9 +161,9 @@ func builtinProbeDecide(r *Rule, ctx *Context) {
 	}
 	_ = ctx.Rewind(cfgInt(mark))
 	if peek != nil && peek.Name == cfgStr(r.K["pd_d"]) {
-		r.K["pd_phase"] = 1
+		r.EnsureK()["pd_phase"] = 1
 	} else {
-		r.K["pd_phase"] = 2
+		r.EnsureK()["pd_phase"] = 2
 	}
 }
 
@@ -227,11 +228,8 @@ func builtinKey(r *Rule, _ *Context) {
 		slot = "key"
 	}
 	from := cfgInt(cfg["from"])
-	if r.U == nil {
-		r.U = map[string]any{}
-	}
 	if from >= 0 && from < len(r.O) {
-		r.U[slot] = r.O[from].Val
+		r.EnsureU()[slot] = r.O[from].Val
 	}
 }
 

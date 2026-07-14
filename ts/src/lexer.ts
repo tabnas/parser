@@ -75,12 +75,20 @@ const makePoint = (...params: ConstructorParameters<typeof Point>) =>
   new Point(...params)
 
 // A single lexed token: numeric token id, JS-typed value, raw source text, and match position.
+//
+// NOTE: `src` is a prototype accessor over a lazily-materialized backing
+// field — matchers that only know the token's span (space, line,
+// comment, quoted-string raw text) defer the substring until someone
+// actually reads it, so ignored tokens never allocate one. Reading
+// tkn.src always yields the correct string; the one observable
+// difference from a plain data property is that `src` is not an OWN
+// enumerable property, so Object.keys(tkn), {...tkn}, and
+// JSON.stringify(tkn) do not include it.
 class Token {
   isToken = true             // Marker discriminating Tokens from other values.
   name = EMPTY               // Token name (e.g. '#NR', '#ST').
   tin: Tin = -1 as Tin       // Numeric token id corresponding to name.
   val: any = undefined       // JS-typed value (e.g. a number for #NR).
-  src = EMPTY                // Raw matching source text.
   sI = -1                    // Source index where the match started.
   rI = -1                    // Row where the match started.
   cI = -1                    // Column where the match started.
@@ -90,18 +98,24 @@ class Token {
   why?: string               // Diagnostic note explaining how the token arose.
   ignored?: Token            // Optional attached ignored token (e.g. space/line/comment).
 
+  #src: string | null | undefined  // Materialized source text (undefined = not yet).
+  #ref?: string                    // Full source backing the [sI, sI+len) span.
+
   constructor(
     name: string,
     tin: Tin,
     val: any,
-    src: string,
+    src: string | undefined,
     pnt: Point,
     use?: any,
     why?: string,
+    ref?: string,
+    len?: number,
   ) {
     this.name = name
     this.tin = tin
-    this.src = src
+    this.#src = src
+    this.#ref = ref
     this.val = val
     this.sI = pnt.sI
     this.rI = pnt.rI
@@ -109,7 +123,21 @@ class Token {
     this.use = use
     this.why = why
 
-    this.len = null == src ? 0 : src.length
+    this.len = null != len ? len : null == src ? 0 : src.length
+  }
+
+  get src(): string {
+    let s = this.#src
+    if (undefined === s) {
+      const ref = this.#ref
+      s = this.#src =
+        undefined === ref ? EMPTY : ref.substring(this.sI, this.sI + this.len)
+    }
+    return s as string
+  }
+
+  set src(s: string) {
+    this.#src = s
   }
 
   resolveVal(rule: Rule, ctx: Context): any {
@@ -174,6 +202,8 @@ function guardedMatcher(
   return function guarded(lex, rule, tI) {
     if (!mcfg.lex) return undefined
     if (mcfg.check) {
+      // Check hooks are user code and may read lex.fwd directly.
+      lex.refwd()
       const r = mcfg.check(lex)
       if (r && r.done) return r.token
     }
@@ -412,29 +442,51 @@ const STRING_BODY_TABLE = new Int32Array([
 
 
 
+// One fixed-token candidate: the token source, its length, and its tin.
+type FixedCand = { src: string; len: number; tin: Tin }
+
 let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
-  let fixed = regexp(null, '^(', cfg.rePart.fixed, ')')
+  // First-char dispatch table replacing the old anchored alternation
+  // regex: match cost per position becomes one charCode index plus (for
+  // multi-char tokens) a startsWith verify, with no match-array or
+  // capture substring allocation. Candidates sharing a first char are
+  // ordered longest-first, preserving the regex's longest-match-wins
+  // ordering (utility.ts sorts the alternation the same way).
+  const table: (FixedCand[] | undefined)[] = new Array(256)
+  const wide: FixedCand[] = [] // Tokens whose first char is >= U+0100.
+  const byLenDesc = (a: FixedCand, b: FixedCand) =>
+    b.len - a.len || (a.src < b.src ? -1 : a.src > b.src ? 1 : 0)
+  for (const fsrc of keys(cfg.fixed.token)) {
+    const tin = cfg.fixed.token[fsrc]
+    if (null == tin || 0 === fsrc.length) continue
+    const cand: FixedCand = { src: fsrc, len: fsrc.length, tin }
+    const cc = fsrc.charCodeAt(0)
+    if (cc < 256) {
+      ;(table[cc] = table[cc] || []).push(cand)
+    } else {
+      wide.push(cand)
+    }
+  }
+  for (const cands of table) {
+    if (cands) cands.sort(byLenDesc)
+  }
+  wide.sort(byLenDesc)
 
   return guardedMatcher(cfg.fixed, function fixedBody(lex) {
-    const mcfg = cfg.fixed
-    let pnt = lex.pnt
-    let fwd = lex.fwd
+    const pnt = lex.pnt
+    const src = lex.src
+    const cc = src.charCodeAt(pnt.sI)
+    const cands = cc < 256 ? table[cc] : wide
 
-    let m = fwd.match(fixed)
-    if (m) {
-      let msrc = m[1]
-      let mlen = msrc.length
-      if (0 < mlen) {
-        let tkn: Token | undefined = undefined
+    if (undefined === cands) return undefined
 
-        let tin = mcfg.token[msrc]
-        if (null != tin) {
-          tkn = lex.token(tin, undefined, msrc, pnt)
-
-          pnt.sI += mlen
-          pnt.cI += mlen
-        }
-
+    for (const cand of cands) {
+      // Single-char Latin-1 candidates already matched via the table
+      // index; longer (or wide-char) candidates verify in place.
+      if ((1 === cand.len && cc < 256) || src.startsWith(cand.src, pnt.sI)) {
+        const tkn = lex.token(cand.tin, undefined, cand.src, pnt)
+        pnt.sI += cand.len
+        pnt.cI += cand.len
         return tkn
       }
     }
@@ -460,7 +512,9 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
   return guardedMatcher(cfg.match, function matchBody(lex, rule, tI = 0) {
     let pnt = lex.pnt
-    let fwd = lex.fwd
+    // Value/token matcher regexes are documented to run against the
+    // remainder string, so materialize it (memoized per position).
+    let fwd = lex.refwd()
 
     let oc = 'o' === (rule as Rule).state ? 0 : 1
 
@@ -605,9 +659,11 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   const lineRunSpec = buildLineRunSpec(cfg.line)
   const scanOut: ScanOut = { sI: 0, rI: 0, cI: 0 }
 
+  // The body walks lex.src with absolute indices (aI) — no remainder
+  // slice is materialized per position.
   return guardedMatcher(cfg.comment, function commentBody(lex) {
     let pnt = lex.pnt
-    let fwd = lex.fwd
+    let src = lex.src
 
     let rI = pnt.rI
     let cI = pnt.cI
@@ -620,29 +676,29 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     const rowChars = cfg.line.rowChars
 
     for (let mc of lineComments) {
-      if (fwd.startsWith(mc.start)) {
-        let fwdlen = fwd.length
-        let fI = mc.start.length
+      if (src.startsWith(mc.start, pnt.sI)) {
+        let srclen = src.length
+        let aI = pnt.sI + mc.start.length
         cI += mc.start.length
         let suffixLen = 0
         let cc
         while (
-          fI < fwdlen &&
-          !((cc = fwd.charCodeAt(fI)) < 256
+          aI < srclen &&
+          !((cc = src.charCodeAt(aI)) < 256
             ? lineBM[cc]
-            : lineChars[fwd[fI]])
+            : lineChars[src[aI]])
         ) {
-          let n = commentSuffixMatch(fwd, fI, mc.suffixes)
+          let n = commentSuffixMatch(src, aI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
-          n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
+          n = commentSuffixFnMatch(lex, aI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
           cI++
-          fI++
+          aI++
         }
 
         if (suffixLen > 0) {
           // Consume the suffix as the tail of the comment body.
-          fI += suffixLen
+          aI += suffixLen
           cI += suffixLen
         }
         else if (mc.eatline) {
@@ -650,15 +706,16 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           // a line char (not from a suffix match). cI is intentionally
           // NOT pulled from scanOut — current semantics leave the
           // pnt.cI at end-of-comment-body even after eating newlines.
-          scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+          scan(src, aI, rI, cI, lineRunSpec, scanOut)
           rI = scanOut.rI
-          fI = scanOut.sI
+          aI = scanOut.sI
         }
 
-        let csrc = fwd.substring(0, fI)
-        let tkn = lex.token('#CM', undefined, csrc, pnt)
+        let tkn = lex.token(
+          '#CM', undefined, undefined, pnt,
+          undefined, undefined, aI - pnt.sI)
 
-        pnt.sI += csrc.length
+        pnt.sI = aI
         pnt.cI = cI
         pnt.rI = rI
 
@@ -669,59 +726,61 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     // Multiline comment.
 
     for (let mc of blockComments) {
-      if (fwd.startsWith(mc.start)) {
-        let fwdlen = fwd.length
-        let fI = mc.start.length
+      if (src.startsWith(mc.start, pnt.sI)) {
+        let srclen = src.length
+        let aI = pnt.sI + mc.start.length
         let end = mc.end as string
         cI += mc.start.length
         let suffixLen = 0
         let cc
-        while (fI < fwdlen && !fwd.startsWith(end, fI)) {
-          let n = commentSuffixMatch(fwd, fI, mc.suffixes)
+        while (aI < srclen && !src.startsWith(end, aI)) {
+          let n = commentSuffixMatch(src, aI, mc.suffixes)
           if (n > 0) { suffixLen = n; break }
-          n = commentSuffixFnMatch(lex, fI, mc.suffixFn)
+          n = commentSuffixFnMatch(lex, aI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
-          cc = fwd.charCodeAt(fI)
-          if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI]]) {
+          cc = src.charCodeAt(aI)
+          if (cc < 256 ? rowBM[cc] : rowChars[src[aI]]) {
             rI++
             cI = 0
           }
 
           cI++
-          fI++
+          aI++
         }
 
         if (suffixLen > 0) {
           // Advance through the consumed suffix, tracking newlines.
           for (let k = 0; k < suffixLen; k++) {
-            cc = fwd.charCodeAt(fI + k)
-            if (cc < 256 ? rowBM[cc] : rowChars[fwd[fI + k]]) {
+            cc = src.charCodeAt(aI + k)
+            if (cc < 256 ? rowBM[cc] : rowChars[src[aI + k]]) {
               rI++
               cI = 0
             }
             cI++
           }
-          let csrc = fwd.substring(0, fI + suffixLen)
-          let tkn = lex.token('#CM', undefined, csrc, pnt)
-          pnt.sI += csrc.length
+          let tkn = lex.token(
+            '#CM', undefined, undefined, pnt,
+            undefined, undefined, aI + suffixLen - pnt.sI)
+          pnt.sI = aI + suffixLen
           pnt.rI = rI
           pnt.cI = cI
           return tkn
         }
 
-        if (fwd.startsWith(end, fI)) {
+        if (src.startsWith(end, aI)) {
           cI += end.length
 
           if (mc.eatline) {
-            scan(fwd, fI, rI, cI, lineRunSpec, scanOut)
+            scan(src, aI, rI, cI, lineRunSpec, scanOut)
             rI = scanOut.rI
-            fI = scanOut.sI
+            aI = scanOut.sI
           }
 
-          let csrc = fwd.substring(0, fI + end.length)
-          let tkn = lex.token('#CM', undefined, csrc, pnt)
+          let tkn = lex.token(
+            '#CM', undefined, undefined, pnt,
+            undefined, undefined, aI + end.length - pnt.sI)
 
-          pnt.sI += csrc.length
+          pnt.sI = aI + end.length
           pnt.rI = rI
           pnt.cI = cI
 
@@ -767,27 +826,28 @@ function normalizeCommentSuffix(raw: any):
 }
 
 // commentSuffixMatch returns the length of the best suffix match at
-// fwd[fI:] or 0 if none matches. Suffixes are pre-sorted longest-first,
+// src[aI:] or 0 if none matches. Suffixes are pre-sorted longest-first,
 // so the first match is the best match.
-function commentSuffixMatch(fwd: string, fI: number, suffixes?: string[]): number {
+function commentSuffixMatch(src: string, aI: number, suffixes?: string[]): number {
   if (!suffixes || 0 === suffixes.length) return 0
   for (let s of suffixes) {
-    if (fwd.substring(fI, fI + s.length) === s) return s.length
+    if (src.startsWith(s, aI)) return s.length
   }
   return 0
 }
 
 // commentSuffixFnMatch probes the LexMatcher-form suffix terminator at
-// offset fI. Returns the length of the returned token's src (to be
-// consumed) or 0 if no termination. The lex point is snapshotted and
-// restored so a misbehaving matcher can't advance the stream itself.
-function commentSuffixFnMatch(lex: Lex, fI: number, fn?: LexMatcher): number {
+// absolute source offset aI. Returns the length of the returned token's
+// src (to be consumed) or 0 if no termination. The lex point is
+// snapshotted and restored so a misbehaving matcher can't advance the
+// stream itself.
+function commentSuffixFnMatch(lex: Lex, aI: number, fn?: LexMatcher): number {
   if (!fn) return 0
   let pnt = lex.pnt
   let savedSI = pnt.sI
   let savedRI = pnt.rI
   let savedCI = pnt.cI
-  pnt.sI = savedSI + fI
+  pnt.sI = aI
   let tkn: any
   try {
     tkn = fn(lex, undefined as any)
@@ -803,10 +863,14 @@ function commentSuffixFnMatch(lex: Lex, fI: number, fn?: LexMatcher): number {
 // Match text, checking for literal values, optionally followed by a fixed token.
 // Text strings are terminated by end markers.
 let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
-  let ender = regexp(cfg.line.lex ? null : 's', '^(.*?)', ...cfg.rePart.ender)
+  // Sticky ('y') so the regex runs against the full source at an offset
+  // (ender.lastIndex = pnt.sI) instead of an allocated remainder slice.
+  let ender = regexp(cfg.line.lex ? 'y' : 'ys', '(.*?)', ...cfg.rePart.ender)
 
   return function textMatcher(lex: Lex) {
     if (cfg.text.check) {
+      // Check hooks are user code and may read lex.fwd directly.
+      lex.refwd()
       let check = cfg.text.check(lex)
       if (check && check.done) {
         return check.token
@@ -815,11 +879,11 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 
     let mcfg = cfg.text
     let pnt = lex.pnt
-    let fwd = lex.fwd
     let def = cfg.value.def
     let defre = cfg.value.defre
 
-    let m = fwd.match(ender)
+    ender.lastIndex = pnt.sI
+    let m = ender.exec(lex.src)
 
     if (m) {
       let msrc = m[1]
@@ -846,8 +910,10 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
               // utility.ts) — iteration order is deterministic.
               for (let vspec of defre) {
                 if (vspec.match) {
-                  // If consume, assume regexp starts with ^.
-                  let res = vspec.match.exec(vspec.consume ? fwd : msrc)
+                  // If consume, assume regexp starts with ^. Consuming
+                  // value regexes are user-supplied and match against the
+                  // remainder string (materialized lazily, memoized).
+                  let res = vspec.match.exec(vspec.consume ? lex.refwd() : msrc)
 
                   // Must match entire text.
                   if (res && (vspec.consume || res[0].length === msrc.length)) {
@@ -899,10 +965,12 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let mcfg = cfg.number
 
+  // Sticky ('y') so the regex runs against the full source at an offset
+  // (ender.lastIndex = pnt.sI) instead of an allocated remainder slice.
   let ender = regexp(
-    null,
+    'y',
     [
-      '^([-+]?(0(',
+      '([-+]?(0(',
       [
         mcfg.hex ? 'x[0-9a-fA-F_]+' : null,
         mcfg.oct ? 'o[0-7_]+' : null,
@@ -924,14 +992,15 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let numberSep = mcfg.sep
     ? regexp('g', escre(mcfg.sepChar as string))
     : undefined
+  let numberSepChar = mcfg.sep ? (mcfg.sepChar as string) : undefined
 
   return guardedMatcher(cfg.number, function numberBody(lex) {
     mcfg = cfg.number
     let pnt = lex.pnt
-    let fwd = lex.fwd
     let valdef = cfg.value.def
 
-    let m = fwd.match(ender)
+    ender.lastIndex = pnt.sI
+    let m = ender.exec(lex.src)
     if (m) {
       let msrc = m[1]
       let tsrc = m[9] // NOTE: count parens in numberEnder!
@@ -949,7 +1018,12 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
           if (cfg.value.lex && undefined !== (vs = valdef[msrc])) {
             out = lex.token('#VL', vs.val, msrc, pnt)
           } else {
-            let nstr = numberSep ? msrc.replace(numberSep, '') : msrc
+            // Strip separators only when one is actually present — the
+            // common separator-free number skips the regex replace.
+            let nstr =
+              numberSep && numberSepChar && -1 < msrc.indexOf(numberSepChar)
+                ? msrc.replace(numberSep, '')
+                : msrc
             let num = +nstr
 
             // Special case: +- prefix of 0x... format
@@ -1066,7 +1140,11 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     let rI = startRI
     let cI = pnt.cI + 1
 
-    const buf: string[] = []
+    // Escape-free fast path: until the first escape or replace is
+    // processed the value is the contiguous source run after the opening
+    // quote, so no segment buffer is needed — a clean quoted string costs
+    // one substring instead of a buffer, per-segment pushes, and a join.
+    let buf: string[] | undefined = undefined
 
     while (sI < srclen) {
       // Body scan: consume body chars (and multi-line newlines)
@@ -1076,7 +1154,8 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       sI = scanOut.sI
       rI = scanOut.rI
       cI = scanOut.cI
-      if (bodyStart < sI) buf.push(src.substring(bodyStart, sI))
+      if (undefined !== buf && bodyStart < sI)
+        buf.push(src.substring(bodyStart, sI))
 
       if (sI >= srclen) break
 
@@ -1084,9 +1163,11 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 
       // Closing quote — string done.
       if (cc === qcc) {
+        const val =
+          undefined === buf ? src.substring(startSI + 1, sI) : buf.join(EMPTY)
         sI++
-        const tkn = lex.token('#ST', buf.join(EMPTY),
-          src.substring(startSI, sI), pnt)
+        const tkn = lex.token('#ST', val,
+          undefined, pnt, undefined, undefined, sI - startSI)
         pnt.sI = sI
         pnt.rI = rI
         pnt.cI = cI + 1
@@ -1097,6 +1178,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       if (hasReplace) {
         const rs = replaceCodeMap[cc]
         if (rs !== undefined) {
+          if (undefined === buf) {
+            buf = startSI + 1 < sI ? [src.substring(startSI + 1, sI)] : []
+          }
           buf.push(rs)
           sI++
           cI++
@@ -1106,6 +1190,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
 
       // Escape sequence.
       if (cc === escCharCode) {
+        if (undefined === buf) {
+          buf = startSI + 1 < sI ? [src.substring(startSI + 1, sI)] : []
+        }
         sI++
         cI++
         if (sI >= srclen) break // unterminated
@@ -1230,8 +1317,9 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
         sI++
       }
       if (pnt.sI < sI) {
-        const msrc = src.substring(pnt.sI, sI)
-        const tkn = lex.token('#LN', undefined, msrc, pnt)
+        const tkn = lex.token(
+          '#LN', undefined, undefined, pnt,
+          undefined, undefined, sI - pnt.sI)
         pnt.sI = sI
         pnt.rI = rI
         pnt.cI = 1
@@ -1241,8 +1329,9 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     }
 
     if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
-      const msrc = src.substring(pnt.sI, out.sI)
-      const tkn = lex.token('#LN', undefined, msrc, pnt)
+      const tkn = lex.token(
+        '#LN', undefined, undefined, pnt,
+        undefined, undefined, out.sI - pnt.sI)
       pnt.sI = out.sI
       pnt.rI = out.rI
       pnt.cI = 1
@@ -1262,8 +1351,9 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   return guardedMatcher(cfg.space, function spaceBody(lex) {
     const { pnt, src } = lex
     if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
-      const msrc = src.substring(pnt.sI, out.sI)
-      const tkn = lex.token('#SP', undefined, msrc, pnt)
+      const tkn = lex.token(
+        '#SP', undefined, undefined, pnt,
+        undefined, undefined, out.sI - pnt.sI)
       pnt.sI = out.sI
       pnt.rI = out.rI
       pnt.cI = out.cI
@@ -1305,6 +1395,14 @@ function subMatchFixed(
   return out
 }
 
+// Built-in matcher names (the `matcher` annotation set in configure()).
+// These matchers scan lex.src at pnt offsets or call refwd() themselves;
+// anything else in the matcher list gets a fresh lex.fwd before running.
+const BUILTIN_MATCHER = {
+  match: 1, fixed: 1, space: 1, line: 1,
+  string: 1, comment: 1, number: 1, text: 1,
+} as Record<string, 1 | undefined>
+
 // Lexer driver: holds the scan Point and runs the configured matchers in order via next().
 class Lex {
   src = EMPTY              // Full source text being lexed.
@@ -1312,9 +1410,16 @@ class Lex {
   cfg = {} as Config      // Resolved configuration.
   pnt = makePoint(-1)     // Current scan position.
   fwd = EMPTY as string   // Source from pnt.sI onward (the unconsumed remainder).
+  fwdSI = -1              // pnt.sI the current fwd slice was taken at (memo key).
 
+  // Slice the remainder lazily and memoize on the position — the slice
+  // is only materialized for consumers that genuinely need a remainder
+  // string (custom matchers, value.defre regexes), never once per token.
   refwd(): string {
-    this.fwd = this.src.substring(this.pnt.sI) as string
+    if (this.fwdSI !== this.pnt.sI) {
+      this.fwd = this.src.substring(this.pnt.sI) as string
+      this.fwdSI = this.pnt.sI
+    }
     return this.fwd
   }
 
@@ -1325,13 +1430,17 @@ class Lex {
     this.pnt = makePoint(this.src.length)
   }
 
+  // Create a token. Pass `src` when the matcher already holds the
+  // matched text; pass src=undefined with an explicit `len` to defer
+  // the substring to first read (a span over this lexer's source).
   token(
     ref: Tin | string,
     val: any,
-    src: string,
+    src: string | undefined,
     pnt?: Point,
     use?: any,
     why?: string,
+    len?: number,
   ): Token {
     let tin: Tin
     let name: string
@@ -1343,7 +1452,9 @@ class Lex {
       name = tokenize(ref, this.cfg)
     }
 
-    let tkn = makeToken(name, tin, val, src, pnt || this.pnt, use, why)
+    let tkn = makeToken(
+      name, tin, val, src, pnt || this.pnt, use, why, this.src, len,
+    )
 
     return tkn
   }
@@ -1363,9 +1474,20 @@ class Lex {
 
       tkn = pnt.end
     } else {
-      this.fwd = this.src.substring(pnt.sI) as string
+      // First-char dispatch: run only the matchers that could produce a
+      // token starting with this char (non-Latin-1 chars and configs
+      // without a table run the full pipeline).
+      const dispatch = this.cfg.lex.dispatch
+      const cc = this.src.charCodeAt(pnt.sI)
+      const mats =
+        undefined === dispatch
+          ? this.cfg.lex.match
+          : dispatch[cc < 256 ? cc : 256]
       try {
-        for (let mat of this.cfg.lex.match) {
+        for (let mat of mats) {
+          if (undefined === BUILTIN_MATCHER[(mat as any).matcher]) {
+            this.refwd()
+          }
           if ((tkn = mat(this, rule, tI))) {
             match = mat
             break

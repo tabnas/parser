@@ -8,7 +8,13 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "strict": true,
-    "target": "es2021",
+    // es2022 emits NATIVE #private class fields — at es2021 tsc
+    // downlevels them to WeakMap lookups, which is catastrophically slow
+    // on the hot Token/Rule classes. useDefineForClassFields stays false
+    // so public class-field initialization keeps its pre-es2022 [[Set]]
+    // semantics (fields without initializers are not pre-declared).
+    "target": "es2022",
+    "useDefineForClassFields": false,
     "declaration": true,
     "declarationDir": "../dist",
     "types": ["node"]

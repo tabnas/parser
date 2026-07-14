@@ -1,0 +1,70 @@
+# PROPOSED workflow — lives in ci/workflows/ for review; move to
+# .github/workflows/gate.yml to activate.
+#
+# Closes the engine conformance gate: today build.yml runs only this
+# repo's own suites (~50 strict-JSON TSV rows reach the engine's
+# fixtures), clones json/debug/abnf/railroad but never runs their tests,
+# and does not clone jsonic at all. This workflow runs the DOWNSTREAM
+# json + jsonic suites (both runtimes) against the engine under test —
+# ~2,300 shared TSV rows plus ~1,500 unit tests, including the
+# error-code parity contract — plus the fixture-corpus sync check and
+# the cross-runtime token-stream parity check.
+#
+# Note: cloning downstreams at main couples engine PRs to downstream
+# health. If a broken downstream main starts blocking engine work, pin
+# the clone refs or mark this job non-required-but-visible.
+name: gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Use LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v4
+      with:
+        path: parser
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24.x
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+    - name: Clone downstream repos
+      shell: bash
+      run: |
+        set -e
+        for dep in debug json jsonic; do
+          git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
+    - name: Install TS toolchains
+      shell: bash
+      run: |
+        set -e
+        for pkg in parser debug json jsonic; do
+          ( cd "$pkg/ts" && npm i )
+        done
+    - name: Run gate (all suites, both runtimes, fixture sync)
+      shell: bash
+      run: parser/ci/gate/run-gate.sh "$GITHUB_WORKSPACE"
+
+    - name: Token-stream parity (jsonic grammar over shared fixtures)
+      shell: bash
+      run: parser/ci/parity/run-parity.sh jsonic
+
+    - name: Token-stream parity (json grammar over json fixtures)
+      shell: bash
+      run: parser/ci/parity/run-parity.sh json "$GITHUB_WORKSPACE/json/ts/test/spec"
+
+    - name: Cross-runtime value diff (generated corpus)
+      shell: bash
+      run: parser/ci/fuzz/run-diff.sh 500

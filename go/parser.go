@@ -215,7 +215,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		T1:       NoToken,
 		V1:       NoToken,
 		V2:       NoToken,
-		RS:       make([]*Rule, len(src)*4+100),
+		// Rule stack depth is bounded by grammar nesting (typically tens),
+		// not source length; start small and let the push path's append
+		// grow it (matches the TS runtime, whose stack starts empty).
+		RS:       make([]*Rule, 0, 64),
 		RSI:      0,
 		RSM:      p.RSM,
 		Meta:     meta,
@@ -289,7 +292,22 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 				return nil, p.finishErr(lex.Err, ctx, meta, nil)
 			}
 			tkn := ctx.ParseErr
-			return nil, p.finishErr(p.makeError("unexpected", tkn.Src, src, tkn.SI, tkn.RI, tkn.CI), ctx, meta, tkn)
+			// Use the token's own error code when set (TS parity:
+			// rules.ts bad() throws TabnasError(tkn.err || unexpected))
+			// and inject its Use details (e.g. rulename) into the
+			// message and hint templates.
+			code := "unexpected"
+			if tkn.Err != "" {
+				code = tkn.Err
+			}
+			je := p.makeError(code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI)
+			if len(tkn.Use) > 0 {
+				je.Detail = StrInject(je.Detail, tkn.Use)
+				if je.Hint != "" {
+					je.Hint = StrInject(je.Hint, tkn.Use)
+				}
+			}
+			return nil, p.finishErr(je, ctx, meta, tkn)
 		}
 
 		kI++
@@ -433,18 +451,21 @@ func parseNumericString(s string) float64 {
 		}
 	}
 
-	// Remove underscores if present
-	ns = strings.ReplaceAll(s, "_", "")
+	// Remove underscores, scanning first: most numbers have none and
+	// skip the ReplaceAll machinery entirely.
+	ns = s
+	if strings.IndexByte(s, '_') >= 0 {
+		ns = strings.ReplaceAll(s, "_", "")
+	}
 
 	val, err := strconv.ParseFloat(ns, 64)
 	if err != nil {
 		return math.NaN()
 	}
 
-	// Normalize -0 to 0
-	if val == 0 {
-		return 0
-	}
-
+	// NOTE: negative zero is preserved. An earlier version normalized
+	// -0 to 0 here, silently diverging from both the TS runtime (whose
+	// unary + preserves -0) and encoding/json — caught by the
+	// cross-runtime token parity harness (ci/parity).
 	return val
 }

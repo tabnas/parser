@@ -21,10 +21,8 @@ import { Context } from './context'
 
 import {
   S,
-  badlex,
   deep,
   filterRules,
-  keys,
   srcfmt,
   tokenize,
   // log_stack,
@@ -35,7 +33,7 @@ import { TabnasError } from './error'
 
 import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 
-import { makeRule, makeNoRule, makeRuleSpec } from './rules'
+import { makeRule, makeRuleSpec } from './rules'
 
 
 // Rule-driven parser: start() parses from scratch, clone() makes a child sibling.
@@ -44,6 +42,12 @@ class Parser {
   cfg: Config               // Resolved configuration.
   rsm: RuleSpecMap = {}     // Rule specs keyed by rule name.
   ji: Tabnas                // Owning Tabnas instance.
+
+  // Per-Parser caches for per-parse setup that depends only on cfg.
+  // options()/make() build a fresh Parser (makeParser/clone), so these
+  // never outlive the configuration they were built from.
+  #nrspec?: RuleSpec              // Empty spec backing the NORULE sentinel.
+  #srcfmt?: (s: any) => string    // Debug source formatter.
 
   constructor(options: TabnasOptions, cfg: Config, j: Tabnas) {
     this.options = options
@@ -94,6 +98,8 @@ class Parser {
       makePoint(-1),
     )
 
+    let bdtin = tokenize('#BD', this.cfg)
+
     let notoken = makeNoToken()
 
     // Build the per-parse Context. NORULE is patched in once we have
@@ -109,7 +115,7 @@ class Parser {
       inst: () => tabnas,
       sub: tabnas.internal().sub,
       rsm: this.rsm,
-      F: srcfmt(this.cfg),
+      F: (this.#srcfmt ??= srcfmt(this.cfg)),
       NOTOKEN: notoken,
       NORULE: {} as Rule,
     })
@@ -117,9 +123,13 @@ class Parser {
     // Merge in any caller-supplied parent_ctx (plugin tests use this
     // to seed `meta` or other fields). `deep` mutates the class
     // instance in place, so getters/setters and methods survive.
-    deep(ctx, parent_ctx)
+    if (null != parent_ctx) {
+      deep(ctx, parent_ctx)
+    }
 
-    let norule = makeNoRule(this.ji, ctx)
+    // The no-rule sentinel Rule is per-parse, but its (empty) spec is
+    // immutable and cfg-scoped, so build the spec once per Parser.
+    let norule = makeRule((this.#nrspec ??= makeRuleSpec(this.ji, this.cfg, {})), ctx)
     ctx.NORULE = norule
     ctx.rule = norule
 
@@ -141,7 +151,13 @@ class Parser {
       }
     }
 
-    let lex = badlex(makeLex(ctx), tokenize('#BD', this.cfg), ctx)
+    // Bad tokens are converted to throws by the engine's own token
+    // consumers (the parse_alts fetch loop, and the trailing-content
+    // check below) rather than by wrapping lex.next in a closure — the
+    // old badlex wrapper cost a bind + closure + Lex shape transition
+    // per parse and an extra call frame per token. The exported badlex
+    // helper remains for standalone-lexer users.
+    let lex = makeLex(ctx)
 
     // Stash lex on ctx so ctx.rewind can push tokens back onto the
     // lexer's pending-token queue.
@@ -161,8 +177,9 @@ class Parser {
     // rule open and close, and for each rule on each char to be
     // virtual (like map, list), and double for safety margin (allows
     // lots of backtracking), and apply a multipler option as a get-out-of-jail.
-    let maxr =
-      2 * keys(this.rsm).length * lex.src.length * 2 * ctx.cfg.rule.maxmul
+    let rsmCount = 0
+    for (let _rn in this.rsm) rsmCount++
+    let maxr = 2 * rsmCount * lex.src.length * 2 * ctx.cfg.rule.maxmul
 
     // Process rules on tokens
     let kI = 0
@@ -187,7 +204,17 @@ class Parser {
     }
 
     // TODO: option to allow trailing content
-    if (endtkn.tin !== lex.next(rule).tin) {
+    const endtry = lex.next(rule)
+    if (bdtin === endtry.tin) {
+      // A bad token in trailing content carries its own error code
+      // (e.g. unterminated_string), matching the old badlex wrapper.
+      let details: any = {}
+      if (null != endtry.use) {
+        details.use = endtry.use
+      }
+      throw new TabnasError(endtry.why || S.unexpected, details, endtry, rule, ctx)
+    }
+    if (endtkn.tin !== endtry.tin) {
       throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)
     }
 

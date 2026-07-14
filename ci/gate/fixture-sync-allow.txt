@@ -1,0 +1,10 @@
+# Known, deliberate divergences between parser/test/spec and
+# jsonic/ts/test/spec. One filename per line (either side's name).
+#
+# These three UTF-8 fixtures exist only in the parser repo. TODO: decide
+# whether jsonic should carry them too (they exercise multi-byte source
+# positions, which jsonic's own tests currently cover via unit tests
+# only) — if so, copy them over and delete these entries.
+alignment-utf8.tsv
+include-json-utf8-errors.tsv
+include-json-utf8.tsv

@@ -60,6 +60,11 @@ function errinject<T extends string | string[] | { [key: string]: string }>(
     ...(ctx.cfg || {}),
     ...(ctx.opts || {}),
     ...(token || {}),
+    // Token.src is a prototype accessor (materialized lazily from the
+    // token's span), so the spread above does not pick it up — inject
+    // it explicitly so {src} in error templates is the token's source
+    // text, not the ctx.src function.
+    ...(null == token ? {} : { src: token.src }),
     ...(rule || {}),
     ...(ctx.meta || {}),
     ...(details || {}),

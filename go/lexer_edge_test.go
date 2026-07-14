@@ -86,9 +86,11 @@ func TestMatchStringEscapeErrors(t *testing.T) {
 		{`"\u4`, "invalid_unicode"},                 // truncated 4-digit form
 		{`"\u{GG}"`, "invalid_unicode"},             // bad braced hex
 		{`"\u{42`, "invalid_unicode"},               // unterminated brace
-		{`"abc`, "unterminated_string"},             // no closing quote
-		{`"a` + "\n" + `b"`, "unterminated_string"}, // control char in non-multiline
-		{`"\`, "unterminated_string"},               // escape at end of source
+		{`"abc`, "unterminated_string"}, // no closing quote
+		// Control char in a non-multiline string: unprintable, matching
+		// the TS runtime (previously mis-reported unterminated_string).
+		{`"a` + "\n" + `b"`, "unprintable"},
+		{`"\`, "unterminated_string"}, // escape at end of source
 	}
 	for _, tt := range tests {
 		lex := NewLex(tt.src, DefaultLexConfig())

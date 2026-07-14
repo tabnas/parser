@@ -544,10 +544,43 @@ type Rule struct {
 	OS int    // Open match count (alias of ON).
 	CS int    // Close match count (alias of CN).
 
+	// N/U/K are allocated lazily: nil until first written (a Go nil-map
+	// READ is safe and returns the zero value, so read-only access needs
+	// no guard). Plugins writing to a fresh rule must go through
+	// EnsureN/EnsureU/EnsureK (or nil-guard themselves) — before v0.3
+	// these maps were always allocated, costing three heap allocations
+	// per rule instance whether or not the grammar used them.
 	N   map[string]int // Named counters tracked across the rule.
 	U   map[string]any // Custom user props (not propagated to children).
 	K   map[string]any // Custom keep props (propagated via push/replace).
 	Why string         // Internal tracing field; set when a rule fails.
+}
+
+// EnsureN returns the rule's named-counter map, allocating it on first
+// use. Required before writing r.N on a fresh rule (nil until written).
+func (r *Rule) EnsureN() map[string]int {
+	if r.N == nil {
+		r.N = make(map[string]int, 4)
+	}
+	return r.N
+}
+
+// EnsureU returns the rule's user-prop map, allocating it on first use.
+// Required before writing r.U on a fresh rule (nil until written).
+func (r *Rule) EnsureU() map[string]any {
+	if r.U == nil {
+		r.U = make(map[string]any, 4)
+	}
+	return r.U
+}
+
+// EnsureK returns the rule's keep-prop map, allocating it on first use.
+// Required before writing r.K on a fresh rule (nil until written).
+func (r *Rule) EnsureK() map[string]any {
+	if r.K == nil {
+		r.K = make(map[string]any, 4)
+	}
+	return r.K
 }
 
 // NoRule is the sentinel "no rule" value; its Node is Undefined (TS NORULE.node === undefined).
@@ -590,13 +623,14 @@ func (r *Rule) Gte(counter string, limit int) bool {
 
 // MakeRule creates a new Rule from a RuleSpec.
 func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
+	// N/U/K stay nil until first written (see the field docs / Ensure
+	// helpers) — most rules in value-building grammars never touch them.
 	r := &Rule{
 		I: ctx.UI, Name: spec.Name, Spec: spec, Node: node,
 		State: OPEN, D: ctx.RSI,
 		Child: NoRule, Parent: NoRule, Prev: NoRule, Next: NoRule,
 		O: nil, ON: 0, C: nil, CN: 0,
 		O0: NoToken, O1: NoToken, C0: NoToken, C1: NoToken,
-		N: make(map[string]int), U: make(map[string]any), K: make(map[string]any),
 	}
 	ctx.UI++
 	return r
@@ -655,28 +689,31 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	// Update counters
-	if alt != nil && alt.N != nil {
+	if alt != nil && alt.N != nil && 0 < len(alt.N) {
+		rn := r.EnsureN()
 		for cn, cv := range alt.N {
 			if cv == 0 {
-				r.N[cn] = 0
+				rn[cn] = 0
 			} else {
-				if _, ok := r.N[cn]; !ok {
-					r.N[cn] = 0
+				if _, ok := rn[cn]; !ok {
+					rn[cn] = 0
 				}
-				r.N[cn] += cv
+				rn[cn] += cv
 			}
 		}
 	}
 
 	// Set custom properties
-	if alt != nil && alt.U != nil {
+	if alt != nil && alt.U != nil && 0 < len(alt.U) {
+		ru := r.EnsureU()
 		for k, v := range alt.U {
-			r.U[k] = v
+			ru[k] = v
 		}
 	}
-	if alt != nil && alt.K != nil {
+	if alt != nil && alt.K != nil && 0 < len(alt.K) {
+		rk := r.EnsureK()
 		for k, v := range alt.K {
-			r.K[k] = v
+			rk[k] = v
 		}
 	}
 
@@ -732,14 +769,24 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next = MakeRule(rulespec, ctx, r.Node)
 				r.Child = next
 				next.Parent = r
-				for k, v := range r.N {
-					next.N[k] = v
-				}
-				if len(r.K) > 0 {
-					for k, v := range r.K {
-						next.K[k] = v
+				if len(r.N) > 0 {
+					nn := next.EnsureN()
+					for k, v := range r.N {
+						nn[k] = v
 					}
 				}
+				if len(r.K) > 0 {
+					nk := next.EnsureK()
+					for k, v := range r.K {
+						nk[k] = v
+					}
+				}
+			} else {
+				// Unknown rule name: raise unknown_rule instead of
+				// silently ignoring the push (TS parity — rules.ts
+				// throws via unknownRule + bad when the alt fires).
+				markUnknownRule(ctx, pushName)
+				return next
 			}
 		} else if replaceName != "" {
 			rulespec, ok := ctx.RSM[replaceName]
@@ -747,14 +794,21 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next = MakeRule(rulespec, ctx, r.Node)
 				next.Parent = r.Parent
 				next.Prev = r
-				for k, v := range r.N {
-					next.N[k] = v
-				}
-				if len(r.K) > 0 {
-					for k, v := range r.K {
-						next.K[k] = v
+				if len(r.N) > 0 {
+					nn := next.EnsureN()
+					for k, v := range r.N {
+						nn[k] = v
 					}
 				}
+				if len(r.K) > 0 {
+					nk := next.EnsureK()
+					for k, v := range r.K {
+						nk[k] = v
+					}
+				}
+			} else {
+				markUnknownRule(ctx, replaceName)
+				return next
 			}
 		} else if !isOpen {
 			// Pop
@@ -843,6 +897,24 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 // Supports arbitrary N-token lookahead: an alt's S slice may declare
 // any number of positions (previously capped at 2). Tokens are fetched
 // lazily - position i is only requested after position i-1 matches.
+// markUnknownRule flags an unknown push/replace rule name as a parse
+// error carrying the unknown_rule code and the offending name (TS
+// parity: rules.ts unknownRule token + bad throw). The current
+// lookahead token supplies the source location; it is copied, not
+// mutated, since it may be the shared NoToken sentinel.
+func markUnknownRule(ctx *Context, name string) {
+	at := ctx.T0
+	if at == nil {
+		at = NoToken
+	}
+	ctx.ParseErr = &Token{
+		Name: at.Name, Tin: at.Tin, Val: at.Val, Src: at.Src,
+		SI: at.SI, RI: at.RI, CI: at.CI,
+		Err: "unknown_rule",
+		Use: map[string]any{"rulename": name},
+	}
+}
+
 func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context) (*AltSpec, bool) {
 	if len(alts) == 0 {
 		return nil, false
@@ -892,59 +964,66 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			matched = i + 1
 		}
 
-		// Record the matched tokens on the rule. Both the generalized
-		// O / ON (or C / CN) slice form and the legacy O0 / O1 / OS
-		// (or C0 / C1 / CS) two-slot form are populated.
-		if isOpen {
-			if cap(rule.O) < matched {
-				rule.O = make([]*Token, matched)
-			} else {
-				rule.O = rule.O[:matched]
-			}
-			for i := 0; i < matched; i++ {
-				rule.O[i] = ctx.T[i]
-			}
-			rule.ON = matched
-			rule.OS = matched
-			if matched >= 1 {
-				rule.O0 = rule.O[0]
-			} else {
-				rule.O0 = NoToken
-			}
-			if matched >= 2 {
-				rule.O1 = rule.O[1]
-			} else {
-				rule.O1 = NoToken
-			}
-		} else {
-			if cap(rule.C) < matched {
-				rule.C = make([]*Token, matched)
-			} else {
-				rule.C = rule.C[:matched]
-			}
-			for i := 0; i < matched; i++ {
-				rule.C[i] = ctx.T[i]
-			}
-			rule.CN = matched
-			rule.CS = matched
-			if matched >= 1 {
-				rule.C0 = rule.C[0]
-			} else {
-				rule.C0 = NoToken
-			}
-			if matched >= 2 {
-				rule.C1 = rule.C[1]
-			} else {
-				rule.C1 = NoToken
-			}
-		}
-
-		if cond && alt.C != nil {
-			cond = alt.C(rule, ctx)
-		}
-
+		// Record the matched tokens on the rule only when the tin
+		// positions matched — failed alts left partial recordings that
+		// nothing could observe (custom conditions only run on tin
+		// success, and the next candidate overwrote them). Recording
+		// stays BEFORE the alt.C condition call so conditions observe
+		// the candidate's tokens. Both the generalized O / ON (or C /
+		// CN) slice form and the legacy O0 / O1 / OS (or C0 / C1 / CS)
+		// two-slot form are populated.
 		if cond {
-			return alt, true
+			if isOpen {
+				if cap(rule.O) < matched {
+					rule.O = make([]*Token, matched)
+				} else {
+					rule.O = rule.O[:matched]
+				}
+				for i := 0; i < matched; i++ {
+					rule.O[i] = ctx.T[i]
+				}
+				rule.ON = matched
+				rule.OS = matched
+				if matched >= 1 {
+					rule.O0 = rule.O[0]
+				} else {
+					rule.O0 = NoToken
+				}
+				if matched >= 2 {
+					rule.O1 = rule.O[1]
+				} else {
+					rule.O1 = NoToken
+				}
+			} else {
+				if cap(rule.C) < matched {
+					rule.C = make([]*Token, matched)
+				} else {
+					rule.C = rule.C[:matched]
+				}
+				for i := 0; i < matched; i++ {
+					rule.C[i] = ctx.T[i]
+				}
+				rule.CN = matched
+				rule.CS = matched
+				if matched >= 1 {
+					rule.C0 = rule.C[0]
+				} else {
+					rule.C0 = NoToken
+				}
+				if matched >= 2 {
+					rule.C1 = rule.C[1]
+				} else {
+					rule.C1 = NoToken
+				}
+			}
+
+			if alt.C != nil {
+				cond = alt.C(rule, ctx)
+			}
+
+			if cond {
+				return alt, true
+			}
 		}
 	}
 
