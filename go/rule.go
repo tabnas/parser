@@ -951,9 +951,14 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	return nil, false
 }
 
+// tinMatch reports whether tin is accepted by the tins list of an alt
+// slot. The #AA (ANY) tin is a wildcard: a slot that lists TinAA accepts
+// every token. This mirrors the TS engine, where normalt converts an
+// `s:` entry containing #AA into the "no constraint" sentinel so the
+// match check is skipped entirely (see ts/test/aa-wildcard.test.js).
 func tinMatch(tin Tin, tins []Tin) bool {
 	for _, t := range tins {
-		if tin == t {
+		if tin == t || t == TinAA {
 			return true
 		}
 	}

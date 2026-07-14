@@ -340,6 +340,13 @@ func (j *Tabnas) Id() string {
 	return j.id
 }
 
+// String returns the instance identifier, so a Tabnas instance formats
+// as "Tabnas/<n>[/tag]". Matches TS `tabnas.toString()`, which returns
+// tabnas.id.
+func (j *Tabnas) String() string {
+	return j.id
+}
+
 // PluginOptions returns the options stored for a named plugin.
 // Matches TS `tabnas.options.plugin[name]`.
 func (j *Tabnas) PluginOptions(name string) map[string]any {
@@ -472,6 +479,22 @@ func Empty(opts ...Options) *Tabnas {
 		rs.Clear()
 	}
 	return j
+}
+
+// Empty creates a fresh standalone Tabnas instance with no grammar rules,
+// mirroring the TS instance method `tabnas.empty(options?)`. As in TS —
+// where empty() constructs a brand-new instance (defaults$, standard$,
+// and grammar$ all false) rather than forking the receiver — the
+// receiver contributes nothing: its options, plugins, rules, and custom
+// tokens are NOT inherited (use Derive for inheritance). Delegates to
+// the package-level Empty function.
+//
+// Note: the Go engine bakes its option defaults into config construction
+// (there is no "defaults off" mode as with the TS `defaults$: false`
+// flag), so the returned instance has default lexing options enabled;
+// disable individual matchers via the Lex flags in opts as needed.
+func (j *Tabnas) Empty(opts ...Options) *Tabnas {
+	return Empty(opts...)
 }
 
 // Parse parses a tabnas string using this instance's configuration.
