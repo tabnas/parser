@@ -1500,11 +1500,14 @@ func (l *Lex) matchString() *Token {
 
 		// Disallowed control char (multi-line line chars are consumed
 		// by the body spec, so any control char reaching here is bad).
+		// Reported as unprintable, matching the TS runtime — an earlier
+		// version fell through to unterminated_string (caught by the
+		// cross-runtime token parity harness, ci/parity).
 		if c < 32 {
 			if l.Config.StringAbandon {
 				return nil
 			}
-			break
+			return l.bad("unprintable", l.pnt.SI, sI+1)
 		}
 
 		// Replace chars stop the body run; emit the replacement.

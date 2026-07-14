@@ -290,11 +290,17 @@ function configure(
   // NOTE: these are not value ending tokens
   cfg.value = {
     lex: !!opts.value?.lex,
+    // NOTE: null-prototype object — the lexer looks tokens up by raw
+    // source text (def[msrc]), so with a normal object the inherited
+    // Object.prototype members leak in: unquoted __proto__ or
+    // constructor lexed as a #VL with an undefined value (a:__proto__
+    // parsed as {"a":null}, [constructor] dropping the element). The
+    // Go runtime's map lookup was never affected.
     def: entries(opts.value?.def || {}).reduce(
       (a: any, e: any[]) => (
         null == e[1] || false === e[1] || e[1].match || (a[e[0]] = e[1]), a
       ),
-      {} as any,
+      Object.create(null) as any,
     ),
     // Pre-sort by name at configure time so iteration at lex time is
     // deterministic across runtimes (does not depend on object key order).

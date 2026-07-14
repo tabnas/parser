@@ -463,10 +463,9 @@ func parseNumericString(s string) float64 {
 		return math.NaN()
 	}
 
-	// Normalize -0 to 0
-	if val == 0 {
-		return 0
-	}
-
+	// NOTE: negative zero is preserved. An earlier version normalized
+	// -0 to 0 here, silently diverging from both the TS runtime (whose
+	// unary + preserves -0) and encoding/json — caught by the
+	// cross-runtime token parity harness (ci/parity).
 	return val
 }
