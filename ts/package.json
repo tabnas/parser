@@ -37,8 +37,9 @@
   },
   "license": "MIT",
   "files": [
+    "LICENSE",
     "dist",
-    "LICENSE"
+    "dist-test"
   ],
   "exports": {
     ".": "./dist/tabnas.js",
