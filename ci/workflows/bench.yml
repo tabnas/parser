@@ -1,0 +1,54 @@
+# PROPOSED workflow — lives in ci/workflows/ for review; move to
+# .github/workflows/bench.yml to activate.
+#
+# Advisory benchmark run: numbers from shared CI runners are noisy, so
+# this NEVER gates a merge — it records the fixture-matrix results as a
+# build artifact for humans to compare across runs on the same runner
+# class. For decision-grade numbers, run ci/bench/run-bench.sh locally,
+# back-to-back against a baseline checkout on the same machine.
+name: bench
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'  # weekly, Monday 04:17 UTC
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: parser
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24.x
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+    - name: Clone downstream repos
+      shell: bash
+      run: |
+        set -e
+        for dep in debug json jsonic; do
+          git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
+    - name: Install and build TS
+      shell: bash
+      run: |
+        set -e
+        for pkg in parser debug json jsonic; do
+          ( cd "$pkg/ts" && npm i && npm run build --if-present )
+        done
+    - name: Run benchmarks
+      shell: bash
+      run: |
+        parser/ci/bench/run-bench.sh | tee bench-results.txt
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: bench-results
+        path: bench-results.txt
