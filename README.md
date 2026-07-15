@@ -1,7 +1,12 @@
 # tabnas
 
-[![build](https://github.com/tabnas/parser/actions/workflows/build.yml/badge.svg)](https://github.com/tabnas/parser/actions/workflows/build.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<!-- tabnas-badges -->
+[![npm](https://tabnas.github.io/status/badges/parser-npm.svg)](https://www.npmjs.com/package/@tabnas/parser)
+[![CI](https://github.com/tabnas/parser/actions/workflows/ci.yml/badge.svg)](https://github.com/tabnas/parser/actions/workflows/ci.yml)
+[![go](https://tabnas.github.io/status/badges/parser-go.svg)](https://pkg.go.dev/github.com/tabnas/parser/go)
+[![tabnas standard](https://tabnas.github.io/status/badges/parser-standard.svg)](https://tabnas.github.io/status/)
+<!-- /tabnas-badges -->
+
 
 A **pluggable parsing engine**: a configurable rule-based parser running
 over a configurable matcher-based lexer. The engine ships **no grammar**
