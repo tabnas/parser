@@ -200,6 +200,34 @@ flowchart TD
   back to `val`, which closes returning the total.
 
 
+## Define grammars in ABNF
+
+Grammars don't have to be written as engine rules — the
+[`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin compiles standard
+[ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) into engine rules, so
+you can define a grammar in plain ABNF and parse with it directly. Here is a
+small integer-addition grammar:
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { abnf } = require('@tabnas/abnf')
+
+// An integer-addition grammar, written in ABNF.
+const tn = new Tabnas({ plugins: [abnf] })
+tn.abnf(`
+  sum     = 1*(integer / "+")
+  integer = 1*DIGIT
+`)
+
+// Parse "12+3+45" into a syntax tree of integer nodes ...
+const tree = tn.parse('12+3+45')
+tree.rule                            // => 'sum'
+tree.kids.map((k) => Number(k.src))  // => [12, 3, 45]
+
+// ... then fold the integers to evaluate the sum.
+tree.kids.reduce((total, k) => total + Number(k.src), 0)  // => 60
+```
+
 ## Parser Plugins
 
 Every package depends only on others above it. Runtime (`prod`) dependencies on
