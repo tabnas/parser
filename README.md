@@ -236,6 +236,27 @@ tn.parse('1+2+3').value    // => 6
 tn.parse('12+3+45').value  // => 60
 ```
 
+The round-trip is consistent: [`@tabnas/debug`](https://github.com/tabnas/debug)
+renders the live grammar back to the **same** ABNF it was defined with —
+`add = NR [ PL add ]` in, `add = NR [ PL add ]` out (this is the very ABNF the
+`describe()` dump above prints for the hand-written grammar):
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+const { abnf } = require('@tabnas/abnf')
+const { Debug } = require('@tabnas/debug')
+
+const tn = new Tabnas({ plugins: [abnf] })
+tn.abnf(`
+  add = NR [ PL add ]
+  PL  = "+"
+`)
+
+// @tabnas/debug re-emits the running grammar as ABNF — the same grammar back.
+tn.use(Debug, { print: false })
+tn.debug.model().abnf.split('\n')[0]  // => 'add = NR [ PL add ]'
+```
+
 ## Parser Plugins
 
 Every package depends only on others above it. Runtime (`prod`) dependencies on
