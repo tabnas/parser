@@ -205,34 +205,29 @@ flowchart TD
 The same grammar can be written in standard
 [ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) with the
 [`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin, which compiles ABNF
-into engine rules. This is exactly the grammar `@tabnas/debug` printed above —
-`NR` is the engine's built-in number token and `PL` is `"+"`. `@ref` action
-references evaluate the running total *during* the parse (`@<rule>:<phase>`
-keys attach to grammar rules), so `parse` returns the computed result directly,
-just like the hand-written grammar above:
+into engine rules. This is the same `add` rule `@tabnas/debug` printed above —
+`NR` is the engine's built-in number token and `PL` is `"+"`. As with the
+hand-written grammar (which accumulates into `val`), a single `@ref` action
+keeps a **running total** — it adds each number to the outermost `add` node, so
+there is no walking over children; `parse` returns the computed result:
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
 const { abnf } = require('@tabnas/abnf')
 
+// The outermost `add` instance holds the running total (its rule name is `add`).
+const total = (r) => { let n = r, top = null; while (n) { if (n.name === 'add') top = n; n = n.parent } return top }
+
 const tn = new Tabnas({ plugins: [abnf] })
 tn.abnf(`
-  val = add
   add = NR [ PL add ]
   PL  = "+"
 `, {
   actions: {
-    // Each `add` starts from its leading number (the #NR it matched) ...
-    '@add:o:NR': (r) => { r.node.value = Number(r.o[0].val) },
-    // ... then folds in the value of the `add` after the "+".
-    '@add:ac': (r) => {
-      const rest = r.node.kids.find((k) => typeof k.value === 'number')
-      if (rest) r.node.value += rest.value
-    },
-    // `val` combines its own leading number with the rest of the sum.
-    '@val:ac': (r) => {
-      const rest = r.node.kids.find((k) => typeof k.value === 'number')
-      r.node.value = Number(r.o[0].val) + (rest ? rest.value : 0)
+    // Add every number to the one running total — no child integration.
+    '@add:o:NR': (r) => {
+      const acc = total(r).node
+      acc.value = (acc.value || 0) + Number(r.o[0].val)
     },
   },
 })
