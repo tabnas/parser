@@ -202,30 +202,43 @@ flowchart TD
 
 ## Define grammars in ABNF
 
-Grammars don't have to be written as engine rules — the
-[`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin compiles standard
-[ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) into engine rules, so
-you can define a grammar in plain ABNF and parse with it directly. Here is a
-small integer-addition grammar:
+The same grammar can be written in standard
+[ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) with the
+[`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin, which compiles ABNF
+into engine rules. This is exactly the grammar `@tabnas/debug` printed above —
+`NR` is the engine's built-in number token and `PL` is `"+"`. `@ref` action
+references evaluate the running total *during* the parse (`@<rule>:<phase>`
+keys attach to grammar rules), so `parse` returns the computed result directly,
+just like the hand-written grammar above:
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
 const { abnf } = require('@tabnas/abnf')
 
-// An integer-addition grammar, written in ABNF.
 const tn = new Tabnas({ plugins: [abnf] })
 tn.abnf(`
-  sum     = 1*(integer / "+")
-  integer = 1*DIGIT
-`)
+  val = add
+  add = NR [ PL add ]
+  PL  = "+"
+`, {
+  actions: {
+    // Each `add` starts from its leading number (the #NR it matched) ...
+    '@add:o:NR': (r) => { r.node.value = Number(r.o[0].val) },
+    // ... then folds in the value of the `add` after the "+".
+    '@add:ac': (r) => {
+      const rest = r.node.kids.find((k) => typeof k.value === 'number')
+      if (rest) r.node.value += rest.value
+    },
+    // `val` combines its own leading number with the rest of the sum.
+    '@val:ac': (r) => {
+      const rest = r.node.kids.find((k) => typeof k.value === 'number')
+      r.node.value = Number(r.o[0].val) + (rest ? rest.value : 0)
+    },
+  },
+})
 
-// Parse "12+3+45" into a syntax tree of integer nodes ...
-const tree = tn.parse('12+3+45')
-tree.rule                            // => 'sum'
-tree.kids.map((k) => Number(k.src))  // => [12, 3, 45]
-
-// ... then fold the integers to evaluate the sum.
-tree.kids.reduce((total, k) => total + Number(k.src), 0)  // => 60
+tn.parse('1+2+3').value    // => 6
+tn.parse('12+3+45').value  // => 60
 ```
 
 ## Parser Plugins
