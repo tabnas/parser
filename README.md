@@ -35,8 +35,9 @@ it is **grammar-agnostic**:
 - **Plugins** — a grammar is a plugin that registers tokens and rules.
   Compose several plugins to parse a dialect.
 
-A complete grammar is small. Here is a declarative grammar for integer
-addition expressions (`1+2+3`):
+Here is a declarative grammar for integer
+addition expressions (`1+2+3`). And if you prefer [ABNF syntax](https://datatracker.ietf.org/doc/html/rfc5234), 
+[Tabnas supports that too](https://github.com/tabnas/parser#define-grammars-in-abnf).
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
