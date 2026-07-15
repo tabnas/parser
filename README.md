@@ -258,6 +258,8 @@ tn.use(Debug, { print: false })
 tn.debug.model().abnf.split('\n')[0]  // => 'add = NR [ PL add ]'
 ```
 
+And yes, [left recursion](https://github.com/tabnas/abnf#left-recursion) is supported.
+
 ## Parser Plugins
 
 Every package depends only on others above it. Runtime (`prod`) dependencies on
