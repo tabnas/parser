@@ -260,6 +260,72 @@ tn.debug.model().abnf.split('\n')[0]  // => 'add = NR [ PL add ]'
 
 And yes, [left recursion](https://github.com/tabnas/abnf#left-recursion) is supported.
 
+## How extensibility works
+
+The engine ships no grammar, so everything — including JSON itself — arrives
+by extension. There are two composition mechanisms: **plugins** grow one
+instance's grammar in place, and **merging** combines two finished instances
+into a new one.
+
+### Grammar plugins
+
+A grammar plugin is a plain function that receives the instance (and its
+resolved options):
+
+```js
+const Csv = (tn, opts) => {
+  // define tokens and rules here
+}
+
+const tn = new Tabnas().use(Csv, { header: true })
+```
+
+Inside, a plugin builds its grammar through the same three surfaces used in
+the addition example above:
+
+- **Options** — declare tokens: fixed strings (`fixed.token`), regex or
+  function lexer matchers, custom lex matchers. Plugin-specific options are
+  auto-namespaced under `plugin.<name>` and merged over the plugin's declared
+  defaults.
+- **Rules** — `tn.rule(name, (rs) => ...)` creates a rule *or modifies an
+  existing one*: append open/close alternates, attach actions and conditions,
+  or clear what earlier plugins contributed. Alternates carry group tags
+  (`g:`), so a later plugin can insert before/after — or replace — a named
+  group instead of blindly appending.
+- **Declarative grammars** — `tn.grammar({...})` applies a whole grammar
+  spec at once; function-free specs are serializable and can reference
+  engine builtins by name.
+
+Plugins compose in sequence: each `use()` sees the grammar left by its
+predecessors. That is how the ecosystem is layered — `jsonic` extends the
+strict `json` grammar, and `csv`, `toml`, `yaml` extend `jsonic`. To
+customize without disturbing a shared instance, `tn.make()` forks a child
+that inherits config, plugins, and rules.
+
+### Grammar merging
+
+Plugins compose *vertically* — each extends what came before. `merge()`
+composes *horizontally*: `const ab = a.merge(b)` returns a **new** instance
+combining two independently built grammars, leaving both originals
+untouched.
+
+The merge is **commutative**: `a.merge(b)` and `b.merge(a)` produce the same
+options, the same rule-alternate order, and the same parse behavior.
+
+- **Options** are reconciled, not overridden. A value set on one side (or
+  equal on both) merges cleanly; a side still at the engine default yields;
+  two conflicting non-default values throw, naming the option path.
+- **Rules** defined by both sides interleave their alternates in a
+  deterministic order (token signature, then alternate complexity, group
+  tags, and finally each instance's `tag` as the tie-break).
+- **Tokens** are re-resolved in the merged instance's own token space, so
+  both grammars' tokens and matchers coexist; two fixed tokens claiming the
+  same source string is a genuine conflict and is refused.
+
+Both instances must carry distinct `tag` options so merged artifacts stay
+attributable. The exact semantics live in
+[`ts/src/merge.ts`](ts/src/merge.ts).
+
 ## Parser Plugins
 
 Every package depends only on others above it. Runtime (`prod`) dependencies on
