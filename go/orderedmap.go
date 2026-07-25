@@ -121,6 +121,35 @@ func (o *OrderedMap) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Plainify recursively converts OrderedMap nodes to plain map[string]any
+// (dropping key order) and walks lists, for consumers that need a plain
+// map tree rather than the ordered node — e.g. reconstructing an
+// order-agnostic grammar/config spec from parsed text. Other values pass
+// through unchanged.
+func Plainify(v any) any {
+	switch m := v.(type) {
+	case *OrderedMap:
+		out := make(map[string]any, len(m.Vals))
+		for k, val := range m.Vals {
+			out[k] = Plainify(val)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(m))
+		for k, val := range m {
+			out[k] = Plainify(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(m))
+		for i, val := range m {
+			out[i] = Plainify(val)
+		}
+		return out
+	}
+	return v
+}
+
 // AsStringMap returns the underlying key→value map for either an
 // OrderedMap (its Vals) or a plain map[string]any, easing migration of
 // consumers that only need value access (not order). The bool reports
