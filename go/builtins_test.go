@@ -392,8 +392,8 @@ func TestNativeValueBuilders(t *testing.T) {
 	// @object$ / @array$ / @reset$
 	ro := &Rule{Node: "seed"}
 	builtinObject(ro, nil)
-	if _, ok := ro.Node.(map[string]any); !ok {
-		t.Errorf("@object$: got %T", ro.Node)
+	if om, ok := ro.Node.(*OrderedMap); !ok || om.Len() != 0 {
+		t.Errorf("@object$: got %T (%v)", ro.Node, ro.Node)
 	}
 	ra := &Rule{Node: "seed"}
 	builtinArray(ra, nil)
@@ -560,8 +560,68 @@ func TestJsonBuilderFixtureParity(t *testing.T) {
 		}
 		var oracle any
 		_ = json.Unmarshal([]byte(input), &oracle)
-		if !reflect.DeepEqual(UnwrapUndefined(got), oracle) {
+		// Objects are OrderedMaps now; compare VALUES against the (unordered)
+		// encoding/json oracle by flattening to plain maps. Order parity is
+		// pinned separately (TestObjectInsertionOrder).
+		if !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), oracle) {
 			t.Errorf("build %q: got %#v, want %#v", input, UnwrapUndefined(got), oracle)
 		}
+	}
+}
+
+// omPlainify recursively converts OrderedMap nodes to plain map[string]any
+// (dropping order) so value-only comparisons against encoding/json can use
+// reflect.DeepEqual.
+func omPlainify(v any) any {
+	switch m := v.(type) {
+	case *OrderedMap:
+		out := make(map[string]any, len(m.Vals))
+		for k, val := range m.Vals {
+			out[k] = omPlainify(val)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(m))
+		for k, val := range m {
+			out[k] = omPlainify(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(m))
+		for i, val := range m {
+			out[i] = omPlainify(val)
+		}
+		return out
+	}
+	return v
+}
+
+// TestObjectInsertionOrder pins the headline new behaviour: the default
+// object node preserves the order keys are discovered while parsing, and a
+// sort-configured builder sorts instead.
+func TestObjectInsertionOrder(t *testing.T) {
+	spec := fixtureSpec(t, "json-builder.fixture.json")
+	if spec.Options == nil {
+		spec.Options = &Options{}
+	}
+	spec.Options.Rule = &RuleOptions{Start: "val"}
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse(`{"zebra":1,"alpha":2,"mango":3}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	om, ok := got.(*OrderedMap)
+	if !ok {
+		t.Fatalf("want *OrderedMap, got %T", got)
+	}
+	if want := []string{"zebra", "alpha", "mango"}; !reflect.DeepEqual(om.Keys, want) {
+		t.Errorf("insertion order: got %v, want %v", om.Keys, want)
+	}
+	// MarshalJSON round-trips in source order (not alphabetical).
+	if b, _ := json.Marshal(om); string(b) != `{"zebra":1,"alpha":2,"mango":3}` {
+		t.Errorf("MarshalJSON: got %s", b)
 	}
 }
