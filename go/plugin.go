@@ -800,7 +800,8 @@ func (j *Tabnas) SetOptionsText(text string) (result *Tabnas, err error) {
 	if parsed == nil {
 		return j, nil
 	}
-	m, ok := parsed.(map[string]any)
+	// Options are order-agnostic config; flatten the ordered object node.
+	m, ok := Plainify(parsed).(map[string]any)
 	if !ok {
 		return j, fmt.Errorf("SetOptionsText: expected map, got %T", parsed)
 	}

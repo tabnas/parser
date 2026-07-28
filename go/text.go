@@ -30,6 +30,10 @@ type MapRef struct {
 // reference type, so the assignment is visible through any copy of the
 // MapRef value.
 func NodeMapSet(node any, key string, val any) any {
+	if om, ok := node.(*OrderedMap); ok {
+		om.Set(key, val)
+		return om
+	}
 	if mr, ok := node.(MapRef); ok {
 		mr.Val[key] = val
 		return mr

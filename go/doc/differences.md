@@ -225,7 +225,7 @@ predictable:
 
 | Value | Go Type |
 |---|---|
-| Objects | `map[string]any` (or `MapRef` with option) |
+| Objects | `*OrderedMap` (insertion-ordered; `Map.Plain:true` → `map[string]any`, or `MapRef` with the info option) |
 | Arrays | `[]any` (or `ListRef` with option) |
 | Strings | `string` (or `Text` with option) |
 | Numbers | `float64` |

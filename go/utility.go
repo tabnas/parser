@@ -56,6 +56,37 @@ func deepMerge(base, over any) any {
 		overIsArr = true
 	}
 
+	// Ordered-map merge: when either side is an OrderedMap, keep key order
+	// (base keys in base order, then new over keys in over order) instead
+	// of dropping into an unordered map.
+	_, baseIsOM := base.(*OrderedMap)
+	_, overIsOM := over.(*OrderedMap)
+	if baseIsOM || overIsOM {
+		if bKeys, bVals, bok := mapish(base); bok {
+			if oKeys, oVals, ook := mapish(over); ook {
+				// If the overlay is a Sorted map the result is sorted too, so
+				// build a sorted result up front — Set then inserts every key in
+				// sorted position (a post-hoc Sorted flag would leave Keys in
+				// insertion order while claiming to be sorted).
+				result := NewOrderedMap()
+				if om, ok := over.(*OrderedMap); ok && om.Sorted {
+					result = NewSortedMap()
+				}
+				for _, k := range bKeys {
+					result.Set(k, bVals[k])
+				}
+				for _, k := range oKeys {
+					if existing, ok := result.Get(k); ok {
+						result.Set(k, deepMerge(existing, oVals[k]))
+					} else {
+						result.Set(k, deepClone(oVals[k]))
+					}
+				}
+				return result
+			}
+		}
+	}
+
 	if baseIsMap && overIsMap {
 		// Both maps: recursively merge
 		result := make(map[string]any)
@@ -258,6 +289,31 @@ func mergeMeta(base, over map[string]any) map[string]any {
 	return result
 }
 
+// mapish returns an ordered key list and the underlying value map for any
+// object-shaped value — an OrderedMap (its Keys/Vals), a plain
+// map[string]any, or a MapRef (its Val). Plain maps and MapRefs have no
+// recorded order, so their key list is in Go map-iteration order. The bool
+// reports whether v was object-shaped.
+func mapish(v any) (keys []string, vals map[string]any, ok bool) {
+	switch m := v.(type) {
+	case *OrderedMap:
+		return m.Keys, m.Vals, true
+	case map[string]any:
+		ks := make([]string, 0, len(m))
+		for k := range m {
+			ks = append(ks, k)
+		}
+		return ks, m, true
+	case MapRef:
+		ks := make([]string, 0, len(m.Val))
+		for k := range m.Val {
+			ks = append(ks, k)
+		}
+		return ks, m.Val, true
+	}
+	return nil, nil, false
+}
+
 // deepClone returns a recursive copy of a value (maps, slices, ListRef, MapRef); other types are returned as-is.
 // deepClone([]any{1, 2}) // => [1 2] (new slice)
 func deepClone(val any) any {
@@ -265,6 +321,16 @@ func deepClone(val any) any {
 		return nil
 	}
 	switch v := val.(type) {
+	case *OrderedMap:
+		result := &OrderedMap{
+			Keys:   append([]string(nil), v.Keys...),
+			Vals:   make(map[string]any, len(v.Vals)),
+			Sorted: v.Sorted,
+		}
+		for k, val := range v.Vals {
+			result.Vals[k] = deepClone(val)
+		}
+		return result
 	case map[string]any:
 		result := make(map[string]any)
 		for k, val := range v {
@@ -361,7 +427,7 @@ func StrInject(template string, vals any) string {
 		return ""
 	}
 
-	valsMap, isMap := vals.(map[string]any)
+	valsMap, isMap := AsStringMap(vals) // handles *OrderedMap and plain map
 	valsArr, isArr := vals.([]any)
 
 	if !isMap && !isArr {
@@ -414,6 +480,12 @@ func resolvePath(path string, valsMap map[string]any, valsArr []any, isMap bool)
 
 	for _, part := range parts {
 		switch c := current.(type) {
+		case *OrderedMap:
+			v, ok := c.Get(part)
+			if !ok {
+				return nil, false
+			}
+			current = v
 		case map[string]any:
 			v, ok := c[part]
 			if !ok {
@@ -816,6 +888,9 @@ func MapToOptions(m map[string]any) Options {
 		}
 		if child, ok := mm["child"].(bool); ok {
 			opts.Map.Child = &child
+		}
+		if plain, ok := mm["plain"].(bool); ok {
+			opts.Map.Plain = &plain
 		}
 		if fn, ok := mm["merge"].(func(any, any, *Rule, *Context) any); ok {
 			opts.Map.Merge = fn

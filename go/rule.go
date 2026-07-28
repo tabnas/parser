@@ -67,6 +67,11 @@ func UnwrapUndefined(v any) any {
 		return nil
 	}
 	switch val := v.(type) {
+	case *OrderedMap:
+		for _, k := range val.Keys {
+			val.Vals[k] = UnwrapUndefined(val.Vals[k])
+		}
+		return val
 	case map[string]any:
 		for k, vv := range val {
 			val[k] = UnwrapUndefined(vv)

@@ -93,9 +93,9 @@ type PropertyOptions struct {
 // MatchOptions controls custom token and value matching (TS options.match: RegExp|LexMatcher per entry).
 // Go splits the union: Token/Value hold regexp forms; TokenFn and MatchValueSpec.Fn hold function forms.
 type MatchOptions struct {
-	Lex        *bool                      // Enable custom matching. Default: true.
-	Token      map[string]*regexp.Regexp  // "#NAME" → regexp pattern for custom tokens.
-	TokenEager map[string]bool            // "#NAME" → true when eager (skips the rule-position gate; from @~/…/).
+	Lex        *bool                     // Enable custom matching. Default: true.
+	Token      map[string]*regexp.Regexp // "#NAME" → regexp pattern for custom tokens.
+	TokenEager map[string]bool           // "#NAME" → true when eager (skips the rule-position gate; from @~/…/).
 	// TokenOrder fixes the Tin-allocation order of Token entries so the
 	// lexer's deterministic (Tin-ascending) match-token iteration reflects
 	// a caller-chosen precedence. Names listed here are allocated first, in
@@ -230,6 +230,7 @@ type MapOptions struct {
 	Extend *bool        // Deep-merge duplicate keys. Default: true.
 	Child  *bool        // Parse bare colon as child$ key: {:1} → {"child$":1}. Default: false.
 	Merge  MapMergeFunc // Custom merge function for duplicate keys. Takes precedence over Extend.
+	Plain  *bool        // Build a plain unordered map[string]any instead of the insertion-ordered OrderedMap. For consumers that track key order themselves or don't need it. Default: false (ordered).
 }
 
 // ListOptions controls array/list behavior.
@@ -873,6 +874,7 @@ func buildConfig(o *Options) *LexConfig {
 	// Map
 	cfg.MapExtend = boolVal(optBool(o.Map, func(m *MapOptions) *bool { return m.Extend }), true)
 	cfg.MapChild = boolVal(optBool(o.Map, func(m *MapOptions) *bool { return m.Child }), false)
+	cfg.PlainMap = boolVal(optBool(o.Map, func(m *MapOptions) *bool { return m.Plain }), false)
 	if o.Map != nil && o.Map.Merge != nil {
 		cfg.MapMerge = o.Map.Merge
 	}

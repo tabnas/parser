@@ -189,16 +189,28 @@ func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 // can never leak into a child rule and mis-fire. The open- and close-side
 // builders use disjoint keys, so unconditional delete-after-read is safe.
 
-// @object$ — allocate a fresh empty object. With MapRef info on, allocate
-// a MapRef carrying the static `implicit` flag and an empty Meta bag.
+// @object$ — allocate a fresh empty object. The default object node is an
+// insertion-ordered OrderedMap (keys remember discovery order, matching
+// the TS engine's plain-object semantics). A "sort" config on the alt
+// (K:{object$:{sort:true}}) selects a Sorted node instead — the only way
+// to get alphabetical keys. With MapRef info on, allocate a MapRef
+// carrying the static `implicit` flag and an empty Meta bag.
 func builtinObject(r *Rule, ctx *Context) {
+	cfg := mapConfig(r, "object$")
+	delete(r.K, "object$")
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.MapRef {
-		cfg := mapConfig(r, "object$")
-		delete(r.K, "object$")
 		r.Node = MapRef{Val: make(map[string]any), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
 		return
 	}
-	r.Node = map[string]any{}
+	if cfgBool(cfg["sort"]) {
+		r.Node = NewSortedMap()
+		return
+	}
+	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.PlainMap {
+		r.Node = map[string]any{}
+		return
+	}
+	r.Node = NewOrderedMap()
 }
 
 // @array$ — allocate a fresh empty array. With ListRef info on, allocate
@@ -249,7 +261,7 @@ func builtinSetval(r *Rule, _ *Context) {
 	}
 	key, _ := r.U[slot].(string)
 	switch r.Node.(type) {
-	case map[string]any, MapRef:
+	case map[string]any, MapRef, *OrderedMap:
 		r.Node = NodeMapSet(r.Node, key, r.Child.Node)
 	}
 }
