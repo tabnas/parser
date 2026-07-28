@@ -64,7 +64,14 @@ func deepMerge(base, over any) any {
 	if baseIsOM || overIsOM {
 		if bKeys, bVals, bok := mapish(base); bok {
 			if oKeys, oVals, ook := mapish(over); ook {
+				// If the overlay is a Sorted map the result is sorted too, so
+				// build a sorted result up front — Set then inserts every key in
+				// sorted position (a post-hoc Sorted flag would leave Keys in
+				// insertion order while claiming to be sorted).
 				result := NewOrderedMap()
+				if om, ok := over.(*OrderedMap); ok && om.Sorted {
+					result = NewSortedMap()
+				}
 				for _, k := range bKeys {
 					result.Set(k, bVals[k])
 				}
@@ -74,9 +81,6 @@ func deepMerge(base, over any) any {
 					} else {
 						result.Set(k, deepClone(oVals[k]))
 					}
-				}
-				if om, ok := over.(*OrderedMap); ok {
-					result.Sorted = om.Sorted
 				}
 				return result
 			}
@@ -423,7 +427,7 @@ func StrInject(template string, vals any) string {
 		return ""
 	}
 
-	valsMap, isMap := vals.(map[string]any)
+	valsMap, isMap := AsStringMap(vals) // handles *OrderedMap and plain map
 	valsArr, isArr := vals.([]any)
 
 	if !isMap && !isArr {
@@ -476,6 +480,12 @@ func resolvePath(path string, valsMap map[string]any, valsArr []any, isMap bool)
 
 	for _, part := range parts {
 		switch c := current.(type) {
+		case *OrderedMap:
+			v, ok := c.Get(part)
+			if !ok {
+				return nil, false
+			}
+			current = v
 		case map[string]any:
 			v, ok := c[part]
 			if !ok {
@@ -878,6 +888,9 @@ func MapToOptions(m map[string]any) Options {
 		}
 		if child, ok := mm["child"].(bool); ok {
 			opts.Map.Child = &child
+		}
+		if plain, ok := mm["plain"].(bool); ok {
+			opts.Map.Plain = &plain
 		}
 		if fn, ok := mm["merge"].(func(any, any, *Rule, *Context) any); ok {
 			opts.Map.Merge = fn

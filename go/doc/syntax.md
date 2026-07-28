@@ -14,7 +14,7 @@ tabnas maps parsed values to Go types:
 
 | Value             | Go type        |
 |-------------------|----------------|
-| Object            | `map[string]any` |
+| Object            | `*OrderedMap` (insertion-ordered; `Map.Plain:true` → `map[string]any`) |
 | Array             | `[]any`        |
 | String            | `string`       |
 | Number (any form) | `float64`      |

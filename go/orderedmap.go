@@ -5,6 +5,7 @@ package tabnas
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"sort"
 )
 
@@ -148,6 +149,74 @@ func Plainify(v any) any {
 		return out
 	}
 	return v
+}
+
+// UnmarshalJSON decodes a JSON object into the OrderedMap, preserving the
+// key order they appear in the source (the counterpart to MarshalJSON, so
+// json.Unmarshal(json.Marshal(om), &dst) round-trips instead of mistreating
+// the value as a {Keys,Vals,Sorted} struct). Nested objects decode into
+// OrderedMaps too; numbers follow encoding/json (float64).
+func (o *OrderedMap) UnmarshalJSON(data []byte) error {
+	v, err := decodeOrdered(json.NewDecoder(bytes.NewReader(data)))
+	if err != nil {
+		return err
+	}
+	om, ok := v.(*OrderedMap)
+	if !ok {
+		return fmt.Errorf("OrderedMap: expected a JSON object, got %T", v)
+	}
+	o.Keys, o.Vals, o.Sorted = om.Keys, om.Vals, om.Sorted
+	return nil
+}
+
+// decodeOrdered reads one JSON value from dec, decoding objects into
+// OrderedMaps (source key order), arrays into []any, and scalars as-is.
+func decodeOrdered(dec *json.Decoder) (any, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return tok, nil // scalar: string / float64 / bool / nil
+	}
+	switch delim {
+	case '{':
+		om := NewOrderedMap()
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := kt.(string)
+			if !ok {
+				return nil, fmt.Errorf("OrderedMap: non-string object key %v", kt)
+			}
+			val, err := decodeOrdered(dec)
+			if err != nil {
+				return nil, err
+			}
+			om.Set(key, val)
+		}
+		if _, err := dec.Token(); err != nil { // consume '}'
+			return nil, err
+		}
+		return om, nil
+	case '[':
+		arr := []any{}
+		for dec.More() {
+			val, err := decodeOrdered(dec)
+			if err != nil {
+				return nil, err
+			}
+			arr = append(arr, val)
+		}
+		if _, err := dec.Token(); err != nil { // consume ']'
+			return nil, err
+		}
+		return arr, nil
+	}
+	return nil, fmt.Errorf("OrderedMap: unexpected token %v", tok)
 }
 
 // AsStringMap returns the underlying key→value map for either an

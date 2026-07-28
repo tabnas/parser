@@ -44,11 +44,14 @@ Parse with metadata accessible in rule actions/conditions via
 ## Result types
 
 A JSON-style grammar maps the returned `any` to these concrete types:
-`map[string]any` (objects), `[]any` (arrays), `float64` (numbers),
-`string` (strings), `bool` (booleans), `nil` (null / empty input) — the
-exact mapping is the grammar's choice. With `Info` options enabled,
-those values are wrapped in `Text`, `ListRef`, and `MapRef`. See the
-[syntax reference](syntax.md).
+`*OrderedMap` (objects — an insertion-ordered map preserving source key
+order; `Keys`/`Vals`, ordered `MarshalJSON`/`UnmarshalJSON`, `AsStringMap`),
+`[]any` (arrays), `float64` (numbers), `string` (strings), `bool`
+(booleans), `nil` (null / empty input) — the exact mapping is the
+grammar's choice. Set `Map.Plain: true` to get a plain unordered
+`map[string]any` instead (for consumers that track order themselves).
+With `Info` options enabled, values are wrapped in `Text`, `ListRef`,
+and `MapRef`. See the [syntax reference](syntax.md).
 
 ## Instance management
 

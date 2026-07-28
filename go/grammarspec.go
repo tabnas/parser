@@ -239,7 +239,8 @@ func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) (err error
 	if parsed == nil {
 		return nil
 	}
-	gsMap, ok := parsed.(map[string]any)
+	// A grammar spec is order-agnostic config; flatten the ordered node.
+	gsMap, ok := Plainify(parsed).(map[string]any)
 	if !ok {
 		return fmt.Errorf("GrammarText: expected map, got %T", parsed)
 	}
