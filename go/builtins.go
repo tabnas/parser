@@ -206,6 +206,10 @@ func builtinObject(r *Rule, ctx *Context) {
 		r.Node = NewSortedMap()
 		return
 	}
+	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.PlainMap {
+		r.Node = map[string]any{}
+		return
+	}
 	r.Node = NewOrderedMap()
 }
 

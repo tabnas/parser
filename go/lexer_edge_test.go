@@ -80,12 +80,12 @@ func TestMatchStringEscapeErrors(t *testing.T) {
 		src  string
 		code string
 	}{
-		{`"\xZZ"`, "invalid_ascii"},                 // bad hex digits
-		{`"\x4`, "invalid_ascii"},                   // truncated at end
-		{`"\uZZZZ"`, "invalid_unicode"},             // bad 4-digit hex
-		{`"\u4`, "invalid_unicode"},                 // truncated 4-digit form
-		{`"\u{GG}"`, "invalid_unicode"},             // bad braced hex
-		{`"\u{42`, "invalid_unicode"},               // unterminated brace
+		{`"\xZZ"`, "invalid_ascii"},     // bad hex digits
+		{`"\x4`, "invalid_ascii"},       // truncated at end
+		{`"\uZZZZ"`, "invalid_unicode"}, // bad 4-digit hex
+		{`"\u4`, "invalid_unicode"},     // truncated 4-digit form
+		{`"\u{GG}"`, "invalid_unicode"}, // bad braced hex
+		{`"\u{42`, "invalid_unicode"},   // unterminated brace
 		{`"abc`, "unterminated_string"}, // no closing quote
 		// Control char in a non-multiline string: unprintable, matching
 		// the TS runtime (previously mis-reported unterminated_string).

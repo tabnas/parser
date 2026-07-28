@@ -263,6 +263,11 @@ type LexConfig struct {
 	// MapRef wraps map output values in MapRef structs.
 	MapRef bool
 
+	// PlainMap builds a plain unordered map[string]any object node instead
+	// of the insertion-ordered OrderedMap (for consumers that track order
+	// themselves or don't need it).
+	PlainMap bool
+
 	// InfoMarker is the key name to protect from user data when info options
 	// are enabled. Keys matching this value are dropped during parsing.
 	// Matches TS cfg.info.marker. Empty string means no protection.

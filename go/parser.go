@@ -209,12 +209,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	ctx := &Context{
-		UI:       0,
-		T:        []*Token{NoToken, NoToken},
-		T0:       NoToken,
-		T1:       NoToken,
-		V1:       NoToken,
-		V2:       NoToken,
+		UI: 0,
+		T:  []*Token{NoToken, NoToken},
+		T0: NoToken,
+		T1: NoToken,
+		V1: NoToken,
+		V2: NoToken,
 		// Rule stack depth is bounded by grammar nesting (typically tens),
 		// not source length; start small and let the push path's append
 		// grow it (matches the TS runtime, whose stack starts empty).
