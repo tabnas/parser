@@ -692,6 +692,33 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 
 		tkn := l.nextRaw(r)
+
+		// Notify lex subscribers for EVERY raw token, including ones the
+		// IGNORE set drops below. This mirrors the TS lexer, which calls
+		// ctx.sub.lex at the end of Lex.next() before the parser's rule loop
+		// does any ignoring — a plugin that watches trivia (comments, line
+		// continuations) only sees it if the ignored tokens are delivered.
+		if l.Ctx != nil && 0 < len(l.Ctx.LexSubs) {
+			delivered := tkn
+			if delivered == nil {
+				// No matcher claimed the input. TS synthesizes a #BD token at
+				// this point and still delivers it, so a subscriber observes
+				// the failure position rather than silence. The error built
+				// below is left exactly as it was.
+				bad := ""
+				if l.pnt.SI < len(l.Src) {
+					bad = string(l.Src[l.pnt.SI])
+				}
+				delivered = &Token{
+					Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
+					SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI,
+				}
+			}
+			for _, sub := range l.Ctx.LexSubs {
+				sub(delivered, r, l.Ctx)
+			}
+		}
+
 		if tkn == nil {
 			src := ""
 			if l.pnt.SI < len(l.Src) {

@@ -442,7 +442,11 @@ func (j *Tabnas) SetTokenSet(name string, tins []Tin) {
 }
 
 // Sub subscribes to lex and/or rule events.
-// LexSub fires after each non-ignored token is lexed.
+// LexSub fires after EVERY token the lexer produces, including tokens in the
+// IGNORE set (whitespace, comments, line breaks) — matching the TypeScript
+// runtime, so a subscriber that reconstructs source or collects trivia sees
+// the same stream in both. Subscribers that only want grammar-significant
+// tokens must filter on the token name themselves.
 // RuleSub fires after each rule processing step.
 // Returns the Tabnas instance for chaining.
 func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {

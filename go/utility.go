@@ -863,6 +863,13 @@ func MapToOptions(m map[string]any) Options {
 		if esc, ok := sm["escape"].(map[string]any); ok {
 			opts.String.Escape = make(map[string]string, len(esc))
 			for k, v := range esc {
+				// A null value removes a built-in escape, matching the TS
+				// runtime where `escape: {v: null}` drops \v. Internally the
+				// removal marker is "" (see StringOptions.Escape).
+				if v == nil {
+					opts.String.Escape[k] = ""
+					continue
+				}
 				if s, ok := v.(string); ok {
 					opts.String.Escape[k] = s
 				}
