@@ -206,9 +206,8 @@ flowchart TD
 The same grammar can be written in standard
 [ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) with the
 [`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin, which compiles ABNF
-into engine rules. Not a similar grammar — *this* grammar: the ABNF below is
-character-for-character what the `describe()` dump above prints for the
-hand-written version.
+into engine rules. Not a similar grammar — *this* grammar: the same four
+productions the `describe()` dump above prints for the hand-written version.
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
@@ -235,27 +234,16 @@ tn.parse('1+2+3').value    // => 6
 tn.parse('12+3+45').value  // => 60
 ```
 
-Each line compiles to the same thing the hand-written grammar declares
-explicitly:
-
-| ABNF | Hand-written equivalent |
-|---|---|
-| `val = add` | the `val` rule, whose `open` pushes `add` |
-| `add = NR [ PL add ]` | `add`'s `open` matching `#NR`, `close` replacing with `add` on `#PL` |
-| `NR = <number>` | nothing — `#NR` is the engine's built-in number token |
-| `PL = "+"` | `fixed: { token: { '#PL': '+' } }` |
-
-The last two are worth dwelling on. `PL = "+"` is a production whose whole
-body is a single literal, so it is a *lexical* definition and compiles to a
-named fixed token rather than a rule. And `NR = <number>` is RFC 5234
-`prose-val` — free text describing a terminal rather than defining one, which
-for a built-in lexer token is exactly right: the line documents that `NR` is
-the number token and compiles to nothing.
+Each line compiles to what the hand-written grammar declares explicitly:
+`PL = "+"` becomes the `#PL` fixed token, and `NR = <number>` compiles to
+nothing, because `#NR` is already the engine's built-in number token. See
+[`@tabnas/abnf`'s reference](https://github.com/tabnas/abnf/blob/main/ts/doc/reference.md#the-abnf-dialect)
+for the rules behind both.
 
 Because both notations describe the same grammar, it round-trips.
 [`@tabnas/debug`](https://github.com/tabnas/debug) renders the live engine
-back to ABNF, and what comes out is what went in — re-compilable, not just
-readable:
+back to ABNF, and what comes out is what went in — character for character,
+re-compilable, not just readable:
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
