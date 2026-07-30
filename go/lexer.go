@@ -692,6 +692,18 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 
 		tkn := l.nextRaw(r)
+
+		// Notify lex subscribers for EVERY raw token, including ones the
+		// IGNORE set drops below. This mirrors the TS lexer, which calls
+		// ctx.sub.lex at the end of Lex.next() before the parser's rule loop
+		// does any ignoring — a plugin that watches trivia (comments, line
+		// continuations) only sees it if the ignored tokens are delivered.
+		if tkn != nil && l.Ctx != nil && 0 < len(l.Ctx.LexSubs) {
+			for _, sub := range l.Ctx.LexSubs {
+				sub(tkn, r, l.Ctx)
+			}
+		}
+
 		if tkn == nil {
 			src := ""
 			if l.pnt.SI < len(l.Src) {

@@ -949,11 +949,8 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				} else if i == 1 {
 					ctx.T1 = tkn
 				}
-				if len(ctx.LexSubs) > 0 {
-					for _, sub := range ctx.LexSubs {
-						sub(tkn, rule, ctx)
-					}
-				}
+				// Lex subscribers are notified inside Lex.Next (for every
+				// raw token, ignored ones included), matching the TS lexer.
 			}
 
 			// Empty alt.S[i] means "no Tin constraint at this position"
