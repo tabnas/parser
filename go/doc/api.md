@@ -345,6 +345,11 @@ type LexSub  func(tkn *Token, rule *Rule, ctx *Context)
 type RuleSub func(rule *Rule, ctx *Context)
 ```
 
+`LexSub` fires for **every** token the lexer produces, including tokens in
+the IGNORE set (whitespace, comments, line breaks) — the same stream the
+TypeScript runtime delivers. Filter on the token name if you only want
+grammar-significant tokens.
+
 ## Configuration
 
 ### `(*Tabnas) Config() *LexConfig`
