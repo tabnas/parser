@@ -221,14 +221,11 @@ tn.abnf(`
   PL  = "+"
 `, {
   actions: {
-    // Each `add` holds its own number...
-    '@add:o:NR': (r) => { r.node.value = r.o[0].val },
+    // `val` holds the running total.
+    '@val:o:add': (r) => { r.node.value = 0 },
 
-    // ...plus whatever the nested `add` came to.
-    '@add:ac': (r) => { r.node.value += r.node.kids[0]?.value ?? 0 },
-
-    // `val` carries the result of the parse.
-    '@val:ac': (r) => { r.node.value = r.node.kids[0].value },
+    // Each number adds to it.
+    '@add:o:NR': (r) => { r.parent.node.value += r.o[0].val },
   },
 })
 
@@ -236,9 +233,11 @@ tn.parse('1+2+3').value    // => 6
 tn.parse('12+3+45').value  // => 60
 ```
 
-The total lands on `val`'s node — the same place the hand-written grammar
-above keeps it — so `parse` returns it and the instance carries no state
-between calls.
+The same two actions, on the same two rules, as the hand-written grammar
+above — because the compiler emits the same shape. The tail self-reference
+`[ PL add ]` compiles to the `r: 'add'` close-phase repeat the hand-written
+grammar declares, so `r.parent` is `val` for every repetition and the total
+lands on `val`'s node, where `parse` returns it.
 
 Each line compiles to what the hand-written grammar declares explicitly:
 `PL = "+"` becomes the `#PL` fixed token, and `NR = <number>` compiles to
