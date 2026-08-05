@@ -6,7 +6,7 @@ is understanding-oriented reading, not a task list — for steps see the
 signatures see the [API](api.md) and [options](options.md) references.
 
 The engine model — grammar-as-plugin, the lexer/parser split, the
-open/close rule machinery, two-token lookahead, instance derivation —
+open/close rule machinery, grammar-declared lookahead, instance derivation —
 is shared by both runtimes and described once in
 [../../doc/architecture.md](../../doc/architecture.md). This document
 covers only what is specific to the TypeScript port.

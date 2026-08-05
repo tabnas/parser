@@ -1,5 +1,23 @@
 # Feasibility Report: Converting BNF Grammars into Tabnas Grammars
 
+> **⚠️ Premise superseded — this report needs revisiting.**
+>
+> The analysis below assumes tabnas has a hard **two-token lookahead
+> ceiling**. That is no longer true. Lookahead depth is now declared by each
+> alternate (`alt.sN`, i.e. `alt.s.length`) and the engine collates lookahead
+> columns to the deepest depth a rule declares; `ctx.t` grows on demand. See
+> [`../../doc/architecture.md`](../../doc/architecture.md) and the
+> "Generalizes the previous hard-coded 2-slot collation" note in
+> `src/rules.ts`.
+>
+> The conclusions here are therefore **pessimistic** rather than wrong — the
+> constraint that remains is determinism (first match wins, no backtracking),
+> not depth. Sections that need rework: the "LL(2)-friendly subset" framing in
+> the Summary, §1, the lookahead row in the primitive-mapping table,
+> "Two-token lookahead ceiling" (§ limits), the rule-splitting requirement,
+> and ">2-token lookahead" in the cost list. A converter is likely *more*
+> feasible than this document concludes.
+
 ## Summary
 
 A converter from Backus–Naur Form (BNF) grammars to tabnas grammar specs is

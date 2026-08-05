@@ -53,8 +53,8 @@ matchers on the same primitives.
 
 The parser consumes tokens according to **rules**. Each rule has two
 phases — **open** and **close** — and each phase holds a list of
-**alternates**. An alternate matches a short token pattern (up to two
-tokens of lookahead) and, when it matches, can:
+**alternates**. An alternate matches a token pattern — one token, or as
+many as it declares — and, when it matches, can:
 
 - run an **action** that builds or mutates the result node,
 - **push** a child rule onto the stack (e.g. an object opens a `map` rule),
@@ -66,10 +66,22 @@ Four **state-action hooks** — before-open, after-open, before-close,
 after-close — let a rule run code at each phase boundary (for example,
 initialising a node to `{}` before its open phase).
 
+**Lookahead depth is set by the grammar, not by the engine.** Each
+alternate declares how many token positions it needs (`sN`), and each
+rule collates its lookahead columns to the deepest declared across its
+alternates, per phase (`rules.ts`, `tcol`). The context's lookahead
+buffer (`ctx.t`) is seeded with two slots and grows as alternates ask
+for deeper positions via `t[i]`. There is no fixed limit — an earlier
+version of the engine hard-coded two slots, and that restriction is
+gone. (`ctx.t0` / `t1` survive as deprecated aliases for the first two
+slots; new grammar code should index `t[i]` directly.)
+
 This open/close, push/replace model is deliberately small and strictly
-deterministic: there is no backtracking search, only two-token
-lookahead. That constraint is what keeps parsing linear and predictable,
-and it is the main thing a grammar author has to design around.
+deterministic: alternates are tried in order, the first match wins, and
+there is no backtracking search. That is what keeps parsing linear and
+predictable, and it is the main thing a grammar author has to design
+around — a grammar has to be resolvable without exploring alternatives,
+however far ahead it needs to look to do so.
 
 ## Instances and derivation
 
