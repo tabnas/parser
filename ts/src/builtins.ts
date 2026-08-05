@@ -13,7 +13,8 @@
  *
  *  Two families:
  *
- *  1. Tree builders (`@node$`, `@capture$`, `@bubble$`) — rebuild the
+ *  1. Tree builders (`@node$`, `@capture$`, `@bubble$`, `@fold$`) —
+ *     rebuild the
  *     `{rule?, src, kids}` AST that the hand-written `@tabnas/abnf` plugin
  *     produces. Per-alt config rides in `alt.k.<name>` (the propagated
  *     `k` field), read from the action's 3rd argument so child rules are
@@ -42,7 +43,7 @@ import type { Rule, Context, AltMatch, AltAction, AltCond } from './types'
 // The config-schema version implemented by these builtins. A serialized
 // grammar that declares `GrammarSpec.v` greater than this is refused at
 // load (see Tabnas.grammar). Absent ⇒ treated as version 1.
-export const BUILTIN_SCHEMA_VERSION = 2
+export const BUILTIN_SCHEMA_VERSION = 3
 
 
 const defprop = Object.defineProperty
@@ -87,6 +88,10 @@ interface NodeConfig {
 interface CaptureConfig {
   rule?: string
   kind?: string
+}
+interface FoldConfig {
+  // Close-phase tokens whose src appends to the parent after the fold.
+  cN?: number
 }
 
 // Per-alt config for the native-value builders. `slot` is the r.u key the
@@ -147,6 +152,32 @@ const capture$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
 // Lift the committed child's node straight up (no merge).
 const bubble$: AltAction = (r: Rule) => {
   if (r.child && (r.child.node as any) !== undefined) r.node = r.child.node
+}
+
+// Fold this rule's node upward into its *parent's* node, then clear it.
+// Emitted on the close alts of a tail-repeat rule (`X = seq [ sep X ]`
+// compiled to a same-depth `r:` repeat): each iteration delivers its own
+// node to the parent as a sibling kid, since the parent's `r.child`
+// pointer stays on the FIRST iteration and capture-on-close cannot see
+// the run. Clearing `r.node` makes the parent's later `capture$` a no-op
+// on that stale pointer.
+//
+// `cfg.cN` close-phase tokens (the separator, e.g. `+`) append their src
+// to the parent after the fold, so the parent's src spans the full run
+// while each kid spans only its own segment.
+const fold$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
+  const cfg: FoldConfig = (alt && alt.k && alt.k.fold$) || {}
+  const p = r.parent && (r.parent.node as any)
+  if (null == p || 'object' !== typeof p || !('src' in p)) return
+  const own = r.node as any
+  if (null != own && 'object' === typeof own && 'src' in own && own !== p) {
+    p.src += own.src
+    if (own.rule) p.kids.push(own)
+    else if (Array.isArray(own.kids)) p.kids.push(...own.kids)
+  }
+  const cN = cfg.cN || 0
+  for (let i = 0; i < cN; i++) p.src += r.c[i].src
+  r.node = undefined
 }
 
 
@@ -290,6 +321,7 @@ export const BUILTIN_REFS: Readonly<Record<string, BuiltinRef>> = Object.freeze(
   '@node$': node$,
   '@capture$': capture$,
   '@bubble$': bubble$,
+  '@fold$': fold$,
   '@probeInit$': probeInit$,
   '@probeDecide$': probeDecide$,
   '@probePhase0$': probePhase0$,

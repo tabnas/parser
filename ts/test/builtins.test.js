@@ -20,9 +20,10 @@ describe('builtins', () => {
     it('exports the expected frozen ref set', () => {
       assert.deepEqual(
         Object.keys(BUILTIN_REFS).sort(),
-        ['@array$', '@bubble$', '@capture$', '@key$', '@node$', '@object$',
-          '@probeDecide$', '@probeInit$', '@probePhase0$', '@probePhase1$',
-          '@probePhase2$', '@push$', '@reset$', '@setval$', '@value$'])
+        ['@array$', '@bubble$', '@capture$', '@fold$', '@key$', '@node$',
+          '@object$', '@probeDecide$', '@probeInit$', '@probePhase0$',
+          '@probePhase1$', '@probePhase2$', '@push$', '@reset$', '@setval$',
+          '@value$'])
       assert.equal(Object.isFrozen(BUILTIN_REFS), true)
     })
 
@@ -58,6 +59,46 @@ describe('builtins', () => {
       const j = treeGrammar({ a: '@capture$', k: { capture$: { rule: 'top', kind: 'user' } } })
       assert.deepEqual(j.parse('a'),
         { rule: 'top', src: 'a', kids: [{ rule: 'lit', src: 'a', kids: [] }] })
+    })
+
+    it('@fold$ delivers a tail-repeat run to the parent as siblings', () => {
+      // The shape @tabnas/abnf emits for `X = NR [ PL X ]`: a same-depth
+      // repeat where each iteration folds itself into the parent. The
+      // parent's r.child stays on the FIRST iteration, so its @capture$
+      // must see a cleared node and no-op.
+      const j = new Tabnas({
+        rule: { start: 'val' }, fixed: { token: { '#PL': '+' } } })
+      j.grammar({
+        rule: {
+          val: {
+            open: [{ p: 'add', a: '@node$',
+              k: { node$: { init: true, rule: 'val', kind: 'user', nterms: 0 } } }],
+            close: [{ a: '@capture$', k: { capture$: { rule: 'val', kind: 'user' } } }],
+          },
+          add: {
+            open: [{ s: ['#NR'], a: '@node$',
+              k: { node$: { init: true, rule: 'add', kind: 'user', nterms: 1 } } }],
+            close: [
+              { s: ['#PL'], r: 'add', a: '@fold$', k: { fold$: { cN: 1 } } },
+              { a: '@fold$', k: { fold$: {} } },
+            ],
+          },
+        },
+      })
+      assert.deepEqual(j.parse('1+2+3'), {
+        rule: 'val', src: '1+2+3', kids: [
+          { rule: 'add', src: '1', kids: [] },
+          { rule: 'add', src: '2', kids: [] },
+          { rule: 'add', src: '3', kids: [] },
+        ],
+      })
+      // Single element: one iteration, no separator.
+      assert.deepEqual(j.parse('7'), {
+        rule: 'val', src: '7', kids: [{ rule: 'add', src: '7', kids: [] }],
+      })
+      // Re-parse holds: no state leaks between runs.
+      assert.equal(j.parse('12+3+45').src, '12+3+45')
+      assert.equal(j.parse('12+3+45').kids.length, 3)
     })
 
     it('@bubble$ lifts the child node without merging', () => {

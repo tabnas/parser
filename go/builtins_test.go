@@ -22,7 +22,7 @@ import (
 // --- builtin library ---
 
 func TestBuiltinRefsLibrary(t *testing.T) {
-	want := []string{"@bubble$", "@capture$", "@node$", "@probeDecide$",
+	want := []string{"@bubble$", "@capture$", "@fold$", "@node$", "@probeDecide$",
 		"@probeInit$", "@probePhase0$", "@probePhase1$", "@probePhase2$",
 		"@object$", "@array$", "@reset$", "@key$", "@setval$", "@push$", "@value$"}
 	got := make([]string, 0, len(BUILTIN_REFS))
@@ -37,8 +37,8 @@ func TestBuiltinRefsLibrary(t *testing.T) {
 			t.Errorf("missing builtin %q", k)
 		}
 	}
-	if BUILTIN_SCHEMA_VERSION != 2 {
-		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 2", BUILTIN_SCHEMA_VERSION)
+	if BUILTIN_SCHEMA_VERSION != 3 {
+		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 3", BUILTIN_SCHEMA_VERSION)
 	}
 }
 
@@ -623,5 +623,73 @@ func TestObjectInsertionOrder(t *testing.T) {
 	// MarshalJSON round-trips in source order (not alphabetical).
 	if b, _ := json.Marshal(om); string(b) != `{"zebra":1,"alpha":2,"mango":3}` {
 		t.Errorf("MarshalJSON: got %s", b)
+	}
+}
+
+
+// --- @fold$ (tail-repeat delivery) ---
+
+// The shape @tabnas/abnf emits for `X = NR [ PL X ]`: a same-depth
+// repeat where each iteration folds itself into the parent. Mirrors the
+// TS test "@fold$ delivers a tail-repeat run to the parent as siblings".
+func TestBuiltinFoldTailRepeat(t *testing.T) {
+	tn := Make()
+	err := tn.Grammar(&GrammarSpec{
+		OptionsMap: map[string]any{
+			"rule":  map[string]any{"start": "val"},
+			"fixed": map[string]any{"token": map[string]any{"#PL": "+"}},
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"val": {
+				Open: []*GrammarAltSpec{{P: "add", A: "@node$",
+					K: map[string]any{"node$": map[string]any{
+						"init": true, "rule": "val", "kind": "user"}}}},
+				Close: []*GrammarAltSpec{{A: "@capture$",
+					K: map[string]any{"capture$": map[string]any{
+						"rule": "val", "kind": "user"}}}},
+			},
+			"add": {
+				Open: []*GrammarAltSpec{{S: []string{"#NR"}, A: "@node$",
+					K: map[string]any{"node$": map[string]any{
+						"init": true, "rule": "add", "kind": "user",
+						"nterms": 1}}}},
+				Close: []*GrammarAltSpec{
+					{S: []string{"#PL"}, R: "add", A: "@fold$",
+						K: map[string]any{"fold$": map[string]any{"cN": 1}}},
+					{A: "@fold$"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tn.Parse("1+2+3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := out.(map[string]any)
+	if n == nil || n["src"] != "1+2+3" {
+		t.Fatalf("root: got %v", out)
+	}
+	kids, _ := n["kids"].([]any)
+	if len(kids) != 3 {
+		t.Fatalf("kids: got %d, want 3: %v", len(kids), n)
+	}
+	for i, want := range []string{"1", "2", "3"} {
+		k, _ := kids[i].(map[string]any)
+		if k == nil || k["rule"] != "add" || k["src"] != want ||
+			len(asAnySlice(k["kids"])) != 0 {
+			t.Errorf("kid %d: got %v, want add(%s)", i, kids[i], want)
+		}
+	}
+	// Single element: one iteration, no separator.
+	out7, err := tn.Parse("7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n7, _ := out7.(map[string]any)
+	if n7 == nil || n7["src"] != "7" || len(asAnySlice(n7["kids"])) != 1 {
+		t.Fatalf("single: got %v", out7)
 	}
 }
