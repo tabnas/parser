@@ -51,8 +51,6 @@ Shared design docs for both runtimes live at the top of the repo:
 
 ### Explanation / design notes
 
-- [BNF feasibility](doc/bnf-to-tabnas-feasibility.md) — turning
-  BNF / ABNF into engine rules.
 - [LSP feasibility](doc/lsp-feasibility.md) — language-server angles.
 
 ## Companion packages

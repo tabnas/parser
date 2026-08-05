@@ -89,8 +89,6 @@ the `error` / `hint` / `errmsg` options.
 
 Longer-form explorations live alongside this doc:
 
-- [BNF feasibility](bnf-to-tabnas-feasibility.md) — mapping BNF / ABNF
-  onto the engine's rule model.
 - [LSP feasibility](lsp-feasibility.md) — language-server angles on the
   engine.
 
