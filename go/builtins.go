@@ -29,7 +29,7 @@ import "reflect"
 // BUILTIN_SCHEMA_VERSION is the config-schema version these builtins
 // implement. A serialized grammar declaring GrammarSpec.V greater than
 // this is refused at load. Absent (zero) ⇒ treated as version 1.
-const BUILTIN_SCHEMA_VERSION = 2
+const BUILTIN_SCHEMA_VERSION = 3
 
 // mkNode builds the AST node shape produced by the tree builtins:
 // `{rule?, src, kids}`. `user` rules carry a `rule` tag; others omit it
@@ -128,6 +128,54 @@ func builtinBubble(r *Rule, _ *Context) {
 	if r.Child != nil && r.Child.Node != Undefined {
 		r.Node = r.Child.Node
 	}
+}
+
+// @fold$ — fold this rule's node upward into its *parent's* node, then
+// clear it. Emitted on the close alts of a tail-repeat rule
+// (`X = seq [ sep X ]` compiled to a same-depth `r:` repeat): each
+// iteration delivers its own node to the parent as a sibling kid, since
+// the parent's Child pointer stays on the FIRST iteration and
+// capture-on-close cannot see the run. Clearing Node makes the parent's
+// later @capture$ a no-op on that stale pointer.
+//
+// cN close-phase tokens (the separator, e.g. `+`) append their src to
+// the parent after the fold, so the parent's src spans the full run
+// while each kid spans only its own segment.
+// Config in r.K["fold$"] = {cN?}.
+func builtinFold(r *Rule, _ *Context) {
+	cfg := mapConfig(r, "fold$")
+	if r.Parent == nil || r.Parent == NoRule {
+		return
+	}
+	p, _ := r.Parent.Node.(map[string]any)
+	if p == nil {
+		return
+	}
+	if _, hasSrc := p["src"]; !hasSrc {
+		return
+	}
+	if own, ok := r.Node.(map[string]any); ok && own != nil {
+		_, ownHasSrc := own["src"]
+		if ownHasSrc &&
+			reflect.ValueOf(own).Pointer() != reflect.ValueOf(p).Pointer() {
+			ps, _ := p["src"].(string)
+			os, _ := own["src"].(string)
+			p["src"] = ps + os
+			if own["rule"] != nil && own["rule"] != "" {
+				p["kids"] = append(asAnySlice(p["kids"]), own)
+			} else if oks, okk := own["kids"].([]any); okk {
+				p["kids"] = append(asAnySlice(p["kids"]), oks...)
+			}
+		}
+	}
+	cN := cfgInt(cfg["cN"])
+	for i := 0; i < cN && i < len(r.C); i++ {
+		if r.C[i] != nil {
+			ps, _ := p["src"].(string)
+			p["src"] = ps + r.C[i].Src
+		}
+	}
+	r.Node = Undefined
 }
 
 func asAnySlice(v any) []any {
@@ -320,6 +368,7 @@ var BUILTIN_REFS = map[FuncRef]any{
 	"@node$":        AltAction(builtinNode),
 	"@capture$":     AltAction(builtinCapture),
 	"@bubble$":      AltAction(builtinBubble),
+	"@fold$":        AltAction(builtinFold),
 	"@probeInit$":   AltAction(builtinProbeInit),
 	"@probeDecide$": AltAction(builtinProbeDecide),
 	"@probePhase0$": AltCond(builtinProbePhase0),
