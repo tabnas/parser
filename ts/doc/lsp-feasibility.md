@@ -73,13 +73,14 @@ body, no notion of "after an error, where do I resume?".
 
 ## 3. Parsing Model and Why It Can Resume
 
-Tabnas is a **stack-based rule engine with 2-token lookahead**, not
-recursive descent.
+Tabnas is a **stack-based rule engine with grammar-declared lookahead**,
+not recursive descent.
 
 - `RuleSpec` (`src/rules.ts:161-205`, `src/types.ts:300-336`) has two
   ordered `AltSpec[]` lists: `open` and `close`.
 - An `AltSpec` (`src/types.ts:692-720`) carries:
-  - `s` — 1- or 2-token match sequence.
+  - `s` — the token match sequence; its length (`sN`) sets this
+    alternate's lookahead depth.
   - `p` / `r` — push a child rule / replace current rule.
   - `b` — backtrack count.
   - `c` — condition closure.
@@ -240,7 +241,7 @@ feasibility.
 
 1. **Token insertion.** Should recovery also synthesise a missing token
    (e.g. an absent `,`) and keep the current rule running? This is
-   Roslyn-style and pairs well with tabnas's 2-token lookahead but
+   Roslyn-style and pairs well with tabnas's lookahead model but
    meaningfully enlarges the design. Recommend **deferring** to a second
    iteration.
 2. **Structural sync fallback.** When `syncSet` is empty (deep stack, no

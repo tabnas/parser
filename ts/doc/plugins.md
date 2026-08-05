@@ -201,7 +201,7 @@ the append behavior unchanged.
 
 | Field | Description |
 |---|---|
-| `s` | Token pattern to match — array of token-name strings (or arrays of names for OR-of-tokens), or a space-separated string. Up to two-token lookahead. |
+| `s` | Token pattern to match — array of token-name strings (or arrays of names for OR-of-tokens), or a space-separated string. Its length sets the lookahead depth for this alternate; there is no fixed ceiling. |
 | `a` | Action: `(rule, ctx) => void` (also accepts a `@funcref` string). |
 | `p` | Push a new rule onto the stack by name (creates a child). |
 | `r` | Replace the current rule with another by name (creates a sibling). |

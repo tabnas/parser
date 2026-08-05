@@ -599,8 +599,12 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 // will check (using subMatchFixed) if their source text actually represents
 // a fixed value.
 
-// NOTE 2: matchers can place a second token onto the Point tokens,
-// supporting two token lookahead.
+// NOTE 2: a matcher can queue additional tokens onto the Point's pending
+// queue (pnt.token) as well as returning one. Queued tokens are served, in
+// order, before the lexer scans any further source. subMatchFixed below is
+// the usual case: it returns the leading token and queues a trailing fixed
+// one. The queue is a FIFO of no fixed size — parser lookahead depth is set
+// by the grammar (see alt.sN), not by this.
 
 // Resolved definition of one comment marker, extracted from the Config comment def map.
 type CommentDef = Config['comment']['def'] extends { [_: string]: infer T }

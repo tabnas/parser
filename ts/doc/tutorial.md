@@ -93,8 +93,10 @@ tn.parse('bye')                       // 'farewell'
 ```
 
 The parser tries each open alternate in order and takes the first whose
-token sequence matches. That ordering — first match wins, two-token
-lookahead, no backtracking — is the model you design grammars around.
+token sequence matches. That ordering — first match wins, no backtracking —
+is the model you design grammars around. How far ahead an alternate looks is
+up to the alternate: it declares the token sequence it needs, and the engine
+collates lookahead to the deepest one the rule declares.
 
 ## Where to go next
 
