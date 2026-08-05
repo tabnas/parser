@@ -213,10 +213,6 @@ productions the `describe()` dump above prints for the hand-written version.
 const { Tabnas } = require('@tabnas/parser')
 const { abnf } = require('@tabnas/abnf')
 
-// The accumulator lives here, the same way the hand-written grammar
-// above keeps its running total on the `val` node.
-let total = 0
-
 const tn = new Tabnas({ plugins: [abnf] })
 tn.abnf(`
   val = add
@@ -225,21 +221,24 @@ tn.abnf(`
   PL  = "+"
 `, {
   actions: {
-    // Zero the accumulator once, before `val` opens.
-    '@val:bo': () => { total = 0 },
+    // Each `add` holds its own number...
+    '@add:o:NR': (r) => { r.node.value = r.o[0].val },
 
-    // Add each number to it.
-    '@add:o:NR': (r) => { total += r.o[0].val },
+    // ...plus whatever the nested `add` came to.
+    '@add:ac': (r) => { r.node.value += r.node.kids[0]?.value ?? 0 },
+
+    // `val` carries the result of the parse.
+    '@val:ac': (r) => { r.node.value = r.node.kids[0].value },
   },
 })
 
-tn.parse('1+2+3')
-total                      // => 6
-
-// `@val:bo` resets on every parse, so no cleanup between calls.
-tn.parse('12+3+45')
-total                      // => 60
+tn.parse('1+2+3').value    // => 6
+tn.parse('12+3+45').value  // => 60
 ```
+
+The total lands on `val`'s node — the same place the hand-written grammar
+above keeps it — so `parse` returns it and the instance carries no state
+between calls.
 
 Each line compiles to what the hand-written grammar declares explicitly:
 `PL = "+"` becomes the `#PL` fixed token, and `NR = <number>` compiles to
