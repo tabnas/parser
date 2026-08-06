@@ -1103,16 +1103,19 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
         if (null != pspec) {
           if ('object' === typeof pspec) {
             for (let co of Object.keys(pspec)) {
-              // NOTE: an unknown operator is skipped in silence (pinned by
-              // cover-engine's `condition-edge-shapes`). If it is the only
-              // one, `conds` stays empty, `c` is deleted below, and the
-              // alternate becomes UNCONDITIONAL — so a typo'd operator turns
-              // a guard into a match-everything. The Go port instead errors
-              // on an unknown operator. Worth reconciling; left as-is here
-              // because the current behaviour is deliberate and tested.
-              if (1 === COND_OPS[co]) {
-                conds.push(makeRuleCond(co, prop, pspec[co]))
+              // An unknown operator is an ERROR, not a skip. Skipping meant
+              // that if it was the only condition, `conds` stayed empty, `c`
+              // was deleted below, and the alternate became UNCONDITIONAL —
+              // a typo silently turned a guard into a match-everything. That
+              // is exactly how `$exist` went unnoticed: implemented, but not
+              // listed here, so every `$exist` condition matched everything.
+              // The Go port has always errored on an unknown operator.
+              if (1 !== COND_OPS[co]) {
+                throw new Error(
+                  'tabnas: unknown condition operator: ' + co + ' (on "' + prop +
+                  '"); known operators: ' + Object.keys(COND_OPS).join(', '))
               }
+              conds.push(makeRuleCond(co, prop, pspec[co]))
             }
           }
           else {
