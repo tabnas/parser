@@ -729,6 +729,12 @@ export type { Parser }
 
 // JSON-serializable grammar definition: options plus per-rule alternates.
 export type GrammarSpec = {
+  // Wipe the instance before applying the rest of this spec: every rule
+  // and every fixed-token binding is removed, leaving the lexer matchers
+  // (which are not grammar) in place. The escape hatch for building a
+  // grammar from nothing on an instance that already carries one.
+  clear?: boolean
+
   ref?: Record<FuncRef, Function>           // Functions resolved from FuncRef strings.
 
   // Builtin config-schema version this grammar was compiled against. The
@@ -740,7 +746,10 @@ export type GrammarSpec = {
   // that are resolved against `ref` before being applied.
   options?: Record<string, any>
 
-  rule?: Record<string, {                   // Per-rule alternate definitions.
+  // Per-rule alternate definitions. A `null` entry *removes* that rule
+  // from the instance (the declarative form of `tn.rule(name, null)`);
+  // removing a rule that is not there is a no-op.
+  rule?: Record<string, null | {
     open?: GrammarAltSpec[] |               // OPEN-state alternates (or alts + inject ops).
     {
       alts: GrammarAltSpec[],

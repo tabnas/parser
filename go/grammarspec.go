@@ -14,9 +14,10 @@ type FuncRef = string
 // Declarative grammar specification; mirrors the TypeScript GrammarSpec type.
 type GrammarSpec struct {
 	Ref        map[FuncRef]any             // Maps FuncRef strings (e.g. "@finish") to Go functions.
+	Clear      bool                        // Wipe every rule and fixed-token binding before applying the rest (matchers stay).
 	Options    *Options                    // Typed options merged in (via SetOptions) before rules are processed.
 	OptionsMap map[string]any              // Map-form options; FuncRef values resolved via Ref before applying.
-	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name.
+	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name; a nil entry removes that rule.
 	V          int                         // Builtin config-schema version; engine refuses V > BUILTIN_SCHEMA_VERSION. Zero ⇒ 1.
 }
 
@@ -108,6 +109,22 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 	// reference engine builtins (e.g. @probeInit$) by name. See builtins.go.
 	ref := mergeBuiltinRefs(gs.Ref)
 
+	// Wipe first, so one spec can clear and rebuild in a single pass.
+	// Rules and fixed-token bindings are grammar and go; the lexer
+	// matchers are not, and stay — a grammar cannot put them back, and
+	// without them there would be no tokens to write rules against.
+	if gs.Clear {
+		for rulename := range j.parser.RSM {
+			delete(j.parser.RSM, rulename)
+		}
+		if j.parser.Config.FixedTokens != nil {
+			for src := range j.parser.Config.FixedTokens {
+				delete(j.parser.Config.FixedTokens, src)
+			}
+			j.parser.Config.SortFixedTokens()
+		}
+	}
+
 	// Apply typed Options directly.
 	if gs.Options != nil {
 		j.SetOptions(*gs.Options)
@@ -127,6 +144,14 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 
 	if gs.Rule != nil {
 		for rulename, rulespec := range gs.Rule {
+			// A nil entry removes the rule (the declarative form of
+			// Rule(name, nil)). Removing one that is not there is a no-op,
+			// so a spec can prune defensively.
+			if rulespec == nil {
+				j.Rule(rulename, nil)
+				continue
+			}
+
 			var resolveErr error
 			j.Rule(rulename, func(rs *RuleSpec, _ *Parser) {
 				// Process Open alts.
