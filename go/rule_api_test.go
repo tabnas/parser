@@ -73,21 +73,53 @@ func TestRuleCounterComparisons(t *testing.T) {
 		t.Error("Gte failed for present counter")
 	}
 
-	// Missing counter → always true (matching TS null == this.n[name] || ...).
-	if !r.Eq("missing", 99) {
-		t.Error("Eq on missing counter should be true")
+	// An unset counter reads as 0: it has counted nothing. It is NOT "true
+	// against everything" — that made Lt and Gt both pass at once, so a guard
+	// written the natural way fired before anything had been counted.
+	if !r.Eq("missing", 0) || r.Eq("missing", 99) {
+		t.Error("Eq on an unset counter should compare against 0")
 	}
-	if !r.Lt("missing", -1) {
-		t.Error("Lt on missing counter should be true")
+	if !r.Lt("missing", 1) || r.Lt("missing", -1) || r.Lt("missing", 0) {
+		t.Error("Lt on an unset counter should compare against 0")
 	}
-	if !r.Gt("missing", 99) {
-		t.Error("Gt on missing counter should be true")
+	if !r.Gt("missing", -1) || r.Gt("missing", 99) || r.Gt("missing", 0) {
+		t.Error("Gt on an unset counter should compare against 0")
 	}
-	if !r.Lte("missing", -1) {
-		t.Error("Lte on missing counter should be true")
+	if !r.Lte("missing", 0) || r.Lte("missing", -1) {
+		t.Error("Lte on an unset counter should compare against 0")
 	}
-	if !r.Gte("missing", 99) {
-		t.Error("Gte on missing counter should be true")
+	if !r.Gte("missing", 0) || r.Gte("missing", 99) {
+		t.Error("Gte on an unset counter should compare against 0")
+	}
+
+	// Trichotomy: exactly one of <, =, > holds — the property the old
+	// "unset is true against everything" behaviour violated.
+	for _, limit := range []int{-1, 0, 1, 99} {
+		n := 0
+		if r.Lt("missing", limit) {
+			n++
+		}
+		if r.Eq("missing", limit) {
+			n++
+		}
+		if r.Gt("missing", limit) {
+			n++
+		}
+		if n != 1 {
+			t.Errorf("unset counter vs %d: %d of (Lt,Eq,Gt) true, want exactly 1", limit, n)
+		}
+	}
+
+	// Exist still distinguishes "never counted" from "counted zero".
+	if r.Exist("missing") {
+		t.Error("Exist should be false for a counter that was never set")
+	}
+	zero := &Rule{N: map[string]int{"z": 0}}
+	if !zero.Exist("z") {
+		t.Error("Exist should be true for a counter explicitly set to 0")
+	}
+	if !zero.Eq("z", 0) || !zero.Eq("missing", 0) {
+		t.Error("a set-to-0 counter and an unset counter both compare equal to 0")
 	}
 }
 
@@ -140,17 +172,31 @@ func TestMakeRuleCondOperators(t *testing.T) {
 		// Counter subprop access (n.pk).
 		{"$eq", "n", "pk", 1, true},
 		{"$lte", "n", "pk", 0, false},
-		// Missing property → condition true (matching TS getRuleProp).
-		{"$eq", "n", "missing", 99, true},
-		{"$lt", "n", "missing", -1, true},
-		{"$ne", "n", "missing", 0, true},
-		{"$lte", "n", "missing", -1, true},
-		{"$gt", "n", "missing", 99, true},
-		{"$gte", "n", "missing", 99, true},
-		// Unknown prop → not found → true.
-		{"$eq", "z", "", 99, true},
-		// "n" without subprop → not found → true.
-		{"$eq", "n", "", 99, true},
+		// An unset COUNTER reads as 0 — it has counted nothing — so the
+		// comparison is a real comparison, not an automatic pass.
+		{"$eq", "n", "missing", 0, true},
+		{"$eq", "n", "missing", 99, false},
+		{"$ne", "n", "missing", 0, false},
+		{"$ne", "n", "missing", 99, true},
+		{"$lt", "n", "missing", 1, true},
+		{"$lt", "n", "missing", -1, false},
+		{"$lte", "n", "missing", 0, true},
+		{"$lte", "n", "missing", -1, false},
+		{"$gt", "n", "missing", -1, true},
+		{"$gt", "n", "missing", 99, false},
+		{"$gte", "n", "missing", 0, true},
+		{"$gte", "n", "missing", 99, false},
+		// A path that does not RESOLVE is not a zero — no counter exists to
+		// read. The ORDERED operators stay permissive there (they answer a
+		// question the rule cannot answer); $eq fails CLOSED, because "equals
+		// 99" cannot be satisfied by a value that is not there. This matches
+		// the TS port exactly.
+		{"$lt", "z", "", 99, true},
+		{"$gte", "z", "", 99, true},
+		{"$eq", "z", "", 99, false},
+		// "n" without a counter named → does not resolve.
+		{"$eq", "n", "", 99, false},
+		{"$lt", "n", "", 99, true},
 	}
 	for _, tt := range tests {
 		cond, err := MakeRuleCond(tt.op, tt.prop, tt.subprop, tt.val)
@@ -165,13 +211,23 @@ func TestMakeRuleCondOperators(t *testing.T) {
 }
 
 func TestMakeRuleCondNilRule(t *testing.T) {
-	// getRuleProp(nil) → not found → condition true.
-	cond, err := MakeRuleCond("$eq", "d", "", 5)
+	// Nothing resolves on a nil rule. The ordered operators stay permissive;
+	// $eq fails closed. Same split as the TS port, where the path walk yields
+	// undefined and `undefined === 5` is false.
+	ordered, err := MakeRuleCond("$lt", "d", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cond(nil, nil) {
-		t.Error("condition on nil rule should be true")
+	if !ordered(nil, nil) {
+		t.Error("an ordered condition on a nil rule should stay permissive")
+	}
+
+	eq, err := MakeRuleCond("$eq", "d", "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eq(nil, nil) {
+		t.Error("$eq on a nil rule should fail closed")
 	}
 }
 
@@ -375,5 +431,219 @@ func TestGrammarInvalidGroupTagError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid group tag") {
 		t.Errorf("error should mention invalid group tag, got: %s", err)
+	}
+}
+
+// $exist asks whether the counter was SET, which the comparisons cannot: they
+// read an unset counter as 0, so a counter set to 0 and one never set compare
+// identically. Go had no $exist at all, while TS implemented it (but never
+// listed it as a known operator) — so the documented escape hatch worked in
+// neither runtime.
+func TestMakeRuleCondExist(t *testing.T) {
+	r := &Rule{N: map[string]int{"zero": 0, "two": 2}}
+
+	tests := []struct {
+		subprop string
+		want    bool // for CExist(true)
+	}{
+		{"zero", true}, // set to 0 — exists
+		{"two", true},
+		{"never", false},
+	}
+	for _, tt := range tests {
+		yes, err := MakeRuleCond("$exist", "n", tt.subprop, CExist(true).Val)
+		if err != nil {
+			t.Fatalf("MakeRuleCond($exist): %v", err)
+		}
+		if got := yes(r, nil); got != tt.want {
+			t.Errorf("$exist:true on n.%s = %v, want %v", tt.subprop, got, tt.want)
+		}
+		no, err := MakeRuleCond("$exist", "n", tt.subprop, CExist(false).Val)
+		if err != nil {
+			t.Fatalf("MakeRuleCond($exist): %v", err)
+		}
+		if got := no(r, nil); got != !tt.want {
+			t.Errorf("$exist:false on n.%s = %v, want %v", tt.subprop, got, !tt.want)
+		}
+	}
+
+	// The distinction the comparisons cannot make.
+	if !r.Eq("zero", 0) || !r.Eq("never", 0) {
+		t.Error("both a zero counter and an unset counter compare equal to 0")
+	}
+	if !r.Exist("zero") || r.Exist("never") {
+		t.Error("Exist must separate counted-zero from never-counted")
+	}
+}
+
+// Declarative grammar parts are validated while the grammar is BUILT, so a
+// bad spec can never surface during a parse. ValidateAlt reports every problem
+// at once rather than stopping at the first, so a grammar held as data can be
+// checked before any parser exists.
+func TestValidateAltDeclarativeParts(t *testing.T) {
+	// Unknown operator, unresolvable path root, unusable value, bad group tag.
+	problems := ValidateAlt(&AltSpec{
+		CD: map[string]any{
+			"zz.depth": CLt(3),                 // no such rule property
+			"n.ok":     CondOp{Op: "$bogus"},   // unknown operator
+			"d":        []int{1},               // unusable value type
+		},
+		G: "Bad Tag",
+	})
+	if len(problems) != 4 {
+		t.Errorf("want 4 problems, got %d: %v", len(problems), problems)
+	}
+
+	// A well-formed alt reports nothing. Plain values are the $eq shorthand,
+	// and — matching TS — may be any scalar, not just an int.
+	if got := ValidateAlt(&AltSpec{
+		CD: map[string]any{"n.pk": CLte(0), "d": 1, "name": "val", "u.on": true},
+		G:  "json,map",
+	}); len(got) != 0 {
+		t.Errorf("valid alt reported problems: %v", got)
+	}
+
+	// nil is not a problem.
+	if got := ValidateAlt(nil); len(got) != 0 {
+		t.Errorf("nil alt reported problems: %v", got)
+	}
+
+	// $exist is a known operator (it had none in Go at all before).
+	if got := ValidateAlt(&AltSpec{CD: map[string]any{"n.k": CExist(true)}}); len(got) != 0 {
+		t.Errorf("$exist reported problems: %v", got)
+	}
+}
+
+func TestValidateAltsLabelsLocation(t *testing.T) {
+	problems := ValidateAlts([]*AltSpec{
+		{CD: map[string]any{"n.ok": CLt(1)}},   // fine
+		{CD: map[string]any{"nope.x": CLt(1)}}, // bad
+	}, "val.open")
+	if len(problems) != 1 {
+		t.Fatalf("want 1 problem, got %d: %v", len(problems), problems)
+	}
+	if !strings.Contains(problems[0], "val.open alt[1]:") {
+		t.Errorf("problem should name its location, got %q", problems[0])
+	}
+}
+
+// NormAlt must REJECT what ValidateAlt reports, rather than skipping it and
+// leaving the alternate with fewer conditions than it reads as having.
+func TestNormAltRejectsInvalidDeclarative(t *testing.T) {
+	if err := NormAlt(&AltSpec{CD: map[string]any{"nope.x": CLt(1)}}); err == nil {
+		t.Error("NormAlt must reject an unresolvable condition path")
+	}
+	if err := NormAlt(&AltSpec{CD: map[string]any{"n.x": CondOp{Op: "$bogus"}}}); err == nil {
+		t.Error("NormAlt must reject an unknown condition operator")
+	}
+}
+
+// Negative coverage for the validation surface: empty input is not a problem,
+// valid roots are not rejected (guarding against over-tightening), and every
+// bad entry in one alternate is reported rather than just the first.
+func TestValidateAltNegativeEdges(t *testing.T) {
+	// Empty / nil inputs report nothing.
+	if got := ValidateAlts(nil, "x"); len(got) != 0 {
+		t.Errorf("nil alts reported %v", got)
+	}
+	if got := ValidateAlts([]*AltSpec{}, ""); len(got) != 0 {
+		t.Errorf("empty alts reported %v", got)
+	}
+	if got := ValidateAlt(&AltSpec{}); len(got) != 0 {
+		t.Errorf("bare alt reported %v", got)
+	}
+
+	// The roots Go can actually resolve are accepted.
+	for _, prop := range []string{"d", "n.pk", "n.depth"} {
+		if got := ValidateAlt(&AltSpec{CD: map[string]any{prop: CLt(1)}}); len(got) != 0 {
+			t.Errorf("%s should be valid, got %v", prop, got)
+		}
+	}
+
+	// Every bad entry is reported, not just the first.
+	problems := ValidateAlt(&AltSpec{CD: map[string]any{
+		"aa.x": CLt(1),
+		"bb.y": CLt(1),
+		"n.z":  CondOp{Op: "$nope"},
+	}})
+	if len(problems) != 3 {
+		t.Errorf("want 3 problems, got %d: %v", len(problems), problems)
+	}
+
+	// A function condition is opaque, and does not stop CD being checked.
+	if got := ValidateAlt(&AltSpec{C: func(r *Rule, ctx *Context) bool { return true }}); len(got) != 0 {
+		t.Errorf("function condition should be opaque, got %v", got)
+	}
+}
+
+// A grammar built through the public path must reject an invalid declarative
+// condition, so it can never reach a parse.
+func TestNormAltsRejectsInvalidAlternate(t *testing.T) {
+	rs := &RuleSpec{Name: "val"}
+	rs.AddOpen(&AltSpec{CD: map[string]any{"n.ok": CLt(1)}}) // valid
+	rs.AddOpen(&AltSpec{CD: map[string]any{"bad.x": CLt(1)}})
+
+	if err := NormAlts(rs); err == nil {
+		t.Error("NormAlts must reject an invalid alternate even after a valid one")
+	}
+}
+
+// Cross-port alignment: these are the exact cases the TS port produces, so a
+// change to either runtime that breaks the pairing shows up here. Every row
+// was run through both implementations and confirmed identical.
+//
+// Note the asymmetry: $eq fails CLOSED on a path that does not resolve
+// ("equals x" cannot be satisfied by a value that is not there), while the
+// ordered operators fail OPEN (they answer a question the rule cannot
+// answer). A named counter always resolves — unset reads as 0.
+func TestConditionParityWithTS(t *testing.T) {
+	rule := func() *Rule {
+		return &Rule{
+			Name: "top",
+			N:    map[string]int{"set": 2, "zero": 0},
+			U:    map[string]any{"mode": "strict"},
+			K:    map[string]any{"kept": 7},
+			O0:   &Token{Tin: 5},
+		}
+	}
+
+	cases := []struct {
+		path string
+		op   string
+		val  any
+		want bool
+	}{
+		{"n.set", "$eq", 2, true},
+		{"n.set", "$lt", 3, true},
+		{"n.set", "$gt", 2, false},
+		{"n.unset", "$eq", 0, true},   // unset counter reads as 0
+		{"n.unset", "$gt", 99, false}, // ...so it is NOT past a limit
+		{"n.unset", "$lt", 1, true},
+		{"n.unset", "$exist", true, false},
+		{"n.zero", "$exist", true, true}, // set to 0 is not unset
+		{"d", "$eq", 0, true},
+		{"name", "$eq", "top", true},
+		{"name", "$eq", "other", false},
+		{"u.mode", "$eq", "strict", true},
+		{"u.mode", "$ne", "loose", true},
+		{"u.missing", "$eq", "x", false}, // $eq fails CLOSED
+		{"u.missing", "$lt", 5, true},    // ordered ops fail OPEN
+		{"k.kept", "$eq", 7, true},
+		{"o0.tin", "$gt", 0, true},
+	}
+
+	for _, tc := range cases {
+		prop, sub := tc.path, ""
+		if dot := strings.SplitN(tc.path, ".", 2); len(dot) == 2 {
+			prop, sub = dot[0], dot[1]
+		}
+		cond, err := MakeRuleCond(tc.op, prop, sub, tc.val)
+		if err != nil {
+			t.Fatalf("%s %s %v: %v", tc.path, tc.op, tc.val, err)
+		}
+		if got := cond(rule(), nil); got != tc.want {
+			t.Errorf("%s %s %v = %v, want %v (TS produces %v)",
+				tc.path, tc.op, tc.val, got, tc.want, tc.want)
+		}
 	}
 }

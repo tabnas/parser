@@ -995,10 +995,25 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 	}
 	alt.G = ga.G
 
-	// Internal grammar is constructed from trusted tag literals, so a
-	// validation error here indicates a programming bug rather than bad
-	// user input. Ignore the error — it will surface if a library author
-	// ever adds a malformed tag, via the regular Grammar/GrammarText path.
-	_ = NormAlt(alt)
+	// Internal grammar is constructed from trusted literals, so a validation
+	// error here is a programming bug rather than bad user input. It is still
+	// recorded: swallowing it entirely meant a malformed internal alt — an
+	// unknown condition operator, a bad group tag — produced an alternate
+	// whose condition had quietly vanished, and nothing anywhere said so.
+	// ValidateInternalGrammar surfaces these for the test suite.
+	if err := NormAlt(alt); err != nil {
+		internalGrammarErrors = append(internalGrammarErrors, err)
+	}
 	return alt
+}
+
+// internalGrammarErrors collects validation failures from the trusted
+// internal-grammar path, where there is no caller to return an error to.
+var internalGrammarErrors []error
+
+// ValidateInternalGrammar reports validation errors accumulated while building
+// the built-in grammar. It should be empty; a non-empty result means a
+// malformed internal alternate silently lost part of its spec.
+func ValidateInternalGrammar() []error {
+	return internalGrammarErrors
 }

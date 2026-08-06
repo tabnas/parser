@@ -505,7 +505,7 @@ describe('cover-engine', () => {
       j.parse('a')
       assert.equal(hit, 'empty')
 
-      // Null prop spec and unknown ops are ignored (zero conds).
+      // A null prop spec is still ignored (zero conds).
       let j2 = new Tabnas({
         rule: { start: 'top' },
         fixed: { token: { Ta: 'a' } },
@@ -514,17 +514,29 @@ describe('cover-engine', () => {
       let hit2 = null
       j2.rule('top', (rs) =>
         rs
-          .open([
-            {
-              s: [Ta2],
-              c: { x: null, d: { $weird: 1 } },
-              a: () => (hit2 = 'ok'),
-            },
-          ])
+          .open([{ s: [Ta2], c: { x: null }, a: () => (hit2 = 'ok') }])
           .close([{ s: ['#ZZ'] }]),
       )
       j2.parse('a')
       assert.equal(hit2, 'ok')
+
+      // An unknown operator THROWS. It used to be skipped, which left `conds`
+      // empty, deleted `c`, and made the alternate unconditional — a typo
+      // turned a guard into a match-everything, silently. (That is how
+      // `$exist` stayed broken: implemented, but not a known operator.)
+      let j2b = new Tabnas({
+        rule: { start: 'top' },
+        fixed: { token: { Ta: 'a' } },
+      })
+      assert.throws(
+        () =>
+          j2b.rule('top', (rs) =>
+            rs
+              .open([{ s: [j2b.token.Ta], c: { d: { $weird: 1 } } }])
+              .close([{ s: ['#ZZ'] }]),
+          ),
+        /unknown condition operator: \$weird/,
+      )
 
       // Invalid condition type throws at definition time.
       let j3 = new Tabnas()

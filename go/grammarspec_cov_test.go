@@ -439,3 +439,23 @@ func TestApplyGrammarAltsUnsupportedSpec(t *testing.T) {
 		t.Error("unsupported spec type should not add alts")
 	}
 }
+
+// The internal grammar is trusted, but "trusted" previously meant its
+// validation errors were discarded outright: a malformed internal alternate
+// would lose its condition and nothing anywhere would report it. They are now
+// recorded so the test suite can see them.
+func TestInternalGrammarErrorsRecorded(t *testing.T) {
+	before := len(ValidateInternalGrammar())
+
+	// A well-formed alt records nothing.
+	ResolveGrammarAltStatic(&GrammarAltSpec{C: map[string]any{"d": 0}}, nil)
+	if got := len(ValidateInternalGrammar()); got != before {
+		t.Errorf("valid alt recorded %d error(s), want 0", got-before)
+	}
+
+	// A malformed one is recorded rather than silently dropped.
+	ResolveGrammarAltStatic(&GrammarAltSpec{G: "Bad Tag"}, nil)
+	if got := len(ValidateInternalGrammar()); got <= before {
+		t.Error("a malformed internal alt must record a validation error")
+	}
+}

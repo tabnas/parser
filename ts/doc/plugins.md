@@ -207,12 +207,54 @@ the append behavior unchanged.
 | `r` | Replace the current rule with another by name (creates a sibling). |
 | `b` | Backtrack: number of tokens to put back. |
 | `g` | Group tag(s). Used by `rule.include` / `rule.exclude` filtering. |
-| `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters. |
-| `n` | Increment named counters by these amounts. |
+| `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters — see [Counter conditions](#counter-conditions). |
+| `n` | Increment named counters by these amounts (setting `0` **resets**). |
 | `u` | Custom data attached to the rule's `u` bag. |
 | `k` | Custom data attached to `k` (propagates via push / replace). |
 | `h` | Modifier: `(rule, ctx, alt, next) => alt`. |
 | `e` | Error: `(rule, ctx, alt) => Token | undefined`. |
+
+### Counter conditions
+
+A condition can compare a counter, either imperatively on the rule instance or
+declaratively as data:
+
+```ts
+{ s: '#OB', p: 'map', c: (r) => r.lt('depth', 3) }      // imperative
+{ s: '#OB', p: 'map', c: { 'n.depth': { $lt: 3 } } }    // declarative
+```
+
+| Helper | Declarative | True when |
+|---|---|---|
+| `r.eq('k', n)` | `{ 'n.k': { $eq: n } }` | the counter equals `n` |
+| `r.lt` / `r.lte` | `$lt` / `$lte` | below / at most `n` |
+| `r.gt` / `r.gte` | `$gt` / `$gte` | above / at least `n` |
+| `r.exist('k')` | `{ 'n.k': { $exist: true } }` | the counter was set at all |
+
+**An unset counter reads as `0`.** A counter that was never incremented has
+counted nothing, so exactly one of `<`, `=`, `>` holds and a guard means what
+it says wherever it sits in the alternate list.
+
+Because of that, `eq('k', 0)` is true both for a counter set to `0` and for one
+never set. Use `exist` / `$exist` when the difference matters — it is the only
+form that does not coerce.
+
+Only *counters* read as zero. A path that does not resolve at all — an absent
+`o0`, a `u.*` you never set — is genuine absence, and numeric comparisons on it
+stay permissive rather than inventing a value the rule cannot supply.
+
+> **Changed in 0.6.** Previously an unset counter compared as **true against
+> every helper**, so `lt('k',n)` and `gt('k',n)` were both true and a
+> `$gte` guard fired before anything had been counted. A grammar that relied on
+> that — an alternate gated on `{ 'n.k': { $gt: 0 } }` matching while `k` was
+> still unset — now wants `{ 'n.k': { $exist: false } }`. In the same release
+> `$exist` became usable declaratively: it was implemented but not listed as a
+> known operator, so it was silently dropped, which left the alternate
+> *unconditional*.
+
+Note that `n` counters are applied when an alternate is **accepted**, while `c`
+is evaluated while matching it — so an alternate cannot read a counter it sets
+itself.
 
 ### State Actions
 

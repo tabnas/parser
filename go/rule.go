@@ -5,6 +5,7 @@ package tabnas
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -102,18 +103,33 @@ type AltModifier func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec
 type StateAction func(r *Rule, ctx *Context)
 
 // CondOp is a declarative comparison (operator + value) used in AltSpec.CD, e.g. { 'n.pk': { $lte: 0 } }.
+//
+// Val is `any` rather than `int` so a condition can compare what the TS port
+// can: a counter or depth (numbers), but also a token id, a rule name, or a
+// value parked in U/K (strings, bools). Existing callers are unaffected —
+// CLte(0) still compiles, the literal just widens to any.
 type CondOp struct {
-	Op  string // Comparison operator ($eq, $ne, $lt, $lte, $gt, $gte).
-	Val int    // Value to compare the rule property against.
+	Op  string // Comparison operator ($eq, $ne, $lt, $lte, $gt, $gte, $exist).
+	Val any    // Value to compare the rule property against ($exist: bool).
 }
 
 // Comparison operator constructors for declarative conditions (AltSpec.CD field).
-func CEq(val int) CondOp  { return CondOp{Op: "$eq", Val: val} }
-func CNe(val int) CondOp  { return CondOp{Op: "$ne", Val: val} }
-func CLt(val int) CondOp  { return CondOp{Op: "$lt", Val: val} }
-func CLte(val int) CondOp { return CondOp{Op: "$lte", Val: val} }
-func CGt(val int) CondOp  { return CondOp{Op: "$gt", Val: val} }
-func CGte(val int) CondOp { return CondOp{Op: "$gte", Val: val} }
+func CEq(val any) CondOp  { return CondOp{Op: "$eq", Val: val} }
+func CNe(val any) CondOp  { return CondOp{Op: "$ne", Val: val} }
+func CLt(val any) CondOp  { return CondOp{Op: "$lt", Val: val} }
+func CLte(val any) CondOp { return CondOp{Op: "$lte", Val: val} }
+func CGt(val any) CondOp  { return CondOp{Op: "$gt", Val: val} }
+func CGte(val any) CondOp { return CondOp{Op: "$gte", Val: val} }
+
+// CExist matches on whether the counter was SET, regardless of its value.
+// The comparisons read an unset counter as 0, so they cannot tell "never
+// counted" from "counted zero"; this can. Mirrors the TS `$exist`.
+func CExist(val bool) CondOp {
+	if val {
+		return CondOp{Op: "$exist", Val: 1}
+	}
+	return CondOp{Op: "$exist", Val: 0}
+}
 
 // AltSpec defines a parse alternate specification.
 type AltSpec struct {
@@ -402,44 +418,389 @@ func getRuleProp(r *Rule, prop string, subprop string) (int, bool) {
 	return 0, false
 }
 
+// resolveRuleProp reads a condition path, distinguishing an unset COUNTER
+// from a path that does not resolve at all.
+//
+// A named counter always resolves: one that was never incremented reads as 0,
+// because it has counted nothing. That keeps counter comparisons total —
+// exactly one of <, =, > holds — which is what stops $lt and $gt from both
+// being true at once.
+//
+// A nil rule, an unknown prop, or "n" with no counter named does NOT resolve.
+// That is genuine absence rather than zero, so callers stay permissive there
+// instead of inventing a value the rule cannot supply.
+func resolveRuleProp(r *Rule, prop string, subprop string) (int, bool) {
+	if r == nil {
+		return 0, false
+	}
+	switch prop {
+	case "d":
+		return r.D, true
+	case "n":
+		if subprop != "" {
+			return r.N[subprop], true
+		}
+	}
+	return 0, false
+}
+
 // MakeRuleCond creates an AltCond function from a comparison operator, property path, and value.
 // Matches the TypeScript makeRuleCond(co, prop, subprop, val) function.
 // When the property is not set (missing), the condition returns true.
-func MakeRuleCond(op string, prop string, subprop string, val int) (AltCond, error) {
+// condNum coerces a resolved value to a float for ordered comparison.
+// Only numbers are orderable as numbers; anything else is not.
+func condNum(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	}
+	return 0, false
+}
+
+// condOrder compares two resolved values, mirroring the TS port: numbers
+// compare numerically, strings lexicographically, and anything else is not
+// orderable. Returns (-1, 0, 1) and whether the pair was comparable at all.
+func condOrder(a, b any) (int, bool) {
+	if an, ok := condNum(a); ok {
+		if bn, ok := condNum(b); ok {
+			switch {
+			case an < bn:
+				return -1, true
+			case an > bn:
+				return 1, true
+			}
+			return 0, true
+		}
+		return 0, false
+	}
+	if as, ok := a.(string); ok {
+		if bs, ok := b.(string); ok {
+			return strings.Compare(as, bs), true
+		}
+	}
+	return 0, false
+}
+
+// condEqual is equality across the value shapes a condition can meet.
+// Numbers compare by value regardless of int/float shape, so `n.pk` (int)
+// equals a float64 1 the way it does in TS, where both are just numbers.
+func condEqual(a, b any) bool {
+	if an, ok := condNum(a); ok {
+		if bn, ok := condNum(b); ok {
+			return an == bn
+		}
+		return false
+	}
+	return a == b
+}
+
+// MakeRuleCond builds the condition function for one declarative comparison.
+//
+// A named COUNTER that was never set resolves to 0 — it has counted nothing —
+// so counter comparisons stay total (exactly one of <, =, > holds). These
+// used to short-circuit to true on a missing counter, so $lt and $gt were both
+// true at once and a "past the limit" guard fired on the first token.
+//
+// A path that does not resolve at all (nil rule, unknown property, a `u`/`k`
+// key that was never set) is NOT a zero, and keeps the permissive
+// short-circuit: it answers a question the rule cannot answer. $exist is the
+// explicit set/unset test and never coerces.
+//
+// `subprop` carries the remainder of a dotted path, so `n.a` arrives as
+// ("n", "a") and deeper paths like `parent.n.x` as ("parent", "n.x").
+func MakeRuleCond(op string, prop string, subprop string, val any) (AltCond, error) {
+	path := []string{prop}
+	if subprop != "" {
+		path = append(path, strings.Split(subprop, ".")...)
+	}
+
 	switch op {
+	// $eq fails CLOSED on a path that does not resolve: "equals x" cannot be
+	// satisfied by a value that is not there. The ordered operators below fail
+	// OPEN instead, because they answer a question the rule cannot answer.
+	// (This asymmetry is the TS port's documented behaviour; Go used to fail
+	// open here too, so `{ 'u.never': { $eq: 'x' } }` matched everything.)
 	case "$eq":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval == val
+			rval, ok := resolveRulePath(r, path)
+			return ok && condEqual(rval, val)
 		}, nil
 	case "$ne":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval != val
+			rval, ok := resolveRulePath(r, path)
+			return !ok || !condEqual(rval, val)
 		}, nil
 	case "$lt":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval < val
+			rval, ok := resolveRulePath(r, path)
+			if !ok {
+				return true
+			}
+			cmp, comparable := condOrder(rval, val)
+			return !comparable || cmp < 0
 		}, nil
 	case "$lte":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval <= val
+			rval, ok := resolveRulePath(r, path)
+			if !ok {
+				return true
+			}
+			cmp, comparable := condOrder(rval, val)
+			return !comparable || cmp <= 0
 		}, nil
 	case "$gt":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval > val
+			rval, ok := resolveRulePath(r, path)
+			if !ok {
+				return true
+			}
+			cmp, comparable := condOrder(rval, val)
+			return !comparable || cmp > 0
 		}, nil
 	case "$gte":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
-			return !ok || rval >= val
+			rval, ok := resolveRulePath(r, path)
+			if !ok {
+				return true
+			}
+			cmp, comparable := condOrder(rval, val)
+			return !comparable || cmp >= 0
+		}, nil
+	// $exist asks whether the path was SET, so it reads presence via
+	// getRuleProp/existence rather than the resolving walk (which reads an
+	// unset counter as 0).
+	case "$exist":
+		want := true
+		switch v := val.(type) {
+		case bool:
+			want = v
+		case int:
+			want = v != 0
+		}
+		return func(r *Rule, ctx *Context) bool {
+			return condPathExists(r, path) == want
 		}, nil
 	default:
 		return nil, fmt.Errorf("MakeRuleCond: unknown comparison operator: %s", op)
 	}
+}
+
+// condPathExists reports whether a path was actually SET, which the resolving
+// walk cannot: it reads an unset counter as 0, so a counter set to 0 and one
+// never set look identical to every comparison.
+func condPathExists(r *Rule, path []string) bool {
+	if r == nil || len(path) == 0 {
+		return false
+	}
+	if path[0] == "n" && len(path) == 2 {
+		_, ok := r.N[path[1]]
+		return ok
+	}
+	_, ok := resolveRulePath(r, path)
+	return ok
+}
+
+// condPathRoots are the rule properties a declarative condition can read.
+// Matches the TS port's set, so the same declarative grammar is expressible in
+// either runtime. A path rooted anywhere else can NEVER resolve, and the
+// ordered operators would fail open on it forever — the guard silently doing
+// nothing — so it is rejected while the grammar is built.
+var condPathRoots = map[string]bool{
+	"n": true, "u": true, "k": true, // counters, user data, kept data
+	"d": true, "i": true, "name": true, "state": true, // identity / position
+	"node": true, "oN": true, "cN": true,
+	"o": true, "c": true, "o0": true, "o1": true, "c0": true, "c1": true, // tokens
+	"parent": true, "child": true, "prev": true, "next": true, // rule graph
+	"spec": true,
+}
+
+// resolveRulePath reads a dotted condition path off a rule, mirroring the TS
+// port's generic property walk so the same declarative grammar behaves the
+// same in either runtime.
+//
+// Returns (value, resolved). A named COUNTER always resolves: one never
+// incremented reads as 0, because it has counted nothing — that is what keeps
+// counter comparisons total. Anything the path cannot reach does not resolve,
+// and callers stay permissive there rather than inventing a value.
+func resolveRulePath(r *Rule, path []string) (any, bool) {
+	if r == nil || len(path) == 0 {
+		return nil, false
+	}
+
+	rest := path[1:]
+
+	switch path[0] {
+	case "n":
+		if len(rest) == 1 {
+			return r.N[rest[0]], true // unset counter reads as 0
+		}
+	case "u":
+		if len(rest) == 1 {
+			v, ok := r.U[rest[0]]
+			return v, ok
+		}
+	case "k":
+		if len(rest) == 1 {
+			v, ok := r.K[rest[0]]
+			return v, ok
+		}
+	case "d":
+		return leaf(r.D, rest)
+	case "i":
+		return leaf(r.I, rest)
+	case "name":
+		return leaf(r.Name, rest)
+	case "state":
+		return leaf(r.State, rest)
+	case "node":
+		return leaf(r.Node, rest)
+	case "oN":
+		return leaf(r.ON, rest)
+	case "cN":
+		return leaf(r.CN, rest)
+	case "o0":
+		return tokenPath(r.O0, rest)
+	case "o1":
+		return tokenPath(r.O1, rest)
+	case "c0":
+		return tokenPath(r.C0, rest)
+	case "c1":
+		return tokenPath(r.C1, rest)
+	case "parent":
+		return resolveRulePath(r.Parent, rest)
+	case "child":
+		return resolveRulePath(r.Child, rest)
+	case "prev":
+		return resolveRulePath(r.Prev, rest)
+	case "next":
+		return resolveRulePath(r.Next, rest)
+	}
+
+	return nil, false
+}
+
+// leaf returns v when the path ends here, and nothing when it goes deeper
+// than the value can (TS walks into undefined and yields undefined).
+func leaf(v any, rest []string) (any, bool) {
+	if len(rest) == 0 {
+		return v, true
+	}
+	return nil, false
+}
+
+// tokenPath reads a field off a matched token, e.g. `o0.tin`.
+func tokenPath(t *Token, rest []string) (any, bool) {
+	if t == nil {
+		return nil, false
+	}
+	if len(rest) == 0 {
+		return t, true
+	}
+	if len(rest) != 1 {
+		return nil, false
+	}
+	switch rest[0] {
+	case "tin":
+		return t.Tin, true
+	case "name":
+		return t.Name, true
+	case "src":
+		return t.Src, true
+	case "val":
+		return t.Val, true
+	case "why":
+		return t.Why, true
+	}
+	return nil, false
+}
+
+// condProblems reports everything wrong with one declarative condition entry.
+// Pure: it returns messages instead of an error so a whole grammar can be
+// checked and every problem listed at once.
+func condProblems(propdef string, pspec any) []string {
+	var out []string
+
+	parts := strings.SplitN(propdef, ".", 2)
+	if !condPathRoots[parts[0]] {
+		roots := make([]string, 0, len(condPathRoots))
+		for root := range condPathRoots {
+			roots = append(roots, root)
+		}
+		sort.Strings(roots)
+		out = append(out, fmt.Sprintf(
+			"unknown condition path: %q (no rule property %q); known roots: %s",
+			propdef, parts[0], strings.Join(roots, ", ")))
+	}
+
+	switch v := pspec.(type) {
+	case int, int64, float64, string, bool:
+		// Plain value: shorthand for $eq, as in the TS port.
+	case CondOp:
+		if _, err := MakeRuleCond(v.Op, "d", "", 0); err != nil {
+			out = append(out, fmt.Sprintf(
+				"unknown condition operator: %s (on %q)", v.Op, propdef))
+		}
+	default:
+		// Anything else was silently ignored, leaving the alternate with one
+		// fewer condition than it reads as having — or none at all.
+		out = append(out, fmt.Sprintf(
+			"unusable condition value on %q: want int or CondOp, got %T", propdef, v))
+	}
+
+	return out
+}
+
+// ValidateAlt reports every problem in an alternate's DECLARATIVE parts.
+//
+// Pure: it reports instead of erroring, so a whole grammar can be checked and
+// every problem listed at once. NormAlt calls the same checks while the
+// grammar is built and returns an error on what it finds, which is why a bad
+// declarative spec cannot surface during a parse — but a grammar held as data
+// (the Grammar / GrammarText path, a generator, an editor) can be checked with
+// this directly, before any parser exists.
+//
+// Only declarative fields are checkable: a condition given as a function is
+// opaque, and P/R rule names may legitimately be defined later.
+func ValidateAlt(alt *AltSpec) []string {
+	var out []string
+
+	if alt == nil {
+		return out
+	}
+
+	for propdef, pspec := range alt.CD {
+		out = append(out, condProblems(propdef, pspec)...)
+	}
+
+	if err := ValidateGroupTags(alt.G); err != nil {
+		out = append(out, err.Error())
+	}
+
+	sort.Strings(out) // map iteration is random; keep reports stable
+	return out
+}
+
+// ValidateAlts reports problems across a list of alternates, each prefixed
+// with where it is. label names the list, e.g. "val.open".
+func ValidateAlts(alts []*AltSpec, label string) []string {
+	var out []string
+
+	at := ""
+	if label != "" {
+		at = label + " "
+	}
+
+	for index, alt := range alts {
+		for _, problem := range ValidateAlt(alt) {
+			out = append(out, fmt.Sprintf("%salt[%d]: %s", at, index, problem))
+		}
+	}
+
+	return out
 }
 
 // NormAlt normalizes an AltSpec by converting a declarative CD condition
@@ -457,6 +818,15 @@ func NormAlt(alt *AltSpec) error {
 
 	if alt.CD == nil || alt.C != nil {
 		return nil
+	}
+
+	// Validate the whole declarative condition BEFORE building any of it, so
+	// an unusable entry is reported rather than skipped. Skipping left the
+	// alternate with fewer conditions than it reads as having — or none, in
+	// which case it matched everything. This runs while the grammar is built,
+	// never during a parse.
+	if problems := ValidateAlt(alt); len(problems) > 0 {
+		return fmt.Errorf("tabnas: %s", strings.Join(problems, "; "))
 	}
 
 	var conds []AltCond
@@ -596,34 +966,43 @@ func init() {
 		N: make(map[string]int), U: make(map[string]any), K: make(map[string]any)}
 }
 
-// Eq checks if counter equals limit (nil/missing → true).
+// An unset counter reads as 0: a counter that has never been incremented has
+// counted nothing. These previously short-circuited to true when the counter
+// was missing, which made Lt(k,n) and Gt(k,n) BOTH true — a predicate and its
+// own negation — breaking trichotomy and firing "past the limit" guards on the
+// first token. Use Exist to ask whether a counter was set at all.
+
+// Eq checks if counter equals limit (unset counter reads as 0).
 func (r *Rule) Eq(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val == limit
+	return r.N[counter] == limit
 }
 
-// Lt checks if counter < limit (nil/missing → true).
+// Lt checks if counter < limit (unset counter reads as 0).
 func (r *Rule) Lt(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val < limit
+	return r.N[counter] < limit
 }
 
-// Gt checks if counter > limit (nil/missing → true).
+// Gt checks if counter > limit (unset counter reads as 0).
 func (r *Rule) Gt(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val > limit
+	return r.N[counter] > limit
 }
 
-// Lte checks if counter <= limit (nil/missing → true).
+// Lte checks if counter <= limit (unset counter reads as 0).
 func (r *Rule) Lte(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val <= limit
+	return r.N[counter] <= limit
 }
 
-// Gte checks if counter >= limit (nil/missing → true).
+// Gte checks if counter >= limit (unset counter reads as 0).
 func (r *Rule) Gte(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val >= limit
+	return r.N[counter] >= limit
+}
+
+// Exist reports whether the counter was set at all. The comparison helpers
+// read an unset counter as 0, so they cannot tell "never counted" from
+// "counted zero"; this can. (Declarative equivalent: $exist.)
+func (r *Rule) Exist(counter string) bool {
+	_, ok := r.N[counter]
+	return ok
 }
 
 // MakeRule creates a new Rule from a RuleSpec.

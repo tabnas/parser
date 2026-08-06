@@ -140,29 +140,41 @@ class Rule {
     return rule
   }
 
+  // An unset counter reads as 0: a counter that has never been incremented
+  // has counted nothing. Previously every helper short-circuited to `true`
+  // when the counter was unset, which made `lt(k,n)` and `gt(k,n)` BOTH true
+  // — a predicate and its own negation. That broke trichotomy (exactly one of
+  // <, =, > must hold) and made the natural "refuse when past the limit"
+  // guard fire on the very first token, before anything had been counted.
+  // Reading unset as 0 keeps the permissive direction intact (`lt(k,n)` is
+  // still true when unset, for n>0) while making the strict direction honest.
+  // To ask whether a counter was set at all, use `exist()`.
+
   eq(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value === limit
+    return (this.#n?.[counter] ?? 0) === limit
   }
 
   lt(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value < limit
+    return (this.#n?.[counter] ?? 0) < limit
   }
 
   gt(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value > limit
+    return (this.#n?.[counter] ?? 0) > limit
   }
 
   lte(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value <= limit
+    return (this.#n?.[counter] ?? 0) <= limit
   }
 
   gte(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value >= limit
+    return (this.#n?.[counter] ?? 0) >= limit
+  }
+
+  /** Has this counter been set at all? The comparison helpers read an unset
+   * counter as 0, so they cannot distinguish "never counted" from "counted
+   * zero"; this can. (Declarative equivalent: `{ 'n.k': { $exist: true } }`.) */
+  exist(counter: string): boolean {
+    return null != this.#n?.[counter]
   }
 
   toString() {
@@ -1089,11 +1101,22 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
       for (let prop of ruleprops) {
         const pspec = ac[prop]
         if (null != pspec) {
+          // Validate BEFORE building: a bad operator or an unresolvable path
+          // used to be skipped, leaving `conds` empty so `c` was deleted and
+          // the alternate became UNCONDITIONAL — a typo turned a guard into a
+          // match-everything, silently. This runs while the grammar is built,
+          // so it can never surface during a parse.
+          const problems = condProblems(prop, pspec)
+          if (0 < problems.length) {
+            // Name the rule and phase: in a grammar of any size, "unknown
+            // condition path" on its own is a needle in a haystack.
+            const where = (r?.name ?? '?') + '.' + (OPEN === rs ? 'open' : 'close')
+            throw new Error('tabnas: ' + where + ': ' + problems.join('; '))
+          }
+
           if ('object' === typeof pspec) {
             for (let co of Object.keys(pspec)) {
-              if (1 === COND_OPS[co]) {
-                conds.push(makeRuleCond(co, prop, pspec[co]))
-              }
+              conds.push(makeRuleCond(co, prop, pspec[co]))
             }
           }
           else {
@@ -1189,6 +1212,11 @@ function resolveFunctionRef(
 }
 
 
+// Operators accepted in a declarative condition. An operator missing from
+// this table used to be SILENTLY DROPPED — and if it was the only one, the
+// alternate lost `c` entirely and became unconditional, which is worse than
+// failing. $exist was implemented in makeRuleCond but never listed here, so
+// `{ 'n.k': { $exist: true } }` quietly matched everything.
 const COND_OPS: Record<string, number> = {
   $eq: 1,
   $ne: 1,
@@ -1196,46 +1224,163 @@ const COND_OPS: Record<string, number> = {
   $lte: 1,
   $gt: 1,
   $gte: 1,
+  $exist: 1,
+}
+
+// Roots a declarative condition path may start from: the Rule members a
+// condition can read. A path rooted anywhere else can NEVER resolve, so the
+// ordered operators fail open on it forever and the guard silently does
+// nothing — the same class of bug as an unknown operator, and just as quiet.
+// `n`/`u`/`k` carry arbitrary user keys below the root, so only the root is
+// checked.
+const COND_PATH_ROOTS: Record<string, number> = {
+  n: 1, u: 1, k: 1,                       // counters, user data, kept data
+  d: 1, i: 1, name: 1, state: 1,          // identity / position
+  node: 1, need: 1, oN: 1, cN: 1,
+  o: 1, c: 1, o0: 1, o1: 1, c0: 1, c1: 1, // matched tokens
+  parent: 1, child: 1, prev: 1, next: 1,  // rule graph
+  spec: 1,
+}
+
+/** Every problem in an alternate's DECLARATIVE parts, as messages.
+ *
+ * Pure: it reports instead of throwing, so a whole grammar can be checked and
+ * every problem listed at once. `normalt` calls it while the grammar is being
+ * built and raises on what it finds, which is why a bad declarative spec can
+ * never surface during a parse — but a grammar held as data (the Grammar /
+ * GrammarText path, a generator, an editor) can be checked with this directly,
+ * before any parser exists.
+ *
+ * Only declarative fields are checkable: a condition given as a function is
+ * opaque, and `p`/`r` rule names may legitimately be defined later. */
+export function validateAlt(alt: any): string[] {
+  const out: string[] = []
+
+  if (null == alt || 'object' !== typeof alt) {
+    return out
+  }
+
+  // Condition, object form only — a function condition is opaque.
+  if (null != alt.c && 'object' === typeof alt.c && 'function' !== typeof alt.c) {
+    for (const prop of Object.keys(alt.c)) {
+      const pspec = alt.c[prop]
+      if (null != pspec) {
+        out.push(...condProblems(prop, pspec))
+      }
+    }
+  }
+
+  // Group tags: same rule normalt enforces.
+  if (null != alt.g) {
+    const tags = 'string' === typeof alt.g ? alt.g.split(',') : alt.g
+    if (Array.isArray(tags)) {
+      for (const tag of tags) {
+        if ('string' === typeof tag && !GROUP_TAG_RE.test(tag.trim())) {
+          out.push('invalid group tag: "' + tag + '"')
+        }
+      }
+    }
+  }
+
+  return out
+}
+
+/** Every problem in a list of alternates, each prefixed with where it is.
+ * `label` names the list, e.g. `"val.open"`. */
+export function validateAlts(alts: any[], label: string = ''): string[] {
+  const out: string[] = []
+  const at = label ? label + ' ' : ''
+
+  if (!Array.isArray(alts)) {
+    return out
+  }
+
+  for (let index = 0; index < alts.length; index++) {
+    for (const problem of validateAlt(alts[index])) {
+      out.push(at + 'alt[' + index + ']: ' + problem)
+    }
+  }
+
+  return out
+}
+
+/** Problems with one declarative condition entry: `prop` against `pspec`.
+ * Pure — returns messages instead of throwing, so a validation pass can
+ * collect every problem in a grammar rather than stopping at the first. */
+function condProblems(prop: string, pspec: any): string[] {
+  const out: string[] = []
+
+  const root = prop.split('.')[0]
+  if (1 !== COND_PATH_ROOTS[root]) {
+    out.push('unknown condition path: "' + prop + '" (no rule property "' +
+      root + '"); known roots: ' + Object.keys(COND_PATH_ROOTS).join(', '))
+  }
+
+  if (null != pspec && 'object' === typeof pspec) {
+    for (const co of Object.keys(pspec)) {
+      if (1 !== COND_OPS[co]) {
+        out.push('unknown condition operator: ' + co + ' (on "' + prop +
+          '"); known operators: ' + Object.keys(COND_OPS).join(', '))
+      }
+    }
+  }
+
+  return out
 }
 
 
 function makeRuleCond(co: string, prop: string, val: any) {
   const path = prop.split('.')
 
+  // A COUNTER path (`n.<name>`) compared against a number reads as 0 when the
+  // counter was never set: it has counted nothing, so the comparison stays
+  // total (exactly one of <, =, > holds). Previously an unset counter made
+  // every operator true, so `$lt` and `$gt` both passed and a "past the limit"
+  // guard fired on the first token.
+  //
+  // This applies ONLY to counters. Any other path that fails to resolve — an
+  // absent `o0`, a `u.*` you never set — is genuine absence, not zero, and
+  // inventing a 0 there would silently answer a question the rule cannot
+  // answer; those keep the permissive short-circuit below. `$exist` is the
+  // explicit set/unset test and never coerces.
+  const iscounter = 'n' === path[0] && 2 === path.length && 'number' === typeof val
+  const read = (r: Rule) => {
+    const rval = getpath(r, path)
+    return (null == rval && iscounter) ? 0 : rval
+  }
+
   if ('$eq' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
-      return rval === val
+      return read(r) === val
     }
   }
   else if ('$ne' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
-      return rval != val
+      return read(r) != val
     }
   }
   else if ('$lt' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval < val
     }
   }
   else if ('$lte' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval <= val
     }
   }
 
   else if ('$gt' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval > val
     }
   }
   else if ('$gte' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval >= val
     }
   }
