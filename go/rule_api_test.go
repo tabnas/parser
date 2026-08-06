@@ -73,21 +73,53 @@ func TestRuleCounterComparisons(t *testing.T) {
 		t.Error("Gte failed for present counter")
 	}
 
-	// Missing counter → always true (matching TS null == this.n[name] || ...).
-	if !r.Eq("missing", 99) {
-		t.Error("Eq on missing counter should be true")
+	// An unset counter reads as 0: it has counted nothing. It is NOT "true
+	// against everything" — that made Lt and Gt both pass at once, so a guard
+	// written the natural way fired before anything had been counted.
+	if !r.Eq("missing", 0) || r.Eq("missing", 99) {
+		t.Error("Eq on an unset counter should compare against 0")
 	}
-	if !r.Lt("missing", -1) {
-		t.Error("Lt on missing counter should be true")
+	if !r.Lt("missing", 1) || r.Lt("missing", -1) || r.Lt("missing", 0) {
+		t.Error("Lt on an unset counter should compare against 0")
 	}
-	if !r.Gt("missing", 99) {
-		t.Error("Gt on missing counter should be true")
+	if !r.Gt("missing", -1) || r.Gt("missing", 99) || r.Gt("missing", 0) {
+		t.Error("Gt on an unset counter should compare against 0")
 	}
-	if !r.Lte("missing", -1) {
-		t.Error("Lte on missing counter should be true")
+	if !r.Lte("missing", 0) || r.Lte("missing", -1) {
+		t.Error("Lte on an unset counter should compare against 0")
 	}
-	if !r.Gte("missing", 99) {
-		t.Error("Gte on missing counter should be true")
+	if !r.Gte("missing", 0) || r.Gte("missing", 99) {
+		t.Error("Gte on an unset counter should compare against 0")
+	}
+
+	// Trichotomy: exactly one of <, =, > holds — the property the old
+	// "unset is true against everything" behaviour violated.
+	for _, limit := range []int{-1, 0, 1, 99} {
+		n := 0
+		if r.Lt("missing", limit) {
+			n++
+		}
+		if r.Eq("missing", limit) {
+			n++
+		}
+		if r.Gt("missing", limit) {
+			n++
+		}
+		if n != 1 {
+			t.Errorf("unset counter vs %d: %d of (Lt,Eq,Gt) true, want exactly 1", limit, n)
+		}
+	}
+
+	// Exist still distinguishes "never counted" from "counted zero".
+	if r.Exist("missing") {
+		t.Error("Exist should be false for a counter that was never set")
+	}
+	zero := &Rule{N: map[string]int{"z": 0}}
+	if !zero.Exist("z") {
+		t.Error("Exist should be true for a counter explicitly set to 0")
+	}
+	if !zero.Eq("z", 0) || !zero.Eq("missing", 0) {
+		t.Error("a set-to-0 counter and an unset counter both compare equal to 0")
 	}
 }
 
@@ -140,16 +172,25 @@ func TestMakeRuleCondOperators(t *testing.T) {
 		// Counter subprop access (n.pk).
 		{"$eq", "n", "pk", 1, true},
 		{"$lte", "n", "pk", 0, false},
-		// Missing property → condition true (matching TS getRuleProp).
-		{"$eq", "n", "missing", 99, true},
-		{"$lt", "n", "missing", -1, true},
-		{"$ne", "n", "missing", 0, true},
-		{"$lte", "n", "missing", -1, true},
-		{"$gt", "n", "missing", 99, true},
-		{"$gte", "n", "missing", 99, true},
-		// Unknown prop → not found → true.
+		// An unset COUNTER reads as 0 — it has counted nothing — so the
+		// comparison is a real comparison, not an automatic pass.
+		{"$eq", "n", "missing", 0, true},
+		{"$eq", "n", "missing", 99, false},
+		{"$ne", "n", "missing", 0, false},
+		{"$ne", "n", "missing", 99, true},
+		{"$lt", "n", "missing", 1, true},
+		{"$lt", "n", "missing", -1, false},
+		{"$lte", "n", "missing", 0, true},
+		{"$lte", "n", "missing", -1, false},
+		{"$gt", "n", "missing", -1, true},
+		{"$gt", "n", "missing", 99, false},
+		{"$gte", "n", "missing", 0, true},
+		{"$gte", "n", "missing", 99, false},
+		// A path that does not RESOLVE is not a zero — no counter exists to
+		// read — so those stay permissive rather than inventing a value.
+		// Unknown prop → does not resolve → true.
 		{"$eq", "z", "", 99, true},
-		// "n" without subprop → not found → true.
+		// "n" without a counter named → does not resolve → true.
 		{"$eq", "n", "", 99, true},
 	}
 	for _, tt := range tests {

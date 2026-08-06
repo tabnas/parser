@@ -402,39 +402,72 @@ func getRuleProp(r *Rule, prop string, subprop string) (int, bool) {
 	return 0, false
 }
 
+// resolveRuleProp reads a condition path, distinguishing an unset COUNTER
+// from a path that does not resolve at all.
+//
+// A named counter always resolves: one that was never incremented reads as 0,
+// because it has counted nothing. That keeps counter comparisons total —
+// exactly one of <, =, > holds — which is what stops $lt and $gt from both
+// being true at once.
+//
+// A nil rule, an unknown prop, or "n" with no counter named does NOT resolve.
+// That is genuine absence rather than zero, so callers stay permissive there
+// instead of inventing a value the rule cannot supply.
+func resolveRuleProp(r *Rule, prop string, subprop string) (int, bool) {
+	if r == nil {
+		return 0, false
+	}
+	switch prop {
+	case "d":
+		return r.D, true
+	case "n":
+		if subprop != "" {
+			return r.N[subprop], true
+		}
+	}
+	return 0, false
+}
+
 // MakeRuleCond creates an AltCond function from a comparison operator, property path, and value.
 // Matches the TypeScript makeRuleCond(co, prop, subprop, val) function.
 // When the property is not set (missing), the condition returns true.
 func MakeRuleCond(op string, prop string, subprop string, val int) (AltCond, error) {
 	switch op {
+	// resolveRuleProp yields 0 for a counter that was never set — it has
+	// counted nothing, so the comparison stays total (exactly one of <, =, >
+	// holds). These used to short-circuit to true on a missing counter, so
+	// $lt and $gt were both true at once and a "past the limit" guard fired on
+	// the first token. A path that does not resolve at all (nil rule, unknown
+	// prop, "n" with no counter named) is NOT a zero, and keeps the permissive
+	// short-circuit. $exist remains the explicit set/unset test.
 	case "$eq":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval == val
 		}, nil
 	case "$ne":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval != val
 		}, nil
 	case "$lt":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval < val
 		}, nil
 	case "$lte":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval <= val
 		}, nil
 	case "$gt":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval > val
 		}, nil
 	case "$gte":
 		return func(r *Rule, ctx *Context) bool {
-			rval, ok := getRuleProp(r, prop, subprop)
+			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval >= val
 		}, nil
 	default:
@@ -596,34 +629,43 @@ func init() {
 		N: make(map[string]int), U: make(map[string]any), K: make(map[string]any)}
 }
 
-// Eq checks if counter equals limit (nil/missing → true).
+// An unset counter reads as 0: a counter that has never been incremented has
+// counted nothing. These previously short-circuited to true when the counter
+// was missing, which made Lt(k,n) and Gt(k,n) BOTH true — a predicate and its
+// own negation — breaking trichotomy and firing "past the limit" guards on the
+// first token. Use Exist to ask whether a counter was set at all.
+
+// Eq checks if counter equals limit (unset counter reads as 0).
 func (r *Rule) Eq(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val == limit
+	return r.N[counter] == limit
 }
 
-// Lt checks if counter < limit (nil/missing → true).
+// Lt checks if counter < limit (unset counter reads as 0).
 func (r *Rule) Lt(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val < limit
+	return r.N[counter] < limit
 }
 
-// Gt checks if counter > limit (nil/missing → true).
+// Gt checks if counter > limit (unset counter reads as 0).
 func (r *Rule) Gt(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val > limit
+	return r.N[counter] > limit
 }
 
-// Lte checks if counter <= limit (nil/missing → true).
+// Lte checks if counter <= limit (unset counter reads as 0).
 func (r *Rule) Lte(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val <= limit
+	return r.N[counter] <= limit
 }
 
-// Gte checks if counter >= limit (nil/missing → true).
+// Gte checks if counter >= limit (unset counter reads as 0).
 func (r *Rule) Gte(counter string, limit int) bool {
-	val, ok := r.N[counter]
-	return !ok || val >= limit
+	return r.N[counter] >= limit
+}
+
+// Exist reports whether the counter was set at all. The comparison helpers
+// read an unset counter as 0, so they cannot tell "never counted" from
+// "counted zero"; this can. (Declarative equivalent: $exist.)
+func (r *Rule) Exist(counter string) bool {
+	_, ok := r.N[counter]
+	return ok
 }
 
 // MakeRule creates a new Rule from a RuleSpec.

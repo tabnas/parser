@@ -140,29 +140,41 @@ class Rule {
     return rule
   }
 
+  // An unset counter reads as 0: a counter that has never been incremented
+  // has counted nothing. Previously every helper short-circuited to `true`
+  // when the counter was unset, which made `lt(k,n)` and `gt(k,n)` BOTH true
+  // — a predicate and its own negation. That broke trichotomy (exactly one of
+  // <, =, > must hold) and made the natural "refuse when past the limit"
+  // guard fire on the very first token, before anything had been counted.
+  // Reading unset as 0 keeps the permissive direction intact (`lt(k,n)` is
+  // still true when unset, for n>0) while making the strict direction honest.
+  // To ask whether a counter was set at all, use `exist()`.
+
   eq(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value === limit
+    return (this.#n?.[counter] ?? 0) === limit
   }
 
   lt(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value < limit
+    return (this.#n?.[counter] ?? 0) < limit
   }
 
   gt(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value > limit
+    return (this.#n?.[counter] ?? 0) > limit
   }
 
   lte(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value <= limit
+    return (this.#n?.[counter] ?? 0) <= limit
   }
 
   gte(counter: string, limit: number = 0): boolean {
-    let value = this.#n?.[counter]
-    return null == value || value >= limit
+    return (this.#n?.[counter] ?? 0) >= limit
+  }
+
+  /** Has this counter been set at all? The comparison helpers read an unset
+   * counter as 0, so they cannot distinguish "never counted" from "counted
+   * zero"; this can. (Declarative equivalent: `{ 'n.k': { $exist: true } }`.) */
+  exist(counter: string): boolean {
+    return null != this.#n?.[counter]
   }
 
   toString() {
@@ -1202,40 +1214,55 @@ const COND_OPS: Record<string, number> = {
 function makeRuleCond(co: string, prop: string, val: any) {
   const path = prop.split('.')
 
+  // A COUNTER path (`n.<name>`) compared against a number reads as 0 when the
+  // counter was never set: it has counted nothing, so the comparison stays
+  // total (exactly one of <, =, > holds). Previously an unset counter made
+  // every operator true, so `$lt` and `$gt` both passed and a "past the limit"
+  // guard fired on the first token.
+  //
+  // This applies ONLY to counters. Any other path that fails to resolve — an
+  // absent `o0`, a `u.*` you never set — is genuine absence, not zero, and
+  // inventing a 0 there would silently answer a question the rule cannot
+  // answer; those keep the permissive short-circuit below. `$exist` is the
+  // explicit set/unset test and never coerces.
+  const iscounter = 'n' === path[0] && 2 === path.length && 'number' === typeof val
+  const read = (r: Rule) => {
+    const rval = getpath(r, path)
+    return (null == rval && iscounter) ? 0 : rval
+  }
+
   if ('$eq' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
-      return rval === val
+      return read(r) === val
     }
   }
   else if ('$ne' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
-      return rval != val
+      return read(r) != val
     }
   }
   else if ('$lt' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval < val
     }
   }
   else if ('$lte' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval <= val
     }
   }
 
   else if ('$gt' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval > val
     }
   }
   else if ('$gte' === co) {
     return function ruleCond(r: Rule, _c: Context, _a: AltMatch) {
-      const rval = getpath(r, path)
+      const rval = read(r)
       return null == rval || rval >= val
     }
   }
