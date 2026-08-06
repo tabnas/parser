@@ -98,6 +98,12 @@ function errsite(spec: {
   row = null != row && 0 < row ? row : 1
   col = null != col && 0 < col ? col : 1
 
+  // An empty `cline` means colour is off, and errdesc passes '' (not
+  // undefined) in that case — so test for a usable colour rather than for
+  // null, or the reset codes are emitted with nothing to reset.
+  const tint = cline ? cline : EMPTY
+  const untint = cline ? '\x1b[0m' : EMPTY
+
   pos =
     null != pos && 0 < pos
       ? pos
@@ -121,10 +127,10 @@ function errsite(spec: {
   let pad = 2 + (EMPTY + (row + 2)).length
   let rc = row < 3 ? 1 : row - 2
   let ln = (s: string) =>
-    (null == cline ? '' : cline) +
+    tint +
     (EMPTY + rc++).padStart(pad, ' ') +
     ' | ' +
-    (null == cline ? '' : '\x1b[0m') +
+    untint +
     (null == s ? EMPTY : s)
 
   let blen = behind.length
@@ -136,11 +142,11 @@ function errsite(spec: {
     ' '.repeat(pad) +
     '   ' +
     ' '.repeat(col - 1) +
-    (null == cline ? '' : cline) +
+    tint +
     '^'.repeat(tsrc.length || 1) +
     ' ' +
     msg +
-    (null == cline ? '' : '\x1b[0m'),
+    untint,
     ln(ahead[1]),
     ln(ahead[2]),
   ]

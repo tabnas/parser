@@ -64,6 +64,24 @@ describe('coverage', () => {
     )
   })
 
+  it('colour off emits no ANSI at all', () => {
+    // errdesc passes cline as '' (not undefined) when colour is off, so a
+    // `null ==` guard let the hardcoded reset codes through: the message
+    // carried \x1b[0m sequences with nothing to reset, which is what a log
+    // file or a non-TTY consumer then had to strip. Matches the Go port,
+    // where ColorConfig.Codes() already returned '' for line and reset
+    // together.
+    const ansi = /\x1b\[[0-9;]*m/g
+
+    // Multi-line source: exercises the gutter (ln) and the caret row.
+    const off = errOf(vp({ color: { active: false } }), '1\n2\n}').message
+    assert.equal(off.match(ansi), null, 'colour off must emit no escapes')
+
+    // Colour on is unaffected.
+    const on = errOf(vp({ color: { active: true } }), '1\n2\n}').message
+    assert.ok((on.match(ansi) || []).length > 0, 'colour on still emits escapes')
+  })
+
   it('error at various source positions', () => {
     // Error on a later line exercises the multi-line source-site extract.
     assert.match(errOf(vp({}), '1\n2\n}').message, /-->/)
