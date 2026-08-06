@@ -187,11 +187,16 @@ func TestMakeRuleCondOperators(t *testing.T) {
 		{"$gte", "n", "missing", 0, true},
 		{"$gte", "n", "missing", 99, false},
 		// A path that does not RESOLVE is not a zero — no counter exists to
-		// read — so those stay permissive rather than inventing a value.
-		// Unknown prop → does not resolve → true.
-		{"$eq", "z", "", 99, true},
-		// "n" without a counter named → does not resolve → true.
-		{"$eq", "n", "", 99, true},
+		// read. The ORDERED operators stay permissive there (they answer a
+		// question the rule cannot answer); $eq fails CLOSED, because "equals
+		// 99" cannot be satisfied by a value that is not there. This matches
+		// the TS port exactly.
+		{"$lt", "z", "", 99, true},
+		{"$gte", "z", "", 99, true},
+		{"$eq", "z", "", 99, false},
+		// "n" without a counter named → does not resolve.
+		{"$eq", "n", "", 99, false},
+		{"$lt", "n", "", 99, true},
 	}
 	for _, tt := range tests {
 		cond, err := MakeRuleCond(tt.op, tt.prop, tt.subprop, tt.val)
@@ -206,13 +211,23 @@ func TestMakeRuleCondOperators(t *testing.T) {
 }
 
 func TestMakeRuleCondNilRule(t *testing.T) {
-	// getRuleProp(nil) → not found → condition true.
-	cond, err := MakeRuleCond("$eq", "d", "", 5)
+	// Nothing resolves on a nil rule. The ordered operators stay permissive;
+	// $eq fails closed. Same split as the TS port, where the path walk yields
+	// undefined and `undefined === 5` is false.
+	ordered, err := MakeRuleCond("$lt", "d", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cond(nil, nil) {
-		t.Error("condition on nil rule should be true")
+	if !ordered(nil, nil) {
+		t.Error("an ordered condition on a nil rule should stay permissive")
+	}
+
+	eq, err := MakeRuleCond("$eq", "d", "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eq(nil, nil) {
+		t.Error("$eq on a nil rule should fail closed")
 	}
 }
 
@@ -471,7 +486,7 @@ func TestValidateAltDeclarativeParts(t *testing.T) {
 		CD: map[string]any{
 			"zz.depth": CLt(3),                 // no such rule property
 			"n.ok":     CondOp{Op: "$bogus"},   // unknown operator
-			"d":        "not-an-int",           // unusable value type
+			"d":        []int{1},               // unusable value type
 		},
 		G: "Bad Tag",
 	})
@@ -479,9 +494,10 @@ func TestValidateAltDeclarativeParts(t *testing.T) {
 		t.Errorf("want 4 problems, got %d: %v", len(problems), problems)
 	}
 
-	// A well-formed alt reports nothing.
+	// A well-formed alt reports nothing. Plain values are the $eq shorthand,
+	// and — matching TS — may be any scalar, not just an int.
 	if got := ValidateAlt(&AltSpec{
-		CD: map[string]any{"n.pk": CLte(0), "d": 1},
+		CD: map[string]any{"n.pk": CLte(0), "d": 1, "name": "val", "u.on": true},
 		G:  "json,map",
 	}); len(got) != 0 {
 		t.Errorf("valid alt reported problems: %v", got)
@@ -569,5 +585,65 @@ func TestNormAltsRejectsInvalidAlternate(t *testing.T) {
 
 	if err := NormAlts(rs); err == nil {
 		t.Error("NormAlts must reject an invalid alternate even after a valid one")
+	}
+}
+
+// Cross-port alignment: these are the exact cases the TS port produces, so a
+// change to either runtime that breaks the pairing shows up here. Every row
+// was run through both implementations and confirmed identical.
+//
+// Note the asymmetry: $eq fails CLOSED on a path that does not resolve
+// ("equals x" cannot be satisfied by a value that is not there), while the
+// ordered operators fail OPEN (they answer a question the rule cannot
+// answer). A named counter always resolves — unset reads as 0.
+func TestConditionParityWithTS(t *testing.T) {
+	rule := func() *Rule {
+		return &Rule{
+			Name: "top",
+			N:    map[string]int{"set": 2, "zero": 0},
+			U:    map[string]any{"mode": "strict"},
+			K:    map[string]any{"kept": 7},
+			O0:   &Token{Tin: 5},
+		}
+	}
+
+	cases := []struct {
+		path string
+		op   string
+		val  any
+		want bool
+	}{
+		{"n.set", "$eq", 2, true},
+		{"n.set", "$lt", 3, true},
+		{"n.set", "$gt", 2, false},
+		{"n.unset", "$eq", 0, true},   // unset counter reads as 0
+		{"n.unset", "$gt", 99, false}, // ...so it is NOT past a limit
+		{"n.unset", "$lt", 1, true},
+		{"n.unset", "$exist", true, false},
+		{"n.zero", "$exist", true, true}, // set to 0 is not unset
+		{"d", "$eq", 0, true},
+		{"name", "$eq", "top", true},
+		{"name", "$eq", "other", false},
+		{"u.mode", "$eq", "strict", true},
+		{"u.mode", "$ne", "loose", true},
+		{"u.missing", "$eq", "x", false}, // $eq fails CLOSED
+		{"u.missing", "$lt", 5, true},    // ordered ops fail OPEN
+		{"k.kept", "$eq", 7, true},
+		{"o0.tin", "$gt", 0, true},
+	}
+
+	for _, tc := range cases {
+		prop, sub := tc.path, ""
+		if dot := strings.SplitN(tc.path, ".", 2); len(dot) == 2 {
+			prop, sub = dot[0], dot[1]
+		}
+		cond, err := MakeRuleCond(tc.op, prop, sub, tc.val)
+		if err != nil {
+			t.Fatalf("%s %s %v: %v", tc.path, tc.op, tc.val, err)
+		}
+		if got := cond(rule(), nil); got != tc.want {
+			t.Errorf("%s %s %v = %v, want %v (TS produces %v)",
+				tc.path, tc.op, tc.val, got, tc.want, tc.want)
+		}
 	}
 }

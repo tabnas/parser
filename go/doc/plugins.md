@@ -207,8 +207,19 @@ So `Eq("k", 0)` is true both for a counter set to `0` and for one never set;
 use `Exist` / `CExist` when that difference matters.
 
 Only *counters* read as zero. A path that does not resolve at all — a nil rule,
-an unknown prop, `"n"` with no counter named — is genuine absence, and
-comparisons on it stay permissive rather than inventing a value.
+an unknown prop, `"n"` with no counter named — is genuine absence. The ordered
+operators stay permissive there (they answer a question the rule cannot
+answer); `$eq` fails **closed**, because "equals x" cannot be satisfied by a
+value that is not there. Both match the TS port exactly.
+
+Conditions read the same paths as TS — counters (`n.*`), user and kept data
+(`u.*`, `k.*`), identity (`d`, `i`, `name`, `state`, `node`), matched tokens
+(`o0.tin`, `c0.src`, ...), and the rule graph (`parent`, `child`, `prev`,
+`next`, recursively) — and compare against any scalar, not just integers:
+
+```go
+CD: map[string]any{"u.mode": tabnas.CEq("strict"), "o0.tin": tabnas.CGt(0)},
+```
 
 > **Changed in 0.6.** Previously a missing counter made every comparison true,
 > so `Lt` and `Gt` both passed at once and a `CGte` guard fired before anything
