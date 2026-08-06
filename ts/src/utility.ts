@@ -166,10 +166,12 @@ function configure(
   cfg.fixed = {
     lex: !!opts.fixed?.lex,
     token: opts.fixed
-      ? omap(clean(opts.fixed.token), ([name, src]: [string, string]) => [
-        src,
-        tokenize(name, cfg),
-      ])
+      ? omap(
+        checkFixedTokenNames(clean(opts.fixed.token)),
+        ([name, src]: [string, string]) => [
+          src,
+          tokenize(name, cfg),
+        ])
       : {},
     ref: undefined as any,
     check: opts.fixed?.check,
@@ -837,6 +839,50 @@ function charsBitmap(...parts: (string | object | boolean | undefined)[]): Uint8
 
 // Remove all properties with values null or undefined. Note: mutates argument.
 // clean({a:1, b:null}) // => {a:1}
+// Tokens the engine's own matchers produce. Their tin is bound to a
+// matcher (number, string, text, value, space, line, comment) or to a
+// parse position (bad, end, unknown, any) — not to a literal spelling.
+//
+// Binding one to a fixed literal does not replace the matcher, it adds a
+// second producer for the same tin, and the two then disagree about what
+// the token means. The failure is silent and total: with
+// `fixed: { token: { '#TX': 'foo' } }` the engine parsed `{"a": foo}` to
+// `{}` — the value vanished, with no error.
+//
+// The fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) are NOT in this
+// set. They are literals by definition, so rebinding them is meaningful
+// and supported — it is how @tabnas/csv implements `field.separation`.
+const MATCHER_TOKEN_NAMES = new Set([
+  '#BD', '#ZZ', '#UK', '#AA',
+  '#SP', '#LN', '#CM',
+  '#NR', '#ST', '#TX', '#VL',
+])
+
+
+// Reject binding a matcher-owned token name to a fixed literal. Runs on
+// the cleaned map, so a `null` entry (which *removes* a fixed binding)
+// has already been dropped and is still allowed.
+function checkFixedTokenNames(
+  token: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (null == token) return token
+  for (const name of keys(token)) {
+    if (MATCHER_TOKEN_NAMES.has(name)) {
+      throw new Error(
+        `Tabnas: ${name} is produced by a lexer matcher and cannot be bound ` +
+        `to the fixed literal ${JSON.stringify(token[name])}. Doing so adds a ` +
+        `second producer for the same token rather than replacing the ` +
+        `matcher, and values silently vanish. Configure the matcher instead ` +
+        `(options.number, options.string, options.text, options.value, ` +
+        `options.space, options.line, options.comment), or use a token name ` +
+        `of your own. Fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) may ` +
+        `be rebound freely.`)
+    }
+  }
+  return token
+}
+
+
 function clean<T>(o: T): T {
   for (let p in o) {
     if (null == o[p]) {

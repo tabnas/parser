@@ -56,6 +56,24 @@ Controls recognition of fixed structural tokens (`{`, `}`, `[`, `]`,
 | `lex` | boolean | `true` | Enable fixed token recognition |
 | `token` | object | (built-in) | Map of token name to source string |
 
+A `token` entry set to `null` removes that token's fixed binding — this is
+how a dialect switches off part of the structural syntax (`@tabnas/csv`
+drops `#OB`, `#CB`, `#OS`, `#CS` and `#CL` in strict mode).
+
+Rebinding a fixed token is supported and is the intended way to change a
+literal: `{ '#CA': ';' }` makes the comma token match a semicolon, which
+is how `@tabnas/csv` implements `field.separation`.
+
+**Matcher-owned tokens cannot be bound to a literal.** `#BD`, `#ZZ`,
+`#UK`, `#AA`, `#SP`, `#LN`, `#CM`, `#NR`, `#ST`, `#TX` and `#VL` are
+produced by the engine's matchers, not by a fixed spelling. Binding one
+does not replace its matcher — it adds a second producer for the same
+token, and the two disagree about what the token means. The engine now
+rejects it with an explanatory error; previously it was accepted and the
+affected values silently vanished. To change how one of these is
+recognised, configure its matcher (`number`, `string`, `text`, `value`,
+`space`, `line`, `comment`) or introduce a token name of your own.
+
 ## `tokenSet`
 
 Named groups of tokens, used by grammars and by `tn.tokenSet(name)`.
