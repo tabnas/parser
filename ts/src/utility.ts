@@ -852,11 +852,23 @@ function charsBitmap(...parts: (string | object | boolean | undefined)[]): Uint8
 // The fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) are NOT in this
 // set. They are literals by definition, so rebinding them is meaningful
 // and supported — it is how @tabnas/csv implements `field.separation`.
-const MATCHER_TOKEN_NAMES = new Set([
+const MATCHER_TOKEN_NAMES: ReadonlySet<string> = new Set([
   '#BD', '#ZZ', '#UK', '#AA',
   '#SP', '#LN', '#CM',
   '#NR', '#ST', '#TX', '#VL',
 ])
+
+
+// True when `name` is a token the engine's own matchers produce, and so
+// cannot be bound to a fixed literal. Exported because grammar compilers
+// need the same distinction to decide how to *compile* a production of
+// that name — @tabnas/abnf keeps `TX = "literal"` as a rule shadowing the
+// bareword rather than lifting it to a token. The membership lives here
+// so there is one source of truth; a compiler asks rather than keeping
+// its own copy that can drift.
+function isMatcherToken(name: string): boolean {
+  return MATCHER_TOKEN_NAMES.has(name)
+}
 
 
 // Reject binding a matcher-owned token name to a fixed literal. Runs on
@@ -1217,4 +1229,6 @@ export {
   findTokenSet,
   modlist,
   resolveFuncRefs,
+  isMatcherToken,
+  MATCHER_TOKEN_NAMES,
 }

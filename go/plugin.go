@@ -323,6 +323,19 @@ var matcherTokenNames = map[string]bool{
 }
 
 
+// IsMatcherToken reports whether name is a token the engine's own
+// matchers produce, and so cannot be bound to a fixed literal.
+//
+// Exported because grammar compilers need the same distinction to decide
+// how to *compile* a production of that name: @tabnas/abnf keeps
+// `TX = "literal"` as a rule shadowing the bareword rather than lifting
+// it to a token. The membership lives here so there is one source of
+// truth, and a compiler asks rather than keeping a copy that can drift.
+func IsMatcherToken(name string) bool {
+	return matcherTokenNames[name]
+}
+
+
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
 //   - non-nil: remove any existing src→tin mapping for that name, then set
