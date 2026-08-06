@@ -177,6 +177,47 @@ func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 | `PF` | `func(r *Rule, ctx *Context) string` | dynamic push |
 | `RF` | `func(r *Rule, ctx *Context) string` | dynamic replace |
 | `BF` | `func(r *Rule, ctx *Context) int` | dynamic backtrack |
+| `CD` | `map[string]any` | declarative condition, converted to `C` by `NormAlt` |
+| `N`  | `map[string]int` | increment named counters (setting `0` **resets**) |
+
+### Counter conditions
+
+Compare a counter either on the rule instance or declaratively via `CD`:
+
+```go
+// imperative
+C: func(r *tabnas.Rule, ctx *tabnas.Context) bool { return r.Lt("depth", 3) },
+
+// declarative — equivalent to TS { 'n.depth': { $lt: 3 } }
+CD: map[string]any{"n.depth": tabnas.CLt(3)},
+```
+
+| Method | Constructor | True when |
+|---|---|---|
+| `r.Eq("k", n)` | `CEq(n)` | the counter equals `n` |
+| `r.Lt` / `r.Lte` | `CLt` / `CLte` | below / at most `n` |
+| `r.Gt` / `r.Gte` | `CGt` / `CGte` | above / at least `n` |
+| `r.Exist("k")` | `CExist(true)` | the counter was set at all |
+
+**An unset counter reads as `0`.** A counter that was never incremented has
+counted nothing, so exactly one of `<`, `=`, `>` holds and a guard means what it
+says wherever it sits in the alternate list.
+
+So `Eq("k", 0)` is true both for a counter set to `0` and for one never set;
+use `Exist` / `CExist` when that difference matters.
+
+Only *counters* read as zero. A path that does not resolve at all — a nil rule,
+an unknown prop, `"n"` with no counter named — is genuine absence, and
+comparisons on it stay permissive rather than inventing a value.
+
+> **Changed in 0.6.** Previously a missing counter made every comparison true,
+> so `Lt` and `Gt` both passed at once and a `CGte` guard fired before anything
+> had been counted. `Exist` / `CExist` are new in the same release — Go had no
+> `$exist` at all, so the "was it set?" question could not be asked.
+
+Note that `N` counters are applied when an alternate is **accepted**, while the
+condition is evaluated while matching it — so an alternate cannot read a counter
+it sets itself.
 
 ### State actions
 

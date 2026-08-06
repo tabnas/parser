@@ -1103,6 +1103,13 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
         if (null != pspec) {
           if ('object' === typeof pspec) {
             for (let co of Object.keys(pspec)) {
+              // NOTE: an unknown operator is skipped in silence (pinned by
+              // cover-engine's `condition-edge-shapes`). If it is the only
+              // one, `conds` stays empty, `c` is deleted below, and the
+              // alternate becomes UNCONDITIONAL — so a typo'd operator turns
+              // a guard into a match-everything. The Go port instead errors
+              // on an unknown operator. Worth reconciling; left as-is here
+              // because the current behaviour is deliberate and tested.
               if (1 === COND_OPS[co]) {
                 conds.push(makeRuleCond(co, prop, pspec[co]))
               }
@@ -1201,6 +1208,11 @@ function resolveFunctionRef(
 }
 
 
+// Operators accepted in a declarative condition. An operator missing from
+// this table is SILENTLY DROPPED — and if it was the only one, the alternate
+// loses `c` entirely and becomes unconditional, which is worse than failing.
+// $exist was implemented in makeRuleCond but never listed here, so
+// `{ 'n.k': { $exist: true } }` quietly matched everything.
 const COND_OPS: Record<string, number> = {
   $eq: 1,
   $ne: 1,
@@ -1208,6 +1220,7 @@ const COND_OPS: Record<string, number> = {
   $lte: 1,
   $gt: 1,
   $gte: 1,
+  $exist: 1,
 }
 
 

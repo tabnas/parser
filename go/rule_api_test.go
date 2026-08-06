@@ -418,3 +418,45 @@ func TestGrammarInvalidGroupTagError(t *testing.T) {
 		t.Errorf("error should mention invalid group tag, got: %s", err)
 	}
 }
+
+// $exist asks whether the counter was SET, which the comparisons cannot: they
+// read an unset counter as 0, so a counter set to 0 and one never set compare
+// identically. Go had no $exist at all, while TS implemented it (but never
+// listed it as a known operator) — so the documented escape hatch worked in
+// neither runtime.
+func TestMakeRuleCondExist(t *testing.T) {
+	r := &Rule{N: map[string]int{"zero": 0, "two": 2}}
+
+	tests := []struct {
+		subprop string
+		want    bool // for CExist(true)
+	}{
+		{"zero", true}, // set to 0 — exists
+		{"two", true},
+		{"never", false},
+	}
+	for _, tt := range tests {
+		yes, err := MakeRuleCond("$exist", "n", tt.subprop, CExist(true).Val)
+		if err != nil {
+			t.Fatalf("MakeRuleCond($exist): %v", err)
+		}
+		if got := yes(r, nil); got != tt.want {
+			t.Errorf("$exist:true on n.%s = %v, want %v", tt.subprop, got, tt.want)
+		}
+		no, err := MakeRuleCond("$exist", "n", tt.subprop, CExist(false).Val)
+		if err != nil {
+			t.Fatalf("MakeRuleCond($exist): %v", err)
+		}
+		if got := no(r, nil); got != !tt.want {
+			t.Errorf("$exist:false on n.%s = %v, want %v", tt.subprop, got, !tt.want)
+		}
+	}
+
+	// The distinction the comparisons cannot make.
+	if !r.Eq("zero", 0) || !r.Eq("never", 0) {
+		t.Error("both a zero counter and an unset counter compare equal to 0")
+	}
+	if !r.Exist("zero") || r.Exist("never") {
+		t.Error("Exist must separate counted-zero from never-counted")
+	}
+}

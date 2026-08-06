@@ -90,6 +90,48 @@ describe('counter-comparisons', () => {
     assert.equal(s.eqnever, true)
   })
 
+  it('declarative $exist actually gates the alternate', () => {
+    // $exist was implemented in makeRuleCond but missing from COND_OPS, so it
+    // was skipped as an unknown operator — leaving `conds` empty, deleting
+    // `c`, and making the alternate UNCONDITIONAL. It matched everything,
+    // which is the opposite of a guard, and it was the documented migration
+    // path for the counter change.
+    const run = (cd, counters) => {
+      let j = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
+      let fired = false
+      j.rule('top', (rs) =>
+        rs
+          .open([{ s: [j.token.Ta], n: counters, c: cd, a: () => { fired = true } }])
+          .close([{ s: ['#ZZ'] }]))
+      try { j.parse('a') } catch (e) { }
+      return fired
+    }
+
+    // Counter never set.
+    assert.equal(run({ 'n.never': { $exist: true } }, { x: 1 }), false)
+    assert.equal(run({ 'n.never': { $exist: false } }, { x: 1 }), true)
+
+    // A counter set to 0 — the case the comparisons cannot distinguish from
+    // unset. `n` is applied when an alternate is ACCEPTED, while `c` is
+    // evaluated while matching it, so the counter has to be set by an earlier
+    // alternate (here: open) and read by a later one (close).
+    const closeRun = (cd) => {
+      let j = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
+      let fired = false
+      j.rule('top', (rs) =>
+        rs
+          .open([{ s: [j.token.Ta], n: { zero: 0 } }])
+          .close([{ s: ['#ZZ'], c: cd, a: () => { fired = true } }, { s: ['#ZZ'] }]))
+      try { j.parse('a') } catch (e) { }
+      return fired
+    }
+    assert.equal(closeRun({ 'n.zero': { $exist: true } }), true)
+    assert.equal(closeRun({ 'n.zero': { $exist: false } }), false)
+    // ...and the comparisons genuinely cannot tell it from unset.
+    assert.equal(closeRun({ 'n.zero': { $eq: 0 } }), true)
+    assert.equal(closeRun({ 'n.never': { $eq: 0 } }), true)
+  })
+
   it('a declarative $gte guard no longer fires before anything is counted', () => {
     // Written guard-first, this used to reject at the opening token because
     // the counter was unset there and $gte passed unconditionally.

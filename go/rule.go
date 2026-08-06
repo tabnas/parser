@@ -103,8 +103,8 @@ type StateAction func(r *Rule, ctx *Context)
 
 // CondOp is a declarative comparison (operator + value) used in AltSpec.CD, e.g. { 'n.pk': { $lte: 0 } }.
 type CondOp struct {
-	Op  string // Comparison operator ($eq, $ne, $lt, $lte, $gt, $gte).
-	Val int    // Value to compare the rule property against.
+	Op  string // Comparison operator ($eq, $ne, $lt, $lte, $gt, $gte, $exist).
+	Val int    // Value to compare the rule property against ($exist: 0 false, 1 true).
 }
 
 // Comparison operator constructors for declarative conditions (AltSpec.CD field).
@@ -114,6 +114,16 @@ func CLt(val int) CondOp  { return CondOp{Op: "$lt", Val: val} }
 func CLte(val int) CondOp { return CondOp{Op: "$lte", Val: val} }
 func CGt(val int) CondOp  { return CondOp{Op: "$gt", Val: val} }
 func CGte(val int) CondOp { return CondOp{Op: "$gte", Val: val} }
+
+// CExist matches on whether the counter was SET, regardless of its value.
+// The comparisons read an unset counter as 0, so they cannot tell "never
+// counted" from "counted zero"; this can. Mirrors the TS `$exist`.
+func CExist(val bool) CondOp {
+	if val {
+		return CondOp{Op: "$exist", Val: 1}
+	}
+	return CondOp{Op: "$exist", Val: 0}
+}
 
 // AltSpec defines a parse alternate specification.
 type AltSpec struct {
@@ -469,6 +479,15 @@ func MakeRuleCond(op string, prop string, subprop string, val int) (AltCond, err
 		return func(r *Rule, ctx *Context) bool {
 			rval, ok := resolveRuleProp(r, prop, subprop)
 			return !ok || rval >= val
+		}, nil
+	// $exist asks whether the counter was SET, so it reads presence via
+	// getRuleProp (which reports absence) rather than resolveRuleProp (which
+	// resolves an unset counter to 0). Val 1 = must exist, 0 = must not.
+	case "$exist":
+		want := val != 0
+		return func(r *Rule, ctx *Context) bool {
+			_, ok := getRuleProp(r, prop, subprop)
+			return ok == want
 		}, nil
 	default:
 		return nil, fmt.Errorf("MakeRuleCond: unknown comparison operator: %s", op)
