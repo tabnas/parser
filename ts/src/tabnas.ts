@@ -538,6 +538,27 @@ class Tabnas {
     const ref: Record<string, any> =
       Object.assign(Object.create(null), BUILTIN_REFS, gs.ref || {})
 
+    // Wipe first, so one spec can clear and rebuild in a single pass.
+    // Rules and fixed-token bindings are grammar and go; the lexer
+    // matchers are not, and stay — a grammar cannot put them back, and
+    // without them there would be no tokens to write rules against.
+    if (true === gs.clear) {
+      const rsm = this.#internal.parser.rule() as RuleSpecMap
+      for (const rulename of keys(rsm)) {
+        this.rule(rulename, null)
+      }
+
+      const fixed = this.#internal.config.fixed.token
+      const token: Record<string, null> = {}
+      for (const src of keys(fixed)) {
+        const name = this.token(fixed[src])
+        if (null != name) token[name] = null
+      }
+      if (0 < keys(token).length) {
+        this.options({ fixed: { token } })
+      }
+    }
+
     if (gs.options) {
       const resolved = resolveFuncRefs(gs.options, ref)
       this.options(resolved)
@@ -546,6 +567,14 @@ class Tabnas {
     if (gs.rule) {
       for (const rulename of Object.keys(gs.rule)) {
         const rulespec = gs.rule[rulename]
+
+        // `null` removes the rule. Removing one that is not present is a
+        // no-op, so a spec can prune defensively.
+        if (null === rulespec) {
+          this.rule(rulename, null)
+          continue
+        }
+
         this.rule(rulename, (rs: RuleSpec) => {
           rs.fnref(ref)
           if (rulespec.open) {
