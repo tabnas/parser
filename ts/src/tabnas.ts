@@ -68,6 +68,7 @@ import {
   str,
   tokenize,
   values,
+  isMatcherToken,
 } from './utility'
 
 import { BUILTIN_REFS, BUILTIN_SCHEMA_VERSION } from './builtins'
@@ -141,6 +142,11 @@ const util: Record<string, any> = {
   tokenize,
   trimstk,
   values,
+
+  // Which token names belong to a lexer matcher and so cannot be bound
+  // to a fixed literal. Exposed for grammar compilers that need the same
+  // distinction when deciding how to compile a production of that name.
+  isMatcherToken,
 
   // Lex scan primitives. Plugin authors writing custom matchers can
   // reuse the same state-machine driver and spec builders the core
