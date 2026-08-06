@@ -308,6 +308,21 @@ func (j *Tabnas) applyMatchTokens(opts *Options) {
 	cfg.RebuildMatchTokensSorted()
 }
 
+// matcherTokenNames are the tokens the engine's own matchers produce.
+// Their tin is bound to a matcher (number, string, text, value, space,
+// line, comment) or to a parse position (bad, end, unknown, any) — not to
+// a literal spelling, so they cannot be rebound to one.
+//
+// The fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) are deliberately
+// absent: they are literals by definition, and rebinding them is how
+// @tabnas/csv implements field.separation.
+var matcherTokenNames = map[string]bool{
+	"#BD": true, "#ZZ": true, "#UK": true, "#AA": true,
+	"#SP": true, "#LN": true, "#CM": true,
+	"#NR": true, "#ST": true, "#TX": true, "#VL": true,
+}
+
+
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
 //   - non-nil: remove any existing src→tin mapping for that name, then set
@@ -324,6 +339,21 @@ func (j *Tabnas) applyFixedTokens(opts *Options) {
 	}
 	changed := false
 	for name, srcPtr := range opts.Fixed.Token {
+		if srcPtr != nil && matcherTokenNames[name] {
+			// Fail loud rather than silently mis-lex: binding a
+			// matcher-owned name adds a second producer for the same tin
+			// instead of replacing the matcher, and values then vanish
+			// without an error. Mirrors the TS checkFixedTokenNames guard.
+			panic(fmt.Sprintf(
+				"tabnas: %s is produced by a lexer matcher and cannot be bound "+
+					"to the fixed literal %q. Doing so adds a second producer for "+
+					"the same token rather than replacing the matcher, and values "+
+					"silently vanish. Configure the matcher instead (options.number, "+
+					"options.string, options.text, options.value, options.space, "+
+					"options.line, options.comment), or use a token name of your own. "+
+					"Fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) may be "+
+					"rebound freely.", name, *srcPtr))
+		}
 		tin, ok := j.tinByName[name]
 		if !ok {
 			if srcPtr == nil {

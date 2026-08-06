@@ -64,6 +64,34 @@ describe('coverage', () => {
     )
   })
 
+  it('matcher-owned tokens cannot be bound to a fixed literal', () => {
+    // Binding one adds a second producer for the same tin instead of
+    // replacing the matcher, and the failure is silent and total: before
+    // this guard, `fixed: { token: { '#TX': 'foo' } }` parsed
+    // `{"a": foo}` to `{}` — the value vanished, with no error.
+    const bind = (name, src) => () => vp({ fixed: { token: { [name]: src } } })
+
+    for (const name of [
+      '#BD', '#ZZ', '#UK', '#AA', '#SP', '#LN', '#CM',
+      '#NR', '#ST', '#TX', '#VL',
+    ]) {
+      assert.throws(bind(name, 'lit'), new RegExp(
+        name + ' is produced by a lexer matcher'), name + ' must be refused')
+    }
+
+    // The fixed punctuation tokens are literals by definition, so
+    // rebinding them stays supported — @tabnas/csv does exactly this for
+    // field.separation.
+    for (const name of ['#OB', '#CB', '#OS', '#CS', '#CL', '#CA']) {
+      assert.doesNotThrow(bind(name, ';'), name + ' must stay rebindable')
+    }
+
+    // null removes a fixed binding rather than creating one, so it is
+    // allowed even for a matcher-owned name (where it is a no-op).
+    assert.doesNotThrow(bind('#TX', null))
+    assert.doesNotThrow(bind('#OB', null))
+  })
+
   it('colour off emits no ANSI at all', () => {
     // errdesc passes cline as '' (not undefined) when colour is off, so a
     // `null ==` guard let the hardcoded reset codes through: the message
