@@ -460,3 +460,114 @@ func TestMakeRuleCondExist(t *testing.T) {
 		t.Error("Exist must separate counted-zero from never-counted")
 	}
 }
+
+// Declarative grammar parts are validated while the grammar is BUILT, so a
+// bad spec can never surface during a parse. ValidateAlt reports every problem
+// at once rather than stopping at the first, so a grammar held as data can be
+// checked before any parser exists.
+func TestValidateAltDeclarativeParts(t *testing.T) {
+	// Unknown operator, unresolvable path root, unusable value, bad group tag.
+	problems := ValidateAlt(&AltSpec{
+		CD: map[string]any{
+			"zz.depth": CLt(3),                 // no such rule property
+			"n.ok":     CondOp{Op: "$bogus"},   // unknown operator
+			"d":        "not-an-int",           // unusable value type
+		},
+		G: "Bad Tag",
+	})
+	if len(problems) != 4 {
+		t.Errorf("want 4 problems, got %d: %v", len(problems), problems)
+	}
+
+	// A well-formed alt reports nothing.
+	if got := ValidateAlt(&AltSpec{
+		CD: map[string]any{"n.pk": CLte(0), "d": 1},
+		G:  "json,map",
+	}); len(got) != 0 {
+		t.Errorf("valid alt reported problems: %v", got)
+	}
+
+	// nil is not a problem.
+	if got := ValidateAlt(nil); len(got) != 0 {
+		t.Errorf("nil alt reported problems: %v", got)
+	}
+
+	// $exist is a known operator (it had none in Go at all before).
+	if got := ValidateAlt(&AltSpec{CD: map[string]any{"n.k": CExist(true)}}); len(got) != 0 {
+		t.Errorf("$exist reported problems: %v", got)
+	}
+}
+
+func TestValidateAltsLabelsLocation(t *testing.T) {
+	problems := ValidateAlts([]*AltSpec{
+		{CD: map[string]any{"n.ok": CLt(1)}},   // fine
+		{CD: map[string]any{"nope.x": CLt(1)}}, // bad
+	}, "val.open")
+	if len(problems) != 1 {
+		t.Fatalf("want 1 problem, got %d: %v", len(problems), problems)
+	}
+	if !strings.Contains(problems[0], "val.open alt[1]:") {
+		t.Errorf("problem should name its location, got %q", problems[0])
+	}
+}
+
+// NormAlt must REJECT what ValidateAlt reports, rather than skipping it and
+// leaving the alternate with fewer conditions than it reads as having.
+func TestNormAltRejectsInvalidDeclarative(t *testing.T) {
+	if err := NormAlt(&AltSpec{CD: map[string]any{"nope.x": CLt(1)}}); err == nil {
+		t.Error("NormAlt must reject an unresolvable condition path")
+	}
+	if err := NormAlt(&AltSpec{CD: map[string]any{"n.x": CondOp{Op: "$bogus"}}}); err == nil {
+		t.Error("NormAlt must reject an unknown condition operator")
+	}
+}
+
+// Negative coverage for the validation surface: empty input is not a problem,
+// valid roots are not rejected (guarding against over-tightening), and every
+// bad entry in one alternate is reported rather than just the first.
+func TestValidateAltNegativeEdges(t *testing.T) {
+	// Empty / nil inputs report nothing.
+	if got := ValidateAlts(nil, "x"); len(got) != 0 {
+		t.Errorf("nil alts reported %v", got)
+	}
+	if got := ValidateAlts([]*AltSpec{}, ""); len(got) != 0 {
+		t.Errorf("empty alts reported %v", got)
+	}
+	if got := ValidateAlt(&AltSpec{}); len(got) != 0 {
+		t.Errorf("bare alt reported %v", got)
+	}
+
+	// The roots Go can actually resolve are accepted.
+	for _, prop := range []string{"d", "n.pk", "n.depth"} {
+		if got := ValidateAlt(&AltSpec{CD: map[string]any{prop: CLt(1)}}); len(got) != 0 {
+			t.Errorf("%s should be valid, got %v", prop, got)
+		}
+	}
+
+	// Every bad entry is reported, not just the first.
+	problems := ValidateAlt(&AltSpec{CD: map[string]any{
+		"aa.x": CLt(1),
+		"bb.y": CLt(1),
+		"n.z":  CondOp{Op: "$nope"},
+	}})
+	if len(problems) != 3 {
+		t.Errorf("want 3 problems, got %d: %v", len(problems), problems)
+	}
+
+	// A function condition is opaque, and does not stop CD being checked.
+	if got := ValidateAlt(&AltSpec{C: func(r *Rule, ctx *Context) bool { return true }}); len(got) != 0 {
+		t.Errorf("function condition should be opaque, got %v", got)
+	}
+}
+
+// A grammar built through the public path must reject an invalid declarative
+// condition, so it can never reach a parse.
+func TestNormAltsRejectsInvalidAlternate(t *testing.T) {
+	rs := &RuleSpec{Name: "val"}
+	rs.AddOpen(&AltSpec{CD: map[string]any{"n.ok": CLt(1)}}) // valid
+	rs.AddOpen(&AltSpec{CD: map[string]any{"bad.x": CLt(1)}})
+
+	if err := NormAlts(rs); err == nil {
+		t.Error("NormAlts must reject an invalid alternate even after a valid one")
+	}
+}

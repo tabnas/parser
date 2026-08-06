@@ -5,6 +5,7 @@ package tabnas
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -494,6 +495,94 @@ func MakeRuleCond(op string, prop string, subprop string, val int) (AltCond, err
 	}
 }
 
+// condPathRoots are the rule properties a declarative condition can read.
+// resolveRuleProp resolves only "d" and "n.<counter>", so a path rooted
+// anywhere else can NEVER resolve and the ordered operators fail open on it
+// forever — the guard silently does nothing. (The TS port reads more of the
+// rule via a generic path walk; Go's declarative surface is deliberately
+// narrower, so a grammar shared between them must stay within d/n.)
+var condPathRoots = map[string]bool{"d": true, "n": true}
+
+// condProblems reports everything wrong with one declarative condition entry.
+// Pure: it returns messages instead of an error so a whole grammar can be
+// checked and every problem listed at once.
+func condProblems(propdef string, pspec any) []string {
+	var out []string
+
+	parts := strings.SplitN(propdef, ".", 2)
+	if !condPathRoots[parts[0]] {
+		out = append(out, fmt.Sprintf(
+			"unknown condition path: %q (no rule property %q); known roots: d, n",
+			propdef, parts[0]))
+	}
+
+	switch v := pspec.(type) {
+	case int:
+		// Plain value: shorthand for $eq.
+	case CondOp:
+		if _, err := MakeRuleCond(v.Op, "d", "", 0); err != nil {
+			out = append(out, fmt.Sprintf(
+				"unknown condition operator: %s (on %q)", v.Op, propdef))
+		}
+	default:
+		// Anything else was silently ignored, leaving the alternate with one
+		// fewer condition than it reads as having — or none at all.
+		out = append(out, fmt.Sprintf(
+			"unusable condition value on %q: want int or CondOp, got %T", propdef, v))
+	}
+
+	return out
+}
+
+// ValidateAlt reports every problem in an alternate's DECLARATIVE parts.
+//
+// Pure: it reports instead of erroring, so a whole grammar can be checked and
+// every problem listed at once. NormAlt calls the same checks while the
+// grammar is built and returns an error on what it finds, which is why a bad
+// declarative spec cannot surface during a parse — but a grammar held as data
+// (the Grammar / GrammarText path, a generator, an editor) can be checked with
+// this directly, before any parser exists.
+//
+// Only declarative fields are checkable: a condition given as a function is
+// opaque, and P/R rule names may legitimately be defined later.
+func ValidateAlt(alt *AltSpec) []string {
+	var out []string
+
+	if alt == nil {
+		return out
+	}
+
+	for propdef, pspec := range alt.CD {
+		out = append(out, condProblems(propdef, pspec)...)
+	}
+
+	if err := ValidateGroupTags(alt.G); err != nil {
+		out = append(out, err.Error())
+	}
+
+	sort.Strings(out) // map iteration is random; keep reports stable
+	return out
+}
+
+// ValidateAlts reports problems across a list of alternates, each prefixed
+// with where it is. label names the list, e.g. "val.open".
+func ValidateAlts(alts []*AltSpec, label string) []string {
+	var out []string
+
+	at := ""
+	if label != "" {
+		at = label + " "
+	}
+
+	for index, alt := range alts {
+		for _, problem := range ValidateAlt(alt) {
+			out = append(out, fmt.Sprintf("%salt[%d]: %s", at, index, problem))
+		}
+	}
+
+	return out
+}
+
 // NormAlt normalizes an AltSpec by converting a declarative CD condition
 // into a C function and validating the G tag format.  Returns a non-nil
 // error if any G tag fails the group-tag regex; callers must check the
@@ -509,6 +598,15 @@ func NormAlt(alt *AltSpec) error {
 
 	if alt.CD == nil || alt.C != nil {
 		return nil
+	}
+
+	// Validate the whole declarative condition BEFORE building any of it, so
+	// an unusable entry is reported rather than skipped. Skipping left the
+	// alternate with fewer conditions than it reads as having — or none, in
+	// which case it matched everything. This runs while the grammar is built,
+	// never during a parse.
+	if problems := ValidateAlt(alt); len(problems) > 0 {
+		return fmt.Errorf("tabnas: %s", strings.Join(problems, "; "))
 	}
 
 	var conds []AltCond

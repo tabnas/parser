@@ -144,3 +144,99 @@ describe('counter-comparisons', () => {
   })
 
 })
+
+// Declarative grammar parts are validated while the grammar is BUILT, so a bad
+// spec can never surface during a parse. The pure validators report every
+// problem at once, so a grammar held as data can be checked before any parser
+// exists.
+describe('declarative-validation', () => {
+  const { validateAlt, validateAlts } = require('..')
+
+  it('reports every problem in an alternate at once', () => {
+    const problems = validateAlt({
+      c: { 'zz.depth': { $lt: 3 }, 'n.ok': { $bogus: 1 } },
+      g: 'Bad Tag',
+    })
+    assert.equal(problems.length, 3, problems.join(' | '))
+    assert.ok(problems.some((p) => /unknown condition path: "zz.depth"/.test(p)))
+    assert.ok(problems.some((p) => /unknown condition operator: \$bogus/.test(p)))
+    assert.ok(problems.some((p) => /invalid group tag: "Bad Tag"/.test(p)))
+  })
+
+  it('accepts a well-formed alternate, and stays quiet on opaque parts', () => {
+    assert.deepEqual(validateAlt({ c: { 'n.pk': { $lte: 0 } }, g: 'json,map' }), [])
+    assert.deepEqual(validateAlt({ c: { 'n.k': { $exist: true } } }), [])
+    // A function condition is opaque — not something to flag.
+    assert.deepEqual(validateAlt({ c: (r) => true }), [])
+    assert.deepEqual(validateAlt(null), [])
+  })
+
+  it('names where each problem is', () => {
+    const problems = validateAlts([
+      { c: { 'n.ok': { $lt: 1 } } },
+      { c: { 'nope.x': { $lt: 1 } } },
+    ], 'val.open')
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /^val\.open alt\[1\]:/)
+  })
+
+  it('names the rule and phase, for open and close alike', () => {
+    // Without this a big grammar reports "unknown condition path" with no clue
+    // which of its rules is at fault.
+    assert.throws(
+      () => new Tabnas().rule('myrule', (rs) =>
+        rs.close([{ s: ['#ZZ'], c: { 'nn.d': { $lt: 1 } } }])),
+      /myrule\.close: unknown condition path: "nn\.d"/,
+    )
+    assert.throws(
+      () => new Tabnas().rule('other', (rs) =>
+        rs.open([{ s: ['#NR'], c: { 'n.d': { $zz: 1 } } }])),
+      /other\.open: unknown condition operator: \$zz/,
+    )
+  })
+
+  it('rejects an invalid grammar defined from inside a plugin', () => {
+    // The plugin path must fail at use() too, not defer to parse time.
+    const j = new Tabnas()
+    assert.throws(
+      () => j.use(function bad(tn) {
+        tn.rule('val', (rs) => rs.open([{ s: ['#NR'], c: { 'zz.x': { $lt: 1 } } }]))
+      }),
+      /unknown condition path: "zz\.x"/,
+    )
+  })
+
+  it('reports every bad operator in one condition object', () => {
+    const problems = validateAlt({ c: { 'n.a': { $one: 1, $two: 2, $lt: 3 } } })
+    assert.equal(problems.length, 2, problems.join(' | '))
+  })
+
+  it('accepts the non-obvious roots real grammars use', () => {
+    // Guards against over-tightening: these all resolve on a Rule, and at
+    // least `prev` and `n` are used by the shipped grammars.
+    for (const prop of ['n.pk', 'prev.name', 'd', 'o0.tin', 'u.mode', 'k.x', 'child.name']) {
+      assert.deepEqual(validateAlt({ c: { [prop]: { $eq: 1 } } }), [],
+        prop + ' should be a valid condition path')
+    }
+  })
+
+  it('an invalid alternate is rejected even when a valid one precedes it', () => {
+    assert.throws(
+      () => new Tabnas().rule('val', (rs) => rs.open([
+        { s: ['#NR'], c: { 'n.ok': { $lt: 1 } } },
+        { s: ['#NR'], c: { 'bad.x': { $lt: 1 } } },
+      ])),
+      /unknown condition path: "bad\.x"/,
+    )
+  })
+
+  it('rejects an unresolvable condition path when the grammar is built', () => {
+    // `nn.depth` can never resolve, so the ordered operators would fail open
+    // on it forever and the guard would silently do nothing.
+    const j = new Tabnas()
+    assert.throws(
+      () => j.rule('val', (rs) => rs.open([{ s: ['#NR'], c: { 'nn.depth': { $lt: 3 } } }])),
+      /unknown condition path: "nn\.depth"/,
+    )
+  })
+})

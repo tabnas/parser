@@ -111,6 +111,7 @@ import {
 } from './lexer'
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
+import { validateAlt, validateAlts } from './rules'
 
 import { mergeInstances } from './merge'
 
@@ -673,4 +674,6 @@ export {
   makeStringMatcher,
   makeTextMatcher,
   makeToken,
+  validateAlt,
+  validateAlts,
 }
