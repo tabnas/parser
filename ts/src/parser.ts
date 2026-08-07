@@ -204,6 +204,36 @@ class Parser {
     }
 
     // TODO: option to allow trailing content
+
+    // First check the lookahead buffer. A token that an alt fetched and
+    // then backtracked past (b:1) is still sitting in ctx.t[0] and was
+    // never consumed by any rule — asking the lexer for a *new* token
+    // here would skip straight over it and silently discard input.
+    // The Go port has always checked this first (go/parser.go:321-326);
+    // TS did not, which is why `[1] 2` parsed as `[1]` in TS and errored
+    // in Go. Go is the correct side.
+    const buffered = ctx.t[0]
+    if (
+      null != buffered &&
+      notoken.tin !== buffered.tin &&
+      endtkn.tin !== buffered.tin
+    ) {
+      if (bdtin === buffered.tin) {
+        let details: any = {}
+        if (null != buffered.use) {
+          details.use = buffered.use
+        }
+        throw new TabnasError(
+          buffered.why || S.unexpected,
+          details,
+          buffered,
+          rule,
+          ctx,
+        )
+      }
+      throw new TabnasError(S.unexpected, {}, buffered, norule, ctx)
+    }
+
     const endtry = lex.next(rule)
     if (bdtin === endtry.tin) {
       // A bad token in trailing content carries its own error code
