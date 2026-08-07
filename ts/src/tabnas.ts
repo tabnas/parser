@@ -113,7 +113,7 @@ import {
 import { makeParser, makeRule, makeRuleSpec } from './parser'
 import { validateAlt, validateAlts } from './rules'
 
-import { mergeInstances } from './merge'
+import { mergeInstances, deshareMatchTokens } from './merge'
 
 
 // Utility bag re-exported on Tabnas.util for plugin convenience.
@@ -493,6 +493,21 @@ class Tabnas {
     // passes functions and class instances through by reference, so a spec
     // carrying real action functions or RegExps still works.
     gs = deep({}, gs)
+
+    // Lex matchers are the one thing that must be de-shared rather than
+    // carried by reference. configure() annotates each matcher IN PLACE with
+    // this instance's token number (`matcher.tin$ = +tin`, utility.ts), so a
+    // RegExp or function matcher is instance-specific state wearing the
+    // costume of a plain value. Install one spec into two engines that number
+    // tokens differently and the second silently rewrites the first's
+    // annotation — the first engine then matches on the wrong token, with
+    // nothing to say why. It would also write tin$ onto the caller's own
+    // RegExp, breaking the guarantee the clone above exists to make.
+    // merge.ts already solves this for merged instances; reuse it rather
+    // than grow a second copy.
+    if (gs.options) {
+      deshareMatchTokens(gs.options as Record<string, any>)
+    }
 
     const altG = setting?.rule?.alt?.g
     const altGArr: string[] | null =

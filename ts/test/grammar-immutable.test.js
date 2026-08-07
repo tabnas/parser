@@ -116,4 +116,65 @@ describe('grammar-immutable', () => {
     assert.ok(0 < called, 'function action did not run')
   })
 
+  // Lex matchers are the exception to "pass functions by reference".
+  // configure() writes `matcher.tin$ = +tin` in place, so a shared matcher
+  // is instance-specific state disguised as a plain value.
+  describe('lex matchers are de-shared', () => {
+
+    const RE_SRC = '^#[0-9a-f]{3}'
+    const matcherSpec = (re) => ({
+      options: { match: { token: { '#HX': re } }, rule: { start: 'val' } },
+      rule: { val: { open: [{ s: '#HX', a: '@value$' }], close: [{}] } },
+    })
+
+    // Two engines that number tokens differently, sharing one spec.
+    const twoEngines = (re) => {
+      const a = new Tabnas()
+      a.grammar(matcherSpec(re))
+      const b = new Tabnas()
+      b.token('#X1', 'zz1')
+      b.token('#X2', 'zz2')
+      b.token('#X3', 'zz3')
+      b.grammar(matcherSpec(re))
+      return [a, b]
+    }
+
+    const matcherOf = (tn, src) =>
+      Object.values(tn.internal().config.match.token)
+        .find((m) => m instanceof RegExp && m.source === src)
+
+    it('does not annotate the caller RegExp', () => {
+      const re = new RegExp(RE_SRC)
+      twoEngines(re)
+      assert.equal(re.tin$, undefined, 'tin$ was written onto the caller RegExp')
+    })
+
+    it('gives each engine its own matcher object', () => {
+      const re = new RegExp(RE_SRC)
+      const [a, b] = twoEngines(re)
+      const ma = matcherOf(a, RE_SRC)
+      const mb = matcherOf(b, RE_SRC)
+      assert.ok(ma && mb, 'matcher missing from a config')
+      assert.notEqual(ma, mb, 'both engines share one matcher object')
+      assert.notEqual(ma.tin$, mb.tin$, 'expected different token numbers')
+    })
+
+    it('leaves the first engine parsing correctly after the second installs', () => {
+      const re = new RegExp(RE_SRC)
+      const [a, b] = twoEngines(re)
+      // Before the fix, installing into b rewrote a's tin$, so a matched on
+      // the wrong token and this returned undefined.
+      assert.equal(a.parse('#1ab'), '#1ab')
+      assert.equal(b.parse('#1ab'), '#1ab')
+    })
+
+    it('preserves the eager$ opt-out when cloning', () => {
+      const re = new RegExp(RE_SRC)
+      re.eager$ = true
+      const [a] = twoEngines(re)
+      assert.equal(matcherOf(a, RE_SRC).eager$, true)
+    })
+
+  })
+
 })
