@@ -473,6 +473,27 @@ class Tabnas {
   // Apply a GrammarSpec (declarative rule definition) to this instance.
   grammar(gs: GrammarSpec, setting?: GrammarSetting): this {
 
+    // Install works on a private copy: the caller's spec is theirs, and
+    // must read the same after this call as before it.
+    //
+    // Normalisation is destructive by design — `normalt` rewrites `g` into
+    // a sorted array, nulls an empty `s`, and `resolveFunctionRef` replaces
+    // each `@name$` string with the function it resolves to. Run directly
+    // on the caller's object that turned a declarative, serialisable
+    // grammar into one full of functions. Serialising after installing
+    // therefore produced a spec with every action silently missing: it
+    // still installed, still parsed, and returned undefined. The docs
+    // carried a warning telling people to serialise first, which is a
+    // workaround for a defect rather than a design.
+    //
+    // Go has always copied here (`Grammar` leaves the caller's
+    // *GrammarSpec untouched), so this is also a TS/Go parity fix.
+    //
+    // `deep` is the right clone: it copies plain objects and arrays but
+    // passes functions and class instances through by reference, so a spec
+    // carrying real action functions or RegExps still works.
+    gs = deep({}, gs)
+
     const altG = setting?.rule?.alt?.g
     const altGArr: string[] | null =
       null == altG
