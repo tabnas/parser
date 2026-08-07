@@ -197,6 +197,28 @@ resolved against `spec.ref`. Used by plugins that ship grammar as data
 rather than code. `settings.rule.alt.g` appends group tags to every
 alternate in the spec.
 
+**The spec is not modified.** Installing works on a private copy, so the
+object you pass in reads the same afterwards as before: `@funcref` strings
+are still strings, `g` is still the comma-string you wrote, and the spec
+still serialises to the grammar you authored. You can therefore install one
+spec into several parsers, and serialise it before or after installing, in
+any order.
+
+Two consequences worth knowing:
+
+- Function fields (real actions, conditions, errors) are carried into the
+  copy **by reference**, so a spec may hold live functions and they run as
+  written. Only the containing objects and arrays are copied.
+- Lex matchers in `spec.options.match.token` are the exception and are
+  **cloned**: a `RegExp` is rebuilt (keeping a user-set `eager$`) and a
+  function matcher gets a delegating wrapper. Each engine annotates its
+  matchers with its own token numbers, so sharing one matcher between
+  engines would make the second corrupt the first.
+
+Before 0.6.1 the TypeScript runtime resolved refs in place, so a spec came
+back holding functions and serialising it after installing produced a
+grammar with every action silently missing. Go always copied.
+
 ### `tn.token(ref)`
 
 Dual-shape, like `options`: callable for lookup-or-create, and

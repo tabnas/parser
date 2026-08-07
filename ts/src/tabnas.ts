@@ -113,7 +113,7 @@ import {
 import { makeParser, makeRule, makeRuleSpec } from './parser'
 import { validateAlt, validateAlts } from './rules'
 
-import { mergeInstances } from './merge'
+import { mergeInstances, deshareMatchTokens } from './merge'
 
 
 // Utility bag re-exported on Tabnas.util for plugin convenience.
@@ -472,6 +472,42 @@ class Tabnas {
 
   // Apply a GrammarSpec (declarative rule definition) to this instance.
   grammar(gs: GrammarSpec, setting?: GrammarSetting): this {
+
+    // Install works on a private copy: the caller's spec is theirs, and
+    // must read the same after this call as before it.
+    //
+    // Normalisation is destructive by design — `normalt` rewrites `g` into
+    // a sorted array, nulls an empty `s`, and `resolveFunctionRef` replaces
+    // each `@name$` string with the function it resolves to. Run directly
+    // on the caller's object that turned a declarative, serialisable
+    // grammar into one full of functions. Serialising after installing
+    // therefore produced a spec with every action silently missing: it
+    // still installed, still parsed, and returned undefined. The docs
+    // carried a warning telling people to serialise first, which is a
+    // workaround for a defect rather than a design.
+    //
+    // Go has always copied here (`Grammar` leaves the caller's
+    // *GrammarSpec untouched), so this is also a TS/Go parity fix.
+    //
+    // `deep` is the right clone: it copies plain objects and arrays but
+    // passes functions and class instances through by reference, so a spec
+    // carrying real action functions or RegExps still works.
+    gs = deep({}, gs)
+
+    // Lex matchers are the one thing that must be de-shared rather than
+    // carried by reference. configure() annotates each matcher IN PLACE with
+    // this instance's token number (`matcher.tin$ = +tin`, utility.ts), so a
+    // RegExp or function matcher is instance-specific state wearing the
+    // costume of a plain value. Install one spec into two engines that number
+    // tokens differently and the second silently rewrites the first's
+    // annotation — the first engine then matches on the wrong token, with
+    // nothing to say why. It would also write tin$ onto the caller's own
+    // RegExp, breaking the guarantee the clone above exists to make.
+    // merge.ts already solves this for merged instances; reuse it rather
+    // than grow a second copy.
+    if (gs.options) {
+      deshareMatchTokens(gs.options as Record<string, any>)
+    }
 
     const altG = setting?.rule?.alt?.g
     const altGArr: string[] | null =

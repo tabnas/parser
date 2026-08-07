@@ -611,4 +611,4 @@ function mergeInstances(
 }
 
 
-export { mergeInstances }
+export { mergeInstances, deshareMatchTokens }
