@@ -18,7 +18,7 @@ lexer. Grammar is contributed by plugins.
 | Path | What it is |
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
-| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const Version` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
+| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const VERSION` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
 | `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). Both runtimes run the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones; the relaxed-grammar fixtures are kept for downstream grammar packages. |
 
 ## Authority and alignment rules
@@ -81,7 +81,7 @@ go test -coverpkg=./... -cover ./...
 The repo-root [`Makefile`](Makefile) (adapted from voxgig/util) wraps
 both halves: `make build|test|clean` run the TS and Go sides,
 `make reset` rebuilds from clean, and `make publish-go V=x.y.z` injects
-`V` into the `const Version` in `go/tabnas.go`, commits, and tags
+`V` into the `const VERSION` in `go/tabnas.go`, commits, and tags
 `go/vX.Y.Z`. `make publish-ts` publishes the TS package at its
 `package.json` version. (`make -C ts test` runs the TS suite alone.)
 

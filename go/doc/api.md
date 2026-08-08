@@ -410,5 +410,7 @@ tabnas.Options{Comment: &tabnas.CommentOptions{Lex: boolp(false)}}
 ### `Version`
 
 ```go
-const Version = "0.1.22"
+// Always equal to ts/package.json "version"; asserted by
+// TestVersionMatchesPackageJSON in both runtimes.
+const VERSION string
 ```
