@@ -135,6 +135,10 @@ func MakePoint(srclen int, pos ...int) Point {
 // (*Tabnas).Rule, which creates and registers the RuleSpec in one step;
 // this constructor exists for plugin code that builds specs standalone
 // (e.g. before installing them via RSM()).
+//
+// The spec is stamped with the next definition index (see RuleSpec.Def), so
+// rules built this way still report their declaration order to RuleNames /
+// Rules. Build the specs in the order you mean to declare them.
 func MakeRuleSpec(name string) *RuleSpec {
-	return &RuleSpec{Name: name}
+	return &RuleSpec{Name: name, Def: nextRuleDef()}
 }

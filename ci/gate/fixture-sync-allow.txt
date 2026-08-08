@@ -8,3 +8,9 @@
 alignment-utf8.tsv
 include-json-utf8-errors.tsv
 include-json-utf8.tsv
+
+# Engine-only: pins the string.allowControl lexer option (raw control
+# chars inside a string body) across both runtimes. It is a lexer-config
+# fixture, not a grammar corpus — its first column is an option value,
+# so the jsonic grammar suites cannot consume it.
+lex-string-control.tsv

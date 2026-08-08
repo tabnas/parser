@@ -125,6 +125,7 @@ type LexConfig struct {
 	EscapeMap          map[string]string // Custom escape mappings, e.g. {"n": "\n"}.
 	EscapeRemoved      map[string]bool   // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
 	EscapeStrict       bool              // Disable the non-standard \xHH and \u{...} structural escapes.
+	AllowControl       bool              // Permit raw control chars (< 0x20) in a string body instead of erroring with "unprintable". Line chars are excluded — they stay governed by MultiChars.
 	RewindHistory      int               // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
 	SpaceChars         map[rune]bool     // Characters lexed as space (#SP).
 	LineChars          map[rune]bool     // Characters lexed as line endings (#LN).
@@ -977,7 +978,18 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				}
 				positionExpected := false
 				for _, alt := range alts {
-					if len(alt.S) > 0 && tinMatch(tin, alt.S[0]) {
+					// Read the alt's slots through the context so a token
+					// set overridden on this instance (options.tokenSet) is
+					// honoured here too. Gating on the registration-time
+					// tins would refuse to produce a custom token the
+					// override just added to #VAL / #KEY, and the parser
+					// would then reject the text the override was meant to
+					// admit. Falls back to alt.S outside a parse.
+					altS := alt.S
+					if l.Ctx != nil {
+						altS = l.Ctx.altS(alt)
+					}
+					if len(altS) > 0 && tinMatch(tin, altS[0]) {
 						positionExpected = true
 						break
 					}
@@ -1535,6 +1547,9 @@ func (l *Lex) matchString() *Token {
 		// Reported as unprintable, matching the TS runtime — an earlier
 		// version fell through to unterminated_string (caught by the
 		// cross-runtime token parity harness, ci/parity).
+		// Under string.allowControl the non-line control chars are
+		// classified as plain body by BuildStringBodySpec and never
+		// reach here, so only the embedded-line case remains.
 		if c < 32 {
 			if l.Config.StringAbandon {
 				return nil
@@ -1733,11 +1748,16 @@ func (l *Lex) matchNumber() *Token {
 			for sI < len(src) && (isDigit(src[sI]) || (l.Config.NumberSep != 0 && rune(src[sI]) == l.Config.NumberSep)) {
 				sI++
 			}
-		} else if sI+1 < len(src) && l.isFollowingText(sI+1) && src[sI+1] != '.' {
-			// "0.a" → not a number, let text handle it
+		} else if sI+1 < len(src) && l.isFollowingText(sI+1) && src[sI+1] != '.' &&
+			!isExponentStart(src, sI+1) {
+			// "0.a" → not a number, let text handle it. An exponent is
+			// excepted: TS's fraction group makes the digit optional
+			// (\.[0-9]?...), so "2.e3" is a number there and the check
+			// below must not steal the 'e' as trailing text.
 			return nil
 		} else {
-			// Trailing dot: "0." at end or before delimiter
+			// Trailing dot: "0." at end or before delimiter, or "2.e3"
+			// where the exponent below consumes the rest.
 			sI++ // consume dot
 		}
 	}
@@ -2027,6 +2047,25 @@ func isDigit(ch byte) bool {
 
 func isHexDigitByte(ch byte) bool {
 	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+}
+
+// isExponentStart reports whether a well-formed exponent begins at pos:
+// [eE], an optional sign, then at least one digit. Mirrors the exponent
+// group of the TS number regexp, ([eE][-+]?[0-9]+([0-9_]*[0-9])?), which
+// likewise requires a digit before the separator run — so a bare "2.e"
+// stays text in both runtimes.
+func isExponentStart(src string, pos int) bool {
+	if pos >= len(src) {
+		return false
+	}
+	if src[pos] != 'e' && src[pos] != 'E' {
+		return false
+	}
+	i := pos + 1
+	if i < len(src) && (src[i] == '+' || src[i] == '-') {
+		i++
+	}
+	return i < len(src) && isDigit(src[i])
 }
 
 // textStopBase reports whether the rune at pos terminates a text run for

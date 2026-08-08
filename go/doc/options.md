@@ -112,6 +112,7 @@ Controls quoted string parsing.
 | `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |
 | `EscapeStrict` | `*bool` | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `AllowUnknown: false`, yields JSON-conformant escapes |
+| `AllowControl` | `*bool` | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded — they stay governed by `MultiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (e.g. JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
 | `Abandon` | `*bool` | `false` | On error, return nil to let next matcher try |
 | `Replace` | `map[rune]string` | `nil` | Character replacements during scanning |
 
@@ -259,4 +260,4 @@ Controls ANSI color codes in formatted error messages (TS:
 | `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse |
 | `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
 | `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
-| `Tag` | `string` | Instance identifier tag (shown in the error suffix internal line) |
+| `Tag` | `string` | Instance identifier tag, appended to the instance id and shown in the error suffix internal line. Unset defaults to `DefaultTag` (`"-"`), matching TS. `Merge` treats `"-"` as "no tag chosen" and rejects it |

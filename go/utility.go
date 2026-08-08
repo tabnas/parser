@@ -201,6 +201,18 @@ func deepMergeStruct(base, over any) (any, bool) {
 		return nil, false
 	}
 
+	// A struct with no exported fields is opaque: the field-by-field
+	// merge below can copy nothing out of it (an unexported field is
+	// skipped, and reflect could not set it anyway), so it would hand
+	// back a freshly allocated zero value. For *regexp.Regexp that is a
+	// regexp whose pattern is "" — the merge silently destroyed both
+	// operands. Such a value replaces the base outright, matching the TS
+	// runtime, where deep() treats a class instance on the `over` side
+	// as opaque and lets it win.
+	if !hasExportedField(bElem.Type()) {
+		return over, true
+	}
+
 	result := reflect.New(bElem.Type()).Elem()
 	for i := 0; i < bElem.NumField(); i++ {
 		bf := bElem.Field(i)
@@ -258,6 +270,18 @@ func deepMergeStruct(base, over any) (any, bool) {
 		return ptr.Interface(), true
 	}
 	return result.Interface(), true
+}
+
+// hasExportedField reports whether struct type t declares at least one
+// exported field, i.e. whether a field-by-field merge of two t values
+// can copy anything at all.
+func hasExportedField(t reflect.Type) bool {
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).IsExported() {
+			return true
+		}
+	}
+	return false
 }
 
 // cloneMeta returns a shallow copy of a Meta map (nil stays nil).
@@ -856,6 +880,12 @@ func MapToOptions(m map[string]any) Options {
 		}
 		if allowUnknown, ok := sm["allowUnknown"].(bool); ok {
 			opts.String.AllowUnknown = &allowUnknown
+		}
+		if escapeStrict, ok := sm["escapeStrict"].(bool); ok {
+			opts.String.EscapeStrict = &escapeStrict
+		}
+		if allowControl, ok := sm["allowControl"].(bool); ok {
+			opts.String.AllowControl = &allowControl
 		}
 		if abandon, ok := sm["abandon"].(bool); ok {
 			opts.String.Abandon = &abandon

@@ -159,6 +159,7 @@ Set a definition to `false`/`null` to remove it.
 | `escape` | object | (standard) | Escape-sequence mappings. Map a key to `null` or `''` to remove a built-in escape (e.g. `{ v: null }` rejects `\v`) |
 | `allowUnknown` | boolean | `true` | Copy unknown escape sequences through (`\w` → `w`) |
 | `escapeStrict` | boolean | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `allowUnknown: false`, yields JSON.parse-conformant escapes |
+| `allowControl` | boolean | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded — they stay governed by `multiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (e.g. JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
 | `replace` | object | — | Character replacement map during scanning |
 | `abandon` | boolean | `false` | On error, let the next matcher try instead of failing |
 

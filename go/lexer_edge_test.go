@@ -3,6 +3,7 @@
 package tabnas
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -425,5 +426,109 @@ func TestLexBadToken(t *testing.T) {
 	tkn := lex.Bad("custom_reason")
 	if tkn.Tin != TinBD || tkn.Why != "custom_reason" {
 		t.Errorf("Bad token malformed: %+v", tkn)
+	}
+}
+
+// TestMatchNumberExponentTrailingDot pins the TS-parity behaviour of a
+// trailing dot before an exponent. The TS number regexp makes the
+// fractional digit optional ((\.[0-9]?...)?), so "2.e3" is a number
+// there; matchNumber originally bailed because isFollowingText saw the
+// 'e' as trailing text. Without exponent digits ("2.e") both runtimes
+// fall through to text. Mirrors ts/test/lex.test.js
+// 'number-exponent-trailing-dot'.
+func TestMatchNumberExponentTrailingDot(t *testing.T) {
+	tests := []struct {
+		src string
+		tin Tin
+		val any
+	}{
+		{"2.e3", TinNR, 2000.0},
+		{"2.e+3", TinNR, 2000.0},
+		{"2.e-3", TinNR, 0.002},
+		{"0.e1", TinNR, 0.0},
+		{"2.e", TinTX, "2.e"},
+		{"2.a", TinTX, "2.a"},
+	}
+	for _, tt := range tests {
+		lex := NewLex(tt.src, DefaultLexConfig())
+		tkn := lex.Next()
+		if lex.Err != nil {
+			t.Errorf("%q: unexpected lex error: %v", tt.src, lex.Err)
+			continue
+		}
+		if tkn.Tin != tt.tin || tkn.Val != tt.val {
+			t.Errorf("%q: expected %v (%v), got %v (%s)", tt.src, tt.val, tt.tin, tkn.Val, tkn.Name)
+		}
+	}
+}
+
+// TestMatchNumberExponentRange pins TS parity for out-of-range exponents.
+// TS coerces with unary +, which saturates: 1e999 -> Infinity, 1e-999 -> 0
+// (and -1e-999 -> -0). Go's parseNumericString used to treat ParseFloat's
+// ErrRange as a hard failure and drop the token to the text matcher, so
+// these parsed as strings. Mirrors ts/test/lex.test.js
+// 'number-exponent-range'.
+func TestMatchNumberExponentRange(t *testing.T) {
+	tests := []struct {
+		src string
+		tin Tin
+		val any
+	}{
+		{"1e999", TinNR, math.Inf(1)},
+		{"-1e999", TinNR, math.Inf(-1)},
+		{"1e+999", TinNR, math.Inf(1)},
+		{"1e309", TinNR, math.Inf(1)},
+		{"2.e999", TinNR, math.Inf(1)},
+		{"1e308", TinNR, 1e308},
+		{"1e-999", TinNR, 0.0},
+		{"1e", TinTX, "1e"},
+	}
+	for _, tt := range tests {
+		lex := NewLex(tt.src, DefaultLexConfig())
+		tkn := lex.Next()
+		if lex.Err != nil {
+			t.Errorf("%q: unexpected lex error: %v", tt.src, lex.Err)
+			continue
+		}
+		if tkn.Tin != tt.tin || tkn.Val != tt.val {
+			t.Errorf("%q: expected %v (%v), got %v (%s)", tt.src, tt.val, tt.tin, tkn.Val, tkn.Name)
+		}
+	}
+
+	// Underflow keeps its sign, as JS unary + does (Object.is(-1e-999, -0)).
+	lex := NewLex("-1e-999", DefaultLexConfig())
+	tkn := lex.Next()
+	f, ok := tkn.Val.(float64)
+	if !ok || f != 0 || !math.Signbit(f) {
+		t.Errorf("-1e-999: expected negative zero, got %v (%s)", tkn.Val, tkn.Name)
+	}
+}
+
+// TestMatchNumberNegativeZero pins written negative zero. TS's unary +
+// yields -0 for each of these and encoding/json does the same, so the Go
+// number lexer must too. An earlier Go version normalized -0 to +0 in
+// parseNumericString; nothing in the suite caught it, because JSON
+// serialization erases the sign and the shared .tsv fixtures compare
+// JSON. The literals take different lexer paths (integer / fractional /
+// exponent), so pin all three; +0 must stay positive, or "preserved"
+// would just mean "always negative".
+func TestMatchNumberNegativeZero(t *testing.T) {
+	for _, tt := range []struct {
+		src  string
+		sign bool
+	}{
+		{"-0", true},
+		{"-0.0", true},
+		{"-0e0", true},
+		{"0", false},
+		{"0.0", false},
+		{"+0", false},
+	} {
+		ntkn := NewLex(tt.src, DefaultLexConfig()).Next()
+		nf, nok := ntkn.Val.(float64)
+		if !nok || nf != 0 || math.Signbit(nf) != tt.sign {
+			t.Errorf("%q: expected zero with signbit=%v, got %v (%s)",
+				tt.src, tt.sign, ntkn.Val, ntkn.Name)
+		}
 	}
 }

@@ -58,7 +58,24 @@ type Token struct {
 
 // Bad converts this token to an error token with the given error code.
 // Matches TS token.bad(err, details).
+//
+// The NoToken sentinel is a package-level singleton, and ctx.T0 is that
+// singleton whenever the lookahead is empty (e.g. in a bc action that
+// has already consumed the last token). Writing Err/Use into it would
+// poison every later parse in the process — a grammar that once raised
+// its own code (csv's csv_extra_field, multisource's
+// multisource_cycle, ...) would make every subsequent generic
+// "no alt matched" failure anywhere in the program report that stale
+// code and its stale details. So marking the sentinel produces a copy
+// instead. TS has no equivalent hazard: it mints a fresh no-token per
+// parse (makeNoToken in parser.ts). Every caller uses the return value,
+// which is why copy-on-write is transparent.
 func (t *Token) Bad(err string, details ...map[string]any) *Token {
+	if t == NoToken {
+		copied := *NoToken
+		copied.Use = nil
+		t = &copied
+	}
 	t.Err = err
 	if len(details) > 0 && details[0] != nil {
 		if t.Use == nil {

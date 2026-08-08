@@ -132,7 +132,9 @@ func (j *Tabnas) Rule(name string, definer RuleDefiner) *Tabnas {
 	}
 	rs := j.parser.RSM[name]
 	if rs == nil {
-		rs = &RuleSpec{Name: name}
+		// MakeRuleSpec stamps the definition index, so first registration
+		// here is what RuleNames/Rules report as declaration order.
+		rs = MakeRuleSpec(name)
 		j.parser.RSM[name] = rs
 	}
 	definer(rs, j.parser)
@@ -322,7 +324,6 @@ var matcherTokenNames = map[string]bool{
 	"#NR": true, "#ST": true, "#TX": true, "#VL": true,
 }
 
-
 // IsMatcherToken reports whether name is a token the engine's own
 // matchers produce, and so cannot be bound to a fixed literal.
 //
@@ -335,6 +336,38 @@ func IsMatcherToken(name string) bool {
 	return matcherTokenNames[name]
 }
 
+// applyTokenSets materializes opts.TokenSet into per-instance token sets.
+// Each entry's token names are resolved against this instance (so a set may
+// be defined in terms of another set, or of a custom token) and installed
+// via SetTokenSet, which also refreshes the config's IgnoreSet/ValSet/KeySet.
+//
+// Empty names are skipped, mirroring the TS `null` filter in configure()
+// that lets a caller shorten a set (`['#ST', null, null, null]`).
+//
+// Called from BOTH Make and SetOptions: `Make(opts)` and
+// `Make().SetOptions(opts)` must be equivalent for the same Options.
+func (j *Tabnas) applyTokenSets(opts *Options) {
+	if opts == nil || opts.TokenSet == nil {
+		return
+	}
+	// Deterministic order: a set may reference another set by name, and
+	// map iteration order would otherwise make the outcome vary per run.
+	names := make([]string, 0, len(opts.TokenSet))
+	for setName := range opts.TokenSet {
+		names = append(names, setName)
+	}
+	sort.Strings(names)
+	for _, setName := range names {
+		var tins []Tin
+		for _, name := range opts.TokenSet[setName] {
+			if name == "" {
+				continue
+			}
+			tins = append(tins, j.resolveTokenName(name)...)
+		}
+		j.SetTokenSet(setName, tins)
+	}
+}
 
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
@@ -406,8 +439,45 @@ func (j *Tabnas) Config() *LexConfig {
 }
 
 // RSM returns the rule spec map for direct inspection or modification.
+// The map has no order; use RuleNames or Rules to walk the grammar in
+// declaration order.
 func (j *Tabnas) RSM() map[string]*RuleSpec {
 	return j.parser.RSM
+}
+
+// Rules returns this instance's rule specs in declaration order — the order
+// the grammar defined them, not the alphabetical order an RSM() map walk
+// would give. Ordering is by RuleSpec.Def, the definition index stamped at
+// registration; specs built as bare struct literals (Def == 0) carry no
+// order and sort last, by name, so the result is always deterministic.
+func (j *Tabnas) Rules() []*RuleSpec {
+	rules := make([]*RuleSpec, 0, len(j.parser.RSM))
+	for _, rs := range j.parser.RSM {
+		rules = append(rules, rs)
+	}
+	sort.Slice(rules, func(a, b int) bool {
+		x, y := rules[a], rules[b]
+		if (x.Def == 0) != (y.Def == 0) {
+			return y.Def == 0 // unstamped specs last
+		}
+		if x.Def != y.Def {
+			return x.Def < y.Def
+		}
+		return x.Name < y.Name
+	})
+	return rules
+}
+
+// RuleNames returns this instance's rule names in declaration order.
+// Equivalent to mapping Rules() over Name; the convenience form for tools
+// (documentation, diagram generators) that only need the order.
+func (j *Tabnas) RuleNames() []string {
+	rules := j.Rules()
+	names := make([]string, len(rules))
+	for i, rs := range rules {
+		names[i] = rs.Name
+	}
+	return names
 }
 
 // TinName returns the name for a Tin value, checking both built-in and custom tokens.
@@ -453,6 +523,30 @@ func (j *Tabnas) TokenSet(name string) []Tin {
 	default:
 		return nil
 	}
+}
+
+// hasTokenSet reports whether name refers to a token set on this instance,
+// without building the copy TokenSet returns. Used on the parse-time
+// re-resolution path, which asks about far more names than it resolves.
+func (j *Tabnas) hasTokenSet(name string) bool {
+	if j.customTokenSets != nil {
+		if _, ok := j.customTokenSets[name]; ok {
+			return true
+		}
+	}
+	switch name {
+	case "IGNORE", "VAL", "KEY":
+		return true
+	}
+	return false
+}
+
+// hasToken reports whether name is a token this instance already knows.
+// Unlike Token, it never mints a new one — the parse-time path must not
+// mutate the instance's token space.
+func (j *Tabnas) hasToken(name string) bool {
+	_, ok := j.tinByName[name]
+	return ok
 }
 
 // SetTokenSet registers a custom named token set.
@@ -749,19 +843,7 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	j.applyMatchTokens(&opts)
 
 	// Apply tokenSet: resolve token names and update per-instance sets.
-	if opts.TokenSet != nil {
-		for setName, names := range opts.TokenSet {
-			var tins []Tin
-			for _, name := range names {
-				if name == "" {
-					continue
-				}
-				resolved := j.resolveTokenName(name)
-				tins = append(tins, resolved...)
-			}
-			j.SetTokenSet(setName, tins)
-		}
-	}
+	j.applyTokenSets(&opts)
 
 	// Re-alias the parser error fields to the rebuilt config maps.
 	// buildConfig resolved Error/Hint/ErrMsg from the merged options.

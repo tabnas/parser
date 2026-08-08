@@ -580,10 +580,29 @@ function escre(s: string | undefined) {
       .replace(/\n/g, '\\n')
 }
 
+// True when `v` is a class instance (RegExp, Date, Map, a plugin's own
+// class, ...) rather than a plain object, an array, or a
+// null-prototype object. Such a value is opaque to the deep merge: it
+// replaces the base outright instead of being descended into.
+//
+// Without this test a RegExp on the `over` side was merged key-by-key,
+// and since `for..in` over a RegExp yields no own enumerable keys the
+// merge was a silent no-op — the parent's pattern survived, so
+// `tn.make({number: {exclude: /new/}})` kept the inherited /^00+/.
+function isClassInstance(v: any): boolean {
+  const ctor = v.constructor
+  return (
+    S.function === typeof ctor &&
+    S.Object !== ctor.name &&
+    S.Array !== ctor.name
+  )
+}
+
 // Deep override for plain data. Mutates base object and array.
 // Array merge by `over` index, `over` wins non-matching types, except:
 // `undefined` always loses, `over` plain objects inject into functions,
-// and `over` functions always win. Over always copied.
+// `over` functions always win, and an `over` class instance (RegExp,
+// Date, ...) replaces rather than merges. Over always copied.
 // deep({a:1}, {b:2}) // => {a:1, b:2}
 function deep(base?: any, ...rest: any): any {
   let base_isf = S.function === typeof base
@@ -596,7 +615,8 @@ function deep(base?: any, ...rest: any): any {
       base_iso &&
       over_iso &&
       !over_isf &&
-      Array.isArray(base) === Array.isArray(over)
+      Array.isArray(base) === Array.isArray(over) &&
+      !isClassInstance(over)
     ) {
       for (let k in over) {
         base[k] = deep(base[k], over[k])
@@ -797,10 +817,21 @@ function snip(s: any, len: number = 5) {
 // Deep clone a class instance, preserving its prototype.
 // clone(new Foo()) // => new Foo()-equivalent (same prototype, deep-copied data)
 function clone(class_instance: any) {
-  return deep(
-    Object.create(Object.getPrototypeOf(class_instance)),
-    class_instance,
-  )
+  const out = Object.create(Object.getPrototypeOf(class_instance))
+
+  // Copied key-by-key rather than as `deep(out, class_instance)`:
+  // deep() treats a class instance on the `over` side as opaque and
+  // replaces the base with it (so that e.g. a RegExp option overrides
+  // instead of silently merging into nothing), which would hand back
+  // the original object instead of a copy. Per key the behaviour is
+  // identical to the old whole-object merge — `deep(undefined, v)` is
+  // exactly what `base[k]` evaluated to there — except that a value
+  // inherited from the shared prototype is no longer mutated in place.
+  for (const k in class_instance) {
+    out[k] = deep(undefined, class_instance[k])
+  }
+
+  return out
 }
 
 // Build a char->code-point lookup map from strings/objects (false parts skipped).

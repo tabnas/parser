@@ -17,8 +17,8 @@ lexer. Grammar is contributed by plugins.
 
 | Path | What it is |
 |---|---|
-| `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm, currently `2.28.0`). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
-| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const Version` lives in `go/tabnas.go` (currently `0.1.22`). Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
+| `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm, currently `0.6.1`). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
+| `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const Version` lives in `go/tabnas.go` (currently `0.6.1`). Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
 | `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). Both runtimes run the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones; the relaxed-grammar fixtures are kept for downstream grammar packages. |
 
 ## Authority and alignment rules
@@ -91,7 +91,10 @@ Tab-separated, header row first, one case per line. `\n`, `\r`, `\t`
 in the input column are unescaped by the loaders. The expected column
 is JSON, or `ERROR:<code>` for error cases. Loaders:
 `ts/test/utility.js` (`loadTSV`) and `go/spec_test.go`
-(`runParserTSV` / `runErrorTSV`; `specDir` resolves `../test/spec`).
+(`runParserTSV` / `runErrorTSV`; `specDir` resolves `../test/spec`), plus
+`go/utility_spec_test.go` (`loadSpecTSV`) for the `utility-*.tsv` set.
+The two loaders' escape handling must stay in step — see
+`unescape` (TS) and `preprocessEscapes` (Go).
 
 ## Documentation structure
 
