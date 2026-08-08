@@ -16,7 +16,7 @@ import (
 // VERSION is this module's version. It MUST equal ts/package.json
 // "version": the release orchestrator rewrites both, and
 // TestVersionMatchesPackageJSON fails the build if they drift.
-const VERSION = "0.6.3"
+const VERSION = "0.7.0"
 
 // Error message templates matching TypeScript defaults (ts/src/defaults.ts).
 // Values are injected with StrInject using {key} placeholders.
