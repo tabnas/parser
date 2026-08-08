@@ -685,6 +685,7 @@ export type { ScanSpec, ScanOut } from './lexer'
 export type { BuiltinRef } from './builtins'
 
 export {
+  VERSION,
   Tabnas,
   TabnasError,
   BUILTIN_REFS,
@@ -713,3 +714,8 @@ export {
   validateAlt,
   validateAlts,
 }
+
+// VERSION is this package's version. It MUST equal package.json "version":
+// the release orchestrator rewrites both, and the version test fails the
+// build if they drift. Mirrors `const VERSION` in go/tabnas.go.
+const VERSION = '0.6.3'
