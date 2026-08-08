@@ -368,13 +368,11 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			if tkn.Err != "" {
 				code = tkn.Err
 			}
-			je := p.makeError(code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI)
-			if len(tkn.Use) > 0 {
-				je.Detail = StrInject(je.Detail, tkn.Use)
-				if je.Hint != "" {
-					je.Hint = StrInject(je.Hint, tkn.Use)
-				}
-			}
+			// tkn.Use goes IN to the single injection pass rather than being
+			// applied over the already-rendered text: a detail whose name
+			// collides with a location key (csv's {row}) would otherwise find
+			// its placeholder already consumed.
+			je := p.makeError(code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
 			return nil, p.finishErr(je, ctx, meta, tkn)
 		}
 
@@ -458,18 +456,26 @@ func (p *Parser) finishErr(err error, ctx *Context, meta map[string]any, tkn *To
 // makeError creates a TabnasError using this parser's error messages.
 // Parser-level fields (ErrorMessages, Hints, ErrTag) take precedence over
 // the config when set directly; normally they alias the config values.
-func (p *Parser) makeError(code, src, fullSource string, pos, row, col int) *TabnasError {
+// The optional `use` bag is a grammar's own error details; see
+// makeTabnasError for why its keys override the built-in location keys.
+func (p *Parser) makeError(code, src, fullSource string, pos, row, col int, use ...map[string]any) *TabnasError {
 	cfg := p.Config
 	if cfg != nil && p.ErrorMessages != nil {
 		// Aliased in NewParser/Make; this guards direct field assignment.
 		cfg.ErrorMessages = p.ErrorMessages
 	}
-	je := makeTabnasError(code, src, fullSource, pos, row, col, cfg)
+	je := makeTabnasError(code, src, fullSource, pos, row, col, cfg, use...)
 	if p.Hints != nil {
 		if hint, ok := p.Hints[code]; ok {
-			je.Hint = StrInject(hint, map[string]any{
+			ref := map[string]any{
 				"code": code, "src": src, "pos": pos, "row": row, "col": col,
-			})
+			}
+			for _, u := range use {
+				for k, v := range u {
+					ref[k] = v
+				}
+			}
+			je.Hint = StrInject(hint, ref)
 		}
 	}
 	if p.ErrTag != "" {

@@ -273,9 +273,35 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 // palette, errmsg name/suffix/link, and instance tag. A nil cfg uses the
 // package defaults with colour disabled. Template {key} placeholders are
 // injected with StrInject, matching TS errinject (ts/src/error.ts).
-func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexConfig) *TabnasError {
+// The optional `use` bag carries a grammar's own error details (a bad token's
+// tkn.Use). Its keys OVERRIDE the built-in location keys below, because a
+// grammar that names a detail `row` means its own row — csv's
+// "Row {row} has too many fields" means the CSV row, not the source line. The
+// built-in value used to win, so that message rendered as "Row -1 ..." in Go
+// while TS rendered "Row 2". Merging once, with `use` last, also avoids a
+// second injection pass re-expanding a placeholder that appeared inside an
+// injected value.
+func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexConfig, use ...map[string]any) *TabnasError {
 	msgs := errorMessages
 	hints := defaultHints
+
+	// Normalise an unset location. A grammar can legitimately raise on the
+	// NoToken sentinel (token.go: SI/RI/CI = -1) — csv does, via
+	// ctx.T0.Bad() when the lookahead slot has been consumed — and that used
+	// to surface to the reader as "--> file:-1:-1" and inject {row}/{col} as
+	// -1. TS reports 1:1 for the same case. Rows and columns are 1-based and
+	// pos is a 0-based offset, so anything below those floors is "unknown",
+	// not a position.
+	if pos < 0 {
+		pos = 0
+	}
+	if row < 1 {
+		row = 1
+	}
+	if col < 1 {
+		col = 1
+	}
+
 	je := &TabnasError{
 		Code:       code,
 		Pos:        pos,
@@ -315,6 +341,11 @@ func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexCo
 		"pos":  pos,
 		"row":  row,
 		"col":  col,
+	}
+	for _, u := range use {
+		for k, v := range u {
+			ref[k] = v
+		}
 	}
 
 	je.Detail = StrInject(tmpl, ref)
