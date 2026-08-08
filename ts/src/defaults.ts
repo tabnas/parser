@@ -178,6 +178,15 @@ const defaults: TabnasOptions = {
     // structural escapes \xHH and \u{...} (plain \uXXXX stays).
     escapeStrict: false,
 
+    // Allow raw control characters (code point < 0x20) inside a string
+    // body instead of erroring with `unprintable`. Line-end characters
+    // are NOT covered by this: they stay governed by `multiChars`, so a
+    // raw newline in a single-line string is still an error. Grammars
+    // whose spec admits raw control chars (e.g. JSON5, whose
+    // JSON5SourceCharacter permits a literal tab) set this true.
+    // Default false keeps the strict behaviour.
+    allowControl: false,
+
     // If string lexing fails, instead of error, allow other matchers to try.
     abandon: false,
   },

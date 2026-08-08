@@ -1,0 +1,13 @@
+allowControl	input	expected
+false	"x\ty"	ERROR:unprintable
+true	"x\ty"	#ST:x\ty
+false	"x\ny"	ERROR:unprintable
+true	"x\ny"	ERROR:unprintable
+false	"x\ry"	ERROR:unprintable
+true	"x\ry"	ERROR:unprintable
+false	`x\ty`	ERROR:unprintable
+true	`x\ty`	#ST:x\ty
+false	`x\ny`	#ST:x\ny
+true	`x\ny`	#ST:x\ny
+false	"xy"	#ST:xy
+true	"xy"	#ST:xy

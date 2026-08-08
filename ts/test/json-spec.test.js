@@ -3,8 +3,9 @@
 
 // Runs the shared strict-JSON spec fixtures (test/spec/include-json*.tsv)
 // against the strict-JSON grammar plugin (test/json-plugin.ts). The Go
-// port runs the same fixtures (go/alignment_test.go TestIncludeJSON*),
-// keeping the two runtimes coupled on the strict-JSON surface.
+// port runs the same fixtures (go/spec_test.go TestSpecIncludeJSON and
+// TestSpecIncludeJSONErrors), keeping the two runtimes coupled on the
+// strict-JSON surface.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert')

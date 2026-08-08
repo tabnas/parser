@@ -39,8 +39,15 @@ type Options struct {
 	Rewind   *RewindOptions      // Consumed-token retention for ctx.Rewind (TS options.rewind).
 	Property *PropertyOptions    // Go-specific options not present in the TypeScript version.
 	Color    *ColorOptions       // ANSI colour codes in formatted error messages (TS options.color).
-	Tag      string              // Instance identifier tag.
+	Tag      string              // Instance identifier tag. Default: DefaultTag.
 }
+
+// DefaultTag is the instance tag applied when Options.Tag is unset. It
+// matches the TS default (`tag: '-'` in ts/src/defaults.ts), so the tag
+// that appears in instance ids, in the "--internal:" error suffix, and
+// in debug-plugin output is identical in both runtimes. Merge rejects it
+// the same way it rejects an empty tag: "-" means "no tag was chosen".
+const DefaultTag = "-"
 
 // ColorOptions sets the ANSI escape codes used when formatting a TabnasError (TS options.color).
 type ColorOptions struct {
@@ -216,6 +223,14 @@ type StringOptions struct {
 	// stays). Default: false. With escape-map removals and AllowUnknown:false this
 	// yields JSON.parse-conformant handling.
 	EscapeStrict *bool
+
+	// AllowControl permits raw control characters (code point < 0x20) inside a
+	// string body instead of failing with "unprintable". Line-end characters are
+	// excluded: they stay governed by MultiChars, so a raw newline inside a
+	// single-line string is still an error. Grammars whose spec admits raw
+	// control chars (e.g. JSON5, whose JSON5SourceCharacter permits a literal
+	// tab) set this true. Default: false (strict).
+	AllowControl *bool
 	Abandon      *bool           // On string error, return nil to let next matcher try. Default: false.
 	Replace      map[rune]string // Character replacements applied during string scanning.
 	Check        LexCheck        // Hook invoked before the string matcher runs (TS options.string.check).
@@ -381,6 +396,16 @@ func Make(opts ...Options) *Tabnas {
 		o = opts[0]
 	}
 
+	// An unset tag defaults to "-", matching the TS default
+	// (ts/src/defaults.ts `tag: '-'`). The tag is printed verbatim — in
+	// the "--internal: tag=..." error suffix, in the instance id, and by
+	// the debug plugin — so leaving it empty here made every Go
+	// diagnostic differ from the TS one. Merge treats "-" as "unset",
+	// exactly as TS does (ts/src/merge.ts tagOf).
+	if o.Tag == "" {
+		o.Tag = DefaultTag
+	}
+
 	cfg := buildConfig(&o)
 	rsm := make(map[string]*RuleSpec)
 
@@ -465,6 +490,11 @@ func Make(opts ...Options) *Tabnas {
 
 	// Apply match.token / match.tokenFn matchers passed at construction.
 	j.applyMatchTokens(&o)
+
+	// Apply tokenSet passed at construction. Must run after applyMatchTokens
+	// so a set may name a token created by a match spec, and mirrors the
+	// tail of SetOptions: Make(opts) and SetOptions(opts) are equivalent.
+	j.applyTokenSets(&o)
 
 	return j
 }
@@ -818,6 +848,7 @@ func buildConfig(o *Options) *LexConfig {
 	}
 	cfg.AllowUnknownEscape = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.AllowUnknown }), true)
 	cfg.EscapeStrict = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.EscapeStrict }), false)
+	cfg.AllowControl = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.AllowControl }), false)
 	cfg.StringAbandon = boolVal(optBool(o.String, func(s *StringOptions) *bool { return s.Abandon }), false)
 	if o.String != nil && o.String.Replace != nil {
 		cfg.StringReplace = o.String.Replace

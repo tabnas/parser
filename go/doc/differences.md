@@ -31,10 +31,20 @@ grammar package registers one via `tabnas.RegisterTextParser` (in the
 manner of database/sql drivers), and until one is registered the
 text-form APIs return an error.
 
-Both runtimes run the shared fixtures under `test/spec/` through their
-strict-JSON test fixtures: TypeScript runs the strict-JSON and utility
-fixtures (`include-json*.tsv`, `utility-*.tsv`) via `json-plugin.ts`, and
-Go runs them via `jsonplugin_test.go`.
+Both runtimes run the same shared fixtures under `test/spec/`: the
+strict-JSON set (`include-json*.tsv`) and the utility set
+(`utility-*.tsv`). TypeScript runs them from `ts/test/json-spec.test.js`
+and `ts/test/utility.test.js` (grammar from `ts/test/json-plugin.ts`); Go
+runs them from `go/spec_test.go` and `go/utility_spec_test.go` (grammar
+from `go/jsonplugin_test.go`).
+
+The remaining fixtures in `test/spec/` (`alignment-*`, `feature-*`,
+`fv-*`, `comma-*`, `exclude-*`, `tabnas-*`, `lex-errors`) exercise
+*relaxed* grammar syntax — bare text, unquoted keys, implicit
+structure — which the strict-JSON test grammar rejects by design. This
+engine ships no grammar, so those fixtures are **not executed here**;
+they are maintained for the downstream grammar packages (e.g. `jsonic`)
+that do implement the relaxed syntax.
 
 ## Behavioral Differences
 
@@ -45,13 +55,65 @@ These affect parse output for the same input.
 Aligned. Both lexers require an ender character after a number, so
 `123abc` lexes as a single text token in both (TS via the ender-anchored
 number regexp, Go via its not-a-number check). The shared fixture
-`alignment-number-text.tsv` pins this behavior.
+`alignment-number-text.tsv` records this behavior, but needs a relaxed
+grammar to run and so is exercised downstream, not in this repo.
+
+Two exponent forms were previously misaligned and are now fixed in Go:
+
+- **Trailing dot before an exponent** (`2.e3`, `0.e1`, `2.e+3`, `2.e-3`).
+  TS's fraction group makes the digit optional, so these are numbers;
+  `matchNumber` tested for trailing text before testing for an exponent
+  and so abandoned the token. `isExponentStart` (`lexer.go`) carves the
+  exponent out of that check. A bare `2.e` stays text in both, since TS's
+  exponent group also requires a digit.
+- **Out-of-range exponents** (`1e999` → `Infinity`, `-1e999` →
+  `-Infinity`). TS coerces with unary `+`, which saturates;
+  `parseNumericString` treated `strconv.ParseFloat`'s `ErrRange` as a hard
+  failure. It now keeps the saturated value ParseFloat already returns.
+  Other `ParseFloat` errors still yield NaN and drop to the text matcher.
+  Go returns no error at all for underflow, so `1e-999` → `0` and
+  `-1e-999` → negative zero were already correct.
+
+Both are pinned by `TestMatchNumberExponentTrailingDot` /
+`TestMatchNumberExponentRange` (`go/lexer_edge_test.go`) and the matching
+`number-exponent-trailing-dot` / `number-exponent-range` cases in
+`ts/test/lex.test.js`.
+
+### Raw Control Characters in Strings (`string.allowControl`)
+
+Aligned. By default both lexers reject any control character (code point
+below `0x20`) inside a string body with `unprintable`. `string.allowControl`
+(`Options.String.AllowControl` in Go) relaxes that: control characters are
+admitted verbatim as ordinary body text. Line-end characters are deliberately
+NOT covered — they stay governed by `multiChars`, so a raw newline inside a
+single-line string is still an error with the option set. The option exists
+because some grammars' source-character rules admit raw control chars (JSON5's
+`JSON5SourceCharacter` permits a literal tab); the default keeps the strict
+behavior so no existing grammar changes.
+
+Pinned cross-runtime by the shared fixture `test/spec/lex-string-control.tsv`
+(`TestSpecLexStringControl` in `go/lexer_optionplumbing_test.go`,
+`string-allow-control-spec` in `ts/test/lex.test.js`).
 
 ### Empty / Whitespace Input
 
-Both implementations short-circuit exact empty-string input (`""`).
-Whitespace/comment-only input is processed through the normal parse flow in both
-implementations and resolves to `null`/`nil` by grammar behavior.
+Both implementations short-circuit exact empty-string input (`""`) before the
+lexer or the rule loop is built, and return `lex.emptyResult` /
+`Lex.EmptyResult` — default `undefined`/`nil` — or raise `unexpected` when
+`lex.empty` / `Lex.Empty` is false. This is aligned, and it is the *only* path
+for `""`: the rule-iteration budget (which is proportional to source length,
+and so zero for a zero-length source) is never reached, so a grammar whose
+empty value is not `undefined` must declare it via `lex.emptyResult` rather
+than expect its start rule to run. Whitespace/comment-only input takes the
+normal parse flow in both implementations and resolves by grammar behavior.
+
+### Rule-Iteration Budget
+
+The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul` in both.
+Go additionally coerces a non-positive `MaxMul` to the default `3` and floors
+the product at `100`; TS honors `rule.maxmul: 0` literally, which yields a zero
+budget and an `unexpected` error. Only reachable by setting `rule.maxmul` to
+zero or a negative number.
 
 ### Token Consumption
 
@@ -71,6 +133,8 @@ Both implementations now share the same error model:
 | Suffix (bool / string / function) | `errmsg.suffix` | `ErrMsg.Suffix` |
 | "See also" link line | `errmsg.link` | `ErrMsg.Link` |
 | `--internal: tag=...; rule=...; token=...; plugins=...--` block | yes | yes |
+| Instance tag when unset | `'-'` (`defaults.ts`) | `'-'` (`DefaultTag`, applied in `Make`) |
+| Custom bad-token error code | `tkn.err` wins over `unexpected` | `tkn.Err` wins over `unexpected` |
 | Source file name in `--> file:row:col` | `meta.fileName` | `ParseMeta` meta `"fileName"` |
 | ANSI colors | `options.color` | `Options.Color` |
 | Source site extract with caret | yes | yes |
@@ -93,6 +157,21 @@ union across fields:
 
 Full custom matchers (with lexer ordering control) are available in both via
 `lex.match` / `Options.Lex.Match`.
+
+### Matcher `check` Hooks
+
+Aligned. All eight built-in matchers accept a pre-match `check` hook —
+`fixed`, `match`, `space`, `line`, `text`, `number`, `comment`, `string`
+(`FixedCheck`, `MatchCheck`, ... on the Go `LexConfig`). Returning
+`{done: true, token}` / `&LexCheckResult{Done: true, Token: t}` claims the
+match; returning nothing falls through to the normal matcher.
+
+TS previously declared and consulted `string.check` and `comment.check`
+but never copied them out of the options, so those two hooks were dead
+there while Go honoured all eight. Both runtimes now wire all eight, and a
+matcher carrying a `check` opts out of TS's first-char dispatch table so
+the hook runs for every input character, not just the ones the matcher
+would normally claim.
 
 ## Plugin Differences
 
@@ -124,6 +203,22 @@ Differences:
 | Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`) — each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer) — the natural Go equivalent of source equality | 
 | Conditioned-alt dedupe | only when the condition is reference-equal (or absent) | never (a condition cannot be proven identical across closures); unconditioned duplicates are unreachable, so both rules are behavior-safe |
 | Option conflict paths | TS option names (`lex.match.same.make`) | lowercased Go field names, which coincide for most paths (`rule.maxmul`, `lex.match.same.make`) |
+
+## Deep Option Merge (`util.deep` / `Deep`)
+
+Aligned on opaque values. A value that is not a plain object/array —
+a `RegExp` in TS, a struct with no exported fields (`*regexp.Regexp`,
+`time.Time`, ...) in Go — **replaces** the base rather than being merged
+into it. Merging into such a value cannot copy anything: TS's `for..in`
+over a `RegExp` yields no keys (so the parent pattern silently survived a
+child override), and Go's reflective field merge skipped every unexported
+field and handed back a zero value (so `Deep(reA, reB)` produced a regexp
+matching the empty pattern). Both now let the overlay win, which is what
+`tn.make({number: {exclude: /new/}})` has always meant.
+
+Structs with exported fields (the `Options` tree) still merge field by
+field in Go, and plain objects/arrays still merge key by key in TS.
+`undefined`/zero on the overlay side still loses in both.
 
 ## Go-Specific Features
 
@@ -231,3 +326,43 @@ predictable:
 | Numbers | `float64` |
 | Booleans | `bool` |
 | Null | `nil` |
+
+## `options.tokenSet`
+
+Both runtimes accept a `tokenSet` option and apply it identically from
+either construction path — `Make(opts)` and `SetOptions(opts)` are
+equivalent, as are TS `new Tabnas(opts)` and `tabnas.options(opts)`.
+How the value combines with the built-in set differs:
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Type | `{ [name: string]: (string \| null)[] }` | `map[string][]string` |
+| Combination with the default set | index-wise deep merge with `defaults.tokenSet`, so `{ KEY: ['#ST'] }` yields `[#ST, #NR, #ST, #VL]`; shortening a set needs explicit `null` padding (`['#ST', null, null, null]`) | replacement — `{"KEY": {"#ST"}}` yields `[#ST]`. Go's `Options` carries no `tokenSet` defaults to merge against (the defaults live in the config's `KeySet`/`ValSet`/`IgnoreSet`) |
+| "Drop this entry" marker | `null` | `""` (an empty name is skipped) |
+
+Both runtimes late-bind token-set references in rule alternates, so an
+override applies to alternates that were declared before it. In Go the
+declared names are kept on `AltSpec.SNames` and re-resolved against the
+parsing instance; alternates built from raw `[]Tin` carry no names and
+match exactly what they were given. The lexer's `match.token` gate (a
+custom match token is only produced where the current rule position
+expects it) reads the same late-bound slots, so adding a custom token to
+`#KEY` / `#VAL` by override is enough to have it lexed.
+
+## Rule Declaration Order
+
+A TS `GrammarSpec.rule` object keeps insertion order for free; a Go map
+has none. Go therefore records declaration order explicitly:
+
+- `RuleSpec.Def` — a monotonically increasing definition index stamped
+  when the spec is first created (`(*Tabnas).Rule`, `Grammar`,
+  `GrammarText`, `MakeRuleSpec`). Redefining an existing rule does not
+  renumber it. Zero means the spec was built as a bare struct literal.
+- `(*Tabnas).Rules() []*RuleSpec` and `(*Tabnas).RuleNames() []string` —
+  the grammar in declaration order. Unstamped specs sort last, by name,
+  so the result is always deterministic. `RSM()` remains unordered.
+- `GrammarSpec.RuleOrder []string` — declares the order of the `Rule`
+  map's entries. Without it, `Grammar()` applies rules in sorted-name
+  order (deterministic, but alphabetical rather than as-declared).
+  `GrammarText` fills it in automatically from the source text's key
+  order, so text grammars need not supply it.

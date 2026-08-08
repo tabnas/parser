@@ -384,6 +384,7 @@ function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
   const replaceCodeMap = cfg.string.replaceCodeMap
   const hasReplace = cfg.string.hasReplace
   const isMultiLine = !!cfg.string.multiBitmap[qcc]
+  const allowControl = cfg.string.allowControl
   const lineBM = cfg.line.charsBitmap
   const rowBM = cfg.line.rowCharsBitmap
 
@@ -398,6 +399,11 @@ function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
     } else if (cc < 32) {
       if (isMultiLine && lineBM[cc]) {
         classOf[cc] = rowBM[cc] ? 3 : 2
+      } else if (allowControl && !lineBM[cc]) {
+        // Raw control char admitted verbatim: plain BODY. Line chars
+        // are deliberately excluded — inside a single-line string they
+        // must still stop and error.
+        classOf[cc] = 0
       } else {
         classOf[cc] = 1
       }
@@ -641,6 +647,11 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       },
       {} as any,
     ),
+
+    // The check hook is honoured by guardedMatcher below and by
+    // buildLexDispatch (a comment matcher with a check must be a
+    // candidate for every first char, not just the marker starts).
+    check: oc?.check,
   }
 
   // Pre-sort by start length (longest first) so that a longer marker
@@ -1087,9 +1098,19 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     // and \u{...} (plain \uXXXX stays). Combined with escape-map removals
     // and allowUnknown:false this yields JSON.parse-conformant handling.
     escapeStrict: !!os.escapeStrict,
+    // Permit raw control chars (< 0x20) in a string body. Line chars
+    // are excluded — they stay governed by multiChars.
+    allowControl: !!os.allowControl,
     hasReplace: false,
     abandon: !!os.abandon,
   })
+
+  // Assigned outside the deep() merge so that dropping the hook from
+  // the options actually clears it (deep() ignores undefined). The
+  // hook is honoured by guardedMatcher below and by buildLexDispatch
+  // (a string matcher with a check must be a candidate for every first
+  // char, not just the quote chars).
+  cfg.string.check = os.check
 
   cfg.string.escMap = clean(cfg.string.escMap)
   // An escape mapped to '' (or null/undefined, removed by clean above)
@@ -1270,7 +1291,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       // Stopped on a control char (cc < 32) that wasn't a multi-line
       // newline (those are consumed by the spec). Either an embedded
       // line char in a non-multi-line string or a real unprintable.
-      // Both are errors.
+      // Both are errors. Under string.allowControl the non-line control
+      // chars are classified as plain body by buildStringBodySpec and
+      // never reach here, so only the embedded-line case remains.
       if (cc < 32) {
         if (mcfg.abandon) return undefined
         pnt.sI = sI

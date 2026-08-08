@@ -5,6 +5,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
 const { Tabnas, makeLex, TabnasError } = require('..')
+const { loadTSV } = require('./utility')
 const tn = new Tabnas()
 const J = (src, meta, ctx) => tn.parse(src, meta, ctx)
 
@@ -265,6 +266,77 @@ describe('lex', function () {
     ])
   })
 
+  // A trailing dot before an exponent is a number: the fraction group
+  // makes the digit optional, so `2.` then `e3` both match. Go's
+  // matchNumber originally rejected these (the 'e' looked like trailing
+  // text), so keep the two runtimes pinned here. Without exponent digits
+  // (`2.e`) it stays text in both.
+  it('number-exponent-trailing-dot', () => {
+    alleq([
+      '2.e3',
+      ['#NR;0;4;1x1;2000', '#ZZ;4;0;1x5'],
+      '2.e+3',
+      ['#NR;0;5;1x1;2000', '#ZZ;5;0;1x6'],
+      '2.e-3',
+      ['#NR;0;5;1x1;0.002', '#ZZ;5;0;1x6'],
+      '0.e1',
+      ['#NR;0;4;1x1;0', '#ZZ;4;0;1x5'],
+      '2.e',
+      ['#TX;0;3;1x1;2.e', '#ZZ;3;0;1x4'],
+      '2.a',
+      ['#TX;0;3;1x1;2.a', '#ZZ;3;0;1x4'],
+    ])
+  })
+
+  // Unary + saturates rather than failing, so an out-of-range exponent is
+  // still a number. Go's parseNumericString used to treat ParseFloat's
+  // ErrRange as a hard failure and drop these to text; keep both runtimes
+  // pinned. `1e` (no exponent digits) is text in both.
+  it('number-exponent-range', () => {
+    alleq([
+      '1e999',
+      ['#NR;0;5;1x1;Infinity', '#ZZ;5;0;1x6'],
+      '-1e999',
+      ['#NR;0;6;1x1;-Infinity', '#ZZ;6;0;1x7'],
+      '1e+999',
+      ['#NR;0;6;1x1;Infinity', '#ZZ;6;0;1x7'],
+      '1e309',
+      ['#NR;0;5;1x1;Infinity', '#ZZ;5;0;1x6'],
+      '2.e999',
+      ['#NR;0;6;1x1;Infinity', '#ZZ;6;0;1x7'],
+      '1e-999',
+      ['#NR;0;6;1x1;0', '#ZZ;6;0;1x7'],
+      '1e',
+      ['#TX;0;2;1x1;1e', '#ZZ;2;0;1x3'],
+    ])
+  })
+
+  // Negative zero survives lexing. `alleq` stringifies token values, and
+  // -0 stringifies as "0", so this case has to compare with Object.is —
+  // which is also why a Go regression here (parseNumericString once
+  // normalized -0 to +0) went unnoticed for so long: JSON serialization
+  // erases the sign too, so the shared .tsv fixtures cannot see it.
+  // Mirrors go/lexer_edge_test.go TestMatchNumberNegativeZero.
+  it('number-negative-zero', () => {
+    const cases = [
+      ['-0', -0],
+      ['-0.0', -0],
+      ['-0e0', -0],
+      ['0', 0],
+      ['0.0', 0],
+      ['+0', 0],
+    ]
+    for (const [src, want] of cases) {
+      const tkn = lexstart(src)()
+      assert.equal(tkn.tin, t.NR, src + ': expected a number token')
+      assert.ok(
+        Object.is(tkn.val, want),
+        src + ': expected ' + (Object.is(want, -0) ? '-0' : '0') +
+        ', got ' + (Object.is(tkn.val, -0) ? '-0' : tkn.val),
+      )
+    }
+  })
+
   it('double-quote', () => {
     // NOTE: col for unterminated is final col
     alleq([
@@ -455,6 +527,120 @@ describe('lex', function () {
         '#ZZ;10;0;2x5',
       ],
     ])
+  })
+
+
+  // Shared cross-runtime fixture for string.allowControl (the Go
+  // counterpart is TestSpecLexStringControl in go/utility_spec_test.go).
+  // Columns: allowControl | input | expected, where expected is either
+  // ERROR:<code> or #ST:<string value>. \t \n \r are unescaped by loadTSV
+  // in BOTH columns, so the input carries a real control char.
+  it('string-allow-control-spec', () => {
+    for (const { cols, row } of loadTSV('lex-string-control')) {
+      const [allowControl, src, expected] = cols
+      try {
+        const inst = new Tabnas({
+          string: { allowControl: 'true' === allowControl },
+        }).make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-string-control row ${row}: allowControl=${allowControl}` +
+          ` input=${JSON.stringify(src)} expected=${JSON.stringify(expected)}\n` +
+          err.message
+        throw err
+      }
+    }
+  })
+
+  // options.string.check and options.comment.check were declared and
+  // consulted by the lexer but never copied into the config, so the
+  // hooks were dead. text.check (which always worked) is the control.
+  it('string-comment-check-hooks-are-wired', () => {
+    const seen = []
+    const hook = (name) => (lex) => {
+      seen.push(name + '@' + lex.pnt.sI)
+      return undefined
+    }
+
+    const inst = new Tabnas({
+      string: { check: hook('string') },
+      comment: {
+        lex: true,
+        def: { hash: { line: true, start: '#' } },
+        check: hook('comment'),
+      },
+      text: { check: hook('text') },
+    }).make()
+
+    const cfg = inst.internal().config
+    assert.equal(typeof cfg.string.check, 'function')
+    assert.equal(typeof cfg.comment.check, 'function')
+    assert.equal(typeof cfg.text.check, 'function')
+
+    // A check hook that claims the match short-circuits its matcher.
+    const claim = new Tabnas({
+      string: {
+        check: (lex) => {
+          const p = lex.pnt
+          const tkn = lex.token('#VL', 'CLAIMED', undefined, p)
+          p.sI = lex.src.length
+          return { done: true, token: tkn }
+        },
+      },
+    }).make()
+    const lexer = makeLex({
+      src: () => '"abc"',
+      cfg: claim.internal().config,
+      opts: claim.options,
+      sub: {},
+    })
+    assert.equal(lexer.next().val, 'CLAIMED')
+  })
+
+  // A check hook must also survive the first-char dispatch table: the
+  // hook has to run for chars the matcher would otherwise never see.
+  it('string-comment-check-hooks-bypass-dispatch', () => {
+    for (const which of ['string', 'comment']) {
+      const seen = []
+      const inst = new Tabnas({
+        comment: { lex: true, def: { hash: { line: true, start: '#' } } },
+        [which]: {
+          ...(which === 'comment'
+            ? { lex: true, def: { hash: { line: true, start: '#' } } }
+            : {}),
+          check: (lex) => {
+            seen.push(lex.pnt.sI)
+            return undefined
+          },
+        },
+      }).make()
+
+      const lexer = makeLex({
+        src: () => 'abc',
+        cfg: inst.internal().config,
+        opts: inst.options,
+        sub: {},
+      })
+      lexer.next()
+
+      // 'a' is neither a quote nor a comment start, so without the
+      // dispatch-table opt-out the hook would never have been called.
+      assert.ok(0 < seen.length, which + ' check hook was not called')
+    }
   })
 
 

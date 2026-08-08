@@ -430,6 +430,65 @@ describe('utility', () => {
     })
   })
 
+  // A RegExp (and any other class instance) on the `over` side of deep()
+  // must REPLACE the base, not be merged into it. `for..in` over a
+  // RegExp yields no own enumerable keys, so the old key-by-key merge
+  // was a silent no-op and the base pattern survived.
+  it('deep-class-instance-replaces', () => {
+    const parentRe = /^00+/
+    const childRe = /newRe/
+
+    assert.equal(deep(parentRe, childRe), childRe)
+    assert.equal(deep({ e: parentRe }, { e: childRe }).e, childRe)
+    assert.equal(deep([parentRe], [childRe])[0], childRe)
+
+    // Other class instances behave the same way.
+    const d0 = new Date(0)
+    const d1 = new Date(86400000)
+    assert.equal(deep(d0, d1), d1)
+    const m0 = new Map([['a', 1]])
+    const m1 = new Map([['b', 2]])
+    assert.equal(deep(m0, m1), m1)
+
+    // Plain objects and arrays still merge (not replaced).
+    assert.deepEqual(deep({ a: 1 }, { b: 2 }), { a: 1, b: 2 })
+    assert.deepEqual(deep([1, 2, 3], [9]), [9, 2, 3])
+
+    // undefined on the over side still loses, even against a RegExp.
+    assert.equal(deep(parentRe, undefined), parentRe)
+  })
+
+  // The option-plumbing consequence of the above: a child instance that
+  // overrides a RegExp option must actually get the new RegExp.
+  it('deep-regexp-option-override', () => {
+    const parent = new Tabnas({ number: { exclude: /^00+/ } })
+    const child = parent.make({ number: { exclude: /newRe/ } })
+
+    assert.equal('' + parent.options.number.exclude, '/^00+/')
+    assert.equal('' + child.options.number.exclude, '/newRe/')
+    assert.equal('' + child.internal().config.number.exclude, '/newRe/')
+  })
+
+  // clone() deep-copies a class instance while preserving its prototype.
+  // It is implemented on top of deep() and must keep working now that
+  // deep() treats an `over` class instance as opaque.
+  it('clone-deep-copies-nested-data', () => {
+    const p = makePoint(4, 3, 2, 1)
+    const q = util.clone(p)
+
+    assert.notEqual(p, q)
+    assert.equal(Object.getPrototypeOf(q), Object.getPrototypeOf(p))
+    assert.equal(q.sI, 3)
+    assert.equal('' + q, 'Point[3/4,2,1]')
+
+    // Nested plain data is copied, not shared. (Point.token is an
+    // array; toString only renders it when non-empty, so this is
+    // checked on a clone of an empty-token Point.)
+    assert.notEqual(q.token, p.token)
+    q.token.push({ a: 1 })
+    assert.equal(p.token.length, 0)
+  })
+
   it('strinject', () => {
     const entries = loadTSV('utility-strinject')
     for (const { cols, row } of entries) {

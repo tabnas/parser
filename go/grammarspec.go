@@ -5,6 +5,7 @@ package tabnas
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -19,6 +20,15 @@ type GrammarSpec struct {
 	OptionsMap map[string]any              // Map-form options; FuncRef values resolved via Ref before applying.
 	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name; a nil entry removes that rule.
 	V          int                         // Builtin config-schema version; engine refuses V > BUILTIN_SCHEMA_VERSION. Zero ⇒ 1.
+
+	// RuleOrder declares the order the Rule map's entries were written in.
+	// A Go map has none, so without it the engine falls back to sorted rule
+	// names — deterministic, but alphabetical rather than as-declared, which
+	// is what (*Tabnas).RuleNames and any tool built on it then report.
+	// Names absent from the map are ignored; rules absent from RuleOrder are
+	// applied after the listed ones, sorted by name. GrammarText fills this
+	// in automatically from the source text's key order.
+	RuleOrder []string
 }
 
 // Open and close alternates for a single rule (each: []*GrammarAltSpec or *GrammarAltListSpec).
@@ -143,7 +153,11 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 	altGTags := extractSettingAltG(setting)
 
 	if gs.Rule != nil {
-		for rulename, rulespec := range gs.Rule {
+		// Walk the rules in declared order (gs.RuleOrder), falling back to
+		// sorted names. Map iteration order would otherwise randomise the
+		// definition indexes stamped below, and with them RuleNames().
+		for _, rulename := range grammarRuleOrder(gs) {
+			rulespec := gs.Rule[rulename]
 			// A nil entry removes the rule (the declarative form of
 			// Rule(name, nil)). Removing one that is not there is a no-op,
 			// so a spec can prune defensively.
@@ -182,6 +196,34 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 	}
 
 	return nil
+}
+
+// grammarRuleOrder returns the rule names of gs.Rule in the order they
+// should be applied: gs.RuleOrder first (skipping names not in the map,
+// and any duplicate), then whatever remains, sorted by name. Rules are
+// stamped with their definition index as they are applied, so this is the
+// order (*Tabnas).RuleNames will later report.
+func grammarRuleOrder(gs *GrammarSpec) []string {
+	names := make([]string, 0, len(gs.Rule))
+	seen := make(map[string]bool, len(gs.Rule))
+	for _, name := range gs.RuleOrder {
+		if seen[name] {
+			continue
+		}
+		if _, ok := gs.Rule[name]; !ok {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	rest := make([]string, 0, len(gs.Rule)-len(names))
+	for name := range gs.Rule {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	return append(names, rest...)
 }
 
 // extractSettingAltG returns the list of tag strings from the variadic
@@ -278,12 +320,34 @@ func (j *Tabnas) GrammarText(text string, setting ...*GrammarSetting) (err error
 	}
 	if ruleMap, ok := gsMap["rule"].(map[string]any); ok {
 		gs.Rule = mapToGrammarRules(ruleMap)
+		// Plainify above dropped key order; recover it from the parsed node
+		// so the rules are stamped in the order the text declares them.
+		gs.RuleOrder = textRuleOrder(parsed)
 	}
 	// Builtin config-schema version (parsed numbers arrive as float64).
 	if v, ok := gsMap["v"]; ok {
 		gs.V = cfgInt(v)
 	}
 	return j.Grammar(gs, setting...)
+}
+
+// textRuleOrder recovers the `rule` block's key order from a parsed grammar
+// node, so a text grammar's declaration order survives the flattening to a
+// Go map. Returns nil when the parser did not produce ordered nodes (the
+// grammar package is free to hand back plain maps), leaving Grammar to fall
+// back to sorted names.
+func textRuleOrder(parsed any) []string {
+	top, ok := parsed.(*OrderedMap)
+	if !ok {
+		return nil
+	}
+	rules, ok := top.Vals["rule"].(*OrderedMap)
+	if !ok {
+		return nil
+	}
+	order := make([]string, len(rules.Keys))
+	copy(order, rules.Keys)
+	return order
 }
 
 // mapToGrammarRules converts a parsed rule map into typed GrammarRuleSpec map.
@@ -566,12 +630,30 @@ func resolveActionList(items []any, ref map[FuncRef]any) (AltAction, error) {
 	}, nil
 }
 
+// ResolveGrammarAlt converts a GrammarAltSpec to a concrete AltSpec against
+// THIS instance: token names resolve through the instance's custom tokens
+// and its custom token sets (options.tokenSet / SetTokenSet), not just the
+// package-level built-ins. Grammar packages that build rule alternates by
+// hand should prefer this over ResolveGrammarAltStatic whenever they hold a
+// *Tabnas — it is the same resolution the declarative Grammar() API uses.
+func (j *Tabnas) ResolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*AltSpec, error) {
+	return j.resolveGrammarAlt(ga, ref)
+}
+
+// ResolveGrammarAlts resolves a slice of GrammarAltSpec against this
+// instance, stopping at the first error.
+func (j *Tabnas) ResolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) ([]*AltSpec, error) {
+	return j.resolveGrammarAlts(gas, ref)
+}
+
 func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*AltSpec, error) {
 	alt := &AltSpec{}
 
-	// Resolve S (token spec: string or []string → [][]Tin)
+	// Resolve S (token spec: string or []string → [][]Tin), keeping the
+	// declared names so token-set positions stay late-bound to the instance.
 	if ga.S != nil {
 		alt.S = j.resolveTokenField(ga.S)
+		alt.SNames = tokenFieldNames(ga.S)
 	}
 
 	// Resolve B (backtrack: int or FuncRef)
@@ -727,6 +809,41 @@ func (j *Tabnas) resolveTokenField(s any) [][]Tin {
 				tins = append(tins, j.resolveTokenName(name)...)
 			}
 			result[i] = tins
+		}
+		return result
+	}
+	return nil
+}
+
+// tokenFieldNames splits a GrammarAltSpec S field into the per-position
+// token names it declares, using the same slot rules as resolveTokenField:
+//
+//	string:   "#KEY #CL"  — each space-separated name is its own slot.
+//	[]string: ["#CB #CS"] — each element is a slot; names inside an element
+//	          are alternatives for that slot.
+//
+// The names are kept on AltSpec.SNames so positions naming a token set can
+// be re-resolved against the parsing instance (see AltSpec.SNames).
+// Returns nil when the field declares no positions.
+func tokenFieldNames(s any) [][]string {
+	switch v := s.(type) {
+	case string:
+		parts := strings.Fields(v)
+		if len(parts) == 0 {
+			return nil
+		}
+		result := make([][]string, len(parts))
+		for i, part := range parts {
+			result[i] = []string{part}
+		}
+		return result
+	case []string:
+		if len(v) == 0 {
+			return nil
+		}
+		result := make([][]string, len(v))
+		for i, slot := range v {
+			result[i] = strings.Fields(slot)
 		}
 		return result
 	}
@@ -915,13 +1032,27 @@ func resolveTokenNameStatic(name string) []Tin {
 }
 
 // ResolveGrammarAltStatic converts a GrammarAltSpec to a concrete AltSpec
-// using only built-in token resolution. Used by the internal Grammar().
-// Errors cause the returned alt to have nil fields (best-effort).
+// using only built-in token resolution, for grammar builders that run
+// without a Tabnas instance to hand. Errors cause the returned alt to have
+// nil fields (best-effort).
+//
+// Token SET references (#KEY, #VAL, …) cannot be resolved statically —
+// a set is per-instance state. The declared names are therefore recorded on
+// AltSpec.SNames and re-resolved against the parsing instance, so an
+// options.tokenSet override still takes effect. Custom TOKENS (as opposed
+// to sets) are not visible here at all and resolve to an unconstrained
+// position; prefer the instance-aware (*Tabnas).ResolveGrammarAlt when an
+// instance is available.
 func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 	alt := &AltSpec{}
 
 	if ga.S != nil {
 		alt.S = resolveTokenFieldStatic(ga.S)
+		// Static resolution can only see the package-level token sets, so
+		// keep the declared names: a position naming a set is re-resolved
+		// against the parsing instance, which is the only thing that knows
+		// about an options.tokenSet override.
+		alt.SNames = tokenFieldNames(ga.S)
 	}
 
 	switch v := ga.B.(type) {

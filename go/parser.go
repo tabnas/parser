@@ -3,6 +3,7 @@
 package tabnas
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -52,6 +53,69 @@ type Context struct {
 	Log     func(...any)     // Debug logger (TS: log).
 	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN).
 	NORULE  *Rule            // Sentinel no-rule (TS: NORULE).
+
+	// tokenSetDyn is set when the parsing instance carries custom token sets,
+	// so alts that name a token set must be re-resolved against it rather
+	// than matched on the tins frozen when the alt was registered.
+	// altSlots memoizes that re-resolution for the duration of one parse;
+	// it is per-Context, so concurrent parses on one instance stay race-free.
+	tokenSetDyn bool
+	altSlots    map[*AltSpec][][]Tin
+}
+
+// altS returns the effective per-position Tin sets for an alt, re-resolving
+// any position that names a token set against the parsing instance. Alts
+// without recorded names, and instances without custom token sets, use
+// AltSpec.S unchanged. The result is memoized per parse, so the walk below
+// runs at most once per alt.
+func (ctx *Context) altS(alt *AltSpec) [][]Tin {
+	if !ctx.tokenSetDyn || alt.SNames == nil || ctx.Inst == nil {
+		return alt.S
+	}
+	if slots, ok := ctx.altSlots[alt]; ok {
+		return slots
+	}
+	slots := alt.S
+	// Only positions that actually name a token set need re-resolving;
+	// everything else keeps the tins already resolved for it. A position
+	// naming anything this instance does not know is left alone too —
+	// resolving it would have to mint a token mid-parse.
+	var rebuilt [][]Tin
+	for i, names := range alt.SNames {
+		if i >= len(alt.S) {
+			break
+		}
+		usesSet, resolvable := false, true
+		for _, name := range names {
+			switch {
+			case ctx.Inst.hasTokenSet(strings.TrimPrefix(name, "#")):
+				usesSet = true
+			case ctx.Inst.hasToken(name):
+			default:
+				resolvable = false
+			}
+		}
+		if !usesSet || !resolvable {
+			continue
+		}
+		if rebuilt == nil {
+			rebuilt = make([][]Tin, len(alt.S))
+			copy(rebuilt, alt.S)
+		}
+		var tins []Tin
+		for _, name := range names {
+			tins = append(tins, ctx.Inst.resolveTokenName(name)...)
+		}
+		rebuilt[i] = tins
+	}
+	if rebuilt != nil {
+		slots = rebuilt
+	}
+	if ctx.altSlots == nil {
+		ctx.altSlots = make(map[*AltSpec][][]Tin)
+	}
+	ctx.altSlots[alt] = slots
+	return slots
 }
 
 // recordConsumed appends the leading `consumed` lookahead tokens to the
@@ -234,6 +298,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		NORULE:   NoRule,
 		F:        func(v any) string { return Str(v, 44) },
 	}
+
+	// Late-bind token-set positions only when this instance actually
+	// overrides a set — the default instance pays nothing.
+	ctx.tokenSetDyn = inst != nil && len(inst.customTokenSets) > 0
 
 	lex.Ctx = ctx
 	ctx.Lex = lex
@@ -460,7 +528,15 @@ func parseNumericString(s string) float64 {
 
 	val, err := strconv.ParseFloat(ns, 64)
 	if err != nil {
-		return math.NaN()
+		// TS coerces with unary +, which saturates rather than failing:
+		// 1e999 -> Infinity, -1e999 -> -Infinity, 1e-999 -> 0. ParseFloat
+		// reports ErrRange for those but still returns the saturated
+		// value, so keep it. Any other error is a real parse failure and
+		// still yields NaN, which drops the token to the text matcher.
+		var ne *strconv.NumError
+		if !errors.As(err, &ne) || ne.Err != strconv.ErrRange {
+			return math.NaN()
+		}
 	}
 
 	// NOTE: negative zero is preserved. An earlier version normalized

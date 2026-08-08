@@ -214,6 +214,12 @@ func BuildStringBodySpec(cfg *LexConfig, q rune) *ScanSpec {
 				}
 				return 2
 			}
+			if cfg.AllowControl && !cfg.LineChars[r] {
+				// Raw control char admitted verbatim: plain BODY. Line
+				// chars are deliberately excluded — inside a single-line
+				// string they must still stop and error.
+				return 0
+			}
 			return 1
 		}
 		return 0 // BODY

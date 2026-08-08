@@ -250,6 +250,10 @@ func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
 
 	clone := *alt
 	clone.S = nil
+	// Merge flattens each position to concrete token names (see `names`
+	// above), so the source alt's declared set references no longer describe
+	// the merged sequence — drop them rather than let them re-bind.
+	clone.SNames = nil
 	clone.N = copyIntMap(alt.N)
 	clone.U = copyAnyMap(alt.U)
 	clone.K = copyAnyMap(alt.K)
@@ -702,12 +706,16 @@ func (j *Tabnas) Merge(other *Tabnas) (result *Tabnas, err error) {
 	}
 	tagJ := j.options.Tag
 	tagO := other.options.Tag
-	if tagJ == "" {
+	// DefaultTag ("-") is what an unset tag resolves to (see Make), so it
+	// counts as "no tag chosen" here — matching TS, whose tagOf rejects
+	// null, "" and "-" alike (ts/src/merge.ts). Without this an unset
+	// instance would silently merge under the tag "-".
+	if tagJ == "" || tagJ == DefaultTag {
 		return nil, fmt.Errorf(
 			"merge: the first instance needs a Tag option " +
 				"(used to identify its grammar)")
 	}
-	if tagO == "" {
+	if tagO == "" || tagO == DefaultTag {
 		return nil, fmt.Errorf(
 			"merge: the second instance needs a Tag option " +
 				"(used to identify its grammar)")

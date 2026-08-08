@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // groupTagRe is the regex every g tag must match: a lowercase letter
@@ -149,11 +150,44 @@ type AltSpec struct {
 	PF func(r *Rule, ctx *Context) string // Dynamic push rule name
 	RF func(r *Rule, ctx *Context) string // Dynamic replace rule name
 	BF func(r *Rule, ctx *Context) int    // Dynamic backtrack
+
+	// SNames records the token NAMES declared for each S position, when the
+	// alt was built from a name-based spec (Grammar / GrammarText /
+	// ResolveGrammarAltStatic). Positions that name a token SET (#KEY, #VAL,
+	// #IGNORE, or a custom set) are re-resolved against the instance doing
+	// the parsing, so a per-instance options.tokenSet override takes effect
+	// even for alts resolved before — or independently of — that override.
+	// This is TS parity: rules.ts resolves `r.ji.tokenSet(n) ?? r.ji.token(n)`
+	// at rule-normalisation time rather than freezing tins at registration.
+	// nil when the alt was built from raw Tins (S is then authoritative).
+	SNames [][]string
+}
+
+// ruleDefCounter stamps every RuleSpec with a monotonically increasing
+// definition index. It is process-global (a RuleSpec can be built before it
+// is attached to an instance), which makes the absolute values meaningless
+// but the relative order within one instance exactly the registration order.
+// Atomic so grammars built concurrently on separate instances stay race-free.
+var ruleDefCounter atomic.Int64
+
+// nextRuleDef returns the next definition index (1-based; 0 means "unstamped").
+func nextRuleDef() int {
+	return int(ruleDefCounter.Add(1))
 }
 
 // RuleSpec is the specification for a parsing rule; its alternate and action lists are unexported and mutated only via methods (mirroring the TS RuleSpec).
 type RuleSpec struct {
-	Name  string        // Rule name (key in the rule spec map).
+	Name string // Rule name (key in the rule spec map).
+
+	// Def is the rule's declaration order: a monotonically increasing index
+	// stamped when the spec is first created ((*Tabnas).Rule, Grammar,
+	// GrammarText, MakeRuleSpec). Rule specs sort by Def into the order the
+	// grammar declared them — the Go engine's answer to the insertion order
+	// a TS object literal keeps for free. Use (*Tabnas).RuleNames or
+	// (*Tabnas).Rules rather than reading this directly. Zero means the spec
+	// was built as a bare struct literal and carries no order.
+	Def int
+
 	open  []*AltSpec    // Open-phase alternates, tried in order.
 	close []*AltSpec    // Close-phase alternates, tried in order.
 	bo    []StateAction // Before-open actions.
@@ -1308,7 +1342,10 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		matched := 0
 		cond := true
 
-		sN := len(alt.S)
+		// Token-set positions are re-resolved against the parsing instance
+		// (identity when it has no tokenSet override).
+		altS := ctx.altS(alt)
+		sN := len(altS)
 		for i := 0; i < sN; i++ {
 			// Grow the lookahead buffer on demand.
 			for len(ctx.T) <= i {
@@ -1336,8 +1373,8 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			// (wildcard) - the token is still fetched and consumed but
 			// the match check is skipped. This prevents silently
 			// dropping the check at a later required position.
-			if len(alt.S[i]) != 0 {
-				if !tinMatch(ctx.T[i].Tin, alt.S[i]) {
+			if len(altS[i]) != 0 {
+				if !tinMatch(ctx.T[i].Tin, altS[i]) {
 					cond = false
 					break
 				}

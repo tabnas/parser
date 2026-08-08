@@ -149,6 +149,12 @@ export type TabnasOptions = {
     // false. Combine with escape-map removals + allowUnknown:false for
     // JSON.parse-conformant escape handling.
     escapeStrict?: boolean
+    // Allow raw control characters (code point < 0x20) inside a string
+    // body rather than failing with `unprintable`. Line-end characters
+    // are excluded: they remain governed by `multiChars`, so a raw
+    // newline inside a single-line string is still an error. Default
+    // false (strict).
+    allowControl?: boolean
     replace?: { [char: string]: string | null }   // Post-parse character replacements.
     abandon?: boolean               // Abandon (re-lex) on unterminated string.
     check?: LexCheck                // Post-match validation hook.
@@ -394,6 +400,7 @@ export type Config = {
     multiBitmap: Uint8Array         // 256-byte fast-path lookup for multiChars
     allowUnknown: boolean           // Pass through unknown escapes verbatim.
     escapeStrict: boolean           // Disable non-standard structural escapes.
+    allowControl: boolean           // Permit raw control chars (< 0x20) in a string body.
     replaceCodeMap: { [charCode: number]: string }   // Char-code replacement map.
     hasReplace: boolean             // True if replaceCodeMap is non-empty.
     abandon: boolean                // Abandon (re-lex) on unterminated string.
