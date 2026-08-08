@@ -31,7 +31,8 @@ clean-go:
 # Publish Go module: make publish-go V=0.1.7
 publish-go: test-go
 	@test -n "$(V)" || (echo "Usage: make publish-go V=x.y.z" && exit 1)
-	sed -i '' 's/^const Version = ".*"/const Version = "$(V)"/' ../go/tabnas.go
+	@grep -q '^const VERSION = ' ../go/tabnas.go || (echo "publish-go: no 'const VERSION = ' in ../go/tabnas.go; refusing to release with an unbumped constant" && exit 1)
+	sed -i '' 's/^const VERSION = ".*"/const VERSION = "$(V)"/' ../go/tabnas.go
 	sed -i '' 's/^Version: .*/Version: $(V)/' ../go/README.md
 	git add ../go/tabnas.go ../go/README.md
 	git commit -m "go: v$(V)"
