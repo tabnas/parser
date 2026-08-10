@@ -91,6 +91,8 @@ Longer-form explorations live alongside this doc:
 
 - [LSP feasibility](lsp-feasibility.md) — language-server angles on the
   engine.
+- [GBNF feasibility](gbnf-feasibility.md) — llama.cpp grammar
+  (constrained LLM decoding) angles on the engine.
 
 For the shared engine rationale, see
 [../../doc/architecture.md](../../doc/architecture.md).

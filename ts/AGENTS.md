@@ -46,7 +46,8 @@ purpose, never mix them:
 - `doc/concepts.md` — explanation: the TS-specific engine model and
   rationale; links to the shared `../../doc/architecture.md`.
 - `doc/plugins.md` — the plugin-authoring how-to.
-- `doc/lsp-feasibility.md` — a design-note explanation.
+- `doc/lsp-feasibility.md`, `doc/gbnf-feasibility.md` — design-note
+  explanations.
 
 `README.md` is an **orientation hub**: what the package is, install,
 one tiny example, and links out. Do not let it grow into a manual —
