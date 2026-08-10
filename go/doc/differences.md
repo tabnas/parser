@@ -38,13 +38,12 @@ and `ts/test/utility.test.js` (grammar from `ts/test/json-plugin.ts`); Go
 runs them from `go/spec_test.go` and `go/utility_spec_test.go` (grammar
 from `go/jsonplugin_test.go`).
 
-The remaining fixtures in `test/spec/` (`alignment-*`, `feature-*`,
-`fv-*`, `comma-*`, `exclude-*`, `tabnas-*`, `lex-errors`) exercise
-*relaxed* grammar syntax — bare text, unquoted keys, implicit
-structure — which the strict-JSON test grammar rejects by design. This
-engine ships no grammar, so those fixtures are **not executed here**;
-they are maintained for the downstream grammar packages (e.g. `jsonic`)
-that do implement the relaxed syntax.
+Fixtures exercising *relaxed* grammar syntax — bare text, unquoted keys,
+implicit structure — used to sit in `test/spec/` too, unexecuted, since
+the strict-JSON test grammar rejects them by design and this engine ships
+no grammar. They now live only in the grammar's own repo
+([`tabnas/jsonic`](https://github.com/tabnas/jsonic), `test/spec/`),
+where both of its runtimes run them.
 
 ## Behavioral Differences
 
@@ -54,9 +53,10 @@ These affect parse output for the same input.
 
 Aligned. Both lexers require an ender character after a number, so
 `123abc` lexes as a single text token in both (TS via the ender-anchored
-number regexp, Go via its not-a-number check). The shared fixture
-`alignment-number-text.tsv` records this behavior, but needs a relaxed
-grammar to run and so is exercised downstream, not in this repo.
+number regexp, Go via its not-a-number check). The fixture recording this
+behavior needs a relaxed grammar to run, so it lives and is exercised
+downstream: `alignment-number-text.tsv` in
+[`tabnas/jsonic`](https://github.com/tabnas/jsonic)'s `test/spec/`.
 
 Two exponent forms were previously misaligned and are now fixed in Go:
 

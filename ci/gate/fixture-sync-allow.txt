@@ -1,11 +1,17 @@
 # Known, deliberate divergences between parser/test/spec and
 # jsonic/ts/test/spec. One filename per line (either side's name).
 #
-# These three UTF-8 fixtures exist only in the parser repo. TODO: decide
-# whether jsonic should carry them too (they exercise multi-byte source
-# positions, which jsonic's own tests currently cover via unit tests
-# only) — if so, copy them over and delete these entries.
-alignment-utf8.tsv
+# Since the corpora split (this repo owns the engine's own surface,
+# jsonic owns the relaxed-grammar corpus) a file existing on one side
+# only is normal and no longer a failure. Entries here just keep the
+# expected ones from being reported as INFO.
+#
+# alignment-utf8.tsv used to be listed here with a TODO to decide whether
+# jsonic should carry it. It now lives in jsonic and runs in both of that
+# repo's runtimes, so the entry is gone.
+#
+# These two exercise multi-byte source positions against the strict-JSON
+# grammar, which is this repo's own surface.
 include-json-utf8-errors.tsv
 include-json-utf8.tsv
 

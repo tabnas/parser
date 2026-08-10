@@ -19,7 +19,7 @@ lexer. Grammar is contributed by plugins.
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
 | `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const VERSION` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
-| `test/spec/` | Shared `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`). Both runtimes run the strict-JSON (`include-json*.tsv`) and `utility-*.tsv` ones; the relaxed-grammar fixtures are kept for downstream grammar packages. |
+| `test/spec/` | `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`) for the engine's own surface: strict-JSON (`include-json*.tsv`), `utility-*.tsv`, `lex-string-control.tsv`, `happy.tsv`. Every file here has a runner in this repo. Relaxed-grammar fixtures belong in the grammar's repo — see [`test/AGENTS.md`](test/AGENTS.md). |
 
 ## Authority and alignment rules
 

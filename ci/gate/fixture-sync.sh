@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
-# fixture-sync.sh — verify the shared TSV fixture corpus has not drifted
-# between this repo (test/spec/) and jsonic (ts/test/spec/).
+# fixture-sync.sh — verify the fixtures this repo SHARES with jsonic have
+# not drifted.
 #
-# The two corpora are meant to be byte-identical copies, with one naming
-# convention difference: files named tabnas-*.tsv here are named
-# jsonic-*.tsv in the jsonic repo. Files listed in
-# fixture-sync-allow.txt are known, deliberate divergences (see the
-# comments in that file) and are reported as SKIP instead of FAIL.
+# The two repos no longer hold mirrored corpora. This repo owns the
+# engine's own surface (strict-JSON, utility, lexer-option fixtures);
+# jsonic owns the relaxed-grammar corpus and runs it. Only the files
+# present in BOTH are required to match, and those are compared
+# byte-for-byte. A file that exists on one side only is that side's to
+# own and is reported as INFO, not a failure.
+#
+# (This script previously required the two corpora to be byte-identical
+# copies in both directions. It also pointed at jsonic's old
+# ts/test/spec path, so once jsonic moved its fixtures to the repo root
+# the script exited 1 on every run and stopped detecting anything —
+# which is how the shared include-json.tsv came to differ by five rows
+# without anyone noticing.)
+#
+# One naming convention difference is preserved: files named tabnas-*.tsv
+# here are named jsonic-*.tsv there.
 #
 # Usage: ci/gate/fixture-sync.sh [path-to-jsonic-repo]
 #   default jsonic location: ../jsonic relative to this repo's root.
-# Exit code: 0 = in sync (allowlisted divergences only), 1 = drift.
+# Exit code: 0 = shared fixtures agree, 1 = drift.
 set -u
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,7 +29,12 @@ PARSER_ROOT="$(cd "$DIR/../.." && pwd)"
 JSONIC_ROOT="${1:-$PARSER_ROOT/../jsonic}"
 
 A="$PARSER_ROOT/test/spec"
-B="$JSONIC_ROOT/ts/test/spec"
+# jsonic keeps its fixtures at the repo root so both its runtimes sit
+# below them; older checkouts had them under ts/test/spec.
+B="$JSONIC_ROOT/test/spec"
+if [ ! -d "$B" ] && [ -d "$JSONIC_ROOT/ts/test/spec" ]; then
+  B="$JSONIC_ROOT/ts/test/spec"
+fi
 ALLOW="$DIR/fixture-sync-allow.txt"
 
 if [ ! -d "$B" ]; then
@@ -40,18 +56,17 @@ map_name() {
 
 fail=0
 checked=0
-skipped=0
+only_here=0
 
 for f in "$A"/*.tsv; do
   base="$(basename "$f")"
   mapped="$(map_name "$base")"
   if [ ! -f "$B/$mapped" ]; then
-    if allowed "$base"; then
-      skipped=$((skipped + 1))
-      echo "SKIP (allowlisted, missing in jsonic): $base"
-    else
-      fail=1
-      echo "FAIL (missing in jsonic): $base (expected $mapped)"
+    # Owned by this repo alone. The allowlist predates the split and is
+    # kept only so an entry there stays quiet rather than noisy.
+    only_here=$((only_here + 1))
+    if ! allowed "$base"; then
+      echo "INFO (parser-owned, not in jsonic): $base"
     fi
     continue
   fi
@@ -64,23 +79,9 @@ for f in "$A"/*.tsv; do
   fi
 done
 
-# Reverse direction: jsonic fixtures that do not exist here.
-for f in "$B"/*.tsv; do
-  base="$(basename "$f")"
-  case "$base" in
-    jsonic-*) unmapped="tabnas-${base#jsonic-}" ;;
-    *) unmapped="$base" ;;
-  esac
-  if [ ! -f "$A/$unmapped" ]; then
-    if allowed "$base"; then
-      skipped=$((skipped + 1))
-      echo "SKIP (allowlisted, missing in parser): $base"
-    else
-      fail=1
-      echo "FAIL (missing in parser): jsonic:$base (expected $unmapped)"
-    fi
-  fi
-done
+# The reverse direction is deliberately NOT checked: jsonic owns the
+# relaxed-grammar corpus, and requiring this repo to carry a copy of it
+# is what produced two sets of the same files, one of them dead.
 
-echo "fixture-sync: $checked identical, $skipped allowlisted, fail=$fail"
+echo "fixture-sync: $checked shared and identical, $only_here parser-owned, fail=$fail"
 exit $fail
