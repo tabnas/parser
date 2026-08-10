@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Options configures a Tabnas parser instance; nil pointer fields mean "use default".
@@ -307,8 +308,12 @@ type ResultOptions struct {
 // ConfigModifier is a function that modifies the LexConfig after construction.
 type ConfigModifier func(cfg *LexConfig, opts *Options)
 
-// idCounter is used to generate unique Tabnas instance IDs.
-var idCounter int
+// idCounter is used to generate unique Tabnas instance IDs. Accessed
+// atomically: Make is safe for concurrent use (constructing parsers from
+// many goroutines is a supported pattern, and downstream test suites run
+// under -race), and a bare increment here was the one data race in the
+// construction path.
+var idCounter atomic.Int64
 
 // Tabnas is a configured parser instance, equivalent to TypeScript's Tabnas.make().
 type Tabnas struct {
@@ -390,6 +395,10 @@ func (j *Tabnas) SetPluginOptions(name string, opts map[string]any) {
 
 // Make creates a new Tabnas parser instance with the given options.
 // Unset option fields fall back to defaults, matching TypeScript Tabnas.make().
+//
+// Make is safe for concurrent use: any number of goroutines may construct
+// parsers simultaneously. (Each *Tabnas instance is itself NOT safe for
+// concurrent Parse calls — one instance per goroutine, or serialize.)
 func Make(opts ...Options) *Tabnas {
 	var o Options
 	if len(opts) > 0 {
@@ -439,12 +448,11 @@ func Make(opts ...Options) *Tabnas {
 		nameByTin[tin] = name
 	}
 
-	idCounter++
 	tag := ""
 	if o.Tag != "" {
 		tag = "/" + o.Tag
 	}
-	instanceId := "Tabnas/" + strconv.Itoa(idCounter) + tag
+	instanceId := "Tabnas/" + strconv.FormatInt(idCounter.Add(1), 10) + tag
 
 	j := &Tabnas{
 		id:         instanceId,

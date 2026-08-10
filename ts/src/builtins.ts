@@ -38,6 +38,7 @@
  */
 
 import type { Rule, Context, AltMatch, AltAction, AltCond } from './types'
+import { recordKeyOrder } from './utility'
 
 
 // The config-schema version implemented by these builtins. A serialized
@@ -274,6 +275,11 @@ const setval$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
   if (null != n && 'object' === typeof n) {
     const key = r.u[cfg.slot || 'key']
     if (ctx.cfg.info.map && key === ctx.cfg.info.marker) return
+    // First insertion wins, matching Go OrderedMap.Set: a repeated key
+    // keeps its original position.
+    if (ctx.cfg.map && ctx.cfg.map.ordered && !(key in n)) {
+      recordKeyOrder(n, key)
+    }
     n[key] = r.child.node
   }
 }

@@ -163,6 +163,14 @@ export type TabnasOptions = {
     extend?: boolean                // Deep-merge duplicate keys.
     merge?: (prev: any, curr: any) => any   // Custom duplicate-key merger.
     child?: boolean                 // Wrap values in child objects.
+    // Record key insertion order on each map node (non-enumerable
+    // side-channel; read it with `keyOrder`). Plain JS objects enumerate
+    // integer-like keys in ascending numeric order NO MATTER the order
+    // they were written — a language semantic, not a bug — so `{2:9,1:8}`
+    // irrecoverably loses the 2-before-1 order at object creation. The Go
+    // port's OrderedMap preserves it for every key. Opting in restores
+    // cross-port parity without changing the plain-object result shape.
+    ordered?: boolean
   }
   list?: {                          // Array/list construction.
     property: boolean               // Allow properties in lists.
@@ -454,6 +462,7 @@ export type Config = {
     extend: boolean                 // Deep-merge duplicate keys.
     merge?: (prev: any, curr: any, rule: Rule, ctx: Context) => any   // Custom duplicate-key merger.
     child: boolean                  // Wrap values in child objects.
+    ordered: boolean                // Record key insertion order (see keyOrder).
   }
 
   list: {                           // Array/list construction.
