@@ -421,10 +421,21 @@ describe('cover-lex', () => {
     assert.equal(tkn.name, '#VL')
     assert.equal(tkn.val, 'forty-two')
 
-    // A number-like prefix that fails numeric conversion but is
-    // followed by a fixed token: subMatchFixed with a null first.
+    // A number-like run that fails numeric conversion followed by a
+    // fixed token: the matcher must decline the WHOLE span — no token,
+    // no point movement — so the text matcher takes the run and the
+    // fixed token lexes at its true position. (This test previously
+    // asserted the opposite: subMatchFixed fired with a null first,
+    // emitting the `,` while the point still sat on the `0`, which ate
+    // the run's first character and fabricated list elements downstream
+    // — `[0xFF.5]` parsed as [[],"xFF.5"]. The number matcher now obeys
+    // the same rule the text matcher's caller already stated: "a
+    // following fixed token can only match if there was already a valid
+    // match".)
     let t = tokens({}, '0b_,')
-    assert.equal(t[0].name, '#CA')
+    assert.equal(t[0].name, '#TX')
+    assert.equal(t[0].val, '0b_')
+    assert.equal(t[1].name, '#CA')
   })
 
   it('text-value-regexps-and-modify', () => {

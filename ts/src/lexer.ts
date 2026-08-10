@@ -995,7 +995,14 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
         .join('|'),
       // ')|[.0-9]+([0-9_]*[0-9])?)',
       ')|\\.?[0-9]+([0-9_]*[0-9])?)',
-      '(\\.[0-9]?([0-9_]*[0-9])?)?',
+      // Fraction: a bare trailing dot is fine, but when fraction digits
+      // are present the run must START with a digit, as the integer and
+      // exponent runs already require. The previous `\.[0-9]?(...)` made
+      // the leading digit optional, so a separator could open the run
+      // and `1._5` parsed as 1.5 while `1_5.` style boundary-separator
+      // forms fell to text — separators are legal only BETWEEN digits.
+      // (?: keeps the capture count: tsrc is read from m[9] below.)
+      '(\\.(?:[0-9]([0-9_]*[0-9])?)?)?',
       '([eE][-+]?[0-9]+([0-9_]*[0-9])?)?',
     ]
       .join('')
@@ -1059,7 +1066,18 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
         }
       }
 
-      if (included) {
+      // Emit a fixed token from the ender ONLY when the number itself was
+      // consumed. The sticky regexp spans number+ender, so tsrc sits at
+      // sI+mlen — but the point is only advanced past the number when a
+      // token was produced. Emitting the ender while declining the number
+      // (e.g. `0xFF.5`, where the run matches the shape but coerces to
+      // NaN) advanced the point one fixed-token length INSIDE the
+      // unconsumed run: the grammar saw a `,` or `]` that was never at
+      // that position, fabricating null/empty elements, and the run's
+      // first character was destroyed. `[0xFF.5]` parsed as
+      // [[],"xFF.5"]. Declining must decline the WHOLE span, so the
+      // lenient text matcher takes the run intact, as the Go port does.
+      if (included && null != out) {
         out = subMatchFixed(lex, out, tsrc)
       }
 

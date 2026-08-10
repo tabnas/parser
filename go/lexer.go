@@ -1724,15 +1724,17 @@ func (l *Lex) matchNumber() *Token {
 			return nil // Just a dot, not a number
 		}
 		sI++ // consume dot
-		for sI < len(src) && (isDigit(src[sI]) || (l.Config.NumberSep != 0 && rune(src[sI]) == l.Config.NumberSep)) {
-			sI++
-			hasDigits = true
+		var edge bool
+		sI, hasDigits, edge = scanDigitRun(src, sI, l.Config.NumberSep)
+		if edge {
+			return nil // ".5_" style — separator at a run edge
 		}
 	} else {
 		// Integer part
-		for sI < len(src) && (isDigit(src[sI]) || (l.Config.NumberSep != 0 && rune(src[sI]) == l.Config.NumberSep)) {
-			hasDigits = true
-			sI++
+		var edge bool
+		sI, hasDigits, edge = scanDigitRun(src, sI, l.Config.NumberSep)
+		if edge {
+			return nil // "+_1", "1_" — separator at a run edge
 		}
 	}
 
@@ -1745,8 +1747,10 @@ func (l *Lex) matchNumber() *Token {
 		// Check what follows the dot
 		if sI+1 < len(src) && isDigit(src[sI+1]) {
 			sI++ // consume dot
-			for sI < len(src) && (isDigit(src[sI]) || (l.Config.NumberSep != 0 && rune(src[sI]) == l.Config.NumberSep)) {
-				sI++
+			var edge bool
+			sI, _, edge = scanDigitRun(src, sI, l.Config.NumberSep)
+			if edge {
+				return nil // "1.5_" — separator at a run edge
 			}
 		} else if sI+1 < len(src) && l.isFollowingText(sI+1) && src[sI+1] != '.' &&
 			!isExponentStart(src, sI+1) {
@@ -1770,8 +1774,13 @@ func (l *Lex) matchNumber() *Token {
 			sI++
 		}
 		expStart := sI
-		for sI < len(src) && (isDigit(src[sI]) || (l.Config.NumberSep != 0 && rune(src[sI]) == l.Config.NumberSep)) {
-			sI++
+		var expEdge bool
+		sI, _, expEdge = scanDigitRun(src, sI, l.Config.NumberSep)
+		if expEdge {
+			// "1e_2" / "1e2_" — separator at a run edge. Reset to the
+			// no-exponent-digits state so the existing following-text
+			// check below declines the whole run to text.
+			sI = expStart
 		}
 		if sI == expStart {
 			// No exponent digits - check if trailing makes it text
@@ -2054,6 +2063,39 @@ func isHexDigitByte(ch byte) bool {
 // group of the TS number regexp, ([eE][-+]?[0-9]+([0-9_]*[0-9])?), which
 // likewise requires a digit before the separator run — so a bare "2.e"
 // stays text in both runtimes.
+// scanDigitRun consumes a run of digits and separators from i, returning
+// the end index, whether any real digit was consumed, and whether the run
+// begins or ends with a separator. Separators are legal only BETWEEN the
+// digits of a run (TS parity: the number regexp writes every digit run as
+// `[0-9]+([0-9_]*[0-9])?` — digit-led and digit-ended, interior separators
+// free). A run with a separator at either edge is not a number at all and
+// the whole span must fall to the lenient text matcher: the scanner
+// previously swallowed edge separators, so `+_1` parsed as 1, `1_` as 1
+// and `[1_,2]` as [1,2], silently changing user data.
+func scanDigitRun(src string, i int, sep rune) (end int, sawDigit bool, edgeSep bool) {
+	start := i
+	lastSep := false
+	for i < len(src) {
+		if isDigit(src[i]) {
+			sawDigit = true
+			lastSep = false
+			i++
+		} else if sep != 0 && rune(src[i]) == sep {
+			if i == start {
+				edgeSep = true
+			}
+			lastSep = true
+			i++
+		} else {
+			break
+		}
+	}
+	if lastSep {
+		edgeSep = true
+	}
+	return i, sawDigit, edgeSep
+}
+
 func isExponentStart(src string, pos int) bool {
 	if pos >= len(src) {
 		return false

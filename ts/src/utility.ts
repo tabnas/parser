@@ -340,6 +340,7 @@ function configure(
     extend: !!opts.map?.extend,
     merge: opts.map?.merge,
     child: !!opts.map?.child,
+    ordered: !!opts.map?.ordered,
   }
 
   cfg.list = {
@@ -1230,7 +1231,54 @@ function resolveFuncRefs(
 }
 
 
+
+
+// Key-insertion-order side channel, for `map: { ordered: true }`.
+//
+// Symbol.for, not a local Symbol: two copies of the engine (a linked dev
+// tree and a published one, say) must read each other's records. The
+// property is defined non-enumerable so Object.keys, JSON.stringify,
+// spread, and deep() never see it — the node remains a plain object to
+// every existing consumer.
+const KEY_ORDER = Symbol.for('tabnas.keyOrder')
+
+// Record `key` as inserted on `node`, first insertion wins — re-assigning
+// an existing key keeps its original position, exactly as the Go port's
+// OrderedMap.Set does. Call AFTER deciding newness (before assignment).
+function recordKeyOrder(node: any, key: any) {
+  let order: any[] = node[KEY_ORDER]
+  if (undefined === order) {
+    order = []
+    defprop(node, KEY_ORDER, {
+      value: order,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+  order.push('' + key)
+}
+
+// The insertion order of a parsed map's keys. With `map.ordered` on, this
+// is the order the keys appeared in the source — including integer-like
+// keys, which Object.keys reorders ascending regardless of the source.
+// Without the option (or on any foreign object) it falls back to
+// Object.keys, i.e. plain JS enumeration order.
+function keyOrder(node: any): string[] {
+  if (null != node && 'object' === typeof node) {
+    const order = node[KEY_ORDER]
+    if (undefined !== order) {
+      return order.slice()
+    }
+    return Object.keys(node)
+  }
+  return []
+}
+
 export {
+  KEY_ORDER,
+  recordKeyOrder,
+  keyOrder,
   S,
   assign,
   badlex,

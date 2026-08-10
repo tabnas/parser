@@ -44,6 +44,9 @@ import type {
 import { OPEN, CLOSE, BEFORE, AFTER, EMPTY, SKIP } from './types'
 
 import {
+  keyOrder,
+  recordKeyOrder,
+  KEY_ORDER,
   S,
   assign,
   badlex,
@@ -118,6 +121,9 @@ import { mergeInstances, deshareMatchTokens } from './merge'
 
 // Utility bag re-exported on Tabnas.util for plugin convenience.
 const util: Record<string, any> = {
+  keyOrder,
+  recordKeyOrder,
+  KEY_ORDER,
   badlex,
   charset,
   clean,
@@ -686,6 +692,7 @@ export type { BuiltinRef } from './builtins'
 
 export {
   VERSION,
+  keyOrder,
   Tabnas,
   TabnasError,
   BUILTIN_REFS,
