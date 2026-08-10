@@ -110,7 +110,7 @@ file to one job:
   complete.
 - **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
-  `ts/doc/{bnf-to-tabnas,lsp}-feasibility.md` reports) covers design and
+  `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports) covers design and
   rationale.
 
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in

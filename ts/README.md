@@ -52,6 +52,8 @@ Shared design docs for both runtimes live at the top of the repo:
 ### Explanation / design notes
 
 - [LSP feasibility](doc/lsp-feasibility.md) — language-server angles.
+- [GBNF feasibility](doc/gbnf-feasibility.md) — llama.cpp grammar
+  (constrained LLM decoding) angles.
 
 ## Companion packages
 

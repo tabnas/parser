@@ -26,7 +26,7 @@ with the native-value builders as **alt actions** (`a:`). Config rides in
 | `@push$`   | `r.node.push(r.child.node)` (array element append) |
 | `@value$`  | child-wins-else resolve the matched scalar token |
 
-`BUILTIN_SCHEMA_VERSION` (currently **2**) versions the config contract; a
+`BUILTIN_SCHEMA_VERSION` (currently **3**) versions the config contract; a
 grammar may declare `GrammarSpec.v` and the engine refuses one that needs a
 newer schema.
 
