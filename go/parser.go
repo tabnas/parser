@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -484,6 +485,31 @@ func (p *Parser) makeError(code, src, fullSource string, pos, row, col int, use 
 	return je
 }
 
+// exactBaseFloat evaluates a base-prefixed integer's digit string to the
+// float64 JS Number() would produce: the exact mathematical value, rounded
+// once to nearest. Used only when the literal exceeds int64, so the hot
+// in-range path stays on strconv.ParseInt.
+//
+// big.Float.SetInt carries enough precision to hold the integer exactly,
+// so Float64() performs a single correctly-rounded conversion — no double
+// rounding, and no clamping.
+func exactBaseFloat(digits string, base int) (float64, bool) {
+	if digits == "" {
+		return 0, false
+	}
+	// Defensive: the lexer strips separators before calling, but big.Int
+	// only accepts them with base 0.
+	if strings.IndexByte(digits, '_') >= 0 {
+		digits = strings.ReplaceAll(digits, "_", "")
+	}
+	bi, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return 0, false
+	}
+	f, _ := new(big.Float).SetInt(bi).Float64()
+	return f, true
+}
+
 // parseNumericString converts a numeric string to float64.
 // Handles standard decimals, hex (0x), octal (0o), binary (0b), and signs.
 func parseNumericString(s string) float64 {
@@ -503,25 +529,39 @@ func parseNumericString(s string) float64 {
 	}
 
 	if len(ns) >= 2 {
+		base := 0
 		switch {
 		case ns[0] == '0' && (ns[1] == 'x' || ns[1] == 'X'):
-			val, err := strconv.ParseInt(ns[2:], 16, 64)
-			if err != nil {
-				return math.NaN()
-			}
-			return sign * float64(val)
+			base = 16
 		case ns[0] == '0' && (ns[1] == 'o' || ns[1] == 'O'):
-			val, err := strconv.ParseInt(ns[2:], 8, 64)
-			if err != nil {
-				return math.NaN()
-			}
-			return sign * float64(val)
+			base = 8
 		case ns[0] == '0' && (ns[1] == 'b' || ns[1] == 'B'):
-			val, err := strconv.ParseInt(ns[2:], 2, 64)
-			if err != nil {
-				return math.NaN()
+			base = 2
+		}
+		if base != 0 {
+			digits := ns[2:]
+			val, err := strconv.ParseInt(digits, base, 64)
+			if err == nil {
+				return sign * float64(val)
 			}
-			return sign * float64(val)
+			// Out of int64 range: JS Number("0x...") computes the exact
+			// mathematical value of the digit string and rounds ONCE to
+			// the nearest float64, so match that rather than failing.
+			//
+			// This is the base-prefixed sibling of the decimal ErrRange
+			// tolerance below, and it must NOT be written as "keep what
+			// ParseInt returned": ParseInt CLAMPS to MaxInt64, which is
+			// a different number. 0x8000000000000000 survives the clamp
+			// only by coincidence (float64(MaxInt64) and float64(2^63)
+			// round to the same double); 0xFFFFFFFFFFFFFFFF would come
+			// back 9.2e18 instead of 1.8446744073709552e19 — silently
+			// off by 2x, and by an arbitrary factor further out.
+			if f, ok := exactBaseFloat(digits, base); ok {
+				return sign * f
+			}
+			// A real parse failure (bad digit for the base, empty body):
+			// NaN drops the token to the lenient text matcher.
+			return math.NaN()
 		}
 	}
 

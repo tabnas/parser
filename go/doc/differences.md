@@ -66,6 +66,16 @@ Two exponent forms were previously misaligned and are now fixed in Go:
   and so abandoned the token. `isExponentStart` (`lexer.go`) carves the
   exponent out of that check. A bare `2.e` stays text in both, since TS's
   exponent group also requires a digit.
+- **Base-prefixed integers beyond int64** (`0xFFFFFFFFFFFFFFFF`,
+  `0o1000000000000000000000`). JS `Number("0x…")` evaluates the exact
+  mathematical value of the digit string and rounds once to nearest
+  float64; `strconv.ParseInt` fails with `ErrRange`, which used to drop
+  the token to the text matcher, so the run lexed as `#TX` in Go and
+  `#NR` in TS. `parseNumericString` now falls back to `exactBaseFloat`
+  (big.Int → big.Float) on `ErrRange`. NOTE this is deliberately NOT
+  "keep what ParseInt returned": that CLAMPS to MaxInt64, which agrees
+  for `0x8000000000000000` only by coincidence and is off by 2x for
+  `0xFFFFFFFFFFFFFFFF`. The in-range path stays on ParseInt.
 - **Out-of-range exponents** (`1e999` → `Infinity`, `-1e999` →
   `-Infinity`). TS coerces with unary `+`, which saturates;
   `parseNumericString` treated `strconv.ParseFloat`'s `ErrRange` as a hard
