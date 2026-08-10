@@ -27,24 +27,42 @@ Those fixtures now live in `tabnas/jsonic` only.
 ## Format
 
 Tab-separated, one case per line, with a header row (`input` `expected`
-or, for list-child fixtures, a third column). Loaders unescape `\n`,
-`\r`, `\t` in the **`input` column only** — the `expected` column is raw
-JSON, so JSON's own escape rules apply there. The `expected` column is
+or, for list-child fixtures, a third column). The `expected` column is
 either:
 
 - a JSON value (the parse result), or
 - `ERROR:<code>` for inputs that must fail with that error code.
 
+**Escapes: this repo decodes `\n`, `\r`, `\r\n` and `\t` in EVERY
+column.** `ts/test/utility.js::loadTSV` maps `unescape` over all columns,
+and the Go `lex-string-control` runner deliberately calls
+`preprocessEscapes` on both of its columns to match. Write an `expected`
+value accordingly: a JSON string that must contain a real newline cannot
+be spelled here, because `"a\nb"` is decoded to a raw control character
+before `JSON.parse` sees it.
+
+Note that `tabnas/jsonic` decodes the **input column only** (both of its
+runtimes). The two repos therefore read a shared fixture differently if
+it puts an escape outside the input column — none of the three files
+shared with jsonic does today, and `ci/gate/fixture-sync.sh` compares
+those files byte-for-byte, so a divergence would show up there. Aligning
+the two loaders is worth doing; until then, keep escapes in the `input`
+column of any fixture that also lives in jsonic.
+
 ## Who runs what
 
 Every fixture here, and the runner that executes it:
 
-| Fixture | Runner |
-|---|---|
-| `include-json.tsv`, `include-json-errors.tsv`, `include-json-utf8.tsv`, `include-json-utf8-errors.tsv` | Go `go/spec_test.go` (through the strict-JSON test fixture in `go/jsonplugin_test.go`); TS `ts/test/json-spec.test.js` (through the strict-JSON test grammar) |
-| `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | TS `ts/test/utility.test.js` |
-| `lex-string-control.tsv` | Go `go/lexer_optionplumbing_test.go` |
-| `happy.tsv` | TS `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run |
+| Fixture | TypeScript runner | Go runner |
+|---|---|---|
+| `include-json.tsv`, `include-json-errors.tsv`, `include-json-utf8.tsv`, `include-json-utf8-errors.tsv` | `ts/test/json-spec.test.js` | `go/spec_test.go` |
+| `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` |
+| `lex-string-control.tsv` | `ts/test/lex.test.js` | `go/lexer_optionplumbing_test.go` |
+| `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — |
+
+Both strict-JSON runners go through the strict-JSON grammar that lives as
+a test fixture in each runtime (`ts/test/json-plugin.ts`,
+`go/jsonplugin_test.go`) — the engine itself ships no grammar.
 
 Both loaders (`ts/test/utility.js`, `go/spec_test.go`) must stay in step
 on escape handling and on what counts as a row; a divergence there makes

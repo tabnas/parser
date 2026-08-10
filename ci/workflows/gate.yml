@@ -57,9 +57,14 @@ jobs:
       shell: bash
       run: parser/ci/gate/run-gate.sh "$GITHUB_WORKSPACE"
 
-    - name: Token-stream parity (jsonic grammar over shared fixtures)
+    # The jsonic corpus lives in the jsonic repo — pass it explicitly.
+    # Omitting it defaults to this repo's test/spec, which since the
+    # corpora split holds only the engine's own strict-JSON and utility
+    # fixtures: the relaxed inputs that actually drive the jsonic lexer
+    # would silently stop being exercised.
+    - name: Token-stream parity (jsonic grammar over jsonic fixtures)
       shell: bash
-      run: parser/ci/parity/run-parity.sh jsonic
+      run: parser/ci/parity/run-parity.sh jsonic "$GITHUB_WORKSPACE/jsonic/test/spec"
 
     - name: Token-stream parity (json grammar over json fixtures)
       shell: bash
