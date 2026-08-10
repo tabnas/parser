@@ -23,11 +23,12 @@ Three deliverables follow from one another:
 
 1. **`@tabnas/gbnf`** — a front-end plugin compiling GBNF text into
    engine rules, giving GBNF authors an offline parser, validator, and
-   test-runner (in JS *and* Go) plus railroad diagrams and debug output.
+   test-runner in both runtimes (TS first; Go once the front-end
+   compiler is ported, §10) plus railroad diagrams and debug output.
 2. **A GBNF renderer** — engine-to-`.gbnf` export alongside the existing
-   engine-to-ABNF round-trip, so any tabnas grammar (jsonic above all)
+   engine-to-ABNF round-trip, so a tabnas grammar (jsonic above all)
    becomes a constraint file for llama.cpp and every GBNF-consuming
-   stack.
+   stack (scope in §6).
 3. **An ABNF ⇄ GBNF bridge** — falls out of 1 + 2 for free; no such
    converter exists anywhere as of mid-2026.
 
@@ -100,8 +101,9 @@ alternates, exactly as with ABNF today.
 Per repository convention, the compiler front-end lives in its own repo
 (`tabnas/gbnf`, npm `@tabnas/gbnf`), like `tabnas/abnf`. The engine repo
 needs no new runtime features for the front-end (builtin schema 3
-suffices); the renderer is expected to land in `@tabnas/debug` beside
-the ABNF renderer (§9.5).
+suffices — with astral character classes the one open encoding
+question, §7.7); the renderer is expected to land in `@tabnas/debug`
+beside the ABNF renderer (§9.5).
 
 ---
 
@@ -116,8 +118,10 @@ would face:
    are *already* regex classes — they pass through with only escape
    normalisation. The Go port's `\uHHHH` → RE2 `\x{H…}` rewrite
    (`go/utility.go`, tested in `go/builtins_test.go:289-309`) covers
-   GBNF's Unicode escapes; simple classes are RE2-safe, and Go rejects
-   uncompilable patterns loudly at grammar load.
+   GBNF's `\xXX` and `\uXXXX` escapes; simple BMP classes are RE2-safe,
+   and Go rejects uncompilable patterns loudly at grammar load.
+   Astral-plane classes (`\UXXXXXXXX`) are an open cross-runtime
+   encoding question (§7.7).
 2. **Repetition.** The compiler idiom for `*`/`+` is pinned by fixture:
    paired helper rules (`_genN_plus_X` → `_genN_star_X`) with 1–2-token
    first-set alternates, explicit `b:` push-back, and an empty
@@ -126,14 +130,22 @@ would face:
    GBNF's `{m,n}`.
 3. **Grouping and sequencing.** `(...)` maps to the `$stepN`
    helper-rule chaining the ABNF compiler already emits.
-4. **Ambiguity.** The probe/rewind machinery (`src/builtins.ts`,
-   `@probeInit$`/`@probeDecide$`) is the escape hatch for prefixes that
-   exceed the engine's bounded lookahead — notation-independent and
-   reusable as-is.
-5. **Literals are the easy case.** GBNF literals are case-sensitive, so
-   they all take the simple `fixed.token` route. The eager-regex
-   machinery (`@~/^hi/i`) exists *because* ABNF literals are
-   case-insensitive by default; GBNF never needs it.
+4. **Ambiguity — within limits.** The probe/rewind machinery
+   (`src/builtins.ts`, `@probeInit$`/`@probeDecide$`) handles one
+   specific shape: an optional prefix disambiguated by a single
+   following token, via a mark/rewind probe whose phase-0 close
+   consumes nothing. It is not general backtracking — the engine
+   remains a single deterministic rule stack (§7.2 covers what that
+   excludes).
+5. **Literals are the easy case — mostly.** GBNF literals are
+   case-sensitive, so they take the simple `fixed.token` route, with
+   one caveat: the fixed matcher is global and longest-match-wins
+   (`src/lexer.ts:454-462`), so literals that overlap across alternates
+   (`"a" "b"` beside `"ab"`) shadow each other, and the front-end must
+   detect overlaps and fall back to character-level regex-token
+   emission for them. The eager-regex machinery (`@~/^hi/i`) exists
+   *because* ABNF literals are case-insensitive by default; GBNF never
+   needs it.
 6. **Validation strategy.** The engine test suites validate against
    captured compiled output without depending on the external compiler
    (`test/builtins.test.js`, `go/builtins_test.go`). A GBNF front-end is
@@ -159,10 +171,11 @@ would face:
 | `# comment` | dropped at compile | ABNF `;` comments |
 | `<token>` `<[id]>` `!<…>` | **no text-level meaning** — reject with a clear error by default (§7) | none (sampler-level extension) |
 
-Everything in the left column except the last two rows has a working,
-fixture-pinned emission today. For bounded repetition the counter and
-condition machinery is engine-tested, but the emission strategy is an
-open question (§9.1).
+Everything in the left column has a working, fixture-pinned emission
+today except two rows: bounded repetition (`{m}` `{m,}` `{m,n}`), where
+the counter and condition machinery is engine-tested but the compiler
+emission strategy is an unresolved implementation gap (§9.1), and
+tokenizer-token terminals, which are rejected by policy (§7.1).
 
 ---
 
@@ -183,6 +196,14 @@ Actions attach with the same `'@rule:phase:name'` keys the ABNF plugin
 uses, so a GBNF grammar can build ASTs with the `$`-builtin tree
 builders unchanged.
 
+One engine default the plugin must override: the lexer ships
+`tokenSet.IGNORE = ['#SP', '#LN', '#CM']` (`src/defaults.ts:56`) —
+jsonic-friendly, but wrong for GBNF, which is exact: `root ::= "a"`
+must reject `" a "`. The plugin installs an empty ignore set (and no
+space/comment matchers beyond what the grammar itself declares) so
+that `tn.parse()` is a faithful acceptance test rather than a lenient
+one.
+
 **Why this is worth building — the demand is documented:**
 
 - The top ask around GBNF is offline testing: "validate my grammar and
@@ -193,7 +214,8 @@ builders unchanged.
   ([issue #10321](https://github.com/ggml-org/llama.cpp/issues/10321)).
 - Outside llama.cpp the only offline GBNF parser/validator is
   [gbnf.dev](https://gbnf.dev) (JS + Python). **Nothing exists in Go.**
-  Tabnas ships both runtimes from one conformance suite.
+  Tabnas ships both runtimes from one conformance suite (Go `.gbnf`
+  text input arriving via the staged port, §10 step 3).
 - Editor tooling is thin (a VS Code highlighter and an alpha LSP).
   Tabnas brings `@tabnas/railroad` diagrams and `@tabnas/debug`
   tracing to GBNF grammars immediately, and the error-recovery design
@@ -210,6 +232,18 @@ accept/reject sample strings identically in TS and Go.
 ---
 
 ## 6. The Renderer: Engine → GBNF
+
+Scope first: a context-free target can only encode a context-free
+grammar. `GrammarAltSpec` admits runtime conditions (`c:`), counter
+guards, and function-valued `p:`/`r:`, and plugins can install
+arbitrary lexer matcher functions — acceptance-shaping behaviour no
+GBNF rendering can express (value-building actions are fine; they do
+not change the accepted language). The renderer is therefore defined
+over grammars whose *acceptance* is fully declarative — the pure-data
+`GrammarSpec` subset the "ABNF pure-data" work is expanding — and must
+refuse anything else rather than emit a constraint that over- or
+under-accepts. Silently breaking the generate-then-parse guarantee is
+the one failure mode this export must never have.
 
 `@tabnas/debug` renders the live engine back to ABNF,
 character-for-character and re-compilable (`tn.debug.model().abnf`). A
@@ -267,22 +301,44 @@ describe the expected format; the grammar only guarantees compliance.
    naming the rule. A later option could approximate `<think>` as the
    literal text `"<think>"` for validation purposes, but that changes
    acceptance and must stay opt-in. The renderer never emits these.
-2. **Notation collisions with ABNF.** `[...]` is a character class in
+2. **Deterministic engine, nondeterministic notation.** GBNF can
+   express arbitrarily ambiguous CFGs — llama.cpp's sampler explores
+   alternatives nondeterministically at generation time. The tabnas
+   engine runs one rule stack with first-match-wins alternates and
+   bounded, grammar-declared lookahead; the probe machinery widens
+   this for one specific shape (§3.4), not general backtracking. The
+   front-end therefore targets the deterministic subset — which covers
+   the practical corpus (json, arithmetic, chess) — and must detect
+   and reject grammars whose alternates cannot be disambiguated by
+   bounded first-sets or the probe pattern, with an error naming the
+   rule. The ABNF dialect already implies this posture; here it must
+   be documented, not discovered.
+3. **Notation collisions with ABNF.** `[...]` is a character class in
    GBNF but optionality in ABNF; comments are `#` vs `;`; alternation
    `|` vs `/`; definition `::=` vs `=`. All cheap, all easy to get
    subtly wrong — the fixture corpus is the guard.
-3. **Case-insensitive export.** ABNF-sourced grammars may contain
+4. **Case-insensitive export.** ABNF-sourced grammars may contain
    case-insensitive literals (the eager `@~/^hi/i` tokens); GBNF
    literals are case-sensitive, so the renderer expands them to
    character-class alternation (`[hH] [iI]`).
-4. **No incremental alternatives.** GBNF has no ABNF `=/`; the
+5. **No incremental alternatives.** GBNF has no ABNF `=/`; the
    front-end sees only whole productions. Engine-side rule *extension*
    (plugins appending alternates) still works — it is below the
    notation.
-5. **Go regex ceiling.** Emitted classes must stay RE2-compatible (no
+6. **Go regex ceiling.** Emitted classes must stay RE2-compatible (no
    lookahead/backreferences). GBNF's class syntax cannot express
    either, so this is a non-issue for the front-end; it constrains
    only hand-written extensions.
+7. **Astral character classes.** GBNF's `\UXXXXXXXX` escapes reach
+   beyond the Basic Multilingual Plane. A JS regex needs the `u` flag
+   for code-point (rather than surrogate-half) class semantics, but
+   the serialized-regex loader copies flags verbatim into Go as an
+   inline `(?flags)` group (`go/utility.go:1224-1227`), and RE2
+   rejects `(?u)`. The serialized form therefore has no astral-safe
+   encoding today: the front-end must either expand astral ranges into
+   surrogate-pair alternations on the TS side, or the engines must
+   agree on a flag-translation convention — the one place GBNF support
+   may need an engine-side change rather than only a new front-end.
 
 ---
 
@@ -360,10 +416,14 @@ in Go in the same change when feasible, or is recorded in
 2. **Front-end compile** — GBNF → `GrammarSpec`, validated against the
    llama.cpp `grammars/` corpus; captured fixtures added to the engine
    repo's cross-runtime suites in the same style as the ABNF fixtures.
-3. **Go parity** — the front-end compiles to pure data, so Go needs
-   only fixture loading (the pattern in `go/builtins_test.go` today);
-   `GrammarText()`/`RegisterTextParser` already cover text-form
-   loading.
+3. **Go parity, in two halves** — (a) runtime parity: the front-end
+   compiles to pure data, so precompiled specs load and validate via
+   the shared-fixture pattern in `go/builtins_test.go` today; (b) a Go
+   port of the GBNF text compiler, without which Go users cannot
+   supply `.gbnf` text at all — `GrammarText()` and
+   `RegisterTextParser` parse the tabnas spec format, not GBNF. Until
+   (b) lands, Go consumption is explicitly limited to specs compiled
+   by the TS plugin, and the validator CLI (step 4) is TS-only.
 4. **Validator surface** — a small CLI (`gbnf-check <grammar>
    <sample…>`) in the plugin repo; this is the #9825 use case made
    trivial.
