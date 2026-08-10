@@ -1,3 +1,0 @@
-input	expected
-t:{null:null,int:100,dec:9.9,t:true,f:false,qs:"a\"a'a",as:'a"a\'a'}	{"t":{"null":null,"int":100,"dec":9.9,"t":true,"f":false,"qs":"a\"a'a","as":"a\"a'a"}}
-null:null,int:100,dec:9.9,t:true,f:false,qs:"a\"a'a",as:'a"a\'a'	{"null":null,"int":100,"dec":9.9,"t":true,"f":false,"qs":"a\"a'a","as":"a\"a'a"}
