@@ -144,6 +144,44 @@ describe('number-base-boundary', () => {
     }
   })
 
+  it('base-prefix marker letter is case-insensitive', () => {
+    // Go's matchNumber accepts either case for the marker; TS accepted only
+    // lowercase, so `0XFF` was #NR there and #TX here. Widened to match Go —
+    // hex DIGITS were already case-insensitive in both ports (0xAB == 0xab),
+    // so only the marker was asymmetric, and JS `Number()` already coerces
+    // "0XFF" to 255.
+    const rows = [
+      ['0XFF', '#NR("0XFF")'],
+      ['0O17', '#NR("0O17")'],
+      ['0B101', '#NR("0B101")'],
+      ['0Xff', '#NR("0Xff")'],
+      // Case-insensitive marker must not weaken the boundary rule above.
+      ['0XFF.5', '#NR("0XFF") #DT(".") #NR("5")'],
+      ['0O17.5', '#NR("0O17") #DT(".") #NR("5")'],
+      ['0B101.5', '#NR("0B101") #DT(".") #NR("5")'],
+      // Still not a number without digits, in either case.
+      ['0X.5', '#TX("0X") #DT(".") #NR("5")'],
+    ]
+    for (const [src, want] of rows) {
+      assert.equal(stream(src), want, 'uppercase marker: ' + src)
+    }
+
+    // The decoded values must match the lowercase forms exactly.
+    const j = tn.make(DOT)
+    const lex = (s) => {
+      const l = makeLex({
+        src: () => s,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      return l.next().val
+    }
+    assert.equal(lex('0XFF'), lex('0xFF'))
+    assert.equal(lex('0O17'), lex('0o17'))
+    assert.equal(lex('0B101'), lex('0b101'))
+  })
+
   it('declining a run does not fabricate elements', () => {
     // Guards the earlier fix in the same matcher: a run that matches the
     // shape but fails numeric conversion must decline the WHOLE span, so the

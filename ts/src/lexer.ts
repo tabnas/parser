@@ -1029,10 +1029,21 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   // Every inner group is now non-capturing, so the number contributes
   // exactly ONE capture (msrc) and the ender's first group is m[2] rather
   // than m[9]. That retires "count parens in numberEnder!" as a hazard.
+  // The marker letter is case-insensitive, as it is in Go's matchNumber
+  // (src[sI+1] == 'x' || src[sI+1] == 'X', and likewise o/O and b/B) and as
+  // JS `Number()` already is — +"0XFF" is 255, so the coercion below needed
+  // no change. TS accepted only the lowercase marker, so `0XFF` lexed as
+  // #TX here and #NR there.
+  //
+  // Widening TS to match Go, rather than narrowing Go to match TS: Go is the
+  // reference port, and narrowing would break any Go consumer relying on
+  // 0XFF being 255. It is also the internally consistent direction — hex
+  // DIGITS are already case-insensitive in both ports (0xAB == 0xab), so
+  // only the marker was asymmetric.
   let baseAlts = [
-    mcfg.hex ? 'x[0-9a-fA-F_]+' : null,
-    mcfg.oct ? 'o[0-7_]+' : null,
-    mcfg.bin ? 'b[01_]+' : null,
+    mcfg.hex ? '[xX][0-9a-fA-F_]+' : null,
+    mcfg.oct ? '[oO][0-7_]+' : null,
+    mcfg.bin ? '[bB][01_]+' : null,
   ]
     .filter((s) => null != s)
     .join('|')

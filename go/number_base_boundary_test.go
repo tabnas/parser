@@ -142,3 +142,42 @@ func TestNumberBaseBoundaryNonNumbersStayText(t *testing.T) {
 		}
 	}
 }
+
+func TestNumberBaseBoundaryUppercaseMarker(t *testing.T) {
+	// Go's matchNumber has always accepted either case for the marker letter
+	// (src[sI+1] == 'x' || src[sI+1] == 'X', and likewise o/O and b/B). TS
+	// accepted only lowercase, so 0XFF was #NR here and #TX there. TS was
+	// widened to match rather than Go narrowed: narrowing would break any Go
+	// consumer relying on 0XFF being 255, and hex DIGITS are already
+	// case-insensitive in both ports, so only the marker was asymmetric.
+	cases := [][2]string{
+		{"0XFF", `#NR("0XFF")`},
+		{"0O17", `#NR("0O17")`},
+		{"0B101", `#NR("0B101")`},
+		{"0Xff", `#NR("0Xff")`},
+		// The case-insensitive marker must not weaken the boundary rule.
+		{"0XFF.5", `#NR("0XFF") #DT(".") #NR("5")`},
+		{"0O17.5", `#NR("0O17") #DT(".") #NR("5")`},
+		{"0B101.5", `#NR("0B101") #DT(".") #NR("5")`},
+		// Still not a number without digits, in either case.
+		{"0X.5", `#TX("0X") #DT(".") #NR("5")`},
+	}
+	for _, c := range cases {
+		if got := lexStream(t, c[0]); got != c[1] {
+			t.Errorf("uppercase marker %q:\n got  %s\n want %s", c[0], got, c[1])
+		}
+	}
+
+	// Decoded values must match the lowercase forms exactly.
+	val := func(src string) any {
+		j := Make(Options{})
+		j.Token("#DT", ".")
+		return NewLex(src, j.Config()).Next().Val
+	}
+	for _, p := range [][2]string{{"0XFF", "0xFF"}, {"0O17", "0o17"}, {"0B101", "0b101"}} {
+		if val(p[0]) != val(p[1]) {
+			t.Errorf("%q and %q decode differently: %v vs %v",
+				p[0], p[1], val(p[0]), val(p[1]))
+		}
+	}
+}
