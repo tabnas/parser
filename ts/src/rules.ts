@@ -799,6 +799,30 @@ function parse_alts(
   const NOTOKEN = ctx.NOTOKEN
   const tbuf = ctx.t
 
+  // Negotiated lexing (cfg.lex.relex): a token fetched under one
+  // rule context keeps its identity in the pushback buffer, but a
+  // character claimable by several matchers may legitimately be a
+  // different token for a different alternate. When enabled, a tin
+  // mismatch is not final: the alternate may re-cut the span under its
+  // own token list. See Lex.relex.
+  const RELEX = ctx.cfg.lex.relex
+
+  // Undo state for a recut this alternate commits. The token buffer is
+  // shared with every later alternate AND with later rules, so a cut
+  // chosen for an alternate that then fails would otherwise be inherited
+  // as if it had been chosen for them — which is how a renegotiation
+  // could turn a working parse into a failing one. Only the FIRST recut
+  // of an alternate is recorded: restoring to before it undoes any
+  // later ones too. Plain locals, so the common no-recut path allocates
+  // nothing.
+  let unI = -1
+  let unTkn: Token = NOTOKEN
+  let unSI = 0
+  let unRI = 0
+  let unCI = 0
+  let unQueue: Token[] | null = null
+  let unEnd: Token | undefined = undefined
+
   for (altI = 0; altI < len; altI++) {
     alt = alts[altI] as NormAltSpec
 
@@ -806,6 +830,7 @@ function parse_alts(
     // rule can record exactly which tokens it consumed.
     let matched = 0
     cond = true
+    unI = -1
 
     const S = alt.S
     const sN = alt.sN | 0
@@ -829,7 +854,16 @@ function parse_alts(
           ctx.tC++
           // Bad tokens abort the parse with their own error code
           // (formerly done by the badlex wrapper around lex.next).
-          if (BD === tkn.tin) {
+          //
+          // Under negotiated lexing a bad token is a soft failure
+          // instead: the current rule's token column may simply be
+          // unable to produce the character (a user rule whose only
+          // viable alternate is empty, sitting before a class-matched
+          // token, has nothing to gate the class in with). The bad
+          // token stays buffered — an alternate here or in a later
+          // rule renegotiates it via relex, and if nothing ever can,
+          // the parse still fails at this exact token.
+          if (BD === tkn.tin && !RELEX) {
             let details: any = {}
             if (null != tkn.use) {
               details.use = tkn.use
@@ -847,18 +881,62 @@ function parse_alts(
       }
 
       const Si = S ? S[i] : null
-      if (null != Si) {
-        const tin = tkn.tin
-        const part = (tin / 31) | 0
-        // bitAA lives in partition 0 (tin=AA=4). ORing it into the
-        // match mask for any partition other than 0 lets unrelated
-        // tokens in higher partitions collide with alts that merely
-        // set bit 3 of their own partition — a false positive. Apply
-        // bitAA only when testing a partition-0 token.
-        const aaBit = part === 0 ? bitAA : 0
-        if (!(Si[part] & ((1 << ((tin % 31) - 1)) | aaBit))) {
-          cond = false
-          break
+
+      // A bad token never satisfies a position. Under negotiated lexing
+      // its immediate throw is deferred (above) so an alternate can try
+      // to re-cut the span into something it names — but that is ALL the
+      // deferral buys it. Without this test a wildcard position would
+      // accept it outright: `#AA` compiles to a null `Si`, and the
+      // match-any bit would cover a `#BD` tin too, so malformed input
+      // that `relex: false` rejects would parse.
+      const isBad = BD === tkn.tin
+      if (isBad || null != Si) {
+        let hit = false
+        if (!isBad && null != Si) {
+          const tin = tkn.tin
+          const part = (tin / 31) | 0
+          // bitAA lives in partition 0 (tin=AA=4). ORing it into the
+          // match mask for any partition other than 0 lets unrelated
+          // tokens in higher partitions collide with alts that merely
+          // set bit 3 of their own partition — a false positive. Apply
+          // bitAA only when testing a partition-0 token.
+          const aaBit = part === 0 ? bitAA : 0
+          hit = 0 !== (Si[part] & ((1 << ((tin % 31) - 1)) | aaBit))
+        }
+        if (!hit) {
+          // Negotiated lexing: before failing this alternate, ask the
+          // lexer whether the same span cuts to a tin this alternate
+          // wants. Bounded: at most one recut per (alternate, position),
+          // and the recut's tin is in this alt's set by construction.
+          let recut: Token | undefined = undefined
+          if (RELEX && 0 < tkn.len) {
+            const want = alt.t[i]
+            if (null != want && 0 < want.length) {
+              recut = lex.relex(tkn, want, rule)
+            }
+          }
+          if (null == recut) {
+            cond = false
+            break
+          }
+          // First recut of this alternate: remember how to undo it.
+          if (-1 === unI) {
+            const u = lex.relexUndo
+            unI = i
+            unTkn = tkn
+            unSI = u.sI
+            unRI = u.rI
+            unCI = u.cI
+            unQueue = u.token
+            unEnd = u.end
+          }
+          // The recut replaces the buffered token; anything fetched
+          // beyond it was lexed from positions that may no longer
+          // exist, so it is dropped and re-fetched on demand.
+          tbuf[i] = recut
+          for (let j = i + 1; j < tbuf.length; j++) {
+            tbuf[j] = NOTOKEN
+          }
         }
       }
       matched = i + 1
@@ -893,10 +971,34 @@ function parse_alts(
     }
     else {
       alt = null
+      // This alternate renegotiated a token and then failed anyway —
+      // put the cut back, so the alternates and rules that follow see
+      // the buffer as it was before this one touched it.
+      if (-1 !== unI) {
+        lex.unrelex(unSI, unRI, unCI, unQueue as Token[], unEnd)
+        tbuf[unI] = unTkn
+        for (let j = unI + 1; j < tbuf.length; j++) {
+          tbuf[j] = NOTOKEN
+        }
+        unI = -1
+      }
     }
   }
 
   if (!cond) {
+    const bad = tbuf[0]
+    // No alternate could use the token and it is a bad one: raise the
+    // lexer's own error, exactly as the non-negotiated path does at
+    // fetch time. Deferring that throw is what let the alternates try to
+    // re-cut it; now that all of them have declined, the specific
+    // diagnostic is the useful one.
+    if (RELEX && null != bad && BD === bad.tin) {
+      const details: any = {}
+      if (null != bad.use) {
+        details.use = bad.use
+      }
+      throw new TabnasError(bad.why || UNEXPECTED, details, bad, rule, ctx)
+    }
     out.e = tbuf[0] ?? NOTOKEN
   }
 

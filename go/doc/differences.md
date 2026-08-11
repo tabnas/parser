@@ -49,6 +49,30 @@ where both of its runtimes run them.
 
 These affect parse output for the same input.
 
+### Negotiated Lexing (`lex.relex`) — TypeScript only
+
+TS gained an opt-in lexer option, `lex: { relex: true }`: on a
+token-type mismatch in `parse_alts`, the engine re-cuts the buffered
+token's source span constrained to the tokens the alternate itself
+names (`Lex.relex`), instead of failing the alternate outright. Under
+it, a `#BD` token is also a soft failure a later alternate may
+renegotiate rather than an immediate throw.
+
+Go has no equivalent: neither `LexOptions`/`LexConfig` nor the lexer
+carries `Relex`, so a Go grammar plugin cannot opt in. A Go port needs
+the `Lex.relex` equivalent (save point + token queue, re-cut under a
+wanted-tin filter across the match, fixed and builtin matcher paths,
+restore on failure) plus the `parse_alts` mismatch hook.
+
+Practical impact is confined to **scannerless** front-ends. Grammars
+written for a tokenising lexer distinguish their terminals lexically
+and never contest a character, so `relex: false` — the TS default and
+Go's only behaviour — is identical in both runtimes for every ABNF and
+EBNF grammar in the shared fixtures. What Go cannot run today is the
+GBNF corpus (`tabnas/gbnf`), which sets the option. The companion
+compiler machinery in `tabnas/bnf` is deferred for the same reason and
+recorded in that repo's `go/doc/differences.md`.
+
 ### Number + Text Tokenization
 
 Aligned. Both lexers require an ender character after a number, so
