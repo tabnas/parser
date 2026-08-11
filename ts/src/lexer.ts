@@ -1485,6 +1485,18 @@ class Lex {
   // gate than the rule-level union. Set only inside relex().
   want = null as Tin[] | null
 
+  // Where the point stood immediately before the last recut `relex`
+  // COMMITTED. One reusable record: the parser copies out of it at the
+  // moment of the commit (see parse_alts), because a later recut
+  // overwrites it.
+  relexUndo = {
+    sI: -1,
+    rI: -1,
+    cI: -1,
+    token: [] as Token[],
+    end: undefined as Token | undefined,
+  }
+
   // Slice the remainder lazily and memoize on the position — the slice
   // is only materialized for consumers that genuinely need a remainder
   // string (custom matchers, value.defre regexes), never once per token.
@@ -1552,7 +1564,71 @@ class Lex {
     if (null != from.ignored) {
       tkn.ignored = from.ignored
     }
+
+    // Record where the point was, so the caller can undo this commit if
+    // the alternate that asked for it goes on to fail. See `unrelex`.
+    const undo = this.relexUndo
+    undo.sI = sI
+    undo.rI = rI
+    undo.cI = cI
+    undo.token = queue
+    undo.end = end
+
     return tkn
+  }
+
+
+  // Undo a committed recut: put the point back where `relex` found it.
+  // The caller passes its own copy of the snapshot rather than reading
+  // `relexUndo` directly, because that field is overwritten by any
+  // further recut and the undo must reach back to the FIRST one.
+  unrelex(
+    sI: number,
+    rI: number,
+    cI: number,
+    token: Token[],
+    end: Token | undefined,
+  ): void {
+    const pnt = this.pnt
+    pnt.sI = sI
+    pnt.rI = rI
+    pnt.cI = cI
+    pnt.token = token
+    pnt.end = end
+  }
+
+
+  // Run one matcher under a `want` constraint, keeping its token only
+  // when the tin is wanted and restoring the point otherwise. Used for
+  // custom matchers during negotiated lexing, where the produced tin is
+  // not knowable in advance. A matcher is free to move the cursor and
+  // queue tokens, so the restore covers the same fields `relex` saves.
+  speculate(
+    mat: LexMatcher,
+    rule: Rule,
+    tI?: number,
+  ): Token | undefined {
+    const pnt = this.pnt
+    const sI = pnt.sI
+    const rI = pnt.rI
+    const cI = pnt.cI
+    const qN = pnt.token.length
+    const end = pnt.end
+
+    if (undefined === BUILTIN_MATCHER[(mat as any).matcher]) {
+      this.refwd()
+    }
+    const tkn = mat(this, rule, tI)
+    if (null != tkn && (this.want as Tin[]).includes(tkn.tin)) {
+      return tkn
+    }
+
+    pnt.sI = sI
+    pnt.rI = rI
+    pnt.cI = cI
+    pnt.token.length = qN
+    pnt.end = end
+    return undefined
   }
 
   constructor(ctx: Context) {
@@ -1618,10 +1694,8 @@ class Lex {
       try {
         for (let mat of mats) {
           // Negotiated lexing: a single-token builtin whose tin is not
-          // wanted cannot serve the request; skip it. Custom matchers
-          // are skipped too — their token identity is opaque, and a
-          // wrong-tin product would be discarded by relex() anyway.
-          // match/fixed filter internally per candidate.
+          // wanted cannot serve the request; skip it. match/fixed filter
+          // internally, per candidate.
           if (null != this.want) {
             const nm = (mat as any).matcher
             if ('match' !== nm && 'fixed' !== nm) {
@@ -1633,7 +1707,20 @@ class Lex {
                       'comment' === nm ? t.CM :
                         'number' === nm ? t.NR :
                           'text' === nm ? t.TX : -1
-              if (-1 === btin || !this.want.includes(btin)) {
+              if (-1 === btin) {
+                // A custom `lex.match` matcher. Its token identity is
+                // opaque — the only way to learn whether it can serve
+                // the request is to run it — so run it speculatively and
+                // put the cursor back when what it produced is not
+                // wanted. Skipping it outright would deny custom tokens
+                // the renegotiation that match and fixed tokens get.
+                const cand = this.speculate(mat, rule, tI)
+                if (undefined === cand) continue
+                tkn = cand
+                match = mat
+                break
+              }
+              if (!this.want.includes(btin)) {
                 continue
               }
             }

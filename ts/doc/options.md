@@ -259,10 +259,41 @@ Additional text-ending characters. String or string array. Default
 | `empty` | boolean | `true` | Allow empty source input |
 | `emptyResult` | any | `undefined` | Value returned for empty input |
 | `match` | object | (built-in) | Matcher registry: `{ <name>: { order, make } }` |
+| `relex` | boolean | `false` | Let an alternate renegotiate a token's identity |
 
 The `match` registry maps each matcher name to its priority `order`
 and a `make` factory. Lower `order` runs first. See `src/defaults.ts`
 for the built-in registry.
+
+### `relex` — negotiated lexing
+
+A character several matchers could claim is cut to one token when it is
+first lexed, and the pushback buffer keeps that identity as the token is
+offered to later alternates and later rules. An alternate that needed
+the same character to be a *different* — equally valid — token
+therefore fails.
+
+With `relex` on, a token-type mismatch is not final: the engine re-cuts
+that token's source span constrained to the tokens the alternate itself
+names, and retries. Token identity becomes something alternates
+negotiate rather than something the first cut fixes.
+
+```js
+const tn = new Tabnas({ lex: { relex: true } })
+```
+
+Off by default, and worth leaving off unless the grammar needs it.
+Grammars written for a tokenising lexer distinguish their terminals
+lexically and never contest a character. It is **scannerless**
+notations — GBNF and friends, where the grammar describes input one
+character at a time — that routinely do: `@tabnas/gbnf` sets this.
+
+Turning it on cannot make the parser accept something a grammar
+excludes. Every alternate still requires exactly the tokens it names,
+so a re-cut can only turn a *failed* alternate into a match; a wrong
+re-cut fails the alternate exactly as before. The cost is work, not
+correctness: a mismatch that used to end an alternate immediately now
+attempts one bounded re-lex first.
 
 ## `parse`
 
