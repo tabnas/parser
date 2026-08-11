@@ -1,5 +1,13 @@
 # Differences from TypeScript
 
+> **Looking for parity?** This is a PORTING guide — packaging, API shape,
+> Go-specific helpers, plugin surface. Most of it describes how to write
+> the same program twice, not places the two engines disagree.
+>
+> For "will these engines produce the same result for my input?", read
+> [`DIVERGENCE.md`](../../DIVERGENCE.md) at the repository root, which is
+> the single record of behavioural divergence and is deliberately short.
+
 The TypeScript version is the authoritative implementation. The Go version is
 a faithful port of the engine behavior — same packaging (grammar-free
 engine), same lexer structure, same error model — with deliberate Go-only
