@@ -896,7 +896,6 @@ function parse_alts(
           for (let j = i + 1; j < tbuf.length; j++) {
             tbuf[j] = NOTOKEN
           }
-          tkn = recut
         }
       }
       matched = i + 1
