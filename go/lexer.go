@@ -1345,6 +1345,57 @@ func (l *Lex) matchString() *Token {
 	valEnd := -1
 	dirty := false
 
+	// UTF-16 surrogate pairing, held ACROSS escapes rather than inside one
+	// escape branch. TS strings are UTF-16 so pairing is implicit there; Go
+	// decodes to runes and must pair explicitly (doc/differences.md, "\uXXXX
+	// surrogate pairs ... Explicitly combined").
+	//
+	// This used to be a lookahead inside the 4-hex branch that recognised
+	// only another 4-hex escape, and the braced branch wrote its rune
+	// immediately with no lookahead at all. So `😀` paired, but
+	// `\u{d83d}\u{de00}`, `\ud83d\u{de00}` and `\u{d83d}\ude00` all produced
+	// two U+FFFD — three of the four standard spellings of an astral
+	// character were destroyed, and Go rejected documents TS accepts.
+	//
+	// Pairing on the decoded CODE UNIT sequence instead makes the spelling of
+	// each half irrelevant, which is what the ports actually have to agree
+	// on. A high surrogate is withheld until the next unit decides it; a
+	// pending high that nothing pairs with is emitted as U+FFFD, preserving
+	// the documented lone-surrogate behaviour ("U+FFFD (matches
+	// encoding/json)") unchanged.
+	pendingHi := -1
+
+	// flushHi resolves a withheld high surrogate that turned out to be
+	// unpaired. Call before appending anything that is not a code unit.
+	flushHi := func() {
+		if pendingHi >= 0 {
+			sb.WriteRune(utf8.RuneError)
+			pendingHi = -1
+		}
+	}
+
+	// emitUnit appends one decoded UTF-16 code unit, pairing it with a
+	// withheld high surrogate when it is a low one. Both escape spellings
+	// funnel through here, which is what makes mixed spellings work.
+	emitUnit := func(cc int) {
+		if 0xD800 <= cc && cc <= 0xDBFF {
+			flushHi() // high after unpaired high: the first one is lone
+			pendingHi = cc
+			return
+		}
+		if 0xDC00 <= cc && cc <= 0xDFFF {
+			if pendingHi >= 0 {
+				sb.WriteRune(rune(0x10000 + (pendingHi-0xD800)<<10 + (cc - 0xDC00)))
+				pendingHi = -1
+				return
+			}
+			sb.WriteRune(utf8.RuneError) // lone low surrogate
+			return
+		}
+		flushHi()
+		sb.WriteRune(rune(cc))
+	}
+
 	// Per-quote body spec (TS buildStringBodySpec): consumes plain body
 	// chars and, for multi-line quotes, line chars (advancing rI and
 	// resetting cI). Stops on the quote, the escape char, replace chars,
@@ -1355,6 +1406,7 @@ func (l *Lex) matchString() *Token {
 	for sI < srclen {
 		if Scan(src, sI, rI, cI, bodySpec, &out) {
 			if dirty {
+				flushHi() // literal text ends any pending pair
 				sb.WriteString(src[sI:out.SI])
 			}
 			sI, rI, cI = out.SI, out.RI, out.CI
@@ -1387,9 +1439,16 @@ func (l *Lex) matchString() *Token {
 			}
 			esc := src[sI]
 
+			// Only \u can continue a surrogate pair; every other escape is
+			// literal content and resolves a withheld high surrogate first.
+			if esc != 'u' {
+				flushHi()
+			}
+
 			// Check custom escape map first.
 			if l.Config.EscapeMap != nil {
 				if rep, ok := l.Config.EscapeMap[string(esc)]; ok {
+					flushHi() // a remapped \u is literal text, not a code unit
 					sb.WriteString(rep)
 					sI++
 					continue
@@ -1443,7 +1502,7 @@ func (l *Lex) matchString() *Token {
 				if sI+2 <= srclen {
 					cc := parseHexInt(src[sI : sI+2])
 					if cc >= 0 {
-						sb.WriteRune(rune(cc))
+						emitUnit(cc)
 						sI += 1 // loop will increment
 						cI += 2
 					} else {
@@ -1471,10 +1530,9 @@ func (l *Lex) matchString() *Token {
 					if endI >= 1 && endI <= 6 {
 						cc := parseHexInt(src[sI : sI+endI])
 						if cc >= 0 && cc <= 0x10FFFF {
-							// Surrogate code points are not scalar values;
-							// WriteRune substitutes U+FFFD, matching
-							// encoding/json's handling of lone surrogates.
-							sb.WriteRune(rune(cc))
+							// Pairs across spellings via emitUnit; an
+							// unpaired surrogate still lands as U+FFFD.
+							emitUnit(cc)
 							sI += endI // skip past digits, loop handles +1
 							cI += endI + 2
 						} else {
@@ -1496,24 +1554,12 @@ func (l *Lex) matchString() *Token {
 				} else if sI+4 <= srclen {
 					cc := parseHexInt(src[sI : sI+4])
 					if cc >= 0 {
-						// Combine UTF-16 surrogate pairs split across two
-						// \uXXXX escapes (the JSON encoding of astral
-						// chars). TS strings are UTF-16 so pairing happens
-						// implicitly there; Go must pair explicitly. A
-						// lone surrogate becomes U+FFFD via WriteRune,
-						// matching encoding/json.
-						if 0xD800 <= cc && cc <= 0xDBFF &&
-							sI+10 <= srclen && src[sI+4] == '\\' && src[sI+5] == 'u' {
-							lo := parseHexInt(src[sI+6 : sI+10])
-							if 0xDC00 <= lo && lo <= 0xDFFF {
-								full := 0x10000 + (cc-0xD800)<<10 + (lo - 0xDC00)
-								sb.WriteRune(rune(full))
-								sI += 9
-								cI += 10
-								break
-							}
-						}
-						sb.WriteRune(rune(cc))
+						// Pairing is handled by emitUnit on the code unit
+						// sequence, so this branch no longer looks ahead for
+						// a second 4-hex escape. The old lookahead matched
+						// only its own spelling, so a braced low half never
+						// paired and a mixed pair produced two U+FFFD.
+						emitUnit(cc)
 						sI += 3
 						cI += 4
 					} else {
@@ -1563,6 +1609,7 @@ func (l *Lex) matchString() *Token {
 				dirty = true
 				sb.WriteString(src[valStart:sI])
 			}
+			flushHi() // replacement text ends any pending pair
 			sb.WriteString(rep)
 			sI += csize
 			continue
@@ -1571,6 +1618,10 @@ func (l *Lex) matchString() *Token {
 		// Unreachable: every stop class is dispatched above.
 		break
 	}
+
+	// A high surrogate still withheld at the end of the string had nothing
+	// to pair with.
+	flushHi()
 
 	// Check for unterminated string
 	if !foundClose {

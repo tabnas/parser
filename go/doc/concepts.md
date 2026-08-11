@@ -102,8 +102,11 @@ Two mechanical points specific to the Go runtime:
   disagree between the runtimes.)
 - **Invalid UTF-8 input bytes are passed through byte-for-byte** and
   never trigger a panic, upholding the no-panic guarantee even on
-  arbitrary binary input. Lone surrogates from `\uXXXX` escapes become
-  U+FFFD, matching `encoding/json`.
+  arbitrary binary input. A surrogate pair is combined whichever escape
+  spelling each half uses — `😀`, `\u{d83d}\u{de00}` and the two
+  mixed forms all decode to U+1F600 — because pairing runs on the decoded
+  code unit sequence rather than per escape. A surrogate that pairs with
+  nothing becomes U+FFFD, matching `encoding/json`.
 
 See [differences](differences.md#unicode--utf-8) for the full
 TypeScript ↔ Go Unicode comparison.

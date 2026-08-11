@@ -323,7 +323,7 @@ common surface. Mechanical differences:
 |---|---|---|
 | Scan unit | UTF-16 code units | UTF-8 bytes (runes decoded on demand) |
 | Error columns | UTF-16 units (astral char = 2) | Runes (any char = 1) |
-| `\uXXXX` surrogate pairs | Implicit (UTF-16 strings) | Explicitly combined |
+| Surrogate pairs (either escape spelling) | Implicit (UTF-16 strings) | Explicitly combined, on the code unit sequence |
 | Lone surrogates | Preserved (JS strings allow them) | U+FFFD (matches encoding/json) |
 | `\u{...}` braced escapes | 1-6 hex digits, ≤ U+10FFFF, else `invalid_unicode` | Same |
 | Invalid UTF-8 input bytes | n/a (JS strings are UTF-16) | Passed through byte-for-byte, never a panic |
