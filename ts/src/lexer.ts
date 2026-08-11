@@ -1004,31 +1004,54 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
   // Sticky ('y') so the regex runs against the full source at an offset
   // (ender.lastIndex = pnt.sI) instead of an allocated remainder slice.
+  // A base-prefixed run (0x…, 0o…, 0b…) is a COMPLETE integer: no fraction
+  // and no exponent may attach to it. Only the decimal alternative carries
+  // that tail.
+  //
+  // Both groups used to sit outside the alternation, so they attached to
+  // base-prefixed runs too. `0xFF.5` then produced msrc `0xFF.5`, which
+  // coerces to NaN, so the matcher declined the whole span and the lenient
+  // text matcher took `0xFF` as #TX — while Go, whose base-prefix branch has
+  // no tail at all, read #NR("0xFF") and left `.5` to following matchers.
+  //
+  // The follow character decided whether that was visible: `0xFF.a` agreed
+  // by accident, because `.a` cannot open a fraction, so the regex
+  // backtracked to `0xFF` and `.` served as the ender. Any test probing only
+  // `0xFF.x` or `0xFF.5x` passes against the broken code — see the parity
+  // fixtures, which deliberately carry both a diverging and an agreeing
+  // follow character for each of 0x/0o/0b.
+  //
+  // Fraction digits, when present, must START with a digit, as the integer
+  // and exponent runs already require: an earlier `\.[0-9]?(...)` let a
+  // separator open the run, so `1._5` parsed as 1.5 — separators are legal
+  // only BETWEEN digits.
+  //
+  // Every inner group is now non-capturing, so the number contributes
+  // exactly ONE capture (msrc) and the ender's first group is m[2] rather
+  // than m[9]. That retires "count parens in numberEnder!" as a hazard.
+  let baseAlts = [
+    mcfg.hex ? 'x[0-9a-fA-F_]+' : null,
+    mcfg.oct ? 'o[0-7_]+' : null,
+    mcfg.bin ? 'b[01_]+' : null,
+  ]
+    .filter((s) => null != s)
+    .join('|')
+
+  let decimalRe =
+    '\\.?[0-9]+(?:[0-9_]*[0-9])?' +
+    '(?:\\.(?:[0-9](?:[0-9_]*[0-9])?)?)?' +
+    '(?:[eE][-+]?[0-9]+(?:[0-9_]*[0-9])?)?'
+
   let ender = regexp(
     'y',
-    [
-      '([-+]?(0(',
-      [
-        mcfg.hex ? 'x[0-9a-fA-F_]+' : null,
-        mcfg.oct ? 'o[0-7_]+' : null,
-        mcfg.bin ? 'b[01_]+' : null,
-      ]
-        .filter((s) => null != s)
-        .join('|'),
-      // ')|[.0-9]+([0-9_]*[0-9])?)',
-      ')|\\.?[0-9]+([0-9_]*[0-9])?)',
-      // Fraction: a bare trailing dot is fine, but when fraction digits
-      // are present the run must START with a digit, as the integer and
-      // exponent runs already require. The previous `\.[0-9]?(...)` made
-      // the leading digit optional, so a separator could open the run
-      // and `1._5` parsed as 1.5 while `1_5.` style boundary-separator
-      // forms fell to text — separators are legal only BETWEEN digits.
-      // (?: keeps the capture count: tsrc is read from m[9] below.)
-      '(\\.(?:[0-9]([0-9_]*[0-9])?)?)?',
-      '([eE][-+]?[0-9]+([0-9_]*[0-9])?)?',
-    ]
-      .join('')
-      .replace(/_/g, mcfg.sep ? escre(mcfg.sepChar as string) : ''),
+    (
+      '([-+]?' +
+      // With every base form disabled there is no prefix branch at all,
+      // rather than a degenerate `0(?:)` that matches a bare `0`.
+      ('' === baseAlts
+        ? decimalRe
+        : '(?:0(?:' + baseAlts + ')|' + decimalRe + ')')
+    ).replace(/_/g, mcfg.sep ? escre(mcfg.sepChar as string) : ''),
     ')',
     ...cfg.rePart.ender,
   )
@@ -1047,7 +1070,11 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     let m = ender.exec(lex.src)
     if (m) {
       let msrc = m[1]
-      let tsrc = m[9] // NOTE: count parens in numberEnder!
+      // m[2], not m[9]: the number contributes exactly one capture (msrc),
+      // so the ender's first group follows it directly. Every inner group in
+      // the number pattern is non-capturing precisely so this index cannot
+      // drift again.
+      let tsrc = m[2]
 
       let out: Token | undefined = undefined
       let included = true
