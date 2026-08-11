@@ -486,7 +486,14 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
     if (undefined === cands) return undefined
 
+    // Negotiated lexing: only candidates the requesting alternate wants
+    // may match. Longest-match-wins still holds among those, so a
+    // shorter wanted token can win over a longer unwanted one — which
+    // is the point: the alternate knows which cut it needs.
+    const want = lex.want
+
     for (const cand of cands) {
+      if (null != want && !want.includes(cand.tin)) continue
       // Single-char Latin-1 candidates already matched via the table
       // index; longer (or wide-char) candidates verify in place.
       if ((1 === cand.len && cc < 256) || src.startsWith(cand.src, pnt.sI)) {
@@ -524,6 +531,12 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
     let oc = 'o' === (rule as Rule).state ? 0 : 1
 
+    // Under a negotiated-lexing constraint, value matchers are skipped
+    // outright: they produce value tokens (#VL) by content, not by the
+    // requesting alternate's tin list, so they cannot serve a want.
+    const want = lex.want
+
+    if (null == want)
     for (let valueMatcher of valueMatchers) {
       if (valueMatcher.match instanceof RegExp) {
         // TODO: only match VL if present in rule
@@ -564,7 +577,16 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
       // narrower, so the next rule up the stack can see the token
       // as its proper type rather than falling through to #TX.
 
-      if (
+      if (null != want) {
+        // Negotiated lexing: the alternate's own tin list replaces tcol
+        // gating — only matchers able to produce a wanted tin run.
+        if (
+          !(tokenMatcher as any).tin$ ||
+          !want.includes((tokenMatcher as any).tin$)
+        ) {
+          continue
+        }
+      } else if (
         (tokenMatcher as any).tin$ &&
         !(tokenMatcher as any).eager$ &&
         !rule.spec.def.tcol[oc][tI].includes((tokenMatcher as any).tin$)
@@ -1457,6 +1479,12 @@ class Lex {
   fwd = EMPTY as string   // Source from pnt.sI onward (the unconsumed remainder).
   fwdSI = -1              // pnt.sI the current fwd slice was taken at (memo key).
 
+  // Negotiated-lexing constraint (cfg.lex.relex). When non-null, only
+  // matchers that can produce one of these tins run, and tcol gating is
+  // bypassed — the requesting alternate's own token list is a sharper
+  // gate than the rule-level union. Set only inside relex().
+  want = null as Tin[] | null
+
   // Slice the remainder lazily and memoize on the position — the slice
   // is only materialized for consumers that genuinely need a remainder
   // string (custom matchers, value.defre regexes), never once per token.
@@ -1466,6 +1494,65 @@ class Lex {
       this.fwdSI = this.pnt.sI
     }
     return this.fwd
+  }
+
+  // Negotiated lexing (cfg.lex.relex): re-cut the source span of an
+  // already-lexed token, constrained to the tins the requesting
+  // alternate wants. Returns the recut token — the cursor then sits
+  // after it and any pending lookahead is discarded — or undefined,
+  // with all lexer state restored.
+  //
+  // Why this exists: one character can be claimable by several
+  // matchers ('"' by an escape class and by a fixed quote; '\n' by a
+  // whitespace class and by a fixed literal). The first fetch commits
+  // to one identity by matcher order, and the pushback buffer makes
+  // that identity sticky across rule boundaries — so an alternate
+  // wanting the other, equally valid, identity fails. Scannerless
+  // notations (GBNF) hit this constantly; the parser knows which tins
+  // it wants, so it is allowed to renegotiate the cut.
+  relex(from: Token, want: Tin[], rule: Rule): Token | undefined {
+    if (null == from || from.len <= 0 || from.sI < 0) {
+      return undefined
+    }
+
+    const pnt = this.pnt
+    const sI = pnt.sI
+    const rI = pnt.rI
+    const cI = pnt.cI
+    const queue = pnt.token
+    const end = pnt.end
+
+    pnt.sI = from.sI
+    pnt.rI = from.rI
+    pnt.cI = from.cI
+    pnt.token = []
+    pnt.end = undefined
+
+    this.want = want
+    let tkn: Token | undefined = undefined
+    try {
+      tkn = this.next(rule)
+    } finally {
+      this.want = null
+    }
+
+    if (null == tkn || !want.includes(tkn.tin)) {
+      pnt.sI = sI
+      pnt.rI = rI
+      pnt.cI = cI
+      pnt.token = queue
+      pnt.end = end
+      return undefined
+    }
+
+    // Commit. The cursor now sits after the recut token; queued
+    // lookahead derived from the old cut is stale and stays dropped.
+    // Preserve any attached ignored token (it precedes the span and is
+    // unaffected by the recut).
+    if (null != from.ignored) {
+      tkn.ignored = from.ignored
+    }
+    return tkn
   }
 
   constructor(ctx: Context) {
@@ -1530,6 +1617,28 @@ class Lex {
           : dispatch[cc < 256 ? cc : 256]
       try {
         for (let mat of mats) {
+          // Negotiated lexing: a single-token builtin whose tin is not
+          // wanted cannot serve the request; skip it. Custom matchers
+          // are skipped too — their token identity is opaque, and a
+          // wrong-tin product would be discarded by relex() anyway.
+          // match/fixed filter internally per candidate.
+          if (null != this.want) {
+            const nm = (mat as any).matcher
+            if ('match' !== nm && 'fixed' !== nm) {
+              const t: any = this.cfg.t
+              const btin =
+                'space' === nm ? t.SP :
+                  'line' === nm ? t.LN :
+                    'string' === nm ? t.ST :
+                      'comment' === nm ? t.CM :
+                        'number' === nm ? t.NR :
+                          'text' === nm ? t.TX : -1
+              if (-1 === btin || !this.want.includes(btin)) {
+                continue
+              }
+            }
+          }
+
           if (undefined === BUILTIN_MATCHER[(mat as any).matcher]) {
             this.refwd()
           }

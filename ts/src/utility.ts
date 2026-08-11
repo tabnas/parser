@@ -419,6 +419,7 @@ function configure(
   cfg.lex = {
     empty: !!opts.lex?.empty,
     emptyResult: opts.lex?.emptyResult,
+    relex: !!opts.lex?.relex,
     match: opts.lex?.match
       ? entries(opts.lex.match)
         .reduce((list: any[], entry: any) => {

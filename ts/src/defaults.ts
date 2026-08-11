@@ -334,6 +334,10 @@ Unexpected end of source.`,
     // Empty string is allowed and returns undefined
     empty: true,
     emptyResult: undefined,
+
+    // Negotiated lexing off: grammars written for a tokenising lexer
+    // never need it. Scannerless front-ends (GBNF) opt in.
+    relex: false,
   },
 
   // Parser

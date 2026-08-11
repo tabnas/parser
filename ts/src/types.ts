@@ -223,6 +223,15 @@ export type TabnasOptions = {
   lex?: {                           // Lexer matcher registry.
     empty?: boolean                 // Allow empty source.
     emptyResult?: any               // Result for empty source.
+    // Negotiated lexing. When a rule alternate rejects a token solely
+    // because its tin differs, and the same source span could have
+    // lexed as a tin the alternate wants, re-lex that span constrained
+    // to the wanted tins and retry. This is how a tokenising engine
+    // serves scannerless notations (GBNF), where one character can
+    // legitimately be a different token in different parse contexts.
+    // Off by default: grammars written for tokenising lexers never
+    // need it, and it can only turn failed alternates into matches.
+    relex?: boolean
     match: {                        // Matcher constructors by name.
       [name: string]: {
         order: number               // Match priority (lower runs first).
@@ -312,6 +321,7 @@ export type Config = {
     dispatch?: LexMatcher[][]
     empty: boolean                  // Allow empty source.
     emptyResult: any                // Result for empty source.
+    relex: boolean                  // Negotiated lexing (see Options.lex.relex).
   }
 
   parse: {                          // Parse-phase hooks.

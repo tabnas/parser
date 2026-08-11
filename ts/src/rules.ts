@@ -799,6 +799,14 @@ function parse_alts(
   const NOTOKEN = ctx.NOTOKEN
   const tbuf = ctx.t
 
+  // Negotiated lexing (cfg.lex.relex): a token fetched under one
+  // rule context keeps its identity in the pushback buffer, but a
+  // character claimable by several matchers may legitimately be a
+  // different token for a different alternate. When enabled, a tin
+  // mismatch is not final: the alternate may re-cut the span under its
+  // own token list. See Lex.relex.
+  const RELEX = ctx.cfg.lex.relex
+
   for (altI = 0; altI < len; altI++) {
     alt = alts[altI] as NormAltSpec
 
@@ -829,7 +837,16 @@ function parse_alts(
           ctx.tC++
           // Bad tokens abort the parse with their own error code
           // (formerly done by the badlex wrapper around lex.next).
-          if (BD === tkn.tin) {
+          //
+          // Under negotiated lexing a bad token is a soft failure
+          // instead: the current rule's token column may simply be
+          // unable to produce the character (a user rule whose only
+          // viable alternate is empty, sitting before a class-matched
+          // token, has nothing to gate the class in with). The bad
+          // token stays buffered — an alternate here or in a later
+          // rule renegotiates it via relex, and if nothing ever can,
+          // the parse still fails at this exact token.
+          if (BD === tkn.tin && !RELEX) {
             let details: any = {}
             if (null != tkn.use) {
               details.use = tkn.use
@@ -857,8 +874,29 @@ function parse_alts(
         // bitAA only when testing a partition-0 token.
         const aaBit = part === 0 ? bitAA : 0
         if (!(Si[part] & ((1 << ((tin % 31) - 1)) | aaBit))) {
-          cond = false
-          break
+          // Negotiated lexing: before failing this alternate, ask the
+          // lexer whether the same span cuts to a tin this alternate
+          // wants. Bounded: at most one recut per (alternate, position),
+          // and the recut's tin is in this alt's set by construction.
+          let recut: Token | undefined = undefined
+          if (RELEX && 0 < tkn.len) {
+            const want = alt.t[i]
+            if (null != want && 0 < want.length) {
+              recut = lex.relex(tkn, want, rule)
+            }
+          }
+          if (null == recut) {
+            cond = false
+            break
+          }
+          // The recut replaces the buffered token; anything fetched
+          // beyond it was lexed from positions that may no longer
+          // exist, so it is dropped and re-fetched on demand.
+          tbuf[i] = recut
+          for (let j = i + 1; j < tbuf.length; j++) {
+            tbuf[j] = NOTOKEN
+          }
+          tkn = recut
         }
       }
       matched = i + 1
