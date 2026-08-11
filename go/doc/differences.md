@@ -57,29 +57,59 @@ where both of its runtimes run them.
 
 These affect parse output for the same input.
 
-### Negotiated Lexing (`lex.relex`) — TypeScript only
+### Negotiated Lexing (`lex.relex`)
 
-TS gained an opt-in lexer option, `lex: { relex: true }`: on a
-token-type mismatch in `parse_alts`, the engine re-cuts the buffered
-token's source span constrained to the tokens the alternate itself
-names (`Lex.relex`), instead of failing the alternate outright. Under
-it, a `#BD` token is also a soft failure a later alternate may
-renegotiate rather than an immediate throw.
+Aligned. Both runtimes carry the opt-in lexer option — `lex: { relex: true }`
+in TS, `Options.Lex.Relex` in Go — and it is **off by default** in both.
 
-Go has no equivalent: neither `LexOptions`/`LexConfig` nor the lexer
-carries `Relex`, so a Go grammar plugin cannot opt in. A Go port needs
-the `Lex.relex` equivalent (save point + token queue, re-cut under a
-wanted-tin filter across the match, fixed and builtin matcher paths,
-restore on failure) plus the `parse_alts` mismatch hook.
+When set, a token-type mismatch in the alternate loop is no longer final:
+the engine re-cuts the buffered token's source span constrained to the tins
+the alternate itself names (`Lex.relex` / `Lex.Relex`), instead of failing
+the alternate outright. Under it a `#BD` token is also a soft failure a
+later alternate may renegotiate rather than an immediate throw — and when
+no alternate can use it, the SAME diagnostic is raised, at the same token.
+
+The mechanism is the same on both sides: save point + token queue, re-cut
+under a wanted-tin filter across the match, fixed and builtin matcher
+paths, restore on failure, plus the mismatch hook in the alternate loop.
+Per-runtime notes:
+
+- **The want filter.** `match` and `fixed` filter per candidate, so
+  longest-match-wins still holds *among wanted candidates* — a shorter
+  wanted token can beat a longer unwanted one, which is the point. A
+  single-tin builtin (space, line, string, comment, number, text) is
+  skipped when its tin is not wanted. Value matchers are skipped outright:
+  they produce `#VL` by content, not by the alternate's tin list.
+- **Custom matchers are speculated,** not skipped: their token identity is
+  opaque, so the only way to learn whether one can serve the request is to
+  run it and put the cursor back if what it produced is not wanted.
+- **⚠ differs (cosmetic).** Go's fixed-token dispatch table is a
+  whole-config summary, so under a want the fixed matcher falls through to
+  the candidate list rather than trusting the table's single-byte answer.
+  Same result, one array load slower on the renegotiation path only.
+- **⚠ differs (cosmetic).** TS preserves a recut token's attached
+  `ignored` token; Go's token carries no such field (its lexer skips
+  ignored tokens in `Lex.Next` rather than attaching them), so there is
+  nothing to preserve.
+
+It cannot widen the accepted language. A recut is returned only when its
+tin is in the alternate's OWN list, so every position still requires
+exactly what it always required; a wrong re-cut fails the parse rather
+than satisfying anything. A `#BD` token never satisfies a position, not
+even a wildcard one — without that, `#AA` would make the deferred throw
+into an acceptance.
 
 Practical impact is confined to **scannerless** front-ends. Grammars
-written for a tokenising lexer distinguish their terminals lexically
-and never contest a character, so `relex: false` — the TS default and
-Go's only behaviour — is identical in both runtimes for every ABNF and
-EBNF grammar in the shared fixtures. What Go cannot run today is the
-GBNF corpus (`tabnas/gbnf`), which sets the option. The companion
-compiler machinery in `tabnas/bnf` is deferred for the same reason and
-recorded in that repo's `go/doc/differences.md`.
+written for a tokenising lexer distinguish their terminals lexically and
+never contest a character, so the default is identical in both runtimes
+for every ABNF and EBNF grammar in the shared fixtures. What needs the
+option is the GBNF corpus (`tabnas/gbnf`), where two terminals may claim
+the same character — `arithmetic.gbnf`'s `ws ::= [ \t\n]*` against a
+literal `"\n"`, `json.gbnf`'s quote inside a string body against the
+closing quote, `c.gbnf`'s keywords inside identifier classes.
+
+Pinned by `go/relex_test.go` (the contested shapes, the option probe, the
+over-acceptance guards) and `ts/test/lex.test.js`.
 
 ### Number + Text Tokenization
 

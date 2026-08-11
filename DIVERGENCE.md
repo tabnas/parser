@@ -65,19 +65,6 @@ and runes in Go (any character is 1). Forced by the scan unit — TS scans
 UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
 positions, never in parsed values.
 
-### Negotiated lexing (`lex.relex`) — TypeScript only
-
-TS has an opt-in `lex: { relex: true }` that re-cuts a buffered token's
-source span on a token-type mismatch instead of failing the alternate. Go
-has no equivalent, so a Go grammar cannot opt in.
-
-Impact is confined to **scannerless** front-ends. Grammars written for a
-tokenising lexer distinguish their terminals lexically and never contest a
-character, so `relex: false` — the TS default and Go's only behaviour — is
-identical in both runtimes for every ABNF and JSON-family grammar in the
-fleet. See [`go/doc/differences.md`](go/doc/differences.md) for the full
-description and what a Go port would require.
-
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

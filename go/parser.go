@@ -69,6 +69,30 @@ type Context struct {
 // without recorded names, and instances without custom token sets, use
 // AltSpec.S unchanged. The result is memoized per parse, so the walk below
 // runs at most once per alt.
+// setT writes the lookahead buffer slot i, keeping the legacy T0 / T1
+// aliases in sync so grammar and plugin code reading them observes the
+// same values as ctx.T[0] / ctx.T[1].
+func (ctx *Context) setT(i int, tkn *Token) {
+	for len(ctx.T) <= i {
+		ctx.T = append(ctx.T, NoToken)
+	}
+	ctx.T[i] = tkn
+	if i == 0 {
+		ctx.T0 = tkn
+	} else if i == 1 {
+		ctx.T1 = tkn
+	}
+}
+
+// dropT clears lookahead slots from i onward, so they are re-fetched on
+// demand. Used after a negotiated re-cut, where everything buffered beyond
+// the recut token was lexed from positions that may no longer exist.
+func (ctx *Context) dropT(i int) {
+	for j := i; j < len(ctx.T); j++ {
+		ctx.setT(j, NoToken)
+	}
+}
+
 func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 	if !ctx.tokenSetDyn || alt.SNames == nil || ctx.Inst == nil {
 		return alt.S

@@ -1338,9 +1338,29 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		return nil, false
 	}
 
+	// Negotiated lexing (LexConfig.Relex): a token fetched under one rule
+	// context keeps its identity in the pushback buffer, but a character
+	// claimable by several matchers may legitimately be a DIFFERENT token
+	// for a different alternate. When enabled, a tin mismatch is not
+	// final: the alternate may re-cut the span under its own token list.
+	// See Lex.Relex.
+	relex := ctx.Cfg != nil && ctx.Cfg.Relex
+
+	// Undo state for a recut this alternate commits. The token buffer is
+	// shared with every later alternate AND with later rules, so a cut
+	// chosen for an alternate that then fails would otherwise be inherited
+	// as if it had been chosen for them — which is how a renegotiation
+	// could turn a working parse into a failing one. Only the FIRST recut
+	// of an alternate is recorded: restoring to before it undoes any later
+	// ones too.
+	unI := -1
+	var unTkn *Token
+	var unSaved relexPoint
+
 	for _, alt := range alts {
 		matched := 0
 		cond := true
+		unI = -1
 
 		// Token-set positions are re-resolved against the parsing instance
 		// (identity when it has no tokenSet override).
@@ -1369,14 +1389,52 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// raw token, ignored ones included), matching the TS lexer.
 			}
 
+			// A bad token never satisfies a position. Under negotiated
+			// lexing its immediate throw is deferred (Lex.Next hands it
+			// over instead) so an alternate can try to re-cut the span
+			// into something it names — but that is ALL the deferral buys
+			// it. Without this test a wildcard position would accept it
+			// outright: an empty slot skips the check, and #AA makes
+			// tinMatch true for every tin including #BD, so malformed
+			// input that Relex:false rejects would parse.
+			isBad := relex && ctx.T[i].Tin == TinBD
+
 			// Empty alt.S[i] means "no Tin constraint at this position"
 			// (wildcard) - the token is still fetched and consumed but
 			// the match check is skipped. This prevents silently
 			// dropping the check at a later required position.
-			if len(altS[i]) != 0 {
-				if !tinMatch(ctx.T[i].Tin, altS[i]) {
-					cond = false
-					break
+			if isBad || len(altS[i]) != 0 {
+				hit := false
+				if !isBad && len(altS[i]) != 0 {
+					hit = tinMatch(ctx.T[i].Tin, altS[i])
+				}
+				if !hit {
+					// Before failing this alternate, ask the lexer whether
+					// the same span cuts to a tin this alternate wants.
+					// Bounded: at most one recut per (alternate, position),
+					// and the recut's tin is in this alt's set by
+					// construction — Relex returns nil otherwise — so this
+					// cannot accept a token the position does not name.
+					var recut *Token
+					if relex && 0 < len(ctx.T[i].Src) && len(altS[i]) != 0 {
+						recut = lex.Relex(ctx.T[i], altS[i], rule)
+					}
+					if recut == nil {
+						cond = false
+						break
+					}
+					// First recut of this alternate: remember how to undo.
+					if unI == -1 {
+						unI = i
+						unTkn = ctx.T[i]
+						unSaved = lex.RelexUndo()
+					}
+					// The recut replaces the buffered token; anything
+					// fetched beyond it was lexed from positions that may
+					// no longer exist, so it is dropped and re-fetched on
+					// demand.
+					ctx.setT(i, recut)
+					ctx.dropT(i + 1)
 				}
 			}
 			matched = i + 1
@@ -1443,6 +1501,29 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				return alt, true
 			}
 		}
+
+		// This alternate renegotiated a token and then failed anyway — put
+		// the cut back, so the alternates and rules that follow see the
+		// buffer as it was before this one touched it.
+		if unI != -1 {
+			lex.Unrelex(unSaved)
+			ctx.setT(unI, unTkn)
+			ctx.dropT(unI + 1)
+			unI = -1
+		}
+	}
+
+	// No alternate could use the token and it is a bad one: raise the
+	// lexer's own error, exactly as the non-negotiated path does at fetch
+	// time. Deferring that throw is what let the alternates try to re-cut
+	// it; now that all of them have declined, the specific diagnostic is
+	// the useful one.
+	if relex && 0 < len(ctx.T) && ctx.T[0] != nil && ctx.T[0].Tin == TinBD &&
+		lex.Err == nil {
+		bad := ctx.T[0]
+		je := makeTabnasError(bad.Why, bad.Src, lex.Src, bad.SI, bad.RI, bad.CI, lex.Config)
+		lex.attachErrContext(je, rule, bad.Name, bad.Why)
+		lex.Err = je
 	}
 
 	return nil, false

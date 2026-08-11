@@ -51,6 +51,17 @@ type Lex struct {
 	// internAny). Lazily created on first interned value.
 	intern map[string]any
 
+	// Negotiated-lexing constraint (LexConfig.Relex). When non-nil, only
+	// matchers that can produce one of these tins run. Set only inside
+	// Relex, and cleared before it returns.
+	want []Tin
+
+	// Where the scan stood immediately before the last recut Relex
+	// COMMITTED. One reusable record: the parser copies out of it at the
+	// moment of the commit (see ParseAlts), because a later recut
+	// overwrites it.
+	relexUndo relexPoint
+
 	// Byte-indexed dispatch tables (see lexTables). Engine-built configs
 	// carry a shared prebuilt set (LexConfig.tables, rebuilt by
 	// buildConfig / SortFixedTokens / Derive); hand-built configs get a
@@ -118,6 +129,11 @@ type LexConfig struct {
 	CommentLex bool // Enable comment matching. Default: true.
 	StringLex  bool // Enable string matching. Default: true.
 	ValueLex   bool // Enable value keyword matching. Default: true.
+
+	// Relex enables negotiated lexing (TS cfg.lex.relex, Go
+	// Options.Lex.Relex). Default false. See Lex.Relex for the mechanism
+	// and LexOptions.Relex for why it is opt-in.
+	Relex bool
 
 	StringChars        map[rune]bool     // Quote characters.
 	MultiChars         map[rune]bool     // Multiline quote characters.
@@ -662,6 +678,130 @@ func (l *Lex) Bad(why string) *Token {
 	return tkn
 }
 
+// relexPoint is everything Relex must put back to undo a recut: the scan
+// position, the lookahead queue and the cached end token. Together these
+// are the Go equivalent of the fields TS saves off its Point (which
+// carries token and end inline).
+type relexPoint struct {
+	pnt    Point
+	tokens []*Token
+	end    *Token
+}
+
+// wants reports whether tin can serve the current negotiated-lexing
+// request. With no request in flight every tin is wanted, so matcher
+// bodies can call this unconditionally.
+func (l *Lex) wants(tin Tin) bool {
+	if l.want == nil {
+		return true
+	}
+	for _, t := range l.want {
+		if t == tin {
+			return true
+		}
+	}
+	return false
+}
+
+// Relex re-cuts the source span of an already-lexed token, constrained to
+// the tins the requesting alternate wants (LexConfig.Relex). It returns
+// the recut token — the cursor then sits after it, and any pending
+// lookahead is discarded — or nil, with all lexer state restored.
+//
+// Why this exists: one character can be claimable by several matchers ('"'
+// by an escape class and by a fixed quote; '\n' by a whitespace class and
+// by a fixed literal). The first fetch commits to one identity by matcher
+// order, and the pushback buffer makes that identity sticky across rule
+// boundaries — so an alternate wanting the other, equally valid, identity
+// fails. Scannerless notations (GBNF) hit this constantly; the parser
+// knows which tins it wants, so it is allowed to renegotiate the cut.
+//
+// This cannot widen the accepted language. The recut token is returned
+// only when its tin is in want, which is the alternate's OWN token list,
+// so every position still requires exactly what it always required. A
+// wrong re-cut yields nil (or a token a later position rejects) and the
+// parse fails; it can never satisfy a position the original cut would not
+// have satisfied had the lexer produced it first.
+func (l *Lex) Relex(from *Token, want []Tin, rule *Rule) *Token {
+	if from == nil || len(from.Src) <= 0 || from.SI < 0 || len(want) == 0 {
+		return nil
+	}
+
+	saved := relexPoint{pnt: l.pnt, tokens: l.tokens, end: l.end}
+
+	l.pnt.SI = from.SI
+	l.pnt.RI = from.RI
+	l.pnt.CI = from.CI
+	l.tokens = nil
+	l.end = nil
+
+	l.want = want
+	tkn := l.nextUnfiltered(rule)
+	l.want = nil
+
+	if tkn == nil || !tinIn(tkn.Tin, want) {
+		l.pnt = saved.pnt
+		l.tokens = saved.tokens
+		l.end = saved.end
+		return nil
+	}
+
+	// Commit. The cursor now sits after the recut token; queued lookahead
+	// derived from the old cut is stale and stays dropped. Record where
+	// the scan was, so the caller can undo this commit if the alternate
+	// that asked for it goes on to fail. See Unrelex.
+	l.relexUndo = saved
+
+	return tkn
+}
+
+// Unrelex undoes a committed recut: it puts the scan back where Relex
+// found it. The caller passes its own copy of the snapshot rather than
+// reading relexUndo directly, because that field is overwritten by any
+// further recut and the undo must reach back to the FIRST one.
+func (l *Lex) Unrelex(saved relexPoint) {
+	l.pnt = saved.pnt
+	l.tokens = saved.tokens
+	l.end = saved.end
+}
+
+// RelexUndo returns the snapshot of the last committed recut, for a
+// caller that intends to undo it later.
+func (l *Lex) RelexUndo() relexPoint {
+	return l.relexUndo
+}
+
+// speculate runs one matcher under a want constraint, keeping its token
+// only when the tin is wanted and restoring the scan otherwise. Used for
+// custom matchers during negotiated lexing, where the produced tin is not
+// knowable in advance. A matcher is free to move the cursor and queue
+// tokens, so the restore covers the same fields Relex saves.
+func (l *Lex) speculate(match func() *Token) *Token {
+	saved := relexPoint{pnt: l.pnt, tokens: l.tokens, end: l.end}
+
+	tkn := match()
+	if tkn != nil && tinIn(tkn.Tin, l.want) {
+		return tkn
+	}
+
+	l.pnt = saved.pnt
+	l.tokens = saved.tokens
+	l.end = saved.end
+	return nil
+}
+
+// tinIn reports whether tin appears in tins. Unlike tinMatch this does NOT
+// treat #AA as a wildcard: a want list is a request for specific cuts, and
+// "any token" is not a cut the lexer can aim at.
+func tinIn(tin Tin, tins []Tin) bool {
+	for _, t := range tins {
+		if t == tin {
+			return true
+		}
+	}
+	return false
+}
+
 // attachErrContext records the active rule and token on an error for the
 // standard "--internal: ..." suffix block (TS errdesc suffix).
 func (l *Lex) attachErrContext(je *TabnasError, r *Rule, tokenName, why string) {
@@ -671,6 +811,53 @@ func (l *Lex) attachErrContext(je *TabnasError, r *Rule, tokenName, why string) 
 	}
 	je.tokenName = tokenName
 	je.why = why
+}
+
+// nextUnfiltered2 produces the next raw token and reports whether a
+// matcher actually claimed the input. When none did it synthesizes the
+// #BD token TS synthesizes at the same point, so the position is never
+// silently lost — but it says so through `claimed`, because the two cases
+// raise DIFFERENT errors (an unclaimed position reports token `#UK`, a bad
+// token reports its own name and why).
+//
+// Lex subscribers see every token this returns, ignored ones included,
+// which is what TS's Lex.next does — a plugin watching trivia only sees a
+// comment or line continuation if the ignored tokens are delivered.
+//
+// It performs no IGNORE skipping and raises no error: Next adds both.
+// Relex needs it without either, since a recut may legitimately produce
+// an ignored token (the want list decides) and must never set l.Err for a
+// speculative cut that is about to be thrown away.
+func (l *Lex) nextUnfiltered2(r *Rule) (*Token, bool) {
+	tkn := l.nextRaw(r)
+	claimed := tkn != nil
+
+	if !claimed {
+		bad := ""
+		if l.pnt.SI < len(l.Src) {
+			bad = string(l.Src[l.pnt.SI])
+		}
+		tkn = &Token{
+			Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
+			SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI,
+		}
+	}
+
+	if l.Ctx != nil && 0 < len(l.Ctx.LexSubs) {
+		for _, sub := range l.Ctx.LexSubs {
+			sub(tkn, r, l.Ctx)
+		}
+	}
+
+	return tkn, claimed
+}
+
+// nextUnfiltered is nextUnfiltered2 without the claimed flag, for Relex —
+// which treats an unclaimed position and a bad token alike: neither is in
+// any want list, so both simply fail the renegotiation.
+func (l *Lex) nextUnfiltered(r *Rule) *Token {
+	tkn, _ := l.nextUnfiltered2(r)
+	return tkn
 }
 
 // Next returns the next non-IGNORE token, passing the current parsing rule
@@ -692,35 +879,22 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
 		}
 
-		tkn := l.nextRaw(r)
+		tkn, claimed := l.nextUnfiltered2(r)
 
-		// Notify lex subscribers for EVERY raw token, including ones the
-		// IGNORE set drops below. This mirrors the TS lexer, which calls
-		// ctx.sub.lex at the end of Lex.next() before the parser's rule loop
-		// does any ignoring — a plugin that watches trivia (comments, line
-		// continuations) only sees it if the ignored tokens are delivered.
-		if l.Ctx != nil && 0 < len(l.Ctx.LexSubs) {
-			delivered := tkn
-			if delivered == nil {
-				// No matcher claimed the input. TS synthesizes a #BD token at
-				// this point and still delivers it, so a subscriber observes
-				// the failure position rather than silence. The error built
-				// below is left exactly as it was.
-				bad := ""
-				if l.pnt.SI < len(l.Src) {
-					bad = string(l.Src[l.pnt.SI])
-				}
-				delivered = &Token{
-					Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
-					SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI,
-				}
-			}
-			for _, sub := range l.Ctx.LexSubs {
-				sub(delivered, r, l.Ctx)
-			}
-		}
+		// Negotiated lexing defers both failures below, and ONLY those:
+		// the IGNORE skipping past them is unconditional. A rule's token
+		// column may simply be unable to produce this character — a user
+		// rule whose only viable alternate is empty, sitting before a
+		// class-matched token, has nothing to gate the class in with — so
+		// the bad token is handed to the parser instead, where an
+		// alternate here or in a later rule may re-cut it. If none ever
+		// can, ParseAlts raises the very same error, at this same token.
+		relex := l.Config != nil && l.Config.Relex
 
-		if tkn == nil {
+		if !claimed {
+			if relex {
+				return tkn
+			}
 			src := ""
 			if l.pnt.SI < len(l.Src) {
 				src = string(l.Src[l.pnt.SI])
@@ -732,6 +906,9 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
+			if relex {
+				return tkn
+			}
 			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
 			l.attachErrContext(je, r, tkn.Name, tkn.Why)
 			l.Err = je
@@ -760,6 +937,20 @@ func (l *Lex) guardedMatch(enabled bool, check LexCheck, body func() *Token) *To
 		}
 	}
 	return body()
+}
+
+// runCustom runs one custom matcher, speculatively when a
+// negotiated-lexing request is in flight. A custom matcher's token
+// identity is opaque — the only way to learn whether it can serve the
+// request is to run it — so it runs and the cursor goes back when what it
+// produced is not wanted. Skipping custom matchers outright under a want
+// would deny their tokens the renegotiation that match and fixed tokens
+// get.
+func (l *Lex) runCustom(cm *MatcherEntry, rule *Rule) *Token {
+	if l.want == nil {
+		return cm.Match(l, rule)
+	}
+	return l.speculate(func() *Token { return cm.Match(l, rule) })
 }
 
 // nextRaw returns the next raw token (including IGNORE tokens).
@@ -791,7 +982,7 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 
 	// Run custom matchers with priority before match (< 1e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 1000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
@@ -805,7 +996,7 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 
 	// Run custom matchers with priority before fixed (< 2e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 2000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
@@ -817,80 +1008,92 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 
 	// Run custom matchers with priority before space (< 3e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 3000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.SpaceLex, l.Config.SpaceCheck, l.matchSpace); tkn != nil {
-		return tkn
+	if l.wants(TinSP) {
+		if tkn := l.guardedMatch(l.Config.SpaceLex, l.Config.SpaceCheck, l.matchSpace); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run custom matchers with priority before line (< 4e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 4000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.LineLex, l.Config.LineCheck, l.matchLine); tkn != nil {
-		return tkn
+	if l.wants(TinLN) {
+		if tkn := l.guardedMatch(l.Config.LineLex, l.Config.LineCheck, l.matchLine); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run custom matchers with priority before string (< 5e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 5000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.StringLex, l.Config.StringCheck, l.matchString); tkn != nil {
-		return tkn
+	if l.wants(TinST) {
+		if tkn := l.guardedMatch(l.Config.StringLex, l.Config.StringCheck, l.matchString); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run custom matchers with priority before comment (< 6e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 6000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.CommentLex, l.Config.CommentCheck, l.matchComment); tkn != nil {
-		return tkn
+	if l.wants(TinCM) {
+		if tkn := l.guardedMatch(l.Config.CommentLex, l.Config.CommentCheck, l.matchComment); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run custom matchers with priority before number (< 7e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 7000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.NumberLex, l.Config.NumberCheck, l.matchNumber); tkn != nil {
-		return tkn
+	if l.wants(TinNR) {
+		if tkn := l.guardedMatch(l.Config.NumberLex, l.Config.NumberCheck, l.matchNumber); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run custom matchers with priority before text (< 8e6).
 	for cI < len(l.Config.CustomMatchers) && l.Config.CustomMatchers[cI].Priority < 8000000 {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
 	}
 
-	if tkn := l.guardedMatch(l.Config.TextLex || l.Config.ValueLex,
-		l.Config.TextCheck, l.matchText); tkn != nil {
-		return tkn
+	if l.wants(TinTX) {
+		if tkn := l.guardedMatch(l.Config.TextLex || l.Config.ValueLex,
+			l.Config.TextCheck, l.matchText); tkn != nil {
+			return tkn
+		}
 	}
 
 	// Run remaining custom matchers (priority >= 8e6).
 	for cI < len(l.Config.CustomMatchers) {
-		if tkn := l.Config.CustomMatchers[cI].Match(l, rule); tkn != nil {
+		if tkn := l.runCustom(l.Config.CustomMatchers[cI], rule); tkn != nil {
 			return tkn
 		}
 		cI++
@@ -909,8 +1112,14 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 
 	fwd := l.Src[l.pnt.SI:]
 
+	// Under a negotiated-lexing constraint, value matchers are skipped
+	// outright: they produce value tokens (#VL) by CONTENT, not by the
+	// requesting alternate's tin list, so they cannot serve a want.
 	// Match values first (TS: valueMatchers loop).
 	for _, vm := range l.Config.MatchValues {
+		if l.want != nil {
+			break
+		}
 		// Function-form matcher (TS: LexMatcher branch).
 		if vm.Fn != nil {
 			if tkn := vm.Fn(l, rule); tkn != nil {
@@ -994,7 +1203,18 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 						break
 					}
 				}
-				if pass == 0 {
+				if l.want != nil {
+					// Negotiated lexing: the alternate's own tin list
+					// REPLACES the rule-position gating above — it is the
+					// sharper gate, being one alternate's tokens rather
+					// than the union over all of them. Both passes would
+					// otherwise be needed to reach an unexpected-but-wanted
+					// token, so one filtered pass covers it; pass 1 is
+					// skipped to keep each candidate tried once.
+					if pass == 1 || !l.wants(tin) {
+						continue
+					}
+				} else if pass == 0 {
 					// Pass 0: only tokens expected at this rule position.
 					if !positionExpected {
 						continue
@@ -1037,14 +1257,21 @@ func (l *Lex) matchFixed() *Token {
 
 	// Use sorted list for longest-match-first. Fall back to single-char lookup
 	// if no sorted list (e.g. standalone lexer without Tabnas).
+	// Negotiated lexing: only candidates the requesting alternate wants
+	// may match. Longest-match-wins still holds among those, so a shorter
+	// wanted token can win over a longer unwanted one — which is the
+	// point: the alternate knows which cut it needs.
 	if len(l.Config.FixedSorted) > 0 {
 		c := l.Src[l.pnt.SI]
 		// First-byte reject: most positions are not fixed tokens.
 		if !l.tables.fixedFirst[c] {
 			return nil
 		}
-		// Single-byte token with no longer competitor: direct emit.
-		if tin := Tin(l.tables.fixedTin[c]); tin != 0 {
+		// Single-byte token with no longer competitor: direct emit. The
+		// dispatch table is a whole-config summary, so under a want the
+		// scan falls through to the candidate list rather than trusting
+		// it — the summarized token may not be one this alternate names.
+		if tin := Tin(l.tables.fixedTin[c]); tin != 0 && l.want == nil {
 			tkn := l.Token(l.tinNameFor(tin), tin, nil, asciiByteStr[c])
 			l.pnt.SI++
 			l.pnt.CI++
@@ -1052,6 +1279,9 @@ func (l *Lex) matchFixed() *Token {
 		}
 		remaining := l.Src[l.pnt.SI:]
 		for _, fs := range l.Config.FixedSorted {
+			if !l.wants(l.Config.FixedTokens[fs]) {
+				continue
+			}
 			if strings.HasPrefix(remaining, fs) {
 				tin := l.Config.FixedTokens[fs]
 				tkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
@@ -1066,7 +1296,7 @@ func (l *Lex) matchFixed() *Token {
 	// Fallback: single-char lookup.
 	src := string(l.Src[l.pnt.SI])
 	tin, ok := l.Config.FixedTokens[src]
-	if !ok {
+	if !ok || !l.wants(tin) {
 		return nil
 	}
 	tkn := l.Token(l.tinNameFor(tin), tin, nil, src)

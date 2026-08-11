@@ -83,30 +83,33 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 // says the practical impact is confined to scannerless front-ends, so for
 // every grammar in this fleet the two ports already behave identically.
 // A behavioural test would therefore pass in both ports and pin nothing.
-func TestDivergenceNoRelexOption(t *testing.T) {
+func TestDivergenceRelexOptionExists(t *testing.T) {
 	j := Make(Options{})
 	cfg := j.Config()
 
-	// Guard first: an absence assertion is worthless if the detector sees
-	// nothing at all. Confirm hasField finds fields that certainly exist,
-	// so a rename or a reflection mistake cannot turn the check below into
-	// a vacuous pass. (It nearly did — an earlier sanity check used the
-	// TypeScript field names and "failed", which is what prompted this.)
+	// Guard first: a presence assertion is worthless if the detector sees
+	// everything. Confirm hasField rejects a name that certainly does not
+	// exist, so a reflection mistake cannot turn the check below into a
+	// vacuous pass. (Its predecessor was an ABSENCE assertion, and nearly
+	// went vacuous the other way — an earlier sanity check used the
+	// TypeScript field names and "failed".)
 	for _, known := range []string{"NumberLex", "StringLex", "EscapeChar"} {
 		if !hasField(cfg, known) {
-			t.Fatalf("hasField cannot see known LexConfig field %q, so the "+
-				"Relex assertion below would pass vacuously", known)
+			t.Fatalf("hasField cannot see known LexConfig field %q", known)
 		}
 	}
-
-	// LexConfig carries no Relex field. Reflection keeps this honest
-	// without depending on the struct's current shape.
-	if hasField(cfg, "Relex") {
-		t.Error("Go LexConfig now has a Relex field: the TS-only entry in " +
-			"DIVERGENCE.md is stale and must be removed")
+	if hasField(cfg, "NoSuchFieldAtAll") {
+		t.Fatal("hasField sees a field that does not exist, so the " +
+			"assertion below would pass vacuously")
 	}
-	if hasField(j.Options(), "Relex") {
-		t.Error("Go Options now carries Relex: DIVERGENCE.md entry is stale")
+
+	// Negotiated lexing is ported: LexConfig carries Relex, and it is
+	// readable back off the resolved config, which is how @tabnas/gbnf
+	// probes for support. Behaviour is covered by relex_test.go; this
+	// keeps DIVERGENCE.md honest about the entry no longer applying.
+	if !hasField(cfg, "Relex") {
+		t.Error("LexConfig lost its Relex field: negotiated lexing is a " +
+			"ported feature, not a divergence")
 	}
 }
 

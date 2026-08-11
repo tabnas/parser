@@ -1020,6 +1020,9 @@ func MapToOptions(m map[string]any) Options {
 		if emptyResult, ok := lx["emptyResult"]; ok {
 			opts.Lex.EmptyResult = emptyResult
 		}
+		if relex, ok := lx["relex"].(bool); ok {
+			opts.Lex.Relex = &relex
+		}
 	}
 
 	// error

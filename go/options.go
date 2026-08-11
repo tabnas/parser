@@ -284,6 +284,24 @@ type LexOptions struct {
 	Empty       *bool                 // Allow empty source. Default: true.
 	EmptyResult any                   // Result for empty source. Default: nil.
 	Match       map[string]*MatchSpec // Custom lexer matchers keyed by name (TS lex.match: { name: { order, make } }).
+
+	// Relex enables negotiated lexing. Default: false.
+	//
+	// One character can be claimable by several matchers — a quote by an
+	// escape class and by a fixed quote, a newline by a whitespace class
+	// and by a fixed literal. The first fetch commits to one identity by
+	// matcher order, and the pushback buffer makes that identity stick
+	// across rule boundaries, so an alternate wanting the other — equally
+	// valid — identity fails on input the grammar does admit.
+	//
+	// With this set, a token-type mismatch is not final: the alternate may
+	// re-cut the token's source span constrained to the tokens IT names.
+	// See Lex.Relex.
+	//
+	// Off by default because a grammar written for a tokenising lexer has
+	// disjoint token classes and never contests a character. Scannerless
+	// notations (GBNF) contest them constantly.
+	Relex *bool
 }
 
 // ParserOptions allows custom parser overrides.
@@ -947,6 +965,14 @@ func buildConfig(o *Options) *LexConfig {
 	cfg.RewindHistory = 64
 	if o.Rewind != nil && o.Rewind.History != nil {
 		cfg.RewindHistory = *o.Rewind.History
+	}
+
+	// Negotiated lexing (see LexOptions.Relex). Resolved onto the config
+	// so a caller can read it back — a front-end that needs the feature
+	// probes for it by setting the option and checking it survived, and
+	// an option silently dropped is worse than an absent one.
+	if o.Lex != nil && o.Lex.Relex != nil {
+		cfg.Relex = *o.Lex.Relex
 	}
 
 	// Info options (metadata on parsed output)
