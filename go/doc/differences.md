@@ -348,6 +348,77 @@ classifier beyond the fast-path table: TS for UTF-16 code units ≥ 256,
 Go for UTF-8 lead bytes ≥ 0x80 (decoding the full rune); see the
 Unicode section below.
 
+## Serialized Regex Flags (`@/…/flags`)
+
+Aligned, by translation rather than by copying.
+
+A serialized grammar carries a regex terminal as `@/pattern/flags` (or
+`@~/pattern/flags` for the eager form). That string is **shared** between
+the runtimes, and it holds **JavaScript's** flags, because TypeScript
+writes them natively. Go therefore lowers them to RE2 rather than passing
+them through — copying them verbatim into an inline `(?flags)` group is
+wrong twice over: RE2 rejects most of them outright, and accepts one with
+an entirely different meaning.
+
+| flag | Go | why |
+|---|---|---|
+| `i` `m` `s` | kept | same meaning in both engines |
+| `u` | **dropped** | RE2 needs no equivalent — it is natively rune-based, which is what `u` asks JavaScript to be |
+| `g` `y` `d` | dropped | they govern the JS matcher's statefulness and output (`lastIndex`, sticky, match indices), not the language matched; the engine calls `FindString` once per position |
+| `v` | **refused** | unlike `u` it changes what a class MEANS (set operations, string literals inside classes), so it is not a no-op |
+| anything else | refused | see `U` below |
+
+### Why dropping `u` is sound
+
+`u` is not cosmetic in TypeScript — without it a JS regex is **UTF-16
+code-unit** based, and an astral character is two units. It is also not
+confined to emoji grammars: a negated class (`[^\n]`) and `.` both need it,
+because the complement of any set contains astral code points. The
+question is only whether RE2's native behaviour already IS the flag's
+behaviour. Measured, case by case:
+
+| pattern | input | RE2 | JS `u` | JS without `u` |
+|---|---|---|---|---|
+| `^[a-z]$` | `q` | match | match | match |
+| `^[\u{1F600}-\u{1F64F}]$` | 😀 | match | match | **does not compile** |
+| `^[^\n]$` | 😀 | match | match | **no** |
+| `^.$` | 😀 | match | match | **no** |
+| `^.{2}$` | 😀 | no | no | **match** |
+| `^.{2}$` | 😀😀 | match | match | **no** |
+| `^[^\n]{2}$` | 😀 | no | no | **match** |
+
+RE2 agrees with JS-**with**-`u` on every row and differs from JS-without
+on five. In particular `.` consumes one astral character whole, and
+`.{2}` correspondingly does **not** accept a single astral character as
+two — a real bug once fixed on the TypeScript side, and the one this
+translation must not reintroduce.
+
+Both halves of that table are pinned, so this is an agreement between the
+runtimes rather than a claim about RE2: `go/regexflags_test.go` and
+`ts/test/regex-flags.test.js` assert the same patterns, inputs and
+answers.
+
+### Why an unknown flag is refused rather than ignored
+
+RE2 accepts `(?U)` — and it means *swap greedy*. A letter passed through
+because it was unrecognised could therefore change the language a grammar
+matches, silently. Refusing is the safe default, and it is not silent
+either: an unbuildable serialized regex leaves the original `@/…/` string
+in place, which `MapToOptions` turns into an install error naming the
+token.
+
+### Two related non-equivalences this does NOT fix
+
+Both predate the flag question and are independent of `u`:
+
+- **`\s`** is ASCII-only in RE2 (`[\t\n\f\r ]`) and Unicode-aware in
+  JavaScript (it includes NBSP, U+2028, …), with or without `u`.
+- **`(?i)`** case-folds by Unicode rules in RE2, which matches JS `iu`
+  rather than JS `i` alone.
+
+A shared grammar that depends on either will differ between the runtimes.
+Prefer an explicit class over `\s` in a serialized terminal.
+
 ## Unicode / UTF-8
 
 Both runtimes handle UTF-8 characters of all sizes (2/3/4-byte

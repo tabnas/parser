@@ -1207,6 +1207,68 @@ func jsRegexToGo(pattern string) string {
 	})
 }
 
+// jsRegexFlagsToGo lowers a serialized regex's JS flag string to RE2
+// inline flags, reporting false for a flag whose meaning RE2 cannot carry.
+//
+// The serialized `@/pattern/flags` form is SHARED between the runtimes, so
+// it holds JavaScript's flags — the notation TypeScript writes natively.
+// Copying them verbatim into an inline `(?flags)` group is wrong: RE2
+// rejects most of them outright, and accepts one with a completely
+// different meaning.
+//
+//	i m s   kept — same meaning in both engines.
+//	u       DROPPED, because RE2 needs no equivalent: it is natively
+//	        rune-based, which is exactly what `u` asks JavaScript to be.
+//	        Verified case by case (see go/doc/differences.md): `.` and
+//	        `[^\n]` each consume one astral character WHOLE in RE2, as in
+//	        JS+u and unlike JS without it, and `.{2}` correspondingly does
+//	        NOT accept a single astral character as two.
+//	g y d   DROPPED. They govern the JS matcher's statefulness and output
+//	        (lastIndex, sticky, match indices), not the language matched,
+//	        and the engine calls FindString once per position.
+//	v       REJECTED. Unlike `u` it genuinely changes what a class MEANS
+//	        (set operations, string literals inside classes), so it is not
+//	        a no-op and must not be quietly dropped.
+//
+// An unknown flag is rejected rather than ignored. Note `U`: RE2 accepts
+// it and it means "swap greedy", so passing an unrecognised letter through
+// could silently change the language rather than fail.
+func jsRegexFlagsToGo(flags string) (string, bool) {
+	out := make([]byte, 0, len(flags))
+	for i := 0; i < len(flags); i++ {
+		switch flags[i] {
+		case 'i', 'm', 's':
+			out = append(out, flags[i])
+		case 'u', 'g', 'y', 'd':
+			// No RE2 counterpart is needed; see above.
+		default:
+			return "", false
+		}
+	}
+	return string(out), true
+}
+
+// compileSerializedRegex builds the RE2 form of a serialized `@/…/flags`
+// pattern. It returns nil when the pattern or its flags have no RE2
+// equivalent, which leaves the original string in place — and a leftover
+// `@/…/` string is a loud install error downstream (see MapToOptions),
+// not a silently dropped token.
+func compileSerializedRegex(pattern, flags string) *regexp.Regexp {
+	goFlags, ok := jsRegexFlagsToGo(flags)
+	if !ok {
+		return nil
+	}
+	pattern = jsRegexToGo(pattern)
+	if goFlags != "" {
+		pattern = "(?" + goFlags + ")" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
 func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 	if obj == nil {
 		return nil
@@ -1223,13 +1285,7 @@ func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 		// Regex: @/pattern/flags → *regexp.Regexp
 		if len(s) > 2 && s[1] == '/' {
 			if idx := strings.LastIndex(s, "/"); idx > 1 {
-				pattern := jsRegexToGo(s[2:idx])
-				flags := s[idx+1:]
-				if flags != "" {
-					pattern = "(?" + flags + ")" + pattern
-				}
-				re, err := regexp.Compile(pattern)
-				if err == nil {
+				if re := compileSerializedRegex(s[2:idx], s[idx+1:]); re != nil {
 					return re
 				}
 			}
@@ -1240,13 +1296,7 @@ func ResolveFuncRefs(obj any, ref map[FuncRef]any) any {
 		// (s[1] is '~', not '/').
 		if len(s) > 3 && s[1] == '~' && s[2] == '/' {
 			if idx := strings.LastIndex(s, "/"); idx > 2 {
-				pattern := jsRegexToGo(s[3:idx])
-				flags := s[idx+1:]
-				if flags != "" {
-					pattern = "(?" + flags + ")" + pattern
-				}
-				re, err := regexp.Compile(pattern)
-				if err == nil {
+				if re := compileSerializedRegex(s[3:idx], s[idx+1:]); re != nil {
 					return &EagerRegexp{Re: re}
 				}
 			}
