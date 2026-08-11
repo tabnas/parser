@@ -77,3 +77,9 @@ Recorded here because they are regularly mistaken for divergences:
 - **Native integer type.** Go returns `int64`, TS a `number` or `bigint`
   depending on magnitude. The serialised bytes agree; the difference is
   forced by the storage, not chosen.
+- **The `u` flag on a serialized regex terminal.** A shared `@/…/u` carries
+  a JavaScript flag; Go drops it, because RE2 is natively rune-based and so
+  already behaves as `u` asks JavaScript to behave. Verified case by case
+  and pinned in BOTH runtimes — see "Serialized Regex Flags" in
+  [`go/doc/differences.md`](go/doc/differences.md). The flags that are not
+  no-ops (`v`, and anything unrecognised) are refused rather than dropped.
