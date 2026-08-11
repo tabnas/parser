@@ -13,5 +13,5 @@ jobs:
   ci:
     uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
     with:
-      deps: "debug json abnf railroad"
-      build-order: "parser debug json abnf railroad"
+      deps: "bnf debug abnf"
+      build-order: "parser bnf debug abnf"
