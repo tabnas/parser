@@ -79,6 +79,61 @@ class TestSurface(unittest.TestCase):
         with load_grammar() as g:
             self.assertFalse(g.accepts(b'{"a":1}\x00trailing'))
 
+    def test_explicit_path_is_remembered(self):
+        """The documented load(path=...) then Grammar(spec) sequence.
+
+        The explicit path is deliberately made UNDISCOVERABLE — copied
+        somewhere _default_lib_path() cannot find it, with discovery then
+        forced to fail. Loading from a path discovery would have found
+        anyway proves nothing: the pathless second call would simply
+        rediscover the same library and pass whether or not the explicit
+        load was cached.
+        """
+        import shutil
+        import tempfile
+
+        real = tabnas._default_lib_path()
+        with tempfile.TemporaryDirectory() as tmp:
+            hidden = os.path.join(tmp, "hidden" + os.path.splitext(real)[1])
+            shutil.copy(real, hidden)
+
+            saved_lib, saved_finder = tabnas._lib, tabnas._default_lib_path
+            tabnas._lib = None
+            tabnas._default_lib_path = lambda: (_ for _ in ()).throw(
+                tabnas.TabnasError("discovery must not be reached"))
+            try:
+                tabnas.load(hidden)
+                # No path here: this only works if the explicit load stuck.
+                with load_grammar() as g:
+                    self.assertTrue(g.accepts('{"a":1}'))
+            finally:
+                tabnas._default_lib_path = saved_finder
+                tabnas._lib = saved_lib
+
+    def test_null_pointer_with_zero_length_is_the_empty_buffer(self):
+        """The C marshalling boundary, exercised directly.
+
+        (NULL, 0) is how C spells an empty buffer. This calls the exported
+        symbol with a real null pointer rather than an empty Go string —
+        the only way to reach goBytes, and therefore the only form of this
+        test that can catch a regression in it. Before the fix this
+        returned {"ok": false, "code": "usage"}.
+        """
+        lib = tabnas.load()
+        with load_grammar() as g:
+            res = tabnas._call(lib, lib.tabnas_parse(g._handle, None, 0))
+        self.assertTrue(res.get("ok"), f"(NULL, 0) was refused: {res}")
+        self.assertIn("accept", res)
+
+    def test_null_pointer_with_nonzero_length_is_still_invalid(self):
+        # The other half of the contract: NULL is the empty buffer only
+        # when the length agrees. A non-zero length with no pointer is a
+        # caller bug, not a question.
+        lib = tabnas.load()
+        with load_grammar() as g:
+            res = tabnas._call(lib, lib.tabnas_parse(g._handle, None, 7))
+        self.assertFalse(res.get("ok"), f"(NULL, 7) was accepted: {res}")
+
     def test_unicode_round_trips(self):
         with load_grammar() as g:
             self.assertTrue(g.accepts('{"a":"é日\U0001F600"}'))

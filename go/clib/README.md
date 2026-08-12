@@ -55,6 +55,20 @@ Four rules, each load-bearing:
    length and are *not* read as NUL-terminated C strings. Parser input is
    arbitrary bytes and may legitimately contain a zero byte; truncating
    there would answer a question the caller did not ask.
+
+   A **NULL pointer is the empty buffer when — and only when — the
+   length is zero**, which is how C conveys one:
+
+   | call | result |
+   |---|---|
+   | `(NULL, 0)` | the empty buffer; a normal verdict follows |
+   | `(NULL, n)`, `n > 0` | `ok:false`, code `usage` |
+   | `(ptr, n)`, `n < 0` | `ok:false`, code `usage` |
+
+   `(NULL, 0)` is a question, not a mistake: a grammar may accept empty
+   input, and `lex.empty` decides what it returns when one does. A
+   pointer and a length that disagree cannot be honoured, so they are
+   refused rather than guessed at.
 4. **The caller owns what it is given.** Every `char*` returned must be
    released with `tabnas_free` (it is `malloc`'d, so that is `free(3)` —
    do not use another allocator's). Every handle must be released with
