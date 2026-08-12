@@ -1105,6 +1105,22 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 
 // matchMatch implements the match matcher (TS: makeMatchMatcher at priority 1e6).
 // Handles both match.value (regexp → #VL) and match.token (regexp → custom token).
+//
+// PERFORMANCE. This runs at every lex attempt, so its inner loop is the
+// engine's hottest path on grammars with many match tokens. The gating
+// work is O(match tokens x alternates x tins-per-slot) and it is easy to
+// pay it for nothing:
+//
+//   - Under a negotiated-lexing want, the rule-position scan is dead —
+//     l.wants(tin) is the gate, and positionExpected is never read.
+//     Computing it anyway cost 25-46x on real grammars (the llama.cpp
+//     GBNF corpus via @tabnas/gbnf: json_arr.gbnf went 73ms -> 1.6ms per
+//     parse of an 8-character input once it was skipped).
+//   - Pass 1 under a want skips every candidate, so the second pass is
+//     pure loop overhead.
+//
+// Keep gating work inside the branch that reads it. A profile that shows
+// tinMatch high and regexp matching low means this has regressed.
 func (l *Lex) matchMatch(rule *Rule) *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
@@ -1185,8 +1201,25 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 				if re == nil && mt.Fn == nil {
 					continue
 				}
-				positionExpected := false
-				for _, alt := range alts {
+				if l.want != nil {
+					// Negotiated lexing: the alternate's own tin list
+					// REPLACES the rule-position gating below — it is the
+					// sharper gate, being one alternate's tokens rather
+					// than the union over all of them. One filtered pass
+					// covers it, so pass 1 is skipped (see the break at the
+					// end of the pass loop) to keep each candidate tried
+					// once.
+					//
+					// The position-expected scan below is deliberately NOT
+					// run on this path: nothing here reads it, and it costs
+					// a walk of every alternate's slot-0 tins — with a
+					// ctx.altS lookup each — for every candidate token. See
+					// the performance note above matchMatch.
+					if !l.wants(tin) {
+						continue
+					}
+				} else {
+					// Is this token expected at the current rule position?
 					// Read the alt's slots through the context so a token
 					// set overridden on this instance (options.tokenSet) is
 					// honoured here too. Gating on the registration-time
@@ -1194,41 +1227,36 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// override just added to #VAL / #KEY, and the parser
 					// would then reject the text the override was meant to
 					// admit. Falls back to alt.S outside a parse.
-					altS := alt.S
-					if l.Ctx != nil {
-						altS = l.Ctx.altS(alt)
+					positionExpected := false
+					for _, alt := range alts {
+						altS := alt.S
+						if l.Ctx != nil {
+							altS = l.Ctx.altS(alt)
+						}
+						if len(altS) > 0 && tinMatch(tin, altS[0]) {
+							positionExpected = true
+							break
+						}
 					}
-					if len(altS) > 0 && tinMatch(tin, altS[0]) {
-						positionExpected = true
-						break
-					}
-				}
-				if l.want != nil {
-					// Negotiated lexing: the alternate's own tin list
-					// REPLACES the rule-position gating above — it is the
-					// sharper gate, being one alternate's tokens rather
-					// than the union over all of them. Both passes would
-					// otherwise be needed to reach an unexpected-but-wanted
-					// token, so one filtered pass covers it; pass 1 is
-					// skipped to keep each candidate tried once.
-					if pass == 1 || !l.wants(tin) {
-						continue
-					}
-				} else if pass == 0 {
-					// Pass 0: only tokens expected at this rule position.
-					if !positionExpected {
-						continue
-					}
-				} else {
-					// Pass 1: eager-only fallbacks (position-expected ones
-					// were already tried in pass 0).
-					if positionExpected || !mt.Eager {
+					if pass == 0 {
+						// Pass 0: only tokens expected at this rule position.
+						if !positionExpected {
+							continue
+						}
+					} else if positionExpected || !mt.Eager {
+						// Pass 1: eager-only fallbacks (position-expected
+						// ones were already tried in pass 0).
 						continue
 					}
 				}
 				if tkn := runMatch(mt, tin, re); tkn != nil {
 					return tkn
 				}
+			}
+			// Under a want, pass 1 would skip every candidate — one
+			// filtered pass is the whole search.
+			if l.want != nil {
+				break
 			}
 		}
 	}
