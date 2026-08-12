@@ -12,7 +12,6 @@ binding bug — which is the property that makes a third language
 trustworthy at all.
 """
 
-import json
 import os
 import unittest
 
@@ -22,6 +21,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FIXTURE = os.path.join(ROOT, "ts", "test", "json-builder.fixture.json")
 SPEC_DIR = os.path.join(ROOT, "test", "spec")
+
+# The fixtures carry \n, \r and \t as two-character escapes. Go's reader
+# (go/spec_test.go preprocessEscapes) expands exactly those three and
+# leaves every other backslash alone; anything more eager here would feed
+# the engine a different string than the other runtimes see, which is the
+# one thing a conformance test must not do.
+_ESCAPES = {"n": "\n", "r": "\r", "t": "\t"}
+
+
+def _unescape(s):
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s) and s[i + 1] in _ESCAPES:
+            out.append(_ESCAPES[s[i + 1]])
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
 
 
 def load_grammar():
@@ -81,24 +99,28 @@ class TestSharedFixtures(unittest.TestCase):
             self.skipTest(f"fixture {name} not present")
         with open(path, encoding="utf-8") as f:
             for n, line in enumerate(f, 1):
+                if n == 1:
+                    continue  # header row, as go/spec_test.go loadTSV skips it
                 line = line.rstrip("\n")
                 if not line or line.startswith("#") or "\t" not in line:
                     continue
                 src, expected = line.split("\t", 1)
-                yield n, src, expected
+                yield n, _unescape(src), expected
 
     def test_include_json(self):
         checked = 0
         with load_grammar() as g:
             for n, src, expected in self._rows("include-json.tsv"):
-                try:
-                    src = json.loads(f'"{src}"') if src.startswith("\\") else src
-                except Exception:
-                    pass
                 want_reject = expected.startswith("ERROR:")
                 got = g.accepts(src)
+
+                # BOTH directions, or this proves nothing: a binding that
+                # rejected every input would satisfy the reject rows alone
+                # and pass a test advertised as conformance.
                 if want_reject and got:
                     self.fail(f"line {n}: {src!r} was accepted, expected {expected}")
+                if not want_reject and not got:
+                    self.fail(f"line {n}: {src!r} was rejected, expected accept")
                 checked += 1
         self.assertGreater(checked, 0, "no fixture rows were checked")
 

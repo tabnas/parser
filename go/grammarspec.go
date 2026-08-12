@@ -5,6 +5,7 @@ package tabnas
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -38,8 +39,28 @@ func GrammarSpecFromJSON(data []byte) (*GrammarSpec, error) {
 		gs.Rule = mapToGrammarRules(rm)
 		gs.RuleOrder = jsonRuleOrder(data)
 	}
-	if v, ok := plain["v"]; ok {
-		gs.V = cfgInt(v)
+
+	// `clear` wipes the engine's rules and fixed-token bindings before the
+	// rest of the spec is applied, so dropping it does not merely lose a
+	// flag — it leaves the default bindings in place and changes how the
+	// grammar tokenises. Compared against literal true, exactly as TS
+	// does (`true === gs.clear`): a non-boolean is not a clear request.
+	gs.Clear = plain["clear"] == true
+
+	// A JSON number decodes to float64, so a version that is not a whole
+	// number — or not a number at all — would be silently coerced rather
+	// than refused: cfgInt turns "999" into 0, disabling the version gate
+	// altogether, and 2.5 into 2, a different schema than the one asked
+	// for. TS rejects both (tabnas.ts: 'number' !== typeof, !isInteger,
+	// < 1), and a loader that accepts a spec the canonical runtime
+	// refuses is not the same engine. An ABSENT v still means "current".
+	if raw, present := plain["v"]; present {
+		n, ok := raw.(float64)
+		if !ok || n != math.Trunc(n) || n < 1 {
+			return nil, fmt.Errorf("Grammar: invalid builtin schema "+
+				"version: %v (expected a positive integer)", raw)
+		}
+		gs.V = int(n)
 	}
 	return gs, nil
 }

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+
+# A built library dropped next to the module — _default_lib_path() looks
+# for it here, so it is a normal thing to have and never a thing to commit.
+libtabnas.so
+libtabnas.dylib
+libtabnas.dll

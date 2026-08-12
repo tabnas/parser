@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -67,6 +68,26 @@ func loadGrammar(specJSON string) string {
 	if err := tn.Grammar(gs); err != nil {
 		return failDoc("grammar", firstLine(err.Error()))
 	}
+
+	// Refuse a spec that installs no start rule, even though Grammar()
+	// accepted it. The engine's contract is that a missing start rule
+	// yields no result — deliberately, and TS agrees — but "no result"
+	// arrives here as "no error", which parseWith would report as
+	// accept:true. A validator that accepts EVERY input is far worse than
+	// one that refuses to load, so the refusal happens at the only point
+	// where it is still cheap: before the handle is published. `{}`, a
+	// spec whose rule block has the wrong type, and a spec whose rules
+	// never define the configured start rule all land here.
+	start := tn.Config().RuleStart
+	if start == "" {
+		start = "val" // the engine's own default; see parser.go startParse
+	}
+	if tn.RSM()[start] == nil {
+		return failDoc("grammar", "spec installs no start rule "+
+			strconv.Quote(start)+", so no input could be validated "+
+			"against it")
+	}
+
 	reg.Lock()
 	nextID++
 	id := nextID
@@ -95,10 +116,23 @@ func parseWith(handle int64, src string) string {
 	g.mu.Unlock()
 
 	if err != nil {
+		code := errCode(err)
+
+		// An "internal" error is the engine's no-panic guarantee firing:
+		// a bug in the engine, a matcher or an action, recovered and
+		// returned rather than crashing the process. It is NOT a
+		// judgement about the input. Reporting it as accept:false would
+		// hand the caller an authoritative-looking rejection for a
+		// question that was never actually answered, and bury the
+		// operational failure where no FFI client would look.
+		if code == "internal" {
+			return failDoc(code, firstLine(err.Error()))
+		}
+
 		return reply(map[string]any{
 			"ok": true, "accept": false,
 			"error": map[string]any{
-				"code":    errCode(err),
+				"code":    code,
 				"message": firstLine(err.Error()),
 			},
 		})

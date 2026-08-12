@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	tabnas "github.com/tabnas/parser/go"
 )
 
 func doc(t *testing.T, s string) map[string]any {
@@ -117,6 +119,63 @@ func TestCallErrorsAreDistinctFromRejections(t *testing.T) {
 	}
 	if got := doc(t, loadGrammar("{not a spec")); got["ok"] != false {
 		t.Errorf("an unparseable spec must be ok:false, got %v", got)
+	}
+}
+
+// The failure this guard exists to prevent is the worst one a validator
+// has: a spec that installs no start rule loads clean, and then every
+// input "passes". The engine returns nil,nil for a missing start rule by
+// design (TS does too), so the refusal has to happen here, before a
+// handle is published — otherwise silence reads as acceptance.
+func TestSpecWithNoStartRuleIsRefused(t *testing.T) {
+	for _, spec := range []string{
+		`{}`,
+		`{"rule":123}`,
+		`{"rule":{}}`,
+		`{"options":{"rule":{"start":"nosuchrule"}}}`,
+	} {
+		res := doc(t, loadGrammar(spec))
+		if res["ok"] != false {
+			h := int64(res["handle"].(float64))
+			verdict := doc(t, parseWith(h, "literally anything at all $$$"))
+			freeGrammar(h)
+			t.Errorf("spec %s was accepted as a grammar; it then answered "+
+				"%v for arbitrary input", spec, verdict)
+		}
+	}
+}
+
+// An engine bug is not a verdict on the input. The no-panic guarantee
+// converts a panic in the engine, a matcher or an action into an
+// "internal" error; reporting that as accept:false would give the caller
+// an authoritative-looking rejection for a question never answered.
+func TestInternalErrorIsACallErrorNotARejection(t *testing.T) {
+	// A grammar whose parse entrypoint panics. The engine's recover turns
+	// that into an "internal" *TabnasError rather than crashing, which is
+	// precisely the error parseWith must not dress up as a verdict.
+	tn := tabnas.Make()
+	tn.SetOptions(tabnas.Options{Parser: &tabnas.ParserOptions{
+		Start: func(string, *tabnas.Tabnas, map[string]any) (any, error) {
+			panic("boom inside the engine")
+		},
+	}})
+
+	reg.Lock()
+	nextID++
+	h := nextID
+	loaded[h] = &grammar{tn: tn}
+	reg.Unlock()
+	defer freeGrammar(h)
+
+	got := doc(t, parseWith(h, `{"a":1}`))
+	if got["ok"] != false {
+		t.Fatalf("an engine panic must be ok:false, not a verdict: %v", got)
+	}
+	if _, isVerdict := got["accept"]; isVerdict {
+		t.Errorf("an engine failure must not carry an accept field: %v", got)
+	}
+	if code := got["error"].(map[string]any)["code"]; code != "internal" {
+		t.Errorf("error code = %v, want internal", code)
 	}
 }
 
