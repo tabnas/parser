@@ -111,6 +111,22 @@ func contains(s, sub string) bool {
 	return false
 }
 
+// Empty input is a QUESTION, not a malformed call: some grammars accept
+// it, and the engine has a lex.empty option devoted to what it returns
+// when they do. The cgo shim spells this (NULL, 0) — C's empty buffer —
+// which it used to refuse outright; this pins the behaviour on the side
+// of the boundary a test can reach.
+func TestEmptyInputIsAnsweredNotRefused(t *testing.T) {
+	h := mustLoad(t)
+	got := doc(t, parseWith(h, ""))
+	if got["ok"] != true {
+		t.Errorf("empty input must get a verdict, not a call failure: %v", got)
+	}
+	if _, answered := got["accept"]; !answered {
+		t.Errorf("empty input must carry an accept field: %v", got)
+	}
+}
+
 // ok:false is reserved for the CALL being wrong, never for a rejection —
 // the distinction a caller branches on.
 func TestCallErrorsAreDistinctFromRejections(t *testing.T) {

@@ -79,6 +79,20 @@ class TestSurface(unittest.TestCase):
         with load_grammar() as g:
             self.assertFalse(g.accepts(b'{"a":1}\x00trailing'))
 
+    def test_explicit_path_is_remembered(self):
+        # The documented load(path=...) then Grammar(spec) sequence. If
+        # only auto-discovered libraries were cached, the second call
+        # would go back to discovery and raise for anyone whose library
+        # is not on the default search path.
+        lib = tabnas._default_lib_path()
+        tabnas._lib = None
+        try:
+            tabnas.load(lib)
+            with load_grammar() as g:
+                self.assertTrue(g.accepts('{"a":1}'))
+        finally:
+            tabnas._lib = None
+
     def test_unicode_round_trips(self):
         with load_grammar() as g:
             self.assertTrue(g.accepts('{"a":"é日\U0001F600"}'))
