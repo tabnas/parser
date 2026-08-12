@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/parser",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "main": "dist/tabnas.js",
   "type": "commonjs",
   "types": "dist/tabnas.d.ts",
