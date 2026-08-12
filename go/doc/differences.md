@@ -312,6 +312,26 @@ parse strict JSON; `Implicit` is `false` for braces/brackets and would be
 `true` only for a grammar that creates containers implicitly (e.g. a
 relaxed `a:1` → map).
 
+### `GrammarSpecFromJSON` and the C ABI (`go/clib`)
+
+Go-only, and needed only because Go is typed. `GrammarSpecFromJSON`
+turns a serialized spec — `{"options":…, "rule":…, "v":N}` — into a
+`*GrammarSpec`. TypeScript needs no equivalent: a parsed JSON object is
+already structurally a `GrammarSpec` there, so `tn.grammar(JSON.parse(s))`
+just works.
+
+It is exported rather than left a test helper because it is the only way
+a caller outside Go reaches the engine, which is what `go/clib` — the
+C-ABI shared library — is built on. That library exists so languages
+with no tabnas port can use the engine (Python via `ctypes` is the
+motivating case); it stays grammar-agnostic, taking a serialized spec
+and answering whether input parses. See [`../clib/README.md`](../clib/README.md).
+
+One trap it removes: passing the whole serialized document as
+`GrammarSpec{OptionsMap: …}` looks right and `Grammar()` returns no
+error, but the rule block is never read, so the engine installs no rules
+and every later parse quietly returns nothing.
+
 ### `Info.Text` Option (`TextInfo`)
 
 Wraps string and text values in a `Text` struct that preserves the quote

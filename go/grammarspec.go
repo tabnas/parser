@@ -3,11 +3,85 @@
 package tabnas
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
 )
+
+// GrammarSpecFromJSON builds a GrammarSpec from a serialized spec —
+// {"options": {…}, "rule": {…}, "v": N} — which is the pure-data form a
+// front-end compiler emits.
+//
+// This is the cross-runtime door, and it is exported rather than left a
+// test helper because loading a spec is the ONLY way a caller outside Go
+// reaches the engine: the C ABI in clib/ is the case that forced it, and
+// any future binding needs the same. TypeScript needs no equivalent — a
+// parsed JSON object is already structurally a GrammarSpec there.
+//
+// Do not reach for GrammarSpec{OptionsMap: wholeDocument} instead. It
+// looks like it works — Grammar() returns no error — but the rule block
+// is not read, so the engine installs no rules and every later parse
+// quietly returns nothing. That silence is the failure mode this
+// function exists to remove.
+func GrammarSpecFromJSON(data []byte) (*GrammarSpec, error) {
+	var plain map[string]any
+	if err := json.Unmarshal(data, &plain); err != nil {
+		return nil, err
+	}
+	gs := &GrammarSpec{}
+	if om, ok := plain["options"].(map[string]any); ok {
+		gs.OptionsMap = om
+	}
+	if rm, ok := plain["rule"].(map[string]any); ok {
+		gs.Rule = mapToGrammarRules(rm)
+		gs.RuleOrder = jsonRuleOrder(data)
+	}
+
+	// `clear` wipes the engine's rules and fixed-token bindings before the
+	// rest of the spec is applied, so dropping it does not merely lose a
+	// flag — it leaves the default bindings in place and changes how the
+	// grammar tokenises. Compared against literal true, exactly as TS
+	// does (`true === gs.clear`): a non-boolean is not a clear request.
+	gs.Clear = plain["clear"] == true
+
+	// A JSON number decodes to float64, so a version that is not a whole
+	// number — or not a number at all — would be silently coerced rather
+	// than refused: cfgInt turns "999" into 0, disabling the version gate
+	// altogether, and 2.5 into 2, a different schema than the one asked
+	// for. TS rejects both (tabnas.ts: 'number' !== typeof, !isInteger,
+	// < 1), and a loader that accepts a spec the canonical runtime
+	// refuses is not the same engine. An ABSENT v still means "current".
+	if raw, present := plain["v"]; present {
+		n, ok := raw.(float64)
+		if !ok || n != math.Trunc(n) || n < 1 {
+			return nil, fmt.Errorf("Grammar: invalid builtin schema "+
+				"version: %v (expected a positive integer)", raw)
+		}
+		gs.V = int(n)
+	}
+	return gs, nil
+}
+
+// jsonRuleOrder recovers the rule block's key order from the raw JSON, so
+// a grammar loaded from data reports its rules in the order they were
+// declared rather than alphabetically — what textRuleOrder does for the
+// text form. A Go map cannot carry the order, hence the second pass.
+func jsonRuleOrder(data []byte) []string {
+	var om OrderedMap
+	if err := json.Unmarshal(data, &om); err != nil {
+		return nil
+	}
+	rules, ok := om.Vals["rule"].(*OrderedMap)
+	if !ok {
+		return nil
+	}
+	order := make([]string, len(rules.Keys))
+	copy(order, rules.Keys)
+	return order
+}
 
 // FuncRef is a string starting with "@" that references a function in a Ref map.
 type FuncRef = string
