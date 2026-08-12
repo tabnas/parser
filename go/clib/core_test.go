@@ -113,9 +113,14 @@ func contains(s, sub string) bool {
 
 // Empty input is a QUESTION, not a malformed call: some grammars accept
 // it, and the engine has a lex.empty option devoted to what it returns
-// when they do. The cgo shim spells this (NULL, 0) — C's empty buffer —
-// which it used to refuse outright; this pins the behaviour on the side
-// of the boundary a test can reach.
+// when they do.
+//
+// This is NOT the regression test for the (NULL, 0) marshalling fix, and
+// would pass with or without it — parseWith takes an ordinary Go string
+// and has always accepted "". goBytes lives beside `import "C"` and no
+// Go test can reach it, so the boundary is graded from Python instead,
+// where a real null pointer can be passed: see
+// py/test_tabnas.py::test_null_pointer_with_zero_length_is_the_empty_buffer.
 func TestEmptyInputIsAnsweredNotRefused(t *testing.T) {
 	h := mustLoad(t)
 	got := doc(t, parseWith(h, ""))
