@@ -20,6 +20,17 @@ func Deep(base any, rest ...any) any {
 	return base
 }
 
+// isDangerousMergeKey reports whether an overlay key must never be merged,
+// because in a JS runtime it reaches the prototype chain (prototype
+// pollution). Go maps have no prototype, so a `__proto__` key decoded from
+// JSON is just an ordinary string key here — but the merge is a port of TS
+// deep(), which skips these, so it is dropped identically for parity and
+// defense. Mirrors the guard in TS utility.ts deep() (and prop()).
+// isDangerousMergeKey("__proto__") // => true
+func isDangerousMergeKey(k string) bool {
+	return "__proto__" == k || "constructor" == k || "prototype" == k
+}
+
 // deepMerge merges a single overlay onto base, the recursive core of Deep.
 // deepMerge(map[string]any{"a":1}, map[string]any{"a":2}) // => {"a":2}
 func deepMerge(base, over any) any {
@@ -76,6 +87,10 @@ func deepMerge(base, over any) any {
 					result.Set(k, bVals[k])
 				}
 				for _, k := range oKeys {
+					// Prototype-pollution guard (see isDangerousMergeKey).
+					if isDangerousMergeKey(k) {
+						continue
+					}
 					if existing, ok := result.Get(k); ok {
 						result.Set(k, deepMerge(existing, oVals[k]))
 					} else {
@@ -94,6 +109,10 @@ func deepMerge(base, over any) any {
 			result[k] = v
 		}
 		for k, v := range overMap {
+			// Prototype-pollution guard (see isDangerousMergeKey).
+			if isDangerousMergeKey(k) {
+				continue
+			}
 			if existing, ok := result[k]; ok {
 				result[k] = deepMerge(existing, v)
 			} else {
@@ -346,18 +365,30 @@ func deepClone(val any) any {
 	}
 	switch v := val.(type) {
 	case *OrderedMap:
+		// Prototype-pollution guard: cloning is TS deep()'s copy path too,
+		// where the same key filter runs, so a dangerous key nested under a
+		// freshly-added key is dropped here rather than copied through. See
+		// isDangerousMergeKey. Iterating Keys keeps the copy ordered.
 		result := &OrderedMap{
-			Keys:   append([]string(nil), v.Keys...),
+			Keys:   make([]string, 0, len(v.Keys)),
 			Vals:   make(map[string]any, len(v.Vals)),
 			Sorted: v.Sorted,
 		}
-		for k, val := range v.Vals {
-			result.Vals[k] = deepClone(val)
+		for _, k := range v.Keys {
+			if isDangerousMergeKey(k) {
+				continue
+			}
+			result.Keys = append(result.Keys, k)
+			result.Vals[k] = deepClone(v.Vals[k])
 		}
 		return result
 	case map[string]any:
 		result := make(map[string]any)
 		for k, val := range v {
+			// Prototype-pollution guard (see isDangerousMergeKey).
+			if isDangerousMergeKey(k) {
+				continue
+			}
 			result[k] = deepClone(val)
 		}
 		return result
@@ -376,6 +407,10 @@ func deepClone(val any) any {
 	case MapRef:
 		result := make(map[string]any)
 		for k, val := range v.Val {
+			// Prototype-pollution guard (see isDangerousMergeKey).
+			if isDangerousMergeKey(k) {
+				continue
+			}
 			result[k] = deepClone(val)
 		}
 		return MapRef{Val: result, Implicit: v.Implicit, Meta: cloneMeta(v.Meta)}

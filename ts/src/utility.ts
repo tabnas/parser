@@ -621,6 +621,21 @@ function deep(base?: any, ...rest: any): any {
       !isClassInstance(over)
     ) {
       for (let k in over) {
+        // Prototype-pollution guard: skip keys that reach the prototype
+        // chain, and only merge own enumerable keys. A JSON object like
+        // `{"__proto__":{...}}` gives `over` an OWN enumerable `__proto__`
+        // key whose read/write resolves to Object.prototype — merging it
+        // mutates the global prototype. `constructor`/`prototype` are the
+        // same hazard one hop further. `prop()` rejects `__proto__` for the
+        // identical reason; keep the two guards in step.
+        if (
+          '__proto__' === k ||
+          'constructor' === k ||
+          'prototype' === k ||
+          !Object.prototype.hasOwnProperty.call(over, k)
+        ) {
+          continue
+        }
         base[k] = deep(base[k], over[k])
       }
     } else {
