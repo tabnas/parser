@@ -428,6 +428,16 @@ func textRuleOrder(parsed any) []string {
 func mapToGrammarRules(ruleMap map[string]any) map[string]*GrammarRuleSpec {
 	rules := make(map[string]*GrammarRuleSpec, len(ruleMap))
 	for name, v := range ruleMap {
+		// A JSON null REMOVES the rule: keep the entry as a nil
+		// *GrammarRuleSpec so Grammar()'s nil path prunes it — exactly
+		// what the struct form (Rule[name] = nil) and TS
+		// (`null === rulespec` → rule(name, null)) do. Skipping it here
+		// silently kept the rule installed, a different language than
+		// the canonical runtime accepts.
+		if v == nil {
+			rules[name] = nil
+			continue
+		}
 		rm, ok := v.(map[string]any)
 		if !ok {
 			continue
@@ -469,6 +479,14 @@ func parseGrammarAltsOrSpec(v any) any {
 			if append_, ok := injectRaw["append"].(bool); ok {
 				spec.Inject.Append = append_
 			}
+			// `clear` empties the existing alternates before inserting,
+			// letting a serialized spec replace a rule's open/close
+			// outright — TS honors it from pure JSON (rules.ts add(),
+			// mods.clear), so dropping the key here made the JSON door
+			// accept a different language than the canonical runtime.
+			if clear, ok := injectRaw["clear"].(bool); ok {
+				spec.Inject.Clear = clear
+			}
 			if del, ok := injectRaw["delete"].([]any); ok {
 				for _, d := range del {
 					if f, ok := d.(float64); ok {
@@ -503,11 +521,38 @@ func parseGrammarAlts(arr []any) []*GrammarAltSpec {
 	return alts
 }
 
+// allStrings converts a []any whose elements are all strings to []string.
+// Returns false (and nil) when any element is not a string.
+func allStrings(arr []any) ([]string, bool) {
+	ss := make([]string, len(arr))
+	for i, el := range arr {
+		s, ok := el.(string)
+		if !ok {
+			return nil, false
+		}
+		ss[i] = s
+	}
+	return ss, true
+}
+
 // mapToGrammarAltSpec converts a parsed map to a GrammarAltSpec.
 func mapToGrammarAltSpec(m map[string]any) *GrammarAltSpec {
 	alt := &GrammarAltSpec{}
 	if v, ok := m["s"]; ok {
-		alt.S = v // string or []string ([]any of strings)
+		alt.S = v // string, or []string via the conversion below
+		// JSON delivers the array form as []any, which resolveTokenField
+		// and tokenFieldNames do not read — a serialized ["#Ta"] was
+		// silently dropped, leaving an alt that matches nothing. Convert
+		// an all-string array to the []string slot path (each element a
+		// slot; space-separated names within an element are alternatives
+		// for that slot, matching TS tinsify). Mixed or nested arrays
+		// are undeclared TS leniency and stay unconverted — see
+		// schema/README.md "Known emitter and runtime leniencies".
+		if arr, ok := v.([]any); ok {
+			if ss, all := allStrings(arr); all {
+				alt.S = ss
+			}
+		}
 	}
 	if v, ok := m["b"]; ok {
 		alt.B = v // int (float64 from parse) or FuncRef string
@@ -546,6 +591,14 @@ func mapToGrammarAltSpec(m map[string]any) *GrammarAltSpec {
 	}
 	if v, ok := m["g"].(string); ok {
 		alt.G = v
+	} else if arr, ok := m["g"].([]any); ok {
+		// TS accepts g as an array of tags (['a','b']); Go's normal form
+		// is the comma-separated string (mergeG / splitGroupTags), so
+		// join. Reading only the string form dropped the tags, and with
+		// them rule.include/exclude filtering for serialized grammars.
+		if ss, all := allStrings(arr); all {
+			alt.G = strings.Join(ss, ",")
+		}
 	}
 	return alt
 }

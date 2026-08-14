@@ -26,6 +26,7 @@
     "test-view": "open coverage/lcov-report/index.html",
     "watch": "tsc --build src test -w",
     "build": "tsc --build src test",
+    "gen-registry": "node tools/gen-error-codes.js",
     "diagrams": "docs-src/.vuepress/diagrams/generate.sh",
     "docs-dev": "vuepress dev docs-src",
     "docs-build": "vuepress build docs-src",

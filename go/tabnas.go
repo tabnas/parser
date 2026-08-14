@@ -10,6 +10,8 @@ package tabnas
 
 import (
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -38,7 +40,7 @@ var errorMessages = map[string]string{
 // Error hint templates matching TypeScript defaults (ts/src/defaults.ts).
 // Injected with StrInject like errorMessages.
 var defaultHints = map[string]string{
-	"unknown": "Unknown error code: {code}",
+	"unknown": "Unknown error code: {code}\nDetails:\n{details}",
 
 	"unexpected": "The character(s) {src} do not match any rule alternative active at\nthis position.",
 
@@ -279,6 +281,70 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 	return strings.Join(result, "\n")
 }
 
+// detailQuoteRE strips JSON string quotes for {details} injection, exactly
+// as TS does (ts/src/error.ts strinject): every quote preceded by a
+// non-quote character is dropped, so {"a":"b"} renders as {a:b}.
+var detailQuoteRE = regexp.MustCompile(`([^"])"`)
+
+// errInjectRef builds the StrInject reference bag used for EVERY error
+// template render — makeTabnasError and Parser.makeError must inject from
+// the same bag, or a placeholder only one of them supplies (as happened
+// with {details}) reaches the user raw from the other. It carries the
+// built-in location keys, the grammar's own `use` details (whose keys
+// override the built-ins — see makeTabnasError), and the rendered
+// {details} value.
+//
+// {details} (used by the "unknown" hint) renders the whole detail bag —
+// the merged `use` maps, TS's `details` parameter — the way TS errinject
+// renders an object injection (ts/src/error.ts strinject): JSON.stringify,
+// then strip every quote that follows a non-quote character. Set AFTER the
+// use merge, mirroring TS where the literal `details` key is spread last
+// and so wins over a use key of the same name. json.Marshal sorts map keys
+// where JSON.stringify preserves insertion order, and TS folds an extra
+// `state` key into its details on the bad-token path — residual,
+// non-contractual text differences (DIVERGENCE.md "Not divergences":
+// error message text).
+func errInjectRef(code, src string, pos, row, col int, use []map[string]any) map[string]any {
+	ref := map[string]any{
+		"code": code,
+		"src":  src,
+		"pos":  pos,
+		"row":  row,
+		"col":  col,
+	}
+	detailBag := map[string]any{}
+	for _, u := range use {
+		for k, v := range u {
+			ref[k] = v
+			detailBag[k] = v
+		}
+	}
+	if raw, jerr := json.Marshal(detailBag); jerr == nil {
+		ref["details"] = detailQuoteRE.ReplaceAllString(string(raw), "$1")
+	} else {
+		// Unmarshalable detail values (funcs, channels, NaN) — fall back
+		// to fmt, which at least names them; fmt sorts map keys too.
+		ref["details"] = fmt.Sprintf("%v", detailBag)
+	}
+	return ref
+}
+
+// hintFor selects the hint template for a code: the code's own entry, or
+// the "unknown" hint as the fallback for a code with no hint of its own —
+// TS behavior (ts/src/error.ts errdesc: cfg.hint[code] || ... ||
+// cfg.hint.unknown), whose {details} placeholder then names the
+// unrecognized code and shows the raised details. The package-default
+// guard mirrors the message-template fallback in makeTabnasError.
+func hintFor(hints map[string]string, code string) string {
+	if hint, ok := hints[code]; ok {
+		return hint
+	}
+	if hint, ok := hints["unknown"]; ok {
+		return hint
+	}
+	return defaultHints["unknown"]
+}
+
 // makeTabnasError creates a TabnasError with the proper Detail message.
 // Message and hint templates come from cfg (which merges Options.Error /
 // Options.Hint over the package defaults); cfg also supplies the colour
@@ -346,22 +412,12 @@ func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexCo
 	}
 
 	// Injection reference bag, matching the heuristic spirit of TS
-	// errinject: code, src, and location details.
-	ref := map[string]any{
-		"code": code,
-		"src":  src,
-		"pos":  pos,
-		"row":  row,
-		"col":  col,
-	}
-	for _, u := range use {
-		for k, v := range u {
-			ref[k] = v
-		}
-	}
+	// errinject: code, src, location details, the `use` bag, and the
+	// rendered {details} value (see errInjectRef).
+	ref := errInjectRef(code, src, pos, row, col, use)
 
 	je.Detail = StrInject(tmpl, ref)
-	if hint, ok := hints[code]; ok {
+	if hint := hintFor(hints, code); hint != "" {
 		je.Hint = StrInject(hint, ref)
 	}
 

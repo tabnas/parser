@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tabnas.dev/schema/grammar.schema.json",
+  "title": "Tabnas serialized grammar (GrammarSpec)",
+  "description": "The serialized, pure-JSON form of a Tabnas grammar: the GrammarSpec shape fed to tn.grammar() in TypeScript (ts/src/types.ts GrammarSpec/GrammarAltSpec) and to GrammarSpecFromJSON in Go (go/grammarspec.go). This schema models the PORTABLE JSON form only. The TS-side `ref` property (a map of @-refs to live functions) is deliberately absent: functions are not JSON-serialisable, so a serialized spec cannot carry one — it refers to engine builtins by their $-suffixed FuncRef names (e.g. '@node$') instead, and a caller that needs custom functions supplies a ref bag at load time, outside the serialized document. The Go-only GrammarSpec conveniences (OptionsMap, RuleOrder) are likewise not part of the portable form. Version gate: `v` declares the builtin config-schema version the grammar was compiled against; ABSENT means version 1, and an engine refuses a spec whose `v` exceeds the BUILTIN_SCHEMA_VERSION it implements (ts/src/builtins.ts, go/builtins.go — 3 at the time of writing). That ceiling is deliberately NOT encoded as a maximum here: the schema outlives engine versions, and the refusal is the engine's job.",
+  "type": "object",
+  "properties": {
+    "clear": {
+      "type": "boolean",
+      "description": "Wipe the instance before applying the rest of this spec: every rule and every fixed-token binding is removed, leaving the lexer matchers (which are not grammar) in place. Both runtimes compare against literal true — a non-boolean is not a clear request."
+    },
+    "v": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Builtin config-schema version this grammar was compiled against. Absent means version 1. The engine refuses a spec whose v exceeds the BUILTIN_SCHEMA_VERSION it implements; no maximum is declared here because that ceiling moves with the engine, not with this schema."
+    },
+    "options": {
+      "type": "object",
+      "description": "JSON-serializable options applied before the rules (TabnasOptions). Deliberately free-form: constraining the full TabnasOptions tree is out of scope for this schema. Function-valued option fields use @-prefixed FuncRef strings resolved by the engine."
+    },
+    "rule": {
+      "type": "object",
+      "description": "Per-rule alternate definitions, keyed by rule name. A null entry REMOVES that rule from the instance (the declarative form of tn.rule(name, null)); removing a rule that is not there is a no-op.",
+      "additionalProperties": { "$ref": "#/$defs/ruleSpec" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "funcRef": {
+      "type": "string",
+      "pattern": "^@",
+      "description": "A @-prefixed function reference, resolved by the engine: builtin refs end in '$' (e.g. '@node$'); anything else must be supplied in a ref bag at load time."
+    },
+    "ruleSpec": {
+      "description": "One rule's alternates, or null to remove the rule.",
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "open": { "$ref": "#/$defs/altsOrList" },
+            "close": { "$ref": "#/$defs/altsOrList" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "altsOrList": {
+      "description": "OPEN- or CLOSE-state alternates: either a plain array of alt objects, or an object carrying the alts plus inject operations controlling how they merge into existing alternates.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/alt" }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "alts": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/alt" }
+            },
+            "inject": { "$ref": "#/$defs/inject" }
+          },
+          "required": ["alts"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "inject": {
+      "type": "object",
+      "description": "How the alts merge into a rule's existing alternates (default: prepend).",
+      "properties": {
+        "append": {
+          "type": "boolean",
+          "description": "If true, append; if false or absent, prepend."
+        },
+        "clear": {
+          "type": "boolean",
+          "description": "If true, empty the rule's existing alternates before inserting, so a spec can replace a rule's open/close alternates outright."
+        },
+        "delete": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Indices of existing alternates to delete (negative indices count from the end)."
+        },
+        "move": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Pairs of indices: [from, to, from, to, ...]."
+        }
+      },
+      "additionalProperties": false
+    },
+    "alt": {
+      "type": "object",
+      "description": "A serialized alternate (TS GrammarAltSpec, ts/src/types.ts; Go GrammarAltSpec, go/grammarspec.go): like AltSpec, but function-valued fields use @-prefixed FuncRef strings.",
+      "properties": {
+        "s": {
+          "description": "Token sequence to match: a string of space-separated token names ('#KEY #CL'), or an array whose elements are per-position alternatives.",
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "b": {
+          "description": "Token push-back count, or a FuncRef computing it.",
+          "anyOf": [
+            { "$ref": "#/$defs/funcRef" },
+            { "type": "number" }
+          ]
+        },
+        "p": {
+          "description": "Push child rule: a rule name, or a FuncRef computing one.",
+          "anyOf": [
+            { "$ref": "#/$defs/funcRef" },
+            { "type": "string" }
+          ]
+        },
+        "r": {
+          "description": "Replace with sibling rule: a rule name, or a FuncRef computing one.",
+          "anyOf": [
+            { "$ref": "#/$defs/funcRef" },
+            { "type": "string" }
+          ]
+        },
+        "a": {
+          "description": "Action(s) on match: a FuncRef, or an array of FuncRefs run in order.",
+          "anyOf": [
+            { "$ref": "#/$defs/funcRef" },
+            { "type": "array", "items": { "$ref": "#/$defs/funcRef" } }
+          ]
+        },
+        "e": {
+          "description": "Error token generator.",
+          "$ref": "#/$defs/funcRef"
+        },
+        "h": {
+          "description": "Alternate modifier.",
+          "$ref": "#/$defs/funcRef"
+        },
+        "c": {
+          "description": "Match condition: a FuncRef, or a declarative condition object.",
+          "anyOf": [
+            { "$ref": "#/$defs/funcRef" },
+            { "type": "object" }
+          ]
+        },
+        "n": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" },
+          "description": "Counter increments, keyed by counter name. Integers are the contract: the TS runtime happens to tolerate floats, but the Go door truncates them (see schema/README.md, known leniencies)."
+        },
+        "u": {
+          "type": "object",
+          "description": "Custom data attached to the rule."
+        },
+        "k": {
+          "type": "object",
+          "description": "Custom data attached to the rule and propagated to child rules."
+        },
+        "g": {
+          "description": "Group tags: a comma-separated string or an array of tag strings.",
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

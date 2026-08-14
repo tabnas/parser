@@ -172,6 +172,16 @@ two runtimes rejecting the same input with different codes have agreed on
 nothing. Renaming or removing a base code is therefore a breaking change across
 every plugin in the fleet, in both runtimes — treat it as one.
 
+The machine-readable registry of these codes, with their message and hint
+templates, is [`schema/error-codes.json`](schema/error-codes.json): generated
+from the TS merged catalogues by `npm run gen-registry` (from `ts/`, script
+`ts/tools/gen-error-codes.js`) and staleness-checked in both runtimes' tests
+(`ts/test/schema.test.js`, `go/schema_test.go`) — see
+[`schema/README.md`](schema/README.md). Note that `end_of_source` is declared
+by both engines but currently raised by neither — declared-but-dead, recorded
+here rather than silently removed (a grammar may still raise it: the TS
+strict-JSON test fixture does, via `ctx.t0.err`, when `rule.finish` is off).
+
 ### Structured diagnostics
 
 Serializing a parse error — `JSON.stringify(err)` in TypeScript (via

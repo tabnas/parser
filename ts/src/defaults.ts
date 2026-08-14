@@ -312,7 +312,7 @@ This string has no end quote.`,
 This comment is never closed.`,
 
     unknown_rule: `
-No rule named $rulename is defined.`,
+No rule named {rulename} is defined.`,
 
     end_of_source: `
 Unexpected end of source.`,

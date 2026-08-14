@@ -618,16 +618,16 @@ func (p *Parser) makeError(code, src, fullSource string, pos, row, col int, use 
 	}
 	je := makeTabnasError(code, src, fullSource, pos, row, col, cfg, use...)
 	if p.Hints != nil {
-		if hint, ok := p.Hints[code]; ok {
-			ref := map[string]any{
-				"code": code, "src": src, "pos": pos, "row": row, "col": col,
-			}
-			for _, u := range use {
-				for k, v := range u {
-					ref[k] = v
-				}
-			}
-			je.Hint = StrInject(hint, ref)
+		// Re-render with the parser-level hints, using the SAME bag
+		// makeTabnasError injects from (errInjectRef) — this re-render
+		// used to build a bag without {details}, so every error raised
+		// through a real parse (this is the funnel Parser.startParse
+		// uses) shipped the raw placeholder even though the direct
+		// makeTabnasError path rendered it. Same fallback as hintFor:
+		// a code with no hint of its own gets the "unknown" hint (TS
+		// error.ts errdesc behavior).
+		if hint := hintFor(p.Hints, code); hint != "" {
+			je.Hint = StrInject(hint, errInjectRef(code, src, pos, row, col, use))
 		}
 	}
 	if p.ErrTag != "" {

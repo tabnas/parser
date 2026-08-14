@@ -64,6 +64,117 @@ func TestFromJSONRejectsMalformedVersion(t *testing.T) {
 	}
 }
 
+// loadJSONGrammar builds a default instance and applies a serialized
+// spec through the JSON door, failing the test on any load error.
+func loadJSONGrammar(t *testing.T, spec string) *Tabnas {
+	t.Helper()
+	gs, err := GrammarSpecFromJSON([]byte(spec))
+	if err != nil {
+		t.Fatalf("GrammarSpecFromJSON: %v (%s)", err, spec)
+	}
+	j := Make()
+	if err := j.Grammar(gs); err != nil {
+		t.Fatalf("Grammar: %v (%s)", err, spec)
+	}
+	return j
+}
+
+// expectVerdicts asserts accept/reject per input, naming the failing case.
+func expectVerdicts(t *testing.T, j *Tabnas, accept []string, reject []string) {
+	t.Helper()
+	for _, src := range accept {
+		if _, err := j.Parse(src); err != nil {
+			t.Errorf("%q should be accepted, got: %v", src, err)
+		}
+	}
+	for _, src := range reject {
+		if _, err := j.Parse(src); err == nil {
+			t.Errorf("%q should be rejected", src)
+		}
+	}
+}
+
+// A JSON null rule entry REMOVES the rule, exactly as the struct form
+// (Rule[name] = nil) and TS (`{"rule":{"other":null}}` → rule(name, null))
+// do. The door used to skip null entries, silently keeping the rule
+// installed. Mirrored by ts/test/serialized-grammar.test.js.
+func TestFromJSONRuleNullRemovesRule(t *testing.T) {
+	j := loadJSONGrammar(t, `{"clear":true,`+
+		`"options":{"rule":{"start":"top"}},`+
+		`"rule":{`+
+		`"top":{"open":[{"s":"#NR"},{"p":"other"}]},`+
+		`"other":{"open":[{"s":"#ST"}]}}}`)
+	expectVerdicts(t, j, []string{"42", `"s"`}, nil)
+
+	gs, err := GrammarSpecFromJSON([]byte(`{"rule":{"other":null}}`))
+	if err != nil {
+		t.Fatalf("GrammarSpecFromJSON: %v", err)
+	}
+	if err := j.Grammar(gs); err != nil {
+		t.Fatalf("Grammar: %v", err)
+	}
+
+	if _, ok := j.parser.RSM["other"]; ok {
+		t.Error(`rule "other" should have been removed by the null entry`)
+	}
+	// The push to the now-missing rule must fail the parse, as in TS
+	// (which raises unknown_rule for the same input).
+	if _, err := j.Parse(`"s"`); err == nil {
+		t.Error(`"s" should be rejected once rule "other" is removed`)
+	}
+}
+
+// The array form of `s` (["#NR #ST"]: each element a slot, space-separated
+// names alternatives within the slot) arrives from JSON as []any and was
+// dropped by resolveTokenField/tokenFieldNames — the alt then matched
+// nothing. Same serialized grammar must accept/reject identically in TS
+// (ts/test/serialized-grammar.test.js).
+func TestFromJSONArrayTokenSpec(t *testing.T) {
+	j := loadJSONGrammar(t, `{"clear":true,`+
+		`"options":{"rule":{"start":"top"}},`+
+		`"rule":{"top":{"open":[{"s":["#NR #ST"]}]}}}`)
+	expectVerdicts(t, j, []string{"42", `"s"`}, []string{"abc"})
+}
+
+// Array-form g (["custom","special"]) arrives as []any and was dropped —
+// and with it rule.include/exclude filtering for serialized grammars.
+// Mirrored by ts/test/serialized-grammar.test.js.
+func TestFromJSONArrayGroupTagsFilterable(t *testing.T) {
+	spec := `{"clear":true,` +
+		`"options":{"rule":{"start":"top"}},` +
+		`"rule":{"top":{"open":[` +
+		`{"s":["#NR"]},` +
+		`{"s":"#ST","g":["custom","special"]}]}}}`
+
+	// Without filtering, both alts are live.
+	expectVerdicts(t, loadJSONGrammar(t, spec), []string{"42", `"s"`}, nil)
+
+	// Excluding one of the array's tags must strip the tagged alt.
+	j := loadJSONGrammar(t, spec)
+	j.SetOptions(Options{Rule: &RuleOptions{Exclude: "special"}})
+	expectVerdicts(t, j, []string{"42"}, []string{`"s"`})
+}
+
+// inject {clear:true} empties the existing alternates before inserting —
+// TS honors it from pure JSON (rules.ts add(), mods.clear), so the door
+// must too. Mirrored by ts/test/serialized-grammar.test.js.
+func TestFromJSONInjectClearReplacesAlts(t *testing.T) {
+	j := loadJSONGrammar(t, `{"clear":true,`+
+		`"options":{"rule":{"start":"top"}},`+
+		`"rule":{"top":{"open":[{"s":"#NR"}]}}}`)
+	expectVerdicts(t, j, []string{"42"}, []string{`"s"`})
+
+	gs, err := GrammarSpecFromJSON([]byte(
+		`{"rule":{"top":{"open":{"alts":[{"s":"#ST"}],"inject":{"clear":true}}}}}`))
+	if err != nil {
+		t.Fatalf("GrammarSpecFromJSON: %v", err)
+	}
+	if err := j.Grammar(gs); err != nil {
+		t.Fatalf("Grammar: %v", err)
+	}
+	expectVerdicts(t, j, []string{`"s"`}, []string{"42"})
+}
+
 func TestFromJSONKeepsValidVersion(t *testing.T) {
 	// Absent means "current" and must stay 0, the engine's own sentinel.
 	gs, err := GrammarSpecFromJSON([]byte(`{}`))
