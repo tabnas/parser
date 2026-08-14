@@ -626,7 +626,6 @@ func TestObjectInsertionOrder(t *testing.T) {
 	}
 }
 
-
 // --- @fold$ (tail-repeat delivery) ---
 
 // The shape @tabnas/abnf emits for `X = NR [ PL X ]`: a same-depth

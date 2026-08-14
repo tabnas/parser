@@ -690,6 +690,8 @@ export type { ScanSpec, ScanOut } from './lexer'
 
 export type { BuiltinRef } from './builtins'
 
+export type { TabnasErrorJSON } from './error'
+
 export {
   VERSION,
   keyOrder,

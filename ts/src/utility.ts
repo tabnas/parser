@@ -1110,13 +1110,20 @@ function parserwrap(parser: any) {
               ),
             )
 
+          // One shared sentinel object: TabnasError.toJSON detects the
+          // no-rule sentinel by IDENTITY against ctx.NORULE, so the
+          // fabricated ctx must reference the same object as its `rule`
+          // (two distinct literals would leak 'no-rule' into the
+          // diagnostic's rule/ruleStack).
+          const norule = { name: 'no-rule' } as Rule
+
           throw new TabnasError(
             ex.code || 'json',
             ex.details || {
               msg: ex.message,
             },
             token,
-            {} as Rule,
+            norule,
 
             // TODO: this smells
             ex.ctx ||
@@ -1130,7 +1137,7 @@ function parserwrap(parser: any) {
               root: () => undefined,
               plgn: () => tabnas.internal().plugins,
               inst: () => tabnas,
-              rule: { name: 'no-rule' } as Rule,
+              rule: norule,
               sub: {},
               xs: -1,
               v2: token,
@@ -1145,7 +1152,7 @@ function parserwrap(parser: any) {
               log: meta ? meta.log : undefined,
               F: srcfmt(tabnas.internal().config),
               u: {},
-              NORULE: { name: 'no-rule' } as Rule,
+              NORULE: norule,
               NOTOKEN: { name: 'no-token' } as Token,
             } as unknown as Context),
           )

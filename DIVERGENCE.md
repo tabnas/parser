@@ -63,7 +63,43 @@ forms. Three of those were broken in Go until 0.8.4 and are now pinned.
 Error columns count UTF-16 units in TypeScript (an astral character is 2)
 and runes in Go (any character is 1). Forced by the scan unit — TS scans
 UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
-positions, never in parsed values.
+positions, never in parsed values. The `pos` field of the structured
+diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
+a 0-based offset in UTF-16 units (TS) versus runes (Go). The diagnostic's
+`len` deliberately counts Unicode code points OF THE TOKEN SOURCE, so the
+string-unit arithmetic never diverges; `len` can still differ where the
+two lexers cut different token SPANS (next entry).
+
+The same scan unit shows in the error token synthesized for an UNCLAIMED
+astral character (one no matcher can produce): both ports name it `#BD`
+with `len` 1, but its `src` is one UTF-16 unit in TS (a lone high
+surrogate) and one rune in Go (the whole character). Pinned with opposite
+assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
+`go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
+
+### Bad-token spans for invalid string escapes
+
+The two lexers cut a DIFFERENT bad token for the same invalid escape:
+TypeScript's string matcher reports the offending escape sequence itself,
+Go's reports the string from its opening quote up to the escape. Same
+error `code` — the contract holds — but the token source, and therefore
+the diagnostic's `len`/`pos`/`col`, diverge even for pure-ASCII input:
+
+| input | TypeScript | Go |
+|---|---|---|
+| `"\uZZZZ"` | code `invalid_unicode`, token src `\uZZZZ`, pos 1, col 2, len 6 | code `invalid_unicode`, token src `"\uZZZZ`, pos 0, col 1, len 7 |
+
+This is span metadata on an already-agreed failure, not a disagreement
+about the input's value: both ports reject the document with the same
+code, and no parsed value exists to differ. Aligning the spans would mean
+rewriting one lexer's error recovery to match the other's internal
+matcher structure, for display-only gain. Consumers should treat
+`len`/`pos`/`col` on bad-token errors as advisory and anchor on `code`
+(and `row`, which agrees).
+
+Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
+(`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
+spans on purpose, so changing either side fails loudly.
 
 ## Not divergences
 

@@ -90,4 +90,32 @@ describe('divergence', () => {
       'grammars rather than only for scannerless front-ends',
     )
   })
+
+  it('bad-escape token spans the ESCAPE here, quote-to-escape in Go', () => {
+    // DIVERGENCE.md: "Bad-token spans for invalid string escapes". This
+    // port's string matcher reports the offending escape sequence itself;
+    // Go reports the string from its opening quote up to the escape. Same
+    // code (the contract), different span — so the structured diagnostic's
+    // len/pos/col diverge on this path even for pure-ASCII input.
+    // go/divergence_test.go TestDivergenceBadEscapeSpanIncludesQuote
+    // asserts the OPPOSITE values on purpose.
+    const j = new Tabnas()
+    const lex = makeLex({
+      src: () => '"\\uZZZZ"',
+      cfg: j.internal().config,
+      opts: j.options,
+      sub: {},
+    })
+    const t = lex.next()
+    assert.equal(t.name, '#BD')
+    assert.equal(t.why, 'invalid_unicode', 'the code is shared — only the span diverges')
+    assert.equal(t.src, '\\uZZZZ', 'escape only — Go includes the opening quote')
+    assert.equal(t.sI, 1, 'pos: escape start — Go reports 0 (the quote)')
+    assert.equal(t.cI, 2, 'col: escape start — Go reports 1 (the quote)')
+    assert.equal(
+      Array.from(t.src).length,
+      6,
+      'diagnostic len (code points of token src) — Go reports 7',
+    )
+  })
 })

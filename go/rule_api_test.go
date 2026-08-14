@@ -484,9 +484,9 @@ func TestValidateAltDeclarativeParts(t *testing.T) {
 	// Unknown operator, unresolvable path root, unusable value, bad group tag.
 	problems := ValidateAlt(&AltSpec{
 		CD: map[string]any{
-			"zz.depth": CLt(3),                 // no such rule property
-			"n.ok":     CondOp{Op: "$bogus"},   // unknown operator
-			"d":        []int{1},               // unusable value type
+			"zz.depth": CLt(3),               // no such rule property
+			"n.ok":     CondOp{Op: "$bogus"}, // unknown operator
+			"d":        []int{1},             // unusable value type
 		},
 		G: "Bad Tag",
 	})

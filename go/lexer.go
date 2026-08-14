@@ -835,7 +835,11 @@ func (l *Lex) nextUnfiltered2(r *Rule) (*Token, bool) {
 	if !claimed {
 		bad := ""
 		if l.pnt.SI < len(l.Src) {
-			bad = string(l.Src[l.pnt.SI])
+			// Take the whole rune: indexing yields the first UTF-8
+			// BYTE, and string(byte) widens it to a mangled U+00xx
+			// character for any multi-byte (e.g. astral) input.
+			ch, _ := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
+			bad = string(ch)
 		}
 		tkn = &Token{
 			Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
@@ -897,10 +901,17 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			}
 			src := ""
 			if l.pnt.SI < len(l.Src) {
-				src = string(l.Src[l.pnt.SI])
+				// Take the whole rune: indexing yields the first UTF-8
+				// BYTE, and string(byte) widens it to a mangled U+00xx
+				// character for any multi-byte (e.g. astral) input.
+				ch, _ := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
+				src = string(ch)
 			}
 			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config)
-			l.attachErrContext(je, r, "#UK", "")
+			// The unclaimed position is reported as a #BD (bad) token,
+			// matching the #BD token TS synthesizes at the same point
+			// (ts/src/lexer.ts next; nextUnfiltered2 below does the same).
+			l.attachErrContext(je, r, "#BD", "")
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
 		}

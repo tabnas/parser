@@ -1,0 +1,30 @@
+input	diagnostic
+# Structured-diagnostic parity fixture: each row's input is parsed with the
+# strict-JSON grammar (ts/test/json-plugin.ts / go/jsonplugin_test.go) and
+# must fail; the diagnostic column is the JSON SUBSET of the serialized
+# error (TS JSON.stringify(err), Go json.Marshal(err)) that both runtimes
+# must emit byte-identically. message/hint/src/plugins/version are
+# deliberately not asserted (non-contractual text / harness-dependent).
+# len counts Unicode code points; expected is deduplicated and sorted.
+# Runners: ts/test/diagnostic.test.js, go/diagnostic_spec_test.go.
+{"a": }	{"code":"unexpected","row":1,"col":7,"pos":6,"len":1,"rule":"val","ruleStack":["val","map","pair","val"],"expected":["#NR","#OB","#OS","#ST","#TX","#VL"],"token":{"name":"#CB","src":"}"}}
+[1,2,]	{"code":"unexpected","row":1,"col":6,"pos":5,"len":1,"rule":"val","ruleStack":["val","list","elem","val"],"expected":["#NR","#OB","#OS","#ST","#TX","#VL"],"token":{"name":"#CS","src":"]"}}
+{"a":1 "b":2}	{"code":"unexpected","row":1,"col":8,"pos":7,"len":3,"rule":"pair","ruleStack":["val","map","pair"],"expected":["#CA","#CB"],"token":{"name":"#ST","src":"\"b\""}}
+{	{"code":"unexpected","row":1,"col":2,"pos":1,"len":0,"rule":"pair","ruleStack":["val","map","pair"],"expected":["#ST"],"token":{"name":"#ZZ","src":""}}
+"abc	{"code":"unterminated_string","row":1,"col":1,"pos":0,"len":4,"rule":"val","ruleStack":["val"],"expected":["#NR","#OB","#OS","#ST","#TX","#VL"],"token":{"name":"#BD","src":"\"abc"}}
+# Astral character INSIDE the failing token: len counts code points (4 for
+# the quoted key "b😀"), so both runtimes agree; pos/col count units before
+# the token, which are all BMP here, so they agree too.
+{"a":1 "b😀":2}	{"code":"unexpected","row":1,"col":8,"pos":7,"len":4,"rule":"pair","ruleStack":["val","map","pair"],"expected":["#CA","#CB"],"token":{"name":"#ST","src":"\"b😀\""}}
+# Error on line 2: row/pos advance across the newline (input col is
+# escaped: the loader turns \n into a real newline).
+{\n]	{"code":"unexpected","row":2,"col":1,"pos":2,"len":1,"rule":"pair","ruleStack":["val","map","pair"],"expected":["#ST"],"token":{"name":"#CS","src":"]"}}
+# Trailing content AFTER the root value completed: the root has popped, so
+# ctx.rsI has gone past zero — the stack is just the failing (root) rule,
+# never resurrected popped frames (TS slice(0, rsI) with a negative rsI
+# used to report ["val","map","val"] / ["val","list","val"] here).
+{"a":1}]	{"code":"unexpected","row":1,"col":8,"pos":7,"len":1,"rule":"val","ruleStack":["val"],"expected":["#ZZ"],"token":{"name":"#CS","src":"]"}}
+[1] 2	{"code":"unexpected","row":1,"col":5,"pos":4,"len":1,"rule":"val","ruleStack":["val"],"expected":["#ZZ"],"token":{"name":"#NR","src":"2"}}
+# Unclaimed character (no matcher can produce it under strict JSON): the
+# error token is #BD in both runtimes, spanning the full character.
+x	{"code":"unexpected","row":1,"col":1,"pos":0,"len":1,"rule":"val","ruleStack":["val"],"expected":["#NR","#OB","#OS","#ST","#TX","#VL"],"token":{"name":"#BD","src":"x"}}

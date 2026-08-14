@@ -234,7 +234,16 @@ class Parser {
       throw new TabnasError(S.unexpected, {}, buffered, norule, ctx)
     }
 
-    const endtry = lex.next(rule)
+    // Skip ignorable trivia (space/line/comment) exactly as the rule
+    // fetch loop does (rules.ts parse_alts): Go's Lex.Next skips them
+    // internally, and a trailing space is not trailing content — without
+    // this, a grammar whose rules consume everything before a trailing
+    // ignorable would report the ignorable itself as unexpected.
+    const IGNORE = this.cfg.tokenSetTins.IGNORE
+    let endtry = lex.next(rule)
+    while (IGNORE[endtry.tin]) {
+      endtry = lex.next(rule)
+    }
     if (bdtin === endtry.tin) {
       // A bad token in trailing content carries its own error code
       // (e.g. unterminated_string), matching the old badlex wrapper.
@@ -245,7 +254,11 @@ class Parser {
       throw new TabnasError(endtry.why || S.unexpected, details, endtry, rule, ctx)
     }
     if (endtkn.tin !== endtry.tin) {
-      throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)
+      // Raise with the trailing token just fetched — ctx.t0 is a stale
+      // NOTOKEN here (the lookahead buffer was empty, which is why the
+      // lexer was asked for more), and reporting it placed the error at
+      // 1:1 with an empty token instead of at the trailing content.
+      throw new TabnasError(S.unexpected, {}, endtry, norule, ctx)
     }
 
     // NOTE: by returning root, we get implicit closing of maps and lists.
