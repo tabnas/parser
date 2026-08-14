@@ -779,12 +779,15 @@ export type GrammarSpec = {
     open?: GrammarAltSpec[] |               // OPEN-state alternates (or alts + inject ops).
     {
       alts: GrammarAltSpec[],
-      inject: { append?: boolean, delete?: number[], move?: number[] }
+      // `clear` empties the rule's existing alternates before the new
+      // ones are injected (rules.ts add()), so a spec can replace a
+      // rule's open/close outright.
+      inject: { append?: boolean, clear?: boolean, delete?: number[], move?: number[] }
     }
     close?: GrammarAltSpec[] |              // CLOSE-state alternates (or alts + inject ops).
     {
       alts: GrammarAltSpec[],
-      inject: { append?: boolean, delete?: number[], move?: number[] }
+      inject: { append?: boolean, clear?: boolean, delete?: number[], move?: number[] }
     }
 
   }>

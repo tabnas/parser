@@ -1,0 +1,49 @@
+{
+  "$comment": "Generated from the engine's merged catalogues. Regenerate with: cd ts && npm run gen-registry (or node tools/gen-error-codes.js). CI fails on drift.",
+  "version": "0.8.7",
+  "codes": {
+    "unknown": {
+      "message": "unknown error: {code}",
+      "hint": "Unknown error code: {code}\nDetails:\n{details}"
+    },
+    "unexpected": {
+      "message": "unexpected character(s): {src}",
+      "hint": "The character(s) {src} do not match any rule alternative active at\nthis position."
+    },
+    "invalid_unicode": {
+      "message": "invalid unicode escape: {src}",
+      "hint": "The escape sequence {src} does not encode a valid unicode code point."
+    },
+    "invalid_ascii": {
+      "message": "invalid ascii escape: {src}",
+      "hint": "The escape sequence {src} does not encode a valid ASCII character."
+    },
+    "unprintable": {
+      "message": "unprintable character: {src}",
+      "hint": "The character {src} (code point below 32) is not allowed inside a\nstring literal."
+    },
+    "unterminated_string": {
+      "message": "unterminated string: {src}",
+      "hint": "This string has no end quote."
+    },
+    "unterminated_comment": {
+      "message": "unterminated comment: {src}",
+      "hint": "This comment is never closed."
+    },
+    "unknown_rule": {
+      "message": "unknown rule: {rulename}",
+      "hint": "No rule named {rulename} is defined."
+    },
+    "end_of_source": {
+      "message": "unexpected end of source",
+      "hint": "Unexpected end of source."
+    }
+  },
+  "goOnly": {
+    "internal": {
+      "$comment": "Go-only: raised when the Go engine recovers a panic from a plugin callback or matcher (go/parser.go, go/plugin.go). TypeScript has no counterpart (see AGENTS.md \"Error codes\"). Recorded verbatim from go/tabnas.go; go/schema_test.go keeps this literal honest.",
+      "message": "internal error: {src}",
+      "hint": "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input."
+    }
+  }
+}
