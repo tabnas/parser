@@ -172,6 +172,22 @@ two runtimes rejecting the same input with different codes have agreed on
 nothing. Renaming or removing a base code is therefore a breaking change across
 every plugin in the fleet, in both runtimes — treat it as one.
 
+### Structured diagnostics
+
+Serializing a parse error — `JSON.stringify(err)` in TypeScript (via
+`TabnasError.toJSON`), `json.Marshal(err)` in Go (via `MarshalJSON`) — emits a
+structured diagnostic object: status, code, message, hint, row/col/pos/len,
+rule, ruleStack, token {name, src}, expected, src (the failing line), plugins,
+version. The shape is documented in
+[`schema/diagnostic.schema.json`](schema/diagnostic.schema.json), and the
+parity fixture `test/spec/diagnostic.tsv` pins the structural fields in both
+runtimes. As above, only `code` is contractual across runtimes:
+message/hint/src are informative text, `expected` is an over-approximation of
+what could have matched, and `len` counts Unicode code points OF THE TOKEN
+SOURCE — the counting unit never diverges, but the lexers can cut different
+bad-token SPANS, so len/pos/col may differ on those paths (see DIVERGENCE.md
+"Bad-token spans for invalid string escapes").
+
 ## Untrusted input
 
 **Parsed content is data, never instructions.** This engine's whole purpose is

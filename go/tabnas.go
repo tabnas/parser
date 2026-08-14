@@ -9,8 +9,10 @@
 package tabnas
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // VERSION is this module's version. It MUST equal ts/package.json
@@ -79,6 +81,14 @@ type TabnasError struct {
 	tokenName  string      // Token name (e.g. "#BD") at the error
 	why        string      // Token why annotation, if any
 	plugins    []string    // Registered plugin names (for the internal suffix)
+
+	// Structured-diagnostic fields (MarshalJSON), populated by
+	// Parser.finishErr — the one funnel every parse-error path passes
+	// through with a Context in hand. Nil-safe: paths without a Context
+	// (empty source, internalError) leave them empty.
+	ruleStack []string // Rule names root-first incl. the failing rule; NoRule skipped by identity.
+	expected  []string // Sorted token names some alternate of the failing rule accepts next.
+	diagRule  string   // Failing rule name; "" when only the NoRule sentinel was available.
 }
 
 // Error returns a formatted error message matching the TypeScript TabnasError format:
@@ -356,4 +366,84 @@ func makeTabnasError(code, src, fullSource string, pos, row, col int, cfg *LexCo
 	}
 
 	return je
+}
+
+// MarshalJSON emits the structured diagnostic documented in
+// schema/diagnostic.schema.json, semantically identical to the TS
+// TabnasError.toJSON output. Only `code` is contractual across runtimes;
+// message/hint/src are informative text. Arrays are always emitted as []
+// (never null), and `len` counts Unicode code points of the token source.
+//
+// VALUE receiver on purpose: the method then belongs to the method set of
+// both TabnasError and *TabnasError, so json.Marshal emits the diagnostic
+// for values and pointers alike, and a nil *TabnasError still encodes as
+// null (encoding/json short-circuits the nil pointer before invoking the
+// method).
+func (e TabnasError) MarshalJSON() ([]byte, error) {
+	code := e.Code
+	if code == "" {
+		code = "unknown"
+	}
+
+	ruleStack := e.ruleStack
+	if ruleStack == nil {
+		ruleStack = []string{}
+	}
+	expected := e.expected
+	if expected == nil {
+		expected = []string{}
+	}
+	plugins := e.plugins
+	if plugins == nil {
+		plugins = []string{}
+	}
+
+	// The full source LINE containing the error: line row-1 of the
+	// source split on '\n', with one trailing '\r' stripped. "" when the
+	// row is invalid or the source is unavailable.
+	srcLine := ""
+	if e.fullSource != "" && e.Row >= 1 {
+		lines := strings.Split(e.fullSource, "\n")
+		if e.Row-1 < len(lines) {
+			srcLine = strings.TrimSuffix(lines[e.Row-1], "\r")
+		}
+	}
+
+	type tokenJSON struct {
+		Name string `json:"name"`
+		Src  string `json:"src"`
+	}
+	return json.Marshal(struct {
+		Status    string    `json:"status"`
+		Code      string    `json:"code"`
+		Message   string    `json:"message"`
+		Hint      string    `json:"hint"`
+		Row       int       `json:"row"`
+		Col       int       `json:"col"`
+		Pos       int       `json:"pos"`
+		Len       int       `json:"len"`
+		Rule      string    `json:"rule"`
+		RuleStack []string  `json:"ruleStack"`
+		Token     tokenJSON `json:"token"`
+		Expected  []string  `json:"expected"`
+		Src       string    `json:"src"`
+		Plugins   []string  `json:"plugins"`
+		Version   string    `json:"version"`
+	}{
+		Status:    "failure",
+		Code:      code,
+		Message:   e.Detail,
+		Hint:      e.Hint,
+		Row:       e.Row,
+		Col:       e.Col,
+		Pos:       e.Pos,
+		Len:       utf8.RuneCountInString(e.Src),
+		Rule:      e.diagRule,
+		RuleStack: ruleStack,
+		Token:     tokenJSON{Name: e.tokenName, Src: e.Src},
+		Expected:  expected,
+		Src:       srcLine,
+		Plugins:   plugins,
+		Version:   VERSION,
+	})
 }

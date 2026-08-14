@@ -11,7 +11,7 @@ import type {
   Token,
 } from './types'
 
-import { EMPTY, STRING } from './types'
+import { EMPTY, OPEN, STRING } from './types'
 import { makeToken, makePoint } from './lexer'
 import { assign, deep, entries, keys, escre, tokenize } from './utility'
 
@@ -27,8 +27,44 @@ const S = {
 }
 
 
+// Structured diagnostic shape emitted by TabnasError.toJSON (and by
+// json.Marshal on the Go TabnasError). Documented in
+// schema/diagnostic.schema.json; only `code` is contractual across
+// runtimes — message/hint/src are informative text.
+type TabnasErrorJSON = {
+  status: 'failure'
+  code: string
+  message: string
+  hint: string
+  row: number
+  col: number
+  pos: number
+  len: number
+  rule: string
+  ruleStack: string[]
+  token: { name: string; src: string }
+  expected: string[]
+  src: string
+  plugins: string[]
+  version: string
+}
+
+
 // Tabnas errors with nice formatting.
 class TabnasError extends SyntaxError {
+  // Assigned by `assign(this, desc)` below; declared (emit-free) so
+  // toJSON can read them under strict typing. errdesc has a catch path
+  // that returns {} (see below), so both may be undefined.
+  declare code?: string
+  declare txts?: () => { msg?: string; hint?: string; site?: string }
+
+  // Raw error materials, stashed non-enumerably by the constructor —
+  // errdesc's own `internal` is silently dropped today by the
+  // `{...Object.create(desc)}` spread (prototype props are not own
+  // props), and making it enumerable would change Object.keys and
+  // JSON output shape, and would let JSON.stringify recurse into ctx.
+  declare internal?: { token: Token; rule: Rule; ctx: Context }
+
   constructor(
     code: string,
     details: Record<string, any>,
@@ -40,6 +76,172 @@ class TabnasError extends SyntaxError {
     let desc = errdesc(code, details, token, rule, ctx)
     super(desc.message)
     assign(this, desc)
+    Object.defineProperty(this, 'internal', {
+      value: { token, rule, ctx },
+      enumerable: false,
+    })
+  }
+
+  // Structured diagnostic for JSON.stringify. Mirrors the Go
+  // TabnasError.MarshalJSON output (see schema/diagnostic.schema.json).
+  // Must never throw: errdesc can fail and return {} (its catch path),
+  // leaving code/txts undefined, and plugin code can construct errors
+  // with degenerate token/rule/ctx values — every read is guarded and
+  // the whole derivation is wrapped, falling back to inert defaults.
+  toJSON(): TabnasErrorJSON {
+    const out: TabnasErrorJSON = {
+      status: 'failure',
+      code: STRING === typeof this.code ? (this.code as string) : 'unknown',
+      message: EMPTY,
+      hint: EMPTY,
+      row: 1,
+      col: 1,
+      pos: 0,
+      len: 0,
+      rule: EMPTY,
+      ruleStack: [],
+      token: { name: EMPTY, src: EMPTY },
+      expected: [],
+      src: EMPTY,
+      plugins: [],
+      version: EMPTY,
+    }
+
+    try {
+      const txts = S.function === typeof this.txts ? this.txts!() : undefined
+
+      if (txts && 'string' === typeof txts.msg) {
+        out.message = txts.msg
+      }
+
+      // The hint is stored display-ready: errdesc indents every line by
+      // exactly two spaces. The diagnostic carries the raw text, so
+      // strip exactly that indent, then trim.
+      if (txts && 'string' === typeof txts.hint) {
+        out.hint = txts.hint
+          .split('\n')
+          .map((s: string) => (S.gap === s.substring(0, 2) ? s.substring(2) : s))
+          .join('\n')
+          .trim()
+      }
+    } catch (e) {
+      // Leave message/hint defaults.
+    }
+
+    try {
+      const internal = this.internal
+      const token: Token | undefined = internal?.token
+      const ctx: Context | undefined = internal?.ctx
+
+      if (null != token) {
+        // Clamp unset locations (sentinel tokens carry -1) the same way
+        // the Go error constructor does: rows and columns are 1-based
+        // and pos is a 0-based offset, so anything below those floors
+        // is "unknown", not a position.
+        out.row = 1 <= token.rI ? token.rI : 1
+        out.col = 1 <= token.cI ? token.cI : 1
+        out.pos = 0 <= token.sI ? token.sI : 0
+
+        // token.src is a prototype accessor (lazily materialized), so
+        // spreads and stringify miss it — read it explicitly.
+        const tsrc = STRING === typeof token.src ? token.src : EMPTY
+        // len counts Unicode code points (NOT token.len, which is
+        // UTF-16 units) so the counting unit never diverges between
+        // runtimes. The token SPAN itself can still differ where the
+        // lexers cut bad tokens differently — see DIVERGENCE.md
+        // "Bad-token spans for invalid string escapes".
+        out.len = Array.from(tsrc).length
+        out.token = {
+          name: STRING === typeof token.name ? token.name : EMPTY,
+          src: tsrc,
+        }
+      }
+
+      // The failing rule: prefer the raise-site rule; the parser sites
+      // that raise with the NORULE sentinel fall back to the context's
+      // current rule. If that is also the sentinel, the rule is unknown
+      // and the stack carries no tail. Sentinel detection is by IDENTITY
+      // first — a rule that IS ctx.NORULE is the sentinel whatever it is
+      // named (parserwrap fabricates one named 'no-rule') — with the
+      // name-'' test kept as the fallback for a missing NORULE; a
+      // degenerate rule without a string name (parserwrap passes
+      // `{} as Rule` as the raise-site rule) counts as the sentinel too.
+      const named = (r: Rule | undefined): boolean =>
+        null != r &&
+        r !== ctx?.NORULE &&
+        STRING === typeof r.name &&
+        EMPTY !== r.name
+      let failing: Rule | undefined = internal?.rule
+      if (!named(failing)) {
+        failing = ctx?.rule
+      }
+      if (!named(failing)) {
+        failing = undefined
+      }
+
+      if (null != failing) {
+        out.rule = failing.name
+      }
+
+      // Rule names root-first, including the failing rule. ctx.rs must
+      // be sliced to ctx.rsI — pops move the index without truncating —
+      // and sentinel entries are skipped. rsI goes NEGATIVE (-1) once
+      // the root rule pops (rules.ts pop: `ctx.rs[--ctx.rsI]`), and a
+      // negative slice end counts from the END of the array, which would
+      // resurrect stale popped frames — clamp to 0.
+      const stack: string[] = []
+      if (null != ctx && Array.isArray(ctx.rs) && 'number' === typeof ctx.rsI) {
+        for (const r of ctx.rs.slice(0, Math.max(0, ctx.rsI))) {
+          if (named(r)) {
+            stack.push(r.name)
+          }
+        }
+      }
+      if (null != failing) {
+        stack.push(failing.name)
+      }
+      out.ruleStack = stack
+
+      // Token names some alternate of the failing rule names at
+      // lookahead position 0 for the current state. Deduplicated and
+      // sorted so the two runtimes emit identical arrays (TS tcol
+      // insertion order vs Go alt order would otherwise diverge).
+      const tcol = failing?.spec?.def?.tcol
+      if (null != tcol && null != ctx?.cfg) {
+        const tins: number[] = tcol[OPEN === failing!.state ? 0 : 1]?.[0] ?? []
+        out.expected = [
+          ...new Set(tins.map((tin: number) => '' + tokenize(tin as any, ctx!.cfg))),
+        ].sort()
+      }
+
+      // The full source LINE containing the error.
+      const fullsrc = S.function === typeof ctx?.src ? ctx!.src() : undefined
+      if (STRING === typeof fullsrc) {
+        const line = (fullsrc as string).split('\n')[out.row - 1]
+        if (undefined !== line) {
+          out.src = line.endsWith('\r')
+            ? line.substring(0, line.length - 1)
+            : line
+        }
+      }
+
+      if (S.function === typeof ctx?.plgn) {
+        out.plugins = ctx!.plgn().map((p: any) => '' + p?.name)
+      }
+    } catch (e) {
+      // Leave location/rule/expected defaults.
+    }
+
+    try {
+      // Lazy read avoids a static import cycle: tabnas.ts imports
+      // TabnasError from this module at init; by the time toJSON runs
+      // the tabnas module (which owns VERSION) is fully loaded.
+      out.version = require('./tabnas').VERSION
+    } catch (e) {
+      // Leave version default.
+    }
+
+    return out
   }
 }
 
@@ -493,6 +695,10 @@ function snip(s: any, len: number = 5) {
   return undefined === s
     ? ''
     : ('' + s).substring(0, len).replace(/[\r\n\t]/g, '.')
+}
+
+export type {
+  TabnasErrorJSON,
 }
 
 export {

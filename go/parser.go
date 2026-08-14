@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -62,6 +63,13 @@ type Context struct {
 	// it is per-Context, so concurrent parses on one instance stay race-free.
 	tokenSetDyn bool
 	altSlots    map[*AltSpec][][]Tin
+
+	// parseErrDiag freezes the structured-diagnostic context (rule stack,
+	// failing rule, expected tokens) at the moment ctx.ParseErr is set —
+	// rule.Process keeps mutating RS/RSI and flips the rule state after
+	// recording the error, while the TS engine throws at the raise site,
+	// so finishErr must not read those fields live for grammar errors.
+	parseErrDiag *diagSnapshot
 }
 
 // altS returns the effective per-position Tin sets for an alt, re-resolving
@@ -419,7 +427,15 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		return nil, p.finishErr(p.makeError("unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI), ctx, meta, ctx.T0)
 	}
 	// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
+	// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
+	// rule argument to ctx.Rule — which would clobber the last REAL rule
+	// before finishErr reads it for the diagnostic (TS lex.next performs
+	// no such assignment, so its ctx.rule keeps the last processed rule).
+	// Save/restore rather than passing ctx.Rule so the lex call itself
+	// still sees NoRule, exactly as before.
+	curRule := ctx.Rule
 	endTkn := lex.Next(rule)
+	ctx.Rule = curRule
 	if endTkn.Tin != TinZZ {
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
@@ -475,7 +491,118 @@ func (p *Parser) finishErr(err error, ctx *Context, meta map[string]any, tkn *To
 		je.tokenName = tkn.Name
 		je.why = tkn.Why
 	}
+
+	// Structured-diagnostic fields (TabnasError.MarshalJSON). Grammar
+	// errors recorded via ctx.ParseErr snapshot their context at the
+	// moment the error is raised (rule.Process keeps running — pops,
+	// pushes and the state flip all happen after — while TS throws
+	// immediately at the raise site); everything else is captured live
+	// here, where the context has not moved since the error.
+	if ctx != nil && je.ruleStack == nil {
+		snap := ctx.parseErrDiag
+		if snap == nil {
+			snap = captureDiag(ctx)
+		}
+		je.ruleStack = snap.ruleStack
+		je.expected = snap.expected
+		je.diagRule = snap.rule
+	}
+
 	return je
+}
+
+// diagSnapshot freezes the structured-diagnostic view of a Context: the
+// rule stack root-first including the failing rule, the failing rule's
+// name, and the sorted expected-token names for its current state.
+type diagSnapshot struct {
+	ruleStack []string
+	rule      string
+	expected  []string
+}
+
+// captureDiag builds a diagSnapshot from the context AS IT IS NOW. Called
+// at the moment a grammar error is recorded (rule.go ctx.ParseErr sites),
+// and by finishErr as the live fallback for every other error path. The
+// rule stack is the names root-first including the failing rule; ctx.RS
+// must be cut at ctx.RSI (pops move the index without truncating) and the
+// NoRule sentinel is skipped by IDENTITY — its Name is "norule" and must
+// not leak into the stack.
+func captureDiag(ctx *Context) *diagSnapshot {
+	snap := &diagSnapshot{}
+
+	rsI := ctx.RSI
+	if rsI > len(ctx.RS) {
+		rsI = len(ctx.RS)
+	}
+	if rsI < 0 {
+		rsI = 0
+	}
+	stack := make([]string, 0, rsI+1)
+	for _, r := range ctx.RS[:rsI] {
+		if r != nil && r != NoRule {
+			stack = append(stack, r.Name)
+		}
+	}
+
+	failing := ctx.Rule
+	if failing == nil || failing == NoRule {
+		failing = nil
+	}
+	if failing != nil {
+		stack = append(stack, failing.Name)
+		snap.rule = failing.Name
+
+		// expected: token names some alternate of the failing rule
+		// names at lookahead position 0 for the current state —
+		// deduplicated and SORTED, so the emitted array is
+		// byte-identical to the TS tcol-derived one. Names resolve
+		// via the instance (ctx.Inst.TinName knows custom tokens;
+		// the package-level tinName does not).
+		if failing.Spec != nil {
+			alts := failing.Spec.OpenAlts()
+			if failing.State == CLOSE {
+				alts = failing.Spec.CloseAlts()
+			}
+			seen := map[string]bool{}
+			exp := []string{}
+			for _, alt := range alts {
+				if alt == nil {
+					continue
+				}
+				s := ctx.altS(alt)
+				if len(s) < 1 || len(s[0]) < 1 {
+					continue
+				}
+				for _, tin := range s[0] {
+					name := diagTinName(ctx, tin)
+					if !seen[name] {
+						seen[name] = true
+						exp = append(exp, name)
+					}
+				}
+			}
+			sort.Strings(exp)
+			snap.expected = exp
+		}
+	}
+	snap.ruleStack = stack
+	return snap
+}
+
+// diagTinName resolves a Tin to its name for the structured diagnostic.
+// The instance mapping knows custom tokens; without an instance, fall
+// back to the config's TinNames (the package-level tinName only knows
+// the fixed punctuation tins and answers #UK for everything else).
+func diagTinName(ctx *Context, tin Tin) string {
+	if ctx.Inst != nil {
+		return ctx.Inst.TinName(tin)
+	}
+	if ctx.Cfg != nil && ctx.Cfg.TinNames != nil {
+		if name, ok := ctx.Cfg.TinNames[tin]; ok {
+			return name
+		}
+	}
+	return tinName(tin)
 }
 
 // makeError creates a TabnasError using this parser's error messages.

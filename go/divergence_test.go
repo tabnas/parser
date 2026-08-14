@@ -29,6 +29,7 @@ package tabnas
 import (
 	"reflect"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestDivergenceAstralColumnIsOneRune pins: "Error columns count UTF-16
@@ -139,4 +140,40 @@ func hasField(v any, name string) bool {
 		}
 	}
 	return false
+}
+
+// TestDivergenceBadEscapeSpanIncludesQuote pins: "Bad-token spans for
+// invalid string escapes". This port's string matcher reports the string
+// from its opening quote up to the bad escape; TypeScript reports the
+// offending escape sequence itself. Same code (the contract), different
+// span — so the structured diagnostic's len/pos/col diverge on this path
+// even for pure-ASCII input. ts/test/divergence.test.js asserts the
+// OPPOSITE values on purpose.
+func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
+	j := Make(Options{})
+	lex := NewLex(`"\uZZZZ"`, j.Config())
+	lex.Next()
+
+	je, ok := lex.Err.(*TabnasError)
+	if !ok || je == nil {
+		t.Fatalf("expected a *TabnasError lex error, got %v", lex.Err)
+	}
+	if je.Code != "invalid_unicode" {
+		t.Errorf("code: got %q, want invalid_unicode (the code is shared — "+
+			"only the span diverges)", je.Code)
+	}
+	if je.Src != `"\uZZZZ` {
+		t.Errorf("token src: got %q, want quote-to-escape — TS reports the "+
+			"escape alone", je.Src)
+	}
+	if je.Pos != 0 {
+		t.Errorf("pos: got %d, want 0 (the quote) — TS reports 1", je.Pos)
+	}
+	if je.Col != 1 {
+		t.Errorf("col: got %d, want 1 (the quote) — TS reports 2", je.Col)
+	}
+	if n := utf8.RuneCountInString(je.Src); n != 7 {
+		t.Errorf("diagnostic len (code points of token src): got %d, want 7 "+
+			"— TS reports 6", n)
+	}
 }

@@ -1090,6 +1090,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// In TS, when alts exist but none match, out.e = ctx.t0 which triggers this.bad().
 	if alt == nil && len(alts) > 0 {
 		ctx.ParseErr = ctx.T0
+		ctx.parseErrDiag = captureDiag(ctx)
 		return next
 	}
 
@@ -1099,10 +1100,17 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	// Error check: if alt.E returns a token, signal a parse error.
+	// The diagnostic context is snapshotted HERE, not when the parser
+	// loop later builds the error: Process keeps running (counters,
+	// pushes, pops, the state flip) after this point, while the TS
+	// engine throws immediately at the raise site — reading RS/RSI and
+	// the rule state after Process returns reports the post-mutation
+	// world and diverges from TS.
 	if alt != nil && alt.E != nil {
 		errTkn := alt.E(r, ctx)
 		if errTkn != nil {
 			ctx.ParseErr = errTkn
+			ctx.parseErrDiag = captureDiag(ctx)
 		}
 	}
 
@@ -1331,6 +1339,7 @@ func markUnknownRule(ctx *Context, name string) {
 		Err: "unknown_rule",
 		Use: map[string]any{"rulename": name},
 	}
+	ctx.parseErrDiag = captureDiag(ctx)
 }
 
 func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context) (*AltSpec, bool) {

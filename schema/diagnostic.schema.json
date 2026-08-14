@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tabnas.dev/schema/diagnostic.schema.json",
+  "title": "Tabnas structured diagnostic",
+  "description": "The JSON shape emitted when a TabnasError is serialized: TS JSON.stringify(err) (via toJSON) and Go json.Marshal(err) (via MarshalJSON). Only `code` is contractual across runtimes; message, hint and src are informative text and not in parity (see DIVERGENCE.md 'Not divergences'). `expected` is an over-approximation of what could have matched. `len` counts Unicode code points OF THE TOKEN SOURCE, so its string-unit arithmetic never diverges between runtimes; the two lexers may still cut different token SPANS for bad tokens (DIVERGENCE.md 'Bad-token spans for invalid string escapes'), so len/pos/col can differ on those paths even for pure-ASCII input. `pos` and `col` additionally carry the recorded astral-character divergence: TypeScript counts UTF-16 units, Go counts runes (DIVERGENCE.md 'Column positions for astral characters').",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "const": "failure",
+      "description": "Always 'failure': a diagnostic is only emitted for a failed parse."
+    },
+    "code": {
+      "type": "string",
+      "description": "The error code (e.g. 'unexpected', 'unterminated_string'). THE ONLY CROSS-RUNTIME-CONTRACTUAL FIELD: fixtures pin codes, and the base codes are listed in AGENTS.md 'Error codes'."
+    },
+    "message": {
+      "type": "string",
+      "description": "The one-line rendered message (TS txts().msg, Go Detail) — NOT the multi-line frame that Error.message / Error() renders. Informative text, not in cross-runtime parity."
+    },
+    "hint": {
+      "type": "string",
+      "description": "The hint text, trimmed, without the 2-space display indent the rendered frame uses. Informative text, not in cross-runtime parity. Optional: a degenerate error (TS errdesc failure path) can lose it."
+    },
+    "row": {
+      "type": "integer",
+      "description": "1-based row (line) of the failing token. For rows containing astral characters before the error, column arithmetic differs per runtime (see top-level description)."
+    },
+    "col": {
+      "type": "integer",
+      "description": "1-based column of the failing token. TypeScript counts UTF-16 units, Go counts runes — divergent only when astral characters precede the token on its line."
+    },
+    "pos": {
+      "type": "integer",
+      "description": "0-based source position of the failing token. TypeScript counts UTF-16 units, Go counts runes — the same divergence class as col."
+    },
+    "len": {
+      "type": "integer",
+      "description": "Length of the failing token's source text in Unicode code points (deliberately NOT UTF-16 units), so the counting unit never diverges between runtimes. The token SPAN itself can differ where the lexers cut bad tokens differently (DIVERGENCE.md 'Bad-token spans for invalid string escapes'). 0 when there is no token source."
+    },
+    "rule": {
+      "type": "string",
+      "description": "The failing rule's name; '' when only the no-rule sentinel was available."
+    },
+    "ruleStack": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Rule names root-first, including the failing rule as the last entry; sentinel (no-rule) entries are skipped. Empty when the failure happened outside any rule."
+    },
+    "token": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Failing token's name (e.g. '#ST', '#BD', '#ZZ')."
+        },
+        "src": {
+          "type": "string",
+          "description": "Failing token's raw source text."
+        }
+      },
+      "required": ["name", "src"],
+      "additionalProperties": false,
+      "description": "The token the parse failed on."
+    },
+    "expected": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tokens some alternate of the failing rule names at this position (lookahead position 0 for the rule's current state), deduplicated and sorted ascending. An over-approximation — conditions/counters may still reject them; empty means no token constraint was recorded, not that nothing can match."
+    },
+    "src": {
+      "type": "string",
+      "description": "The full source LINE containing the error (line `row` of the source, trailing carriage return stripped); '' when the row is invalid or the source is unavailable. Informative text, not in cross-runtime parity."
+    },
+    "plugins": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of all registered plugins in registration order. Deliberately a list, not a single 'plugin' field: the engine cannot honestly attribute an error code to one package."
+    },
+    "version": {
+      "type": "string",
+      "description": "The engine version (equals the package version of the runtime that produced the diagnostic)."
+    }
+  },
+  "required": [
+    "status",
+    "code",
+    "message",
+    "row",
+    "col",
+    "pos",
+    "len",
+    "rule",
+    "ruleStack",
+    "token",
+    "expected",
+    "src",
+    "plugins",
+    "version"
+  ],
+  "additionalProperties": false
+}
