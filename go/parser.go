@@ -613,8 +613,19 @@ func diagTinName(ctx *Context, tin Tin) string {
 func (p *Parser) makeError(code, src, fullSource string, pos, row, col int, use ...map[string]any) *TabnasError {
 	cfg := p.Config
 	if cfg != nil && p.ErrorMessages != nil {
-		// Aliased in NewParser/Make; this guards direct field assignment.
-		cfg.ErrorMessages = p.ErrorMessages
+		// Parser-level ErrorMessages override the config's (they are aliased in
+		// NewParser/Make, but a caller may reassign p.ErrorMessages directly).
+		// Apply the override on a SHALLOW COPY of the config rather than writing
+		// it back into the shared *LexConfig: makeError is the funnel for every
+		// failing parse, and one instance's Config is shared across concurrent
+		// parses (Tabnas.Parse reuses j.parser), so the in-place write was a
+		// data race — two goroutines writing cfg.ErrorMessages at once — even
+		// though it usually re-assigned the already-aliased map. makeTabnasError
+		// only reads values out of cfg and never retains the pointer, so a
+		// per-error copy is safe and behaviourally identical.
+		c := *cfg
+		c.ErrorMessages = p.ErrorMessages
+		cfg = &c
 	}
 	je := makeTabnasError(code, src, fullSource, pos, row, col, cfg, use...)
 	if p.Hints != nil {
