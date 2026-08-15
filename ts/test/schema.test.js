@@ -182,6 +182,23 @@ describe('schema', function () {
       'json-builder.fixture.json should satisfy grammar.schema.json')
   })
 
+  // The two grammars the engine's own probe/eager tests load were CAPTURED
+  // from @tabnas/abnf, so they are the fleet's only committed samples of a
+  // real front-end's serialized output. Walking them is what would have
+  // caught abnf emitting an `m` key the schema forbids: this test used to
+  // walk only json-builder.fixture.json, which is hand-written and never
+  // had one.
+  it('captured-abnf-grammars-pass-walk', () => {
+    const schema = loadSchema()
+    for (const name of ['probe-grammar.fixture.json', 'eager-literal.fixture.json']) {
+      const spec = JSON.parse(Fs.readFileSync(Path.join(__dirname, name), 'utf8'))
+      const errs = walk(spec, schema, schema)
+      assert.deepStrictEqual(errs, [],
+        `${name} should satisfy grammar.schema.json — a captured grammar ` +
+        'that fails it means a front-end is emitting keys the engine rejects')
+    }
+  })
+
   it('inject-and-null-rule-forms-pass-walk', () => {
     // The alts+inject object form (including the now-declared `clear`)
     // and a null rule entry (rule removal) are valid serialized shapes —
