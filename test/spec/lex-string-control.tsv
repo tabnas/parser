@@ -11,3 +11,5 @@ false	`x\ny`	#ST:x\ny
 true	`x\ny`	#ST:x\ny
 false	"xy"	#ST:xy
 true	"xy"	#ST:xy
+false	"\xZZ"	ERROR:invalid_ascii
+true	"\xZZ"	ERROR:invalid_ascii
