@@ -44,6 +44,14 @@ type Context struct {
 	RuleSubs []RuleSub            // Rule event subscribers (TS: sub.rule).
 	ParseErr *Token               // Error token; when set, halts the parse.
 
+	// Errors recorded during this parse (TS: ctx.errs). Appended at
+	// each error's CONSTRUCTION site, so the error returned by Parse is
+	// also the last entry. Distinct from ParseErr, which is the
+	// grammar-facing error TOKEN that halts the parse and stays a
+	// single slot (documented plugin API — see doc/plugins.md).
+	// Groundwork for opt-in multi-error recovery.
+	Errs []*TabnasError
+
 	Opts    *Options         // Tabnas instance options (TS: opts).
 	Cfg     *LexConfig       // Tabnas instance config (TS: cfg).
 	Src     string           // Source text being parsed (TS: src).
@@ -287,10 +295,19 @@ func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ru
 // matchers, or engine bugs) into an "internal" TabnasError, upholding the
 // package guarantee that parsing never panics, whatever the input.
 func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
+	// Bound to the parse context as soon as one exists, so a panic
+	// raised after that point (plugin action, custom matcher, engine
+	// bug) still records into ctx.Errs. Without it a subscriber that
+	// captured the context sees an empty Errs while Parse returns an
+	// error, breaking the invariant that the returned error is the last
+	// entry. recordErr is nil-safe, so a panic raised before the
+	// context is built needs no extra guard.
+	var pctx *Context
 	defer func() {
 		if r := recover(); r != nil {
 			result = nil
-			err = p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1)
+			err = pctx.recordErr(
+				p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1))
 		}
 	}()
 
@@ -338,6 +355,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 	lex.Ctx = ctx
 	ctx.Lex = lex
+	pctx = ctx
 
 	startName := p.Config.RuleStart
 	if startName == "" {
@@ -405,7 +423,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// applied over the already-rendered text: a detail whose name
 			// collides with a location key (csv's {row}) would otherwise find
 			// its placeholder already consumed.
-			je := p.makeError(code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
+			je := p.makeErrorIn(ctx, code, tkn.Src, src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
 			return nil, p.finishErr(je, ctx, meta, tkn)
 		}
 
@@ -424,7 +442,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
-		return nil, p.finishErr(p.makeError("unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI), ctx, meta, ctx.T0)
+		return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI), ctx, meta, ctx.T0)
 	}
 	// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
 	// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
@@ -440,7 +458,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
-		return nil, p.finishErr(p.makeError("unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
+		return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
 	}
 	// Check lexer errors from that final Next() call.
 	if lex.Err != nil {
@@ -462,7 +480,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	if len(p.Config.ResultFail) > 0 {
 		for _, fail := range p.Config.ResultFail {
 			if resRule.Node == fail {
-				return nil, p.finishErr(p.makeError("unexpected", "", src, 0, 1, 1), ctx, meta, nil)
+				return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", "", src, 0, 1, 1), ctx, meta, nil)
 			}
 		}
 	}
@@ -610,6 +628,26 @@ func diagTinName(ctx *Context, tin Tin) string {
 // the config when set directly; normally they alias the config values.
 // The optional `use` bag is a grammar's own error details; see
 // makeTabnasError for why its keys override the built-in location keys.
+// recordErr appends an error to the per-parse list and returns it, so
+// call sites can wrap construction in place. The receiver is
+// deliberately nil-safe: a Lex built without a Context (NewLex) has no
+// list to record into, and recording must never be the thing that
+// breaks a parse.
+func (ctx *Context) recordErr(je *TabnasError) *TabnasError {
+	if ctx != nil && je != nil {
+		ctx.Errs = append(ctx.Errs, je)
+	}
+	return je
+}
+
+// makeErrorIn is makeError plus recording on the parse context.
+func (p *Parser) makeErrorIn(
+	ctx *Context, code, src, fullSource string, pos, row, col int,
+	use ...map[string]any,
+) *TabnasError {
+	return ctx.recordErr(p.makeError(code, src, fullSource, pos, row, col, use...))
+}
+
 func (p *Parser) makeError(code, src, fullSource string, pos, row, col int, use ...map[string]any) *TabnasError {
 	cfg := p.Config
 	if cfg != nil && p.ErrorMessages != nil {

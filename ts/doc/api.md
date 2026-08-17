@@ -89,10 +89,27 @@ completion empty exactly where an editor asks for it. The set is
 captured at each end-of-source fetch, while the rule stack is still
 live, at the lookahead position actually being read; captures
 accumulate, because the first can belong to an alternate that is later
-rejected. A finished document reports `['#ZZ']` — precisely "only the
-end may follow". An empty document reports the start rule's openers
-(with `lex.empty` enabled it parses without ever running a lexer, so
-there is no event to capture).
+rejected. `#ZZ` is then added unconditionally: the prefix parsed, so
+stopping here is legal — and the close rule may have consumed an end
+token that an earlier alternate had already buffered, which fires no
+second lexer event to capture. A finished document reports `['#ZZ']` —
+precisely "only the end may follow". An empty capture means the same
+thing and is returned as such; only a document that produced no
+end-of-source event at all (an empty source with `lex.empty` enabled
+parses without ever running a lexer) falls back to the start rule's
+openers.
+
+Because `#ZZ` is a sentinel rather than something a user types, a
+completion provider should drop it from the item list and read it as
+"the document is valid as it stands".
+
+Two cases are deliberately silent. An alternate that stopped matching
+*before* the queried position contributes nothing — its next token
+would have to replace something already typed rather than follow it.
+Neither does an alternate whose backtrack uses the function form
+(`b: (rule, ctx, alt) => n`): that resolves only while the alternate is
+being matched, so the handover point is unknown here, and a missing
+completion beats a wrong one.
 
 Over-approximation caveat: conditions and counters may still reject a
 listed token. Runs on a lazily-created fail-fast sibling, so it works

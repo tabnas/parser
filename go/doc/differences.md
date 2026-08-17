@@ -541,20 +541,31 @@ has none. Go therefore records declaration order explicitly:
   `GrammarText` fills it in automatically from the source text's key
   order, so text grammars need not supply it.
 
-## Per-parse error list (`ctx.errs`) — TS only, Go parity pending
+## Per-parse error list — `ctx.errs` (TS) / `ctx.Errs` (Go)
 
-TS `Context` carries `errs: TabnasError[]`, a per-parse error list.
-Every `TabnasError` records itself there at construction, so after a
-fail-fast parse the thrown error is also `errs[errs.length-1]`; a clean
-parse leaves it empty. This is groundwork for opt-in multi-error
-recovery (`ts/doc/lsp-feasibility.md`) and is pinned by
-`ts/test/errs.test.js`.
+Both runtimes carry a per-parse error list, appended at each error's
+CONSTRUCTION site, so the error the parse reports is also the last
+entry; a clean parse leaves it empty and every parse starts fresh.
+Pinned by `ts/test/errs.test.js` and `go/errs_test.go`.
 
-Go's `Context` has no equivalent yet — `ctx.ParseErr` remains a single
-error. The Go port is scheduled with the rest of the recovery work
-(unified-LSP plan, phase P2); until then this is a deliberate,
-TS-only surface with no behavioural effect on either runtime's
-fail-fast parse results.
+The shapes differ because the error channels do:
+
+| | TypeScript | Go |
+|---|---|---|
+| Field | `ctx.errs: TabnasError[]` | `ctx.Errs []*TabnasError` |
+| Recorded by | the `TabnasError` constructor, so every raise site — engine or plugin — records for free | `ctx.recordErr`, called at each engine construction site (`makeErrorIn`, plus the two `Lex.Next` raises and the deferred relex raise) |
+| Guard | `try/catch` — a frozen array must not mask the error | a nil-safe receiver — a `Lex` built without a `Context` has no list |
+
+`ctx.ParseErr` is unchanged and remains the grammar-facing error TOKEN
+that halts the parse (documented in `doc/plugins.md`): it is a single
+slot with set-once semantics that in-engine consumers and ~20 sibling
+grammar repos rely on. `Errs` is additive and never replaces it.
+
+One gap, deliberate: Go rejects an empty source in `parseInternal`
+before any `Context` exists, so that one error cannot be recorded
+(TS records it). It is unobservable today — no `Context` is reachable
+— but the Go equivalent of TS's `{ value, errors }` result must
+synthesize a one-element list there.
 
 ## Error recovery (`options.parse.recover`) — TS only, Go parity pending
 
