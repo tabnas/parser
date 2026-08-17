@@ -928,7 +928,33 @@ function acceptsClose(spec: RuleSpec, tin: Tin, groups: string[], sig: string): 
 // state has an empty-s catch-all alternate (it can close on anything),
 // the parent's close continuations are legal here too. Powers
 // tn.continuations() (completion in the unified-LSP design).
-function continuationTins(ctx: Context, rule: Rule): Tin[] {
+
+// How many leading positions of an alternate match the currently
+// buffered lookahead. Used by the continuation computation to decide
+// whether an alternate is FULLY matched (and so its push/replace
+// target's opening tokens are legal at this position).
+function altMatchDepth(alt: NormAltSpec, ctx: Context): number {
+  const aN = alt.sN | 0
+  const tbuf = ctx.t
+  const NOTOKEN = ctx.NOTOKEN
+  const bitAA = 1 << (ctx.cfg.t.AA - 1)
+  let k = 0
+  while (k < aN) {
+    const tk = tbuf[k]
+    if (null == tk || NOTOKEN === tk) break
+    const Sk = alt.S ? alt.S[k] : null
+    if (null != Sk) {
+      const tin = tk.tin
+      const part = (tin / 31) | 0
+      const aaBit = 0 === part ? bitAA : 0
+      if (0 === (Sk[part] & ((1 << ((tin % 31) - 1)) | aaBit))) break
+    }
+    k++
+  }
+  return k
+}
+
+function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
   const out = new Set<Tin>()
   if (null == rule || null == ctx || rule === ctx.NORULE) return []
 
@@ -941,7 +967,11 @@ function continuationTins(ctx: Context, rule: Rule): Tin[] {
   } else {
     const stateI = OPEN === rule.state ? 0 : 1
     const tcol = (rule.spec as any).def?.tcol
-    const at: Tin[] = tcol?.[stateI]?.[0] ?? []
+    // atPos is the lookahead position actually being fetched: a rule
+    // peeking at position 1 (having matched position 0) must be asked
+    // what is legal THERE, not at the start of its alternates.
+    const pI = null == atPos ? 0 : atPos
+    const at: Tin[] = tcol?.[stateI]?.[pI] ?? tcol?.[stateI]?.[0] ?? []
     for (const t of at) out.add(t)
   }
 
@@ -958,6 +988,44 @@ function continuationTins(ctx: Context, rule: Rule): Tin[] {
     const pAt: Tin[] = ptcol?.[1]?.[0] ?? []
     for (const t of pAt) out.add(t)
     r = parent
+  }
+
+  // Push/replace closure. An alternate whose token sequence is FULLY
+  // matched at this position is about to push (or become) another
+  // rule, so that rule's opening tokens are legal here too — this is
+  // what makes `[1,` offer the next element's value starters rather
+  // than only the closers its own close alternates name. Alternates
+  // that are only partially matched are deliberately excluded: they
+  // still require their own next token first (`{"a"` wants `:`, not
+  // a value).
+  const opened = new Set<string>()
+  const addOpeners = (name: string | null | false | 0 | undefined) => {
+    if (null == name || false === name || 0 === name) return
+    const rn = String(name)
+    if ('' === rn || opened.has(rn)) return
+    opened.add(rn)
+    const spec: any = ctx.rsm[rn]
+    if (null == spec) return
+    const openTins: Tin[] = spec.def?.tcol?.[0]?.[0] ?? []
+    for (const t of openTins) out.add(t)
+    // A rule that opens with an empty-sequence alternate immediately
+    // hands over to its own target: follow that through.
+    for (const a of (spec.def?.open ?? []) as NormAltSpec[]) {
+      if (0 === (a.sN | 0)) {
+        addOpeners(a.p as any)
+        addOpeners(a.r as any)
+      }
+    }
+  }
+
+  const stateAlts = (OPEN === rule.state
+    ? (rule.spec as any).def?.open
+    : (rule.spec as any).def?.close) as NormAltSpec[] | undefined
+  for (const a of stateAlts ?? []) {
+    if (altMatchDepth(a, ctx) === (a.sN | 0)) {
+      addOpeners(a.p as any)
+      addOpeners(a.r as any)
+    }
   }
 
   return [...out].sort((a, b) => a - b)

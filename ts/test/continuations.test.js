@@ -34,8 +34,29 @@ describe('continuations', () => {
     assert.ok(t.includes('#CS'), 'parent ] via pop-closure: ' + t)
   })
 
-  it('a complete prefix has no continuations', () => {
-    assert.deepStrictEqual(tn.continuations('{"a":1}').tokens, [])
+  it('a complete prefix offers only end-of-source', () => {
+    // A finished document can still be *continued* only by ending: the
+    // set is computed at the end-of-source fetch, so it is precise
+    // rather than empty.
+    assert.deepStrictEqual(tn.continuations('{"a":1}').tokens, ['#ZZ'])
+  })
+
+  it('answers for prefixes that parse successfully', () => {
+    // Permissive grammars parse most mid-edit prefixes (jsonic reads
+    // `{a:` as an implicit null). Reporting nothing for a successful
+    // parse would leave completion empty exactly where an editor asks
+    // for it, so the set is captured at end-of-source instead.
+    const afterColon = tn.continuations('{"a":').tokens
+    assert.ok(afterColon.includes('#NR'), 'value starters offered: ' + afterColon)
+    assert.ok(afterColon.includes('#ST'), 'value starters offered: ' + afterColon)
+  })
+
+  it('offers the next element after a separator (push closure)', () => {
+    // `[1,` has fully matched the separator alternate, so the element
+    // rule it pushes contributes its opening tokens here.
+    const t = tn.continuations('[1,').tokens
+    assert.ok(t.includes('#NR'), 'next element starters: ' + t)
+    assert.ok(t.includes('#CS'), 'and the list closer: ' + t)
   })
 
   it('uses a fail-fast sibling even when recovery is on', () => {

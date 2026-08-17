@@ -213,6 +213,9 @@ class Tabnas {
   #continst?: Tabnas
   #continstGen = -1
   #gen = 0
+  // Continuation set captured at end-of-source by the sibling's
+  // permanent lex subscriber (see continuations()).
+  #contAtEnd = null as Tin[] | null
 
   // Static utility / constants for plugin code that holds the class.
   static util = util      // Shared utility bag.
@@ -513,10 +516,57 @@ class Tabnas {
         }
       }
       if (transplanted) sibParser.norm()
+
+      // Permissive grammars (jsonic and friends) PARSE most mid-edit
+      // prefixes — `{a:` is a complete document with an implicit null,
+      // `[1,` a list with a trailing comma. Reporting nothing for a
+      // successful parse would leave completion empty exactly where an
+      // editor asks for it. So capture the continuation set at the
+      // moment the lexer reaches end-of-source, while the rule stack is
+      // still live (after the parse returns it has unwound).
+      //
+      // One permanent subscriber, installed once with the sibling: the
+      // engine has no unsubscribe, and a per-parse subscription would
+      // mutate the instance's shared list.
+      const ZZ = sib.token('#ZZ')
+      sib.sub({
+        lex: (tkn: Token, rule: Rule, ctx: Context) => {
+          // FIRST end-of-source fetch only: the engine re-serves the
+          // pinned end token as each open rule unwinds, and those later
+          // fetches see a stack that has already closed past the
+          // interesting point. `rule` is the rule that ASKED for the
+          // token — exactly the one whose alternates say what could
+          // have appeared here instead of the end.
+          if (ZZ === tkn.tin && null == this.#contAtEnd) {
+            try {
+              // Lookahead position being fetched: the count of slots
+              // already filled in the buffer. A rule that matched a
+              // separator and is peeking past it must be asked what is
+              // legal at THAT position.
+              let pos = 0
+              const buf = ctx.t
+              const NOTOKEN = ctx.NOTOKEN
+              while (
+                pos < buf.length &&
+                null != buf[pos] &&
+                NOTOKEN !== buf[pos]
+              ) {
+                pos++
+              }
+              this.#contAtEnd = continuationTins(ctx, rule, pos)
+            } catch (e) {
+              this.#contAtEnd = null
+            }
+          }
+        },
+      })
+
       this.#continst = sib
       this.#continstGen = this.#gen
     }
     const inst = this.#continst
+
+    this.#contAtEnd = null
 
     let err: any = undefined
     try {
@@ -526,7 +576,18 @@ class Tabnas {
       else throw e
     }
 
-    if (null == err) return { tins: [], tokens: [] }
+    // The prefix parsed: answer with what the grammar could still have
+    // accepted at end-of-source, captured while the stack was live.
+    if (null == err) {
+      // Annotated read: the write happens inside the lex subscriber,
+      // which TypeScript cannot see from here.
+      const atEnd = this.#contAtEnd as Tin[] | null
+      if (null != atEnd && 0 < atEnd.length) {
+        const tins = [...atEnd].sort((a: Tin, b: Tin) => a - b)
+        return { tins, tokens: tins.map((tin: Tin) => String(inst.token(tin))) }
+      }
+      return { tins: [], tokens: [] }
+    }
 
     const ctx = err.internal?.ctx
     let rule = err.internal?.rule ?? ctx?.rule
