@@ -28,14 +28,32 @@ function make(relex, rules) {
   return j
 }
 
-// Position-keyed last-write-wins reconstruction of the token stream.
+// Reconstruction per the documented contract: newest event wins per
+// position, and each kept token's span shadows older events inside
+// [sI, sI + len).
 function reconstruct(j) {
-  const byPos = new Map()
+  const events = []
   j.sub({
     lex: (tkn) => {
-      if (0 <= tkn.sI) byPos.set(tkn.sI, tkn)
+      if (0 <= tkn.sI) events.push(tkn)
     },
   })
+  const byPos = new Map()
+  byPos.finish = () => {
+    const out = new Map()
+    for (let i = events.length - 1; 0 <= i; i--) {
+      const t = events[i]
+      let shadowed = false
+      for (const kept of out.values()) {
+        if (kept.sI <= t.sI && t.sI < kept.sI + Math.max(1, kept.len)) {
+          shadowed = true
+          break
+        }
+      }
+      if (!shadowed && !out.has(t.sI)) out.set(t.sI, t)
+    }
+    return out
+  }
   return byPos
 }
 
@@ -58,13 +76,17 @@ describe('lexevents', () => {
     const LONG = j.token('#LONG')
     const byPos = reconstruct(j)
     j.parse('ab')
-    const at0 = byPos.get(0)
+    const final = byPos.finish()
+    const at0 = final.get(0)
     assert.ok(at0, 'token recorded at position 0')
     assert.equal(
       at0.tin,
       LONG,
       'restored #LONG wins over the abandoned #SHORT recut',
     )
+    // Span shadowing: the stale event fired at position 1 during the
+    // abandoned speculation is covered by the restored #LONG's span.
+    assert.equal(undefined, final.get(1), 'interior stale event shadowed')
   })
 
   it('a committed recut stays the latest event at its position', () => {
@@ -81,10 +103,11 @@ describe('lexevents', () => {
     }
     const j = make(true, RULES)
     const SHORT = j.token('#SHORT')
+    const TB = j.token('#TB')
     const byPos = reconstruct(j)
     j.parse('ab')
-    const at0 = byPos.get(0)
-    assert.ok(at0, 'token recorded at position 0')
-    assert.equal(at0.tin, SHORT, 'committed recut wins')
+    const final = byPos.finish()
+    assert.equal(final.get(0) && final.get(0).tin, SHORT, 'committed recut wins')
+    assert.equal(final.get(1) && final.get(1).tin, TB, 'following token kept')
   })
 })
