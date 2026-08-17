@@ -319,6 +319,37 @@ type ParseOptions struct {
 	// options.parse.budget). Nil, the default, costs one integer test
 	// per rule iteration.
 	Budget *BudgetOptions
+
+	// Recover is opt-in multi-error recovery (TS options.parse.recover).
+	// Nil, the default, leaves the engine fail-fast.
+	Recover *RecoverOptions
+}
+
+// RecoverOptions configures opt-in panic-mode error recovery. With
+// Enabled set, a parse error no longer ends the parse: the error is
+// recorded, the lexer skips forward to a sync token, the rule stack is
+// popped to a rule that can accept it, and parsing continues. Read the
+// results with ParseRecover.
+//
+// Sync points are derived from the grammar rather than hard-coded: the
+// leading tokens of close alternates whose AltSpec.G tags intersect
+// SyncGroups. A grammar with no such tags falls back to the leading
+// token of EVERY close alternate on the rule stack, so recovery still
+// works on an untagged grammar — less precisely.
+type RecoverOptions struct {
+	Enabled bool // Turn recovery on; everything else is ignored when false.
+
+	// SyncGroups REPLACES the engine default ["close", "comma", "end"]
+	// when non-nil, rather than adding to it — pass the defaults
+	// yourself to keep them. Mirrors the TS option, whose null default
+	// exists for the same reason.
+	SyncGroups []string
+
+	SyncTokens    []string // Extra sync token names, e.g. ["#CA"]. Additive.
+	PopUntilValid *bool    // Pop until a rule accepts the sync token. Default true.
+	MaxSkip       *int     // Cap tokens skipped per recovery. Default 64.
+	MaxRecoveries *int     // Cap recorded errors per parse. Default 32.
+	Suppress      *int     // Drop errors within this many consumed tokens of the last. Default 4.
 }
 
 // BudgetOptions is the opt-in parse budget / cancellation hook. With
@@ -576,9 +607,40 @@ func (j *Tabnas) Empty(opts ...Options) *Tabnas {
 }
 
 // Parse parses a tabnas string using this instance's configuration.
+//
+// With recovery enabled (Options.Parse.Recover) a parse that recovered
+// from errors still returns its partial value here, and a nil error —
+// use ParseRecover to see the errors it recovered from.
 func (j *Tabnas) Parse(src string) (any, error) {
-	return j.parseInternal(src, nil)
+	value, _, err := j.ParseRecover(src)
+	return value, err
 }
+
+// ParseRecover parses and additionally returns the errors recovered
+// from, which is the Go form of TS's `{ value, errors }` result.
+//
+// Go takes a second return value where TS changes the shape of the
+// first: Parse's signature is public and called throughout the fleet,
+// and returning a struct through `any` would force every caller into a
+// type assertion to find out whether they got a value or a result
+// wrapper. A separate method costs nothing to ignore.
+//
+//   - Recovery off: behaves exactly like Parse, errs always nil.
+//   - Recovery on, clean parse: value, nil, nil.
+//   - Recovery on, recovered: the partial value, the recovered errors,
+//     and a nil err — the parse produced a result.
+//   - Recovery on, unrecoverable: nil value and a non-nil err, with
+//     errs carrying anything recovered before giving up.
+func (j *Tabnas) ParseRecover(src string) (any, []*TabnasError, error) {
+	var errs []*TabnasError
+	value, err := j.parseInternal(src, map[string]any{recoverErrsMeta: &errs})
+	return value, errs, err
+}
+
+// recoverErrsMeta is the meta key startParse uses to hand the recovered
+// error list back out. Unexported so it cannot collide with a
+// grammar's own meta.
+const recoverErrsMeta = "tabnas$recoverErrs"
 
 // parseInternal handles empty source, custom parser.start, and delegation.
 func (j *Tabnas) parseInternal(src string, meta map[string]any) (result any, err error) {
@@ -1035,6 +1097,39 @@ func buildConfig(o *Options) *LexConfig {
 	if o.Parse != nil && o.Parse.Budget != nil {
 		cfg.ParseBudgetN = o.Parse.Budget.CheckEveryN
 		cfg.ParseBudgetCheck = o.Parse.Budget.OnCheck
+	}
+
+	// Opt-in recovery. Sync token NAMES resolve to tins here so
+	// recovery never does a lookup at error time.
+	if o.Parse != nil && o.Parse.Recover != nil {
+		r := o.Parse.Recover
+		rc := RecoverConfig{
+			Enabled:       r.Enabled,
+			SyncGroups:    defaultSyncGroups,
+			PopUntilValid: true,
+			MaxSkip:       64,
+			MaxRecoveries: 32,
+			Suppress:      4,
+		}
+		// A supplied SyncGroups REPLACES the engine set rather than
+		// extending it, matching the TS option.
+		if r.SyncGroups != nil {
+			rc.SyncGroups = append([]string{}, r.SyncGroups...)
+		}
+		rc.SyncTokens = append([]string{}, r.SyncTokens...)
+		if r.PopUntilValid != nil {
+			rc.PopUntilValid = *r.PopUntilValid
+		}
+		if r.MaxSkip != nil {
+			rc.MaxSkip = *r.MaxSkip
+		}
+		if r.MaxRecoveries != nil {
+			rc.MaxRecoveries = *r.MaxRecoveries
+		}
+		if r.Suppress != nil {
+			rc.Suppress = *r.Suppress
+		}
+		cfg.Recover = rc
 	}
 
 	// Result fail values.

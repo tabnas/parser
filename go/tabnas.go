@@ -65,6 +65,13 @@ var defaultHints = map[string]string{
 }
 
 // Structured error returned by Parse, carrying the failure location, cause, and formatting context.
+// RecoveredAt records what one panic-mode recovery did, for
+// diagnostics consumers that want to show the skipped region.
+type RecoveredAt struct {
+	Skipped int // Tokens skipped before reaching the sync token.
+	Sync    Tin // The token the parse resumed on.
+}
+
 type TabnasError struct {
 	Code   string // Error code keying errorMessages/defaultHints, e.g. "unexpected", "unterminated_string".
 	Detail string // Human-readable detail message (e.g. "unterminated string: \"abc")
@@ -73,6 +80,11 @@ type TabnasError struct {
 	Col    int    // 1-based column number
 	Src    string // Source fragment at the error (the token text)
 	Hint   string // Additional explanatory text for this error code
+
+	// Recovered is set when this error was recovered from rather than
+	// fatal (options.parse.recover): how far the parse skipped and the
+	// sync token it resumed on. Nil on a fail-fast error.
+	Recovered *RecoveredAt
 
 	fullSource string      // Complete input source (for generating site extract)
 	tag        string      // Custom error tag name (TS: errmsg.name), defaults to "tabnas"

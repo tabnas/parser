@@ -52,10 +52,23 @@ type Context struct {
 	// records whether the state had ANY alternates, which is how a rule
 	// with no alternates at all is told apart from one whose alternates
 	// all failed; daltErr carries the failure token in the latter case.
-	dalt     *AltSpec
-	daltAny  bool
-	daltErr  *Token
-	ParseErr *Token // Error token; when set, halts the parse.
+	dalt    *AltSpec
+	daltAny bool
+	daltErr *Token
+
+	// Recovery bookkeeping (TS: ctx._recoverAt / _recoverSI). recoverAt
+	// is the consumed-token count at the last recovery, for cascade
+	// suppression; recoverSI is the source offset it resumed at, for
+	// the strict-progress guard. The *Set flags distinguish "zero" from
+	// "never recovered".
+	recoverAt    int
+	recoverAtSet bool
+	recoverSI    int
+	recoverSISet bool
+	// Sync token names resolved once per parse (see Context.syncTins).
+	recoverSyncTins []Tin
+	syncTinsDone    bool
+	ParseErr        *Token // Error token; when set, halts the parse.
 
 	// Errors recorded during this parse (TS: ctx.errs). Appended at
 	// each error's CONSTRUCTION site, so the error returned by Parse is
@@ -375,6 +388,16 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	ctx.Lex = lex
 	pctx = ctx
 
+	// Publish the per-parse error list back to ParseRecover on EVERY
+	// return path, including a panic. startParse has many exits, and a
+	// caller that asked for the recovered errors must not lose them
+	// because the parse left by one this forgot about.
+	if meta != nil {
+		if slot, ok := meta[recoverErrsMeta].(*[]*TabnasError); ok && slot != nil {
+			defer func() { *slot = ctx.Errs }()
+		}
+	}
+
 	startName := p.Config.RuleStart
 	if startName == "" {
 		startName = "val"
@@ -411,6 +434,13 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	// hoists it — this loop is the engine's hot path.
 	budgetN := p.Config.ParseBudgetN
 	budgetCheck := p.Config.ParseBudgetCheck
+
+	// gaveUp marks a parse that stopped early because recovery could
+	// not continue. The post-loop completeness checks (trailing
+	// content, latched lexer error) are skipped for it: the parse is
+	// KNOWN incomplete, and reporting that as a fresh error would
+	// replace the recovered diagnostics with a misleading one.
+	gaveUp := false
 
 	kI := 0
 	for rule != NoRule && kI < maxr {
@@ -459,6 +489,33 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 		// Check for parse error from alt.E or actions.
 		if ctx.ParseErr != nil {
+			// Opt-in recovery: record the error and resume from a sync
+			// point instead of ending the parse. This ParseErr test is
+			// Go's throw funnel — the one place a grammar error is
+			// observed — so it is where recovery hooks, mirroring the
+			// single raise site TS recovers at inside bad().
+			if p.Config.Recover.Enabled {
+				if resumed := attemptRecover(
+					ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
+					rule = resumed
+					kI++
+					continue
+				}
+				// Recovery gave up — the skip cap was hit, or no rule on
+				// the stack could accept the sync token. The parse still
+				// has a partial value, and that is more useful to a
+				// language server than nothing, so end the loop and
+				// return what was built rather than failing. This is the
+				// give-up half of TS's { value, errors } contract: TS
+				// returns the shape there too, never throwing once
+				// recovery is on.
+				gaveUp = true
+				ctx.ParseErr = nil
+				ctx.parseErrDiag = nil
+				lex.Err = nil
+				break
+			}
+
 			// Prefer lexer errors (e.g. unterminated_string) over generic
 			// "unexpected" from alt matching, since the lex error is more
 			// specific about what went wrong. Matches TS behavior where
@@ -486,14 +543,35 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		kI++
 	}
 
+	// With recovery on the parse never fails outright: a completeness
+	// failure past this point is recorded as one more diagnostic and
+	// the partial value still goes back, matching TS, where parse()
+	// with recovery enabled always returns { value, errors } and never
+	// throws. `soft` therefore disables every hard return below —
+	// gaveUp implies it, and so does simply having recovered earlier.
+	soft := p.Config.Recover.Enabled || gaveUp
+
 	// Check for lexer errors (unterminated strings, comments, etc.)
-	if lex.Err != nil {
+	if lex.Err != nil && !soft {
 		return nil, p.finishErr(lex.Err, ctx, meta, nil)
+	}
+	if lex.Err != nil && soft {
+		// Record it so the caller still learns the source was not fully
+		// lexable, then stop it failing the finished parse.
+		//
+		// Unless recovery already reported this exact fault: the latched
+		// lexer error is the SAME one recovery skipped past, so
+		// recording it again would show a consumer two squiggles at one
+		// offset for one mistake.
+		if je, ok := lex.Err.(*TabnasError); ok && !ctx.alreadyRecorded(je) {
+			ctx.recordErr(je)
+		}
+		lex.Err = nil
 	}
 
 	// Check for unconsumed tokens (syntax error) - explicit trailing content check.
 	// First check tokens already in the lookahead buffer.
-	if ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ {
+	if !soft && ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ {
 		// Prefer lex errors over generic unexpected for unconsumed tokens too.
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
@@ -510,14 +588,14 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	curRule := ctx.Rule
 	endTkn := lex.Next(rule)
 	ctx.Rule = curRule
-	if endTkn.Tin != TinZZ {
+	if endTkn.Tin != TinZZ && !soft {
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
 		return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
 	}
 	// Check lexer errors from that final Next() call.
-	if lex.Err != nil {
+	if lex.Err != nil && !soft {
 		return nil, p.finishErr(lex.Err, ctx, meta, nil)
 	}
 
@@ -727,6 +805,22 @@ func (ctx *Context) ruleDoneAlt() *RuleDoneAlt {
 		R:   ctx.dalt.R,
 		Err: ctx.daltErr,
 	}
+}
+
+// alreadyRecorded reports whether an equivalent diagnostic — same code
+// at the same offset — is already in the per-parse list. Recovery and
+// the post-loop completeness checks can both observe one fault, and a
+// consumer should see it once.
+func (ctx *Context) alreadyRecorded(je *TabnasError) bool {
+	if ctx == nil || je == nil {
+		return false
+	}
+	for _, prev := range ctx.Errs {
+		if prev != nil && prev.Code == je.Code && prev.Pos == je.Pos {
+			return true
+		}
+	}
+	return false
 }
 
 // makeErrorIn is makeError plus recording on the parse context.
