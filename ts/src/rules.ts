@@ -570,6 +570,12 @@ class RuleSpec {
       if (logging) why += 'H'
     }
 
+    // Expose the alternate this pass resolved to (post-modifier, so a
+    // replacement from alt.h is what consumers see), for the parser's
+    // post-process ruleDone event. A pass with no alternates exposes
+    // null, matching the public RuleDone contract.
+    ;(ctx as any)._dalt = 0 < alts.length ? alt : null
+
     // Unconditional error.
     if (alt.e) {
       return this.bad(alt.e, rule, ctx, { is_open })
@@ -1038,10 +1044,24 @@ function attemptRecover(
       }
       return rule
     }
+    // The erroring rule itself is being abandoned (its close cannot
+    // accept the sync token, and it is not on ctx.rs): synthesize its
+    // close notification first so the structural stream stays balanced.
+    if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
+      const done = { state: CLOSE, alt: null, forced: true }
+      ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
+    }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]
       if (null != r && acceptsClose(r.spec, cand.tin, rec.syncGroups, sig)) {
         return r
+      }
+      // Force-popped without a close pass: synthesize the close
+      // notification so structural consumers (outline/folding) see a
+      // balanced event stream even through recovery.
+      if (null != r && ctx.sub.ruleDone) {
+        const done = { state: CLOSE, alt: null, forced: true }
+        ctx.sub.ruleDone.map((s) => s(r, ctx, done))
       }
     }
     return undefined

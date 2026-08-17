@@ -297,7 +297,7 @@ themselves against re-application).
 
 ## Events
 
-### `tn.sub({ lex?, rule? })`
+### `tn.sub({ lex?, rule?, ruleDone? })`
 
 Subscribe to lex and rule events. Multiple subscriptions are allowed
 and fire in registration order.
@@ -306,8 +306,25 @@ and fire in registration order.
 tn.sub({
   lex: (token, rule, ctx) => { /* … */ },
   rule: (rule, ctx)       => { /* … */ },
+  ruleDone: (rule, ctx, done) => { /* … */ },
 })
 ```
+
+`rule` fires **before** each rule pass — the rule has not matched
+anything yet. `ruleDone` fires **after** the pass: the matched tokens
+are recorded on `rule.o` / `rule.c` (so `rule.o0.sI`-style spans are
+readable), the state transition has been applied, and `done`
+(`RuleDone`) carries `{ state, alt, forced? }` — `state` is the pass
+that ran (`'o'`/`'c'`), `alt` snapshots the matched alternate's
+routing (`b` backtrack count, `g` group tags, `p` pushed rule, `r`
+replacement rule, `err` failure token), and `forced: true` marks a
+close notification synthesized for a rule force-popped during error
+recovery. Structural consumers (outline, folding) pair open/close by `rule.i`
+instance id. A rule replaced via `alt.r` **on its open pass** never
+closes itself — its replacement continues. A replacement on a **close
+pass** is different: that event *is* the rule's real close (the
+strict-JSON `pair`/`elem` continuation loops work this way), so only
+open-pass replacements are treated as non-closing.
 
 ## Identity
 

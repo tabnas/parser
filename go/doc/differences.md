@@ -576,3 +576,12 @@ TS supports an opt-in cancellation/budget hook: `parse.budget.onCheck`
 runs every `checkEveryN` rule-loop iterations and cancels the parse
 (error code `cancel`) on a false return. Go has no equivalent yet;
 scheduled with phase P2 of the unified-LSP plan.
+
+## Post-process rule event (`sub({ ruleDone })`) — TS only, Go parity pending
+
+TS adds a third subscriber kind: `ruleDone` fires after each rule pass
+with matched tokens recorded on the rule and a `RuleDone` payload
+(`state`, matched-alternate `b`/`g`/`p`/`r` snapshot, `forced` for
+recovery-synthesized closes). Go's subscriber surface remains
+`LexSubs`/`RuleSubs` (pre-process only); the port is scheduled with
+phase P2 of the unified-LSP plan.

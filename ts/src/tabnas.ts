@@ -36,6 +36,8 @@ import type {
   RuleSpecMap,
   RuleState,
   RuleSub,
+  RuleDone,
+  RuleDoneSub,
   StateAction,
   Tin,
   Token,
@@ -176,7 +178,7 @@ type Internal = {
   parser:  Parser                                // Live parser instance.
   config:  Config                                // Resolved configuration.
   plugins: Plugin[]                              // Plugins applied, in order.
-  sub:     { lex?: LexSub[]; rule?: RuleSub[] }  // Event subscribers, by kind.
+  sub:     { lex?: LexSub[]; rule?: RuleSub[]; ruleDone?: RuleDoneSub[] }  // Event subscribers, by kind.
   mark:    number                                // Random per-instance stamp.
   merged:  Record<string, any>                   // Merged option tree.
 }
@@ -236,7 +238,7 @@ class Tabnas {
       parser: undefined as unknown as Parser,
       config: undefined as unknown as Config,
       plugins: [],
-      sub: { lex: undefined, rule: undefined },
+      sub: { lex: undefined, rule: undefined, ruleDone: undefined },
       mark: Math.random(),
       merged: undefined as unknown as Record<string, any>,
     }
@@ -456,8 +458,9 @@ class Tabnas {
 
 
   // Subscribe to lexer / rule events. Multiple subscriptions are allowed
-  // and fire in registration order.
-  sub(spec: { lex?: any; rule?: any }): this {
+  // and fire in registration order. `rule` fires before each rule pass;
+  // `ruleDone` fires after it, with matched tokens recorded (RuleDoneSub).
+  sub(spec: { lex?: any; rule?: any; ruleDone?: any }): this {
     if (spec.lex) {
       this.#internal.sub.lex = this.#internal.sub.lex || []
       this.#internal.sub.lex.push(spec.lex)
@@ -465,6 +468,10 @@ class Tabnas {
     if (spec.rule) {
       this.#internal.sub.rule = this.#internal.sub.rule || []
       this.#internal.sub.rule.push(spec.rule)
+    }
+    if (spec.ruleDone) {
+      this.#internal.sub.ruleDone = this.#internal.sub.ruleDone || []
+      this.#internal.sub.ruleDone.push(spec.ruleDone)
     }
     return this
   }
@@ -681,6 +688,8 @@ export type {
   RuleSpecMap,
   RuleState,
   RuleSub,
+  RuleDone,
+  RuleDoneSub,
   StateAction,
   Tin,
   Token,

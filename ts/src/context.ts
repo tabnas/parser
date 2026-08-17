@@ -17,6 +17,7 @@ import type {
   Rule,
   RuleSpec,
   RuleSub,
+  RuleDoneSub,
   Tin,
   Token,
 } from './types'
@@ -33,7 +34,7 @@ export type ContextInit = {
   root:    () => any                           // Returns the parse result root.
   plgn:    () => Plugin[]                       // Returns the applied plugins.
   inst:    () => Tabnas                         // Returns the owning Tabnas instance.
-  sub:     { lex?: LexSub[]; rule?: RuleSub[] } // Lex and rule subscriber callbacks.
+  sub:     { lex?: LexSub[]; rule?: RuleSub[]; ruleDone?: RuleDoneSub[] } // Lex and rule subscriber callbacks.
   rsm:     { [name: string]: RuleSpec }         // Rule specs by name.
   F:       (s: any) => string                   // Value formatter for log/error text.
   NOTOKEN: Token                                // Shared end/absent-token sentinel.
@@ -56,7 +57,7 @@ export class Context {
   inst!: () => Tabnas                           // Returns the owning Tabnas instance.
 
   rule!: Rule                                  // Current rule instance — set by parser.start().
-  sub!: { lex?: LexSub[]; rule?: RuleSub[] }   // Lex and rule subscriber callbacks.
+  sub!: { lex?: LexSub[]; rule?: RuleSub[]; ruleDone?: RuleDoneSub[] }   // Lex and rule subscriber callbacks.
 
   xs: Tin = -1 as Tin                          // Lex state tin.
 

@@ -232,7 +232,35 @@ class Parser {
         ctx.sub.rule.map((sub) => sub(rule, ctx))
       }
 
+      const prev = rule
+      const prevState = rule.state
+
       rule = rule.process(ctx, lex)
+
+      // Post-process event: fires with the pass's matched tokens
+      // recorded on prev.o / prev.c and the state transition applied.
+      // Unlike the pre-process `rule` event, this one can see what the
+      // pass actually did (RuleDone: matched alternate's b/g/p/r).
+      if (ctx.sub.ruleDone) {
+        const dalt: any = (ctx as any)._dalt
+        const done = {
+          state: prevState,
+          alt:
+            null == dalt
+              ? null
+              : {
+                  b: (dalt.b as number) || 0,
+                  // Snapshot: the alternate's own g array is live
+                  // grammar configuration and must not be mutable
+                  // through the event payload.
+                  g: dalt.g ? (dalt.g as string[]).slice() : [],
+                  p: (dalt.p as string) || EMPTY,
+                  r: (dalt.r as string) || EMPTY,
+                  err: dalt.e,
+                },
+        }
+        ctx.sub.ruleDone.map((sub) => sub(prev, ctx, done))
+      }
 
       ctx.log && ctx.log(S.stack, ctx, rule, lex)
 
@@ -307,6 +335,34 @@ class Parser {
     return recovering ? { value: result, errors: ctx.errs } : result
 
     } catch (err) {
+      // A throwing pass never reached the post-process dispatch: emit
+      // the failure event so structural consumers observe the final
+      // attempted pass (fail-fast and recovery give-up alike).
+      if (ctx.sub.ruleDone && err instanceof TabnasError) {
+        try {
+          const frule = ctx.rule
+          if (null != frule && norule !== frule) {
+            const dalt: any = (ctx as any)._dalt
+            const done = {
+              state: frule.state,
+              alt:
+                null == dalt
+                  ? null
+                  : {
+                      b: (dalt.b as number) || 0,
+                      g: dalt.g ? (dalt.g as string[]).slice() : [],
+                      p: (dalt.p as string) || EMPTY,
+                      r: (dalt.r as string) || EMPTY,
+                      err: dalt.e ?? (err as any).internal?.token,
+                    },
+            }
+            ctx.sub.ruleDone.map((sub) => sub(frule, ctx, done))
+          }
+        } catch (subErr) {
+          // Subscriber failures must not mask the parse error.
+        }
+      }
+
       // In recovery mode a terminal error (recovery gave up, trailing
       // content, result.fail) has already been recorded on ctx.errs by
       // the TabnasError constructor — convert to the { value, errors }
