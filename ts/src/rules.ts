@@ -542,6 +542,14 @@ class RuleSpec {
 
     // Handle "before" call.
     let befores = is_open ? (rule.bo ? def.bo : null) : rule.bc ? def.bc : null
+
+    // Error recovery resumed this rule on a pass whose before actions
+    // already ran — do not replay them (see attemptRecover).
+    if ((rule as any)._skipBefores) {
+      ;(rule as any)._skipBefores = false
+      befores = null
+    }
+
     if (befores) {
       let bout: Token | void = undefined
       for (let bI = 0; bI < befores.length; bI++) {
@@ -556,16 +564,17 @@ class RuleSpec {
     let alt: AltMatch =
       0 < alts.length ? parse_alts(is_open, alts, lex, rule, ctx) : EMPTY_ALT
 
-    // Expose the alternate this pass resolved to, for the parser's
-    // post-process ruleDone event (a pointer store; snapshotting is
-    // done only when a subscriber exists).
-    ;(ctx as any)._dalt = alt
-
     // Custom alt handler.
     if (alt.h) {
       alt = alt.h(rule, ctx, alt, next) || alt
       if (logging) why += 'H'
     }
+
+    // Expose the alternate this pass resolved to (post-modifier, so a
+    // replacement from alt.h is what consumers see), for the parser's
+    // post-process ruleDone event. A pass with no alternates exposes
+    // null, matching the public RuleDone contract.
+    ;(ctx as any)._dalt = 0 < alts.length ? alt : null
 
     // Unconditional error.
     if (alt.e) {
@@ -801,12 +810,37 @@ const closeInfoCache = new WeakMap<object, CloseInfo>()
 // A bad token is produced without advancing the lex point (the
 // matchers declined it) — skipping one forward requires moving the
 // point past its span by hand, tracking rows and columns.
-function advanceLexPast(lex: Lex, t: Token): void {
+// Bad-token codes raised from INSIDE a compound construct (string
+// body escapes and control characters): resuming the lexer just past
+// the offending character would restart lexing mid-construct and
+// mis-tokenize the remainder (a stray quote opens a "new" string).
+// For these, recovery advances to a lexical boundary — the next line
+// end — instead.
+const MID_CONSTRUCT: Record<string, boolean> = {
+  unprintable: true,
+  invalid_unicode: true,
+  invalid_ascii: true,
+}
+
+function advanceLexPast(lex: Lex, t: Token, toLineEnd?: boolean): void {
   const pnt = (lex as any).pnt
   const src: string = (lex as any).src
-  const target = Math.max(pnt.sI, t.sI + Math.max(1, t.len | 0))
+  const cfg = (lex as any).ctx?.cfg
+  // Config.line.rowChars is a Chars lookup object; fall back to '\n'
+  // when line lexing is not configured.
+  const rowsObj: Record<string, unknown> | undefined = cfg?.line?.rowChars
+  const isRow = (ch: string) => (null != rowsObj ? !!rowsObj[ch] : '\n' === ch)
+
+  let target = Math.max(pnt.sI, t.sI + Math.max(1, t.len | 0))
+  if (toLineEnd) {
+    let e = target
+    while (e < src.length && !isRow(src[e])) e++
+    // Include the line end itself so lexing resumes on a fresh row.
+    target = Math.max(target, Math.min(src.length, e + 1))
+  }
+
   while (pnt.sI < target && pnt.sI < src.length) {
-    if ('\n' === src[pnt.sI]) {
+    if (isRow(src[pnt.sI])) {
       pnt.rI++
       pnt.cI = 1
     } else {
@@ -852,7 +886,7 @@ function closeInfo(spec: RuleSpec, groups: string[], sig: string): CloseInfo {
 function computeSyncTins(ctx: Context, rule: Rule): Set<Tin> {
   const rec = ctx.cfg.parse.recover
   const sig = rec.syncGroups.join(',')
-  const out = new Set<Tin>(rec.syncTins)
+  const out = new Set<Tin>()
 
   const addSync = (r: Rule) => {
     if (null != r && r !== ctx.NORULE) {
@@ -862,6 +896,9 @@ function computeSyncTins(ctx: Context, rule: Rule): Set<Tin> {
   addSync(rule)
   for (let d = ctx.rsI - 1; 0 <= d; d--) addSync(ctx.rs[d])
 
+  // Structural fallback for untagged grammars is decided on the
+  // grammar-derived set alone — explicit syncTokens are extras, and
+  // must not disable the fallback by their mere presence.
   if (0 === out.size) {
     const addAll = (r: Rule) => {
       if (null != r && r !== ctx.NORULE) {
@@ -871,6 +908,8 @@ function computeSyncTins(ctx: Context, rule: Rule): Set<Tin> {
     addAll(rule)
     for (let d = ctx.rsI - 1; 0 <= d; d--) addAll(ctx.rs[d])
   }
+
+  for (const tin of rec.syncTins) out.add(tin)
 
   return out
 }
@@ -933,7 +972,8 @@ function attemptRecover(
   const NOTOKEN = ctx.NOTOKEN
   const tbuf = ctx.t
 
-  const advancePast = (t: Token) => advanceLexPast(lex, t)
+  const advancePast = (t: Token, toLineEnd?: boolean) =>
+    advanceLexPast(lex, t, toLineEnd)
 
   // Skip forward: drain already-fetched lookahead first (those tokens
   // advanced the lexer and must not be lost), then pull fresh tokens.
@@ -960,7 +1000,9 @@ function attemptRecover(
     ZZ !== cand.tin &&
     (!sync.has(cand.tin) || (noProgress && cand.sI <= lastSI))
   ) {
-    if (BD === cand.tin) advancePast(cand)
+    if (BD === cand.tin) {
+      advancePast(cand, true === MID_CONSTRUCT[cand.why as string])
+    }
     if (rec.maxSkip <= skipped++) return undefined
     cand = 0 < pending.length ? (pending.shift() as Token) : fetch()
   }
@@ -991,8 +1033,23 @@ function attemptRecover(
     // Resume with the erroring rule itself if its close state accepts
     // the sync token, else pop ancestors until one does.
     if (rule !== ctx.NORULE && acceptsClose(rule.spec, cand.tin, rec.syncGroups, sig)) {
-      if (OPEN === rule.state) rule.state = CLOSE
+      if (OPEN === rule.state) {
+        rule.state = CLOSE
+      } else if (!parse.is_open) {
+        // The failed pass was this rule's OWN close: its before-close
+        // actions already ran, and re-processing the close pass would
+        // run them again — corrupting non-idempotent actions (e.g. an
+        // element append). Skip them on the resumed pass.
+        ;(rule as any)._skipBefores = true
+      }
       return rule
+    }
+    // The erroring rule itself is being abandoned (its close cannot
+    // accept the sync token, and it is not on ctx.rs): synthesize its
+    // close notification first so the structural stream stays balanced.
+    if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
+      const done = { state: CLOSE, alt: null, forced: true }
+      ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
     }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]
@@ -1138,9 +1195,13 @@ function parse_alts(
               )
               // Coalesce a contiguous run of bad tokens (e.g. each
               // character of an unlexable word) into one recorded
-              // error whose region metadata grows with the run.
+              // error whose region metadata grows with the run, and
+              // apply the same cascade-suppression window recoveries
+              // use: a fresh bad region with no consumed tokens since
+              // the previous recovery is a follow-on of the same fault.
               const runEnd: number | undefined = (ctx as any)._badTo
               const runErr: any = (ctx as any)._badErr
+              const lastAbs: number | undefined = (ctx as any)._recoverAt
               if (
                 null != runEnd &&
                 tkn.sI <= runEnd &&
@@ -1149,17 +1210,32 @@ function parse_alts(
               ) {
                 ctx.errs.pop()
                 runErr.recovered.skipped++
+                // A run longer than maxSkip gives up like any other
+                // over-long recovery.
+                if (rec.maxSkip < runErr.recovered.skipped) {
+                  throw bderr
+                }
+              } else if (
+                null != lastAbs &&
+                ctx.vAbs - lastAbs < rec.suppress &&
+                ctx.errs[ctx.errs.length - 1] === bderr
+              ) {
+                ctx.errs.pop()
+                ;(ctx as any)._badErr = null
               } else {
                 ;(bderr as any).recovered = { skipped: 1, bad: true }
                 ;(ctx as any)._badErr = bderr
+                ;(ctx as any)._recoverAt = ctx.vAbs
               }
               ;(ctx as any)._badTo = tkn.sI + Math.max(1, tkn.len | 0)
               if (rec.maxRecoveries < ctx.errs.length) {
                 throw bderr
               }
               // The bad token did not advance the lex point — move
-              // past it or the refetch would loop in place.
-              advanceLexPast(lex, tkn)
+              // past it or the refetch would loop in place. Bad tokens
+              // raised mid-construct (string escapes/control chars)
+              // resynchronize at the next line end instead.
+              advanceLexPast(lex, tkn, true === MID_CONSTRUCT[tkn.why as string])
               refetch = true
               continue
             }

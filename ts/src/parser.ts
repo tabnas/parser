@@ -250,7 +250,10 @@ class Parser {
               ? null
               : {
                   b: (dalt.b as number) || 0,
-                  g: (dalt.g as string[]) || [],
+                  // Snapshot: the alternate's own g array is live
+                  // grammar configuration and must not be mutable
+                  // through the event payload.
+                  g: dalt.g ? (dalt.g as string[]).slice() : [],
                   p: (dalt.p as string) || EMPTY,
                   r: (dalt.r as string) || EMPTY,
                   err: dalt.e,
@@ -332,6 +335,34 @@ class Parser {
     return recovering ? { value: result, errors: ctx.errs } : result
 
     } catch (err) {
+      // A throwing pass never reached the post-process dispatch: emit
+      // the failure event so structural consumers observe the final
+      // attempted pass (fail-fast and recovery give-up alike).
+      if (ctx.sub.ruleDone && err instanceof TabnasError) {
+        try {
+          const frule = ctx.rule
+          if (null != frule && norule !== frule) {
+            const dalt: any = (ctx as any)._dalt
+            const done = {
+              state: frule.state,
+              alt:
+                null == dalt
+                  ? null
+                  : {
+                      b: (dalt.b as number) || 0,
+                      g: dalt.g ? (dalt.g as string[]).slice() : [],
+                      p: (dalt.p as string) || EMPTY,
+                      r: (dalt.r as string) || EMPTY,
+                      err: dalt.e ?? (err as any).internal?.token,
+                    },
+            }
+            ctx.sub.ruleDone.map((sub) => sub(frule, ctx, done))
+          }
+        } catch (subErr) {
+          // Subscriber failures must not mask the parse error.
+        }
+      }
+
       // In recovery mode a terminal error (recovery gave up, trailing
       // content, result.fail) has already been recorded on ctx.errs by
       // the TabnasError constructor — convert to the { value, errors }
@@ -340,6 +371,20 @@ class Parser {
         let value: any = undefined
         try {
           value = ctx.root()?.node
+          // When the root never closed, the most complete partial
+          // container is the outermost active rule's node.
+          if (null == value) {
+            for (let d = 0; d < ctx.rsI; d++) {
+              const n = ctx.rs[d]?.node
+              if (null != n) {
+                value = n
+                break
+              }
+            }
+            if (null == value) {
+              value = ctx.rule?.node ?? undefined
+            }
+          }
         } catch (rootErr) {
           // No root yet: the error preceded the first rule.
         }

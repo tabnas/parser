@@ -39,7 +39,7 @@ export type TabnasInternal = {
   parser: Parser                              // Live parser instance.
   config: Config                              // Resolved configuration.
   plugins: Plugin[]                           // Plugins applied, in order.
-  sub: { lex?: LexSub[]; rule?: RuleSub[] }   // Lex and rule subscriber callbacks.
+  sub: { lex?: LexSub[]; rule?: RuleSub[]; ruleDone?: RuleDoneSub[] }   // Lex and rule subscriber callbacks.
   mark: number                                // Random marker identifying this instance.
   merged: Record<string, any>                 // Accumulated merged options.
 }
@@ -243,7 +243,7 @@ export type TabnasOptions = {
     prepare?: { [name: string]: ParsePrepare }   // Pre-parse setup callbacks.
     recover?: {                     // Opt-in error recovery (multi-error collection).
       enabled?: boolean             // Off by default; on, parse returns { value, errors }.
-      syncGroups?: string[]         // AltSpec.g tags marking close alts as sync edges.
+      syncGroups?: string[] | null  // Sync-edge g tags; null = engine default; an array REPLACES the set.
       syncTokens?: string[]         // Extra explicit sync token names.
       popUntilValid?: boolean       // Pop stack until a rule accepts the sync token.
       maxSkip?: number              // Cap forward token skip per recovery.

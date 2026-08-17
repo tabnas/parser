@@ -360,7 +360,12 @@ The parse was cancelled by the caller's parse.budget.onCheck callback
       enabled: false,
 
       // AltSpec.g tags that mark close alternates as sync edges.
-      syncGroups: ['close', 'comma', 'end'],
+      // null = the engine default ['close','comma','end']. Provide an
+      // array to REPLACE the set entirely (include the defaults
+      // yourself if you want them kept) — the option layer merges
+      // arrays index-wise, so a non-null default here would splice
+      // user values over defaults instead of replacing them.
+      syncGroups: null,
 
       // Explicit extra sync token names (e.g. ['#CA']).
       syncTokens: [],

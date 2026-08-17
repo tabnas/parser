@@ -322,7 +322,7 @@ single recorded error whose `recovered.skipped` counts the region.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turn recovery on; `parse()` then returns `{ value, errors }` |
-| `syncGroups` | string[] | `['close','comma','end']` | `AltSpec.g` tags marking close alternates as sync edges |
+| `syncGroups` | string[]\|null | `null` (= `['close','comma','end']`) | `AltSpec.g` tags marking close alternates as sync edges. An array REPLACES the engine set entirely |
 | `syncTokens` | string[] | `[]` | Extra explicit sync token names (e.g. `['#CA']`) |
 | `popUntilValid` | boolean | `true` | Pop the rule stack until a rule's close state accepts the sync token |
 | `maxSkip` | number | `64` | Cap on tokens skipped per recovery |

@@ -446,6 +446,9 @@ function configure(
     prepare: values(opts.parse?.prepare),
     recover: {
       enabled: !!rcv?.enabled,
+      // null default in defaults.ts: a user-supplied array REPLACES
+      // the engine set entirely (the option layer's index-wise array
+      // merge would otherwise splice user values over defaults).
       syncGroups: (rcv?.syncGroups ?? ['close', 'comma', 'end']).slice(),
       // Explicit sync tokens resolve to tins now, so recovery never
       // does name lookups at error time.
