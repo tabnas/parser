@@ -277,6 +277,7 @@ const defaults: TabnasOptions = {
     unterminated_comment: 'unterminated comment: {src}',
     unknown_rule: 'unknown rule: {rulename}',
     end_of_source: 'unexpected end of source',
+    cancel: 'parse cancelled',
   },
 
   errmsg: {
@@ -316,6 +317,10 @@ No rule named {rulename} is defined.`,
 
     end_of_source: `
 Unexpected end of source.`,
+
+    cancel: `
+The parse was cancelled by the caller's parse.budget.onCheck callback
+(or exceeded its configured budget) before completing.`,
   },
 
   // Lexer
@@ -373,6 +378,16 @@ Unexpected end of source.`,
       // Errors within this many consumed tokens of the previous
       // recovery are dropped as cascades.
       suppress: 4,
+    },
+
+    // Opt-in parse budget / cancellation. Off by default (checkEveryN
+    // 0). When set, the main rule loop invokes onCheck every N
+    // iterations; a false return cancels the parse with a `cancel`
+    // error. Long-lived hosts (language servers) use this to enforce
+    // deadlines or observe an abort flag set from another thread.
+    budget: {
+      checkEveryN: 0,
+      onCheck: null,
     },
   },
 

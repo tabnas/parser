@@ -457,6 +457,10 @@ function configure(
       maxRecoveries: null == rcv?.maxRecoveries ? 32 : rcv.maxRecoveries,
       suppress: null == rcv?.suppress ? 4 : rcv.suppress,
     },
+    budget: {
+      checkEveryN: opts.parse?.budget?.checkEveryN || 0,
+      onCheck: opts.parse?.budget?.onCheck || null,
+    },
   }
 
   cfg.debug = {

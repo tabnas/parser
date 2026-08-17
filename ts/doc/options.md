@@ -301,6 +301,7 @@ attempts one bounded re-lex first.
 |---|---|---|---|
 | `prepare` | object | `{}` | Named functions run to prepare the parse `Context` |
 | `recover` | object | see below | Opt-in error recovery (multi-error collection) |
+| `budget` | object | see below | Opt-in parse budget / cancellation |
 
 ### `recover` — error recovery
 
@@ -327,6 +328,22 @@ single recorded error whose `recovered.skipped` counts the region.
 | `maxSkip` | number | `64` | Cap on tokens skipped per recovery |
 | `maxRecoveries` | number | `32` | Cap on recorded errors per parse; beyond it the parse gives up (still returning `{ value, errors }`) |
 | `suppress` | number | `4` | Errors within this many consumed tokens of the previous recovery are dropped as cascades |
+
+### `budget` — cancellation and deadlines
+
+Off by default. When `checkEveryN` is positive, the main rule loop
+invokes `onCheck(ctx)` every N iterations; returning `false` cancels
+the parse with a `cancel` error (in recovery mode the parse returns
+`{ value, errors }` with the cancel error recorded). The callback runs
+on the parsing thread — a host wanting in-flight cancellation from
+another thread has `onCheck` read a flag that thread sets (e.g. a
+`SharedArrayBuffer` cell), or simply enforces a deadline via closure
+state.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `checkEveryN` | number | `0` | Invoke `onCheck` every N rule iterations; `0` disables |
+| `onCheck` | function | `null` | `(ctx) => boolean \| void`; return `false` to cancel |
 
 ## `result`
 
