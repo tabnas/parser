@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tabnas.github.io/parser/schema/clib-artifacts-manifest.schema.json",
+  "title": "tabnas clib release artifact manifest",
+  "description": "Per-release record of which prebuilt clib artifacts exist, written by the shared clib-release workflow (ADR-12 clause 5). Bindings' loaders parse this file, so it is a contract: absence must be explicit data (present:false), never inferred from a failed download, and a loader must verify sha256 before trusting a downloaded artifact — falling through to build-from-source on mismatch.",
+  "type": "object",
+  "required": ["schema", "lib", "tag", "targets"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "description": "Manifest schema version; this document describes version 1.",
+      "const": 1
+    },
+    "lib": {
+      "description": "Library base name, e.g. libtabnasjson.",
+      "type": "string",
+      "pattern": "^libtabnas[a-z0-9]+$"
+    },
+    "tag": {
+      "description": "The release tag these artifacts belong to.",
+      "type": "string",
+      "minLength": 1
+    },
+    "targets": {
+      "description": "One entry per known target, ALWAYS including absent ones.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^(linux|windows|darwin)/(amd64|arm64)$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["file", "present"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "description": "Artifact filename attached to the release.",
+            "type": "string",
+            "minLength": 1
+          },
+          "present": { "type": "boolean" },
+          "sha256": {
+            "description": "Required when present:true; the loader must verify it.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "if": { "properties": { "present": { "const": true } } },
+        "then": { "required": ["file", "present", "sha256"] }
+      }
+    }
+  }
+}
