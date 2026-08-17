@@ -564,16 +564,17 @@ class RuleSpec {
     let alt: AltMatch =
       0 < alts.length ? parse_alts(is_open, alts, lex, rule, ctx) : EMPTY_ALT
 
-    // Expose the alternate this pass resolved to, for the parser's
-    // post-process ruleDone event (a pointer store; snapshotting is
-    // done only when a subscriber exists).
-    ;(ctx as any)._dalt = alt
-
     // Custom alt handler.
     if (alt.h) {
       alt = alt.h(rule, ctx, alt, next) || alt
       if (logging) why += 'H'
     }
+
+    // Expose the alternate this pass resolved to (post-modifier, so a
+    // replacement from alt.h is what consumers see), for the parser's
+    // post-process ruleDone event. A pass with no alternates exposes
+    // null, matching the public RuleDone contract.
+    ;(ctx as any)._dalt = 0 < alts.length ? alt : null
 
     // Unconditional error.
     if (alt.e) {
@@ -1042,6 +1043,13 @@ function attemptRecover(
         ;(rule as any)._skipBefores = true
       }
       return rule
+    }
+    // The erroring rule itself is being abandoned (its close cannot
+    // accept the sync token, and it is not on ctx.rs): synthesize its
+    // close notification first so the structural stream stays balanced.
+    if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
+      const done = { state: CLOSE, alt: null, forced: true }
+      ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
     }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]

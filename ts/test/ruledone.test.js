@@ -115,3 +115,37 @@ describe('ruledone', () => {
     assert.equal(JSON.stringify(out), '{"a":[1,2]}')
   })
 })
+
+describe('ruledone-review', () => {
+  const { Tabnas: T } = require('..')
+  const { json: J } = require('../dist-test/json-plugin')
+
+  it('fires the failure event on the fail-fast throw path', () => {
+    const tn = new T({ plugins: [J] })
+    const events = []
+    tn.sub({ ruleDone: (rule, ctx, done) => events.push({ name: rule.name, state: done.state, err: done.alt && done.alt.err }) })
+    try { tn.parse('{"a":1,,}') } catch (e) { /* fail-fast */ }
+    const failing = events[events.length - 1]
+    assert.ok(failing, 'events emitted')
+    assert.ok(events.some((e) => null != e.err), 'a failure token was observed')
+  })
+
+  it('carries ruleDone subscribers through merge()', () => {
+    const a = new T({ tag: 'A', plugins: [J] })
+    let fired = 0
+    a.sub({ ruleDone: () => fired++ })
+    const b = new T({ tag: 'B' })
+    const ab = a.merge(b)
+    ab.parse('{"x":1}')
+    assert.ok(0 < fired, 'subscriber fired via merged instance')
+  })
+
+  it('event g arrays are snapshots, not live grammar state', () => {
+    const tn = new T({ plugins: [J] })
+    const seen = []
+    tn.sub({ ruleDone: (rule, ctx, done) => { if (done.alt && done.alt.g.length) { seen.push(done.alt.g); done.alt.g.push('HACK') } } })
+    tn.parse('{"a":1}')
+    const out = tn.parse('{"b":2}')
+    assert.equal(JSON.stringify(out), '{"b":2}', 'mutation did not corrupt the grammar')
+  })
+})

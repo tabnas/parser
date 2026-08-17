@@ -600,7 +600,7 @@ function mergeInstances(
   const sub = out.internal().sub
   const xSub = x.internal().sub
   const ySub = y.internal().sub
-  for (const kind of ['lex', 'rule'] as const) {
+  for (const kind of ['lex', 'rule', 'ruleDone'] as const) {
     const combined = [...(xSub[kind] || []), ...(ySub[kind] || [])]
     if (0 < combined.length) {
       sub[kind] = [...(sub[kind] || []), ...combined] as any

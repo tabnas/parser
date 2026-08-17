@@ -319,9 +319,12 @@ that ran (`'o'`/`'c'`), `alt` snapshots the matched alternate's
 routing (`b` backtrack count, `g` group tags, `p` pushed rule, `r`
 replacement rule, `err` failure token), and `forced: true` marks a
 close notification synthesized for a rule force-popped during error
-recovery. Structural consumers (outline, folding) should treat a rule
-replaced via `alt.r` as never closing itself — its replacement
-continues — and pair open/close by `rule.i` instance id.
+recovery. Structural consumers (outline, folding) pair open/close by `rule.i`
+instance id. A rule replaced via `alt.r` **on its open pass** never
+closes itself — its replacement continues. A replacement on a **close
+pass** is different: that event *is* the rule's real close (the
+strict-JSON `pair`/`elem` continuation loops work this way), so only
+open-pass replacements are treated as non-closing.
 
 ## Identity
 

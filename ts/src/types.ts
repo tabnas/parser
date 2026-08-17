@@ -39,7 +39,7 @@ export type TabnasInternal = {
   parser: Parser                              // Live parser instance.
   config: Config                              // Resolved configuration.
   plugins: Plugin[]                           // Plugins applied, in order.
-  sub: { lex?: LexSub[]; rule?: RuleSub[] }   // Lex and rule subscriber callbacks.
+  sub: { lex?: LexSub[]; rule?: RuleSub[]; ruleDone?: RuleDoneSub[] }   // Lex and rule subscriber callbacks.
   mark: number                                // Random marker identifying this instance.
   merged: Record<string, any>                 // Accumulated merged options.
 }
