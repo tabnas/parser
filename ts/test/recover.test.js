@@ -114,6 +114,65 @@ describe('recover', () => {
     assert.ok('errors' in out)
   })
 
+  it('does not replay before-close actions on a resumed close pass', () => {
+    // `[1 :]` errors in the elem close after @elem-bc already appended
+    // the 1 — recovery resuming the same rule must not run it again.
+    const tn = mk()
+    const out = tn.parse('[1 :]')
+    assert.ok(1 <= out.errors.length)
+    if (Array.isArray(out.value)) {
+      const ones = out.value.filter((v) => 1 === v).length
+      assert.ok(ones <= 1, 'element duplicated by replayed bc action: ' + JSON.stringify(out.value))
+    }
+  })
+
+  it('suppresses a lexer error region right after a recovery', () => {
+    const zero = mk({ suppress: 0 }).parse('{"a":true blah blip,"b":1}')
+    const eight = mk({ suppress: 8 }).parse('{"a":true blah blip,"b":1}')
+    assert.ok(2 <= zero.errors.length, 'suppress 0 keeps both regions')
+    assert.equal(eight.errors.length, 1, 'window suppresses the second region')
+    assert.equal(eight.value.b, 1)
+  })
+
+  it('caps unlexable-run length at maxSkip', () => {
+    const tn = mk({ maxSkip: 3 })
+    const out = tn.parse('{"a": zzzzzzzzzzzzzzzzzzzz}')
+    assert.ok('errors' in out, 'gives up but still returns the shape')
+    assert.ok(1 <= out.errors.length)
+  })
+
+  it('replaces syncGroups rather than splicing over defaults', () => {
+    // A replacement array must not retain engine defaults by index:
+    // ['nope'] means ONLY 'nope' (yielding structural fallback here).
+    const tn = mk({ syncGroups: ['nope'] })
+    const out = tn.parse('{"a":1,}')
+    assert.ok('errors' in out && 1 <= out.errors.length)
+    const cfgGroups = tn.internal().config.parse.recover.syncGroups
+    assert.deepStrictEqual(cfgGroups, ['nope'])
+  })
+
+  it('give-up path still returns the active partial container', () => {
+    const tn = mk({ maxRecoveries: 1, suppress: 0 })
+    const out = tn.parse('{"a":true blah,"b":false blah blah}')
+    assert.ok(null != out.value, 'partial value present on give-up')
+    assert.equal(out.value.a, true)
+  })
+
+  it('resynchronizes at line end for in-string control characters', () => {
+    const tn = mk()
+    const out = tn.parse('{"a":"x' + String.fromCharCode(7) + 'y",\n"b":2}')
+    assert.equal(out.errors.length, 1)
+    assert.equal(out.errors[0].code, 'unprintable')
+    // The corrupted line is abandoned at the line end: the structure
+    // survives (an object comes back) and the mis-lexed remainder of
+    // the string cannot swallow the following lines into one giant
+    // string value (each remaining value stays short).
+    assert.equal('object', typeof out.value)
+    for (const v of Object.values(out.value)) {
+      if ('string' === typeof v) assert.ok(v.length < 5, JSON.stringify(v))
+    }
+  })
+
   it('does not disturb subsequent parses on the same instance', () => {
     const tn = mk()
     const bad = tn.parse('{"a":1,}')

@@ -340,6 +340,20 @@ class Parser {
         let value: any = undefined
         try {
           value = ctx.root()?.node
+          // When the root never closed, the most complete partial
+          // container is the outermost active rule's node.
+          if (null == value) {
+            for (let d = 0; d < ctx.rsI; d++) {
+              const n = ctx.rs[d]?.node
+              if (null != n) {
+                value = n
+                break
+              }
+            }
+            if (null == value) {
+              value = ctx.rule?.node ?? undefined
+            }
+          }
         } catch (rootErr) {
           // No root yet: the error preceded the first rule.
         }
