@@ -72,6 +72,61 @@ describe('errs', () => {
     assert.deepStrictEqual(seen.errs, [])
   })
 
+  it('does not inherit a parent context error list', () => {
+    const tn = new Tabnas({ plugins: [json] })
+    let first
+    try {
+      tn.parse('[1,')
+      assert.fail('parse should fail')
+    } catch (e) {
+      first = e
+    }
+    // Seeding a parse with parent_ctx must not carry recorded errors
+    // across — the per-parse guarantee survives the deep merge.
+    try {
+      tn.parse('{"b":', undefined, { errs: [first], u: { seeded: true } })
+      assert.fail('parse should fail')
+    } catch (e) {
+      const ctx = e.internal.ctx
+      assert.equal(ctx.u.seeded, true, 'parent_ctx seeding still works')
+      assert.equal(ctx.errs.length, 1)
+      assert.equal(ctx.errs[0], e)
+    }
+  })
+
+  it('records on the fabricated context of a custom parser wrapper', () => {
+    // A configured parser.start that throws a native SyntaxError is
+    // converted by parserwrap into a TabnasError with a fabricated
+    // context — which must carry errs like any real parse context.
+    const tn = new Tabnas({
+      parser: {
+        start: () => {
+          throw new SyntaxError('Unexpected token x in JSON at position 0')
+        },
+      },
+    })
+    try {
+      tn.parse('x')
+      assert.fail('parse should fail')
+    } catch (e) {
+      assert.ok(e instanceof TabnasError)
+      assert.ok(Array.isArray(e.internal.ctx.errs))
+      assert.equal(e.internal.ctx.errs.length, 1)
+      assert.equal(e.internal.ctx.errs[0], e)
+    }
+  })
+
+  it('never throws from recording on a frozen error list', () => {
+    const err = new TabnasError(
+      'unexpected',
+      {},
+      { isToken: true, tin: 1, rI: 1, cI: 1, sI: 0, len: 0 },
+      {},
+      { errs: Object.freeze([]) },
+    )
+    assert.ok(err instanceof TabnasError)
+  })
+
   it('never throws from recording on a degenerate context', () => {
     // Plugin code can construct TabnasError with unusual ctx values —
     // construction must not depend on ctx.errs being present.
