@@ -186,7 +186,14 @@ func TestContinuationsUnaffectedByRecovery(t *testing.T) {
 		Recover: &RecoverOptions{Enabled: true},
 	}})
 
-	for _, src := range []string{`{"a"`, `{"a":1`, `[1,`, `{"a":1}`} {
+	// Unlexable prefixes are included deliberately. Enabling recovery
+	// changes what the LEXER hands back for unclaimed input — a #BD
+	// token rather than a latched error and #ZZ — so these are the
+	// prefixes where the two instances could most easily disagree.
+	for _, src := range []string{
+		`{"a"`, `{"a":1`, `[1,`, `{"a":1}`,
+		`{"a": zz`, `{"a":true blah`, `{zzz`,
+	} {
 		a := strings.Join(names(plain, src), ",")
 		b := strings.Join(names(rec, src), ",")
 		if a != b {

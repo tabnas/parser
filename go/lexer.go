@@ -906,8 +906,20 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		// can, ParseAlts raises the very same error, at this same token.
 		relex := l.Config != nil && l.Config.Relex
 
+		// Opt-in recovery defers the same two failures for the same
+		// reason relex does: the parser is the only thing that can decide
+		// what to do with a bad token. Latching Err and answering #ZZ
+		// tells the parse the source ENDED, which is a lie while source
+		// remains — recovery then syncs on EOF and abandons the rest of
+		// the document. Handing the #BD token over instead lets the skip
+		// loop step past the unlexable run token by token, which is also
+		// what makes Go and TS agree on how many faults a run contains.
+		// TS defers on exactly this condition (rules.ts: the RELEX throw
+		// is guarded by !cfg.parse.recover.enabled).
+		defer_ := relex || (l.Config != nil && l.Config.Recover.Enabled)
+
 		if !claimed {
-			if relex {
+			if defer_ {
 				return tkn
 			}
 			src := ""
@@ -929,7 +941,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
-			if relex {
+			if defer_ {
 				return tkn
 			}
 			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)

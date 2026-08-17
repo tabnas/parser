@@ -300,16 +300,14 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 
 	fetch := func() *Token {
 		for {
-			// The lexer latches its first error and, while latched,
-			// answers every Next with end-of-source — which it then
-			// CACHES in lex.end. Clearing only the error leaves that
-			// cached end in place, so every later fetch still reports
-			// end-of-source and recovery syncs on EOF instead of on the
-			// next real token: the rest of the document is silently
-			// abandoned. Both have to go.
-			//
-			// The end cache is only dropped while source remains, so a
-			// genuine end-of-source still answers from the cache.
+			// Defensive: with recovery on the lexer no longer latches
+			// Err for unlexable input (it hands the #BD token over
+			// instead), but Lex.Err is exported and a custom matcher can
+			// still set it — and while latched the lexer answers #ZZ and
+			// CACHES that in lex.end, so clearing only the error would
+			// leave every later fetch reporting end-of-source. Clear
+			// both. The end cache is dropped only while source remains,
+			// so a genuine end still answers from the cache.
 			lex.Err = nil
 			if lex.pnt.SI < len(lex.Src) {
 				lex.end = nil
@@ -317,30 +315,6 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 			t := lex.Next(rule)
 			if t == nil {
 				return NoToken
-			}
-
-			// Unlexable input: where TS emits a #BD token the parser can
-			// skip, Go's lexer sets Err and answers #ZZ — claiming
-			// end-of-source with source still ahead of the scan point.
-			// Taken at face value that ends recovery immediately and
-			// abandons the rest of the document, which is how a stray
-			// word swallowed everything after it.
-			//
-			// Present it as the bad token it actually is, so the skip
-			// loop advances past it and counts it against MaxSkip like
-			// any other. The lexer's own error code rides along, so a
-			// mid-construct fault still resynchronizes at the line end.
-			if TinZZ == t.Tin && lex.pnt.SI < len(lex.Src) {
-				why := ""
-				if je, ok := lex.Err.(*TabnasError); ok && je != nil {
-					why = je.Code
-				}
-				return &Token{
-					Name: "#BD", Tin: TinBD, Val: Undefined,
-					Src: lex.Src[lex.pnt.SI : lex.pnt.SI+1],
-					SI:  lex.pnt.SI, RI: lex.pnt.RI, CI: lex.pnt.CI,
-					Err: "unexpected", Why: why,
-				}
 			}
 
 			if lex.Config != nil && lex.Config.IgnoreSet[t.Tin] {

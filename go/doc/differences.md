@@ -600,26 +600,45 @@ signalling lexer failure through a different channel than TS:
   place, so every later fetch still reports end-of-source and recovery
   syncs on EOF — silently abandoning the rest of the document.
   Recovery clears both.
-- **On unlexable input Go sets `Lex.Err` and returns `#ZZ` rather than
-  emitting the `#BD` token TS produces**, claiming end-of-source with
-  source still ahead of the scan point. Recovery re-presents that as
-  the bad token it is, so the skip loop advances past it and counts it
-  against `MaxSkip` like any other.
+- **On unlexable input the lexer used to set `Lex.Err` and return
+  `#ZZ`**, claiming end-of-source with source still ahead of the scan
+  point — which ended recovery at the first bad character and abandoned
+  the rest of the document. With recovery on, the lexer now hands the
+  `#BD` token to the parser instead, exactly the deferral it already
+  made for negotiated lexing, and exactly the condition TS defers on
+  (`rules.ts`, where the throw is guarded by
+  `!cfg.parse.recover.enabled`). The skip loop then walks the run token
+  by token and counts it against `MaxSkip`.
+
+  That deferral is what removed the duplicate diagnostics: one
+  unlexable run is now one diagnostic. `{"a":true blah blip,"b":1}`
+  reported three errors at a single offset before it and reports one
+  after; `{"a": zzz, "b":2}` reported four.
 
 With recovery on, neither runtime's parse fails outright: a
 completeness failure after the rule loop is recorded as one more
 diagnostic and the partial value still comes back.
 
-### Known gap: cascade counting on unlexable runs
+### Known gap: per-run vs per-recovery diagnostics
 
-The runtimes do not agree on **how many errors** a multi-token
-unlexable run contains. Go collapses such a run into a single fault at
-a single offset, where TS sees two regions and suppresses the second
-inside the `suppress` window — so in Go the window has nothing to
-suppress. That follows directly from the second hazard above: the two
-lexers disagree about the token stream before recovery ever sees it.
+Both runtimes now coalesce an unlexable run into a single diagnostic —
+a twenty-character run is one error, not twenty — but they scope the
+coalescing differently:
 
-Reconciling the counts is lexer work rather than recovery work.
+- **TS emits one diagnostic per RUN.**
+- **Go emits one per RECOVERY**, and a single sync search can span
+  several runs.
+
+So `{"a":true blah blip,"b":1}` is two diagnostics in TS and one in Go:
+TS resumes just past `blah`, fails again at `blip`, and reports both,
+while Go's sync search skips both runs on its way to the comma. The
+`suppress` window consequently has a second error to drop in TS and
+none in Go. Go also ends up not picking the trailing `"b":1` back up,
+for the same reason — it resumes at the sync token rather than
+immediately after the run.
+
+Closing this means emitting per-run rather than per-recovery, and
+resuming at the end of a run when the run itself was the fault.
 `TestRecoverCascadeParityGap` marks it explicitly, and the recovery
 fixtures become shared cross-runtime parity fixtures once it closes.
 
