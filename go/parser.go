@@ -68,7 +68,15 @@ type Context struct {
 	// Sync token names resolved once per parse (see Context.syncTins).
 	recoverSyncTins []Tin
 	syncTinsDone    bool
-	ParseErr        *Token // Error token; when set, halts the parse.
+
+	// Path-aware continuation record, written at the failure point by
+	// Rule.Process (TS: ctx._contTins / the failing rule). The collated
+	// answer is position-blind: after matching A of [A,B], a sibling
+	// [C,D] must not contribute D, and only the failing pass knows how
+	// far each alternate actually got.
+	contTins []Tin
+	contRule *Rule
+	ParseErr *Token // Error token; when set, halts the parse.
 
 	// Errors recorded during this parse (TS: ctx.errs). Appended at
 	// each error's CONSTRUCTION site, so the error returned by Parse is
@@ -442,6 +450,15 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	// replace the recovered diagnostics with a misleading one.
 	gaveUp := false
 
+	// Continuations forces a single parse fail-fast whatever the
+	// instance's recovery setting: it must stop AT the query point, and
+	// a recovering parse would skip past it and answer about somewhere
+	// else entirely.
+	noRecover := false
+	if meta != nil {
+		noRecover, _ = meta[contNoRecoverMeta].(bool)
+	}
+
 	kI := 0
 	for rule != NoRule && kI < maxr {
 		ctx.KI = kI
@@ -494,7 +511,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// Go's throw funnel — the one place a grammar error is
 			// observed — so it is where recovery hooks, mirroring the
 			// single raise site TS recovers at inside bad().
-			if p.Config.Recover.Enabled {
+			if p.Config.Recover.Enabled && !noRecover {
 				if resumed := attemptRecover(
 					ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
 					rule = resumed
@@ -549,7 +566,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	// with recovery enabled always returns { value, errors } and never
 	// throws. `soft` therefore disables every hard return below —
 	// gaveUp implies it, and so does simply having recovered earlier.
-	soft := p.Config.Recover.Enabled || gaveUp
+	soft := (p.Config.Recover.Enabled && !noRecover) || gaveUp
 
 	// Check for lexer errors (unterminated strings, comments, etc.)
 	if lex.Err != nil && !soft {

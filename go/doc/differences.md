@@ -703,12 +703,53 @@ is the same; the arithmetic is in each runtime's own unit. A host
 mapping either to editor positions (an LSP server) converts as it
 already must for diagnostics.
 
-## Continuations API (`tn.continuations(src)`) — TS only, Go parity pending
+## Continuations API (`tn.continuations(src)` / `Continuations`)
 
-TS exposes a completion primitive: legal-continuation tokens after
-parsing a prefix, position-aware and widened by a pop-closure over
-empty-close ancestors. The diagnostic `expected[]` field deliberately
-keeps its position-0 semantics in BOTH runtimes for now — it is pinned
-by the shared diagnostic.tsv parity fixtures; the improved computation
-lives only in the new API until the Go parity phase updates both
-together.
+Both runtimes answer what tokens could legally follow a prefix — the
+completion primitive of the unified-LSP design. Pinned by
+`ts/test/continuations.test.js` and `go/continuations_test.go`, whose
+expectations were checked against the OTHER runtime on the same
+prefixes rather than restating each engine's own output.
+
+| | TypeScript | Go |
+|---|---|---|
+| Call | `tn.continuations(src)` | `tn.Continuations(src)` |
+| Returns | `{ tins, tokens }` | `(tins []Tin, names []string)` |
+| Source of the sets | the collated per-rule `tcol` table | `AltSpec.S` directly |
+
+**Go has no `tcol`**, the lookahead table TS collates at normalize
+time, and does not need one: `AltSpec.S` already holds the per-position
+tins, so every set here — a rule's openers, its close-leading tokens,
+an alternate's next position — is read straight off the alternates.
+`closeInfoOf` does the same for recovery. The information is identical;
+only the intermediate table is absent.
+
+Verified equal on the strict-JSON fixture for `""`, `{`, `{"a"`,
+`{"a":`, `{"a":1`, `{"a":1}`, `[`, `[1` and `[1,`.
+
+Shared semantics:
+
+- **Path-aware.** Each alternate contributes only the position it is
+  actually waiting on, so a sibling whose own prefix never matched adds
+  nothing (`{"a"` yields `['#CL']`, not key starters). At a failure the
+  set is recorded by the failing pass itself, while its own lookahead
+  is still buffered.
+- **Pop closure.** While a rule can close on anything, its parent's
+  close continuations are legal here too.
+- **Push closure.** An alternate fully matched at the query position is
+  about to push another rule, so that rule's openers are legal — which
+  is why `[1,` offers the next element's value starters as well as `]`.
+- **Prefixes that parse still answer**, with `#ZZ` included to mean
+  "stopping here is legal". It is a sentinel, not something a user
+  types: a completion provider should drop it and read it as "this
+  document is already valid".
+- **Recovery never changes the answer.** The query forces its own parse
+  fail-fast whatever the instance is configured for, since it must stop
+  AT the query point rather than skip past it.
+
+The set is an over-approximation in both: conditions and counters may
+still reject a listed token.
+
+The diagnostic `expected[]` field deliberately keeps its position-0
+semantics in BOTH runtimes — it is pinned by the shared diagnostic.tsv
+parity fixtures, and the improved computation lives in this API only.

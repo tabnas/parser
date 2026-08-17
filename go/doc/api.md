@@ -408,6 +408,44 @@ grammar.
 `Forced` is always false until Go gains error recovery — only recovery
 synthesizes a close.
 
+## Completion
+
+### `(*Tabnas) Continuations(src string) ([]Tin, []string)`
+
+The tokens that could legally continue `src`, treating it as a
+**prefix** — the completion primitive of the unified-LSP design.
+Returns the tins and their `#`-names, both sorted by tin.
+
+```go
+tins, names := j.Continuations(`{"a"`)
+// names = ["#CL"] — after a key, only the colon can follow
+```
+
+The computation is **path-aware**: each alternate contributes only the
+position it is actually waiting on, so a sibling alternate whose own
+prefix never matched adds nothing. It is widened two ways — a **pop
+closure** (while a rule can close on anything, its parent's close
+continuations are legal here too) and a **push closure** (an alternate
+fully matched at this position is about to push another rule, so that
+rule's openers are legal, which is why `[1,` offers the next element's
+value starters as well as `]`).
+
+A prefix that parses completely still answers. Permissive grammars read
+most mid-edit input as a complete document, and reporting nothing there
+would leave completion empty exactly where an editor asks for it. `#ZZ`
+is included whenever the prefix parses, meaning "stopping here is
+legal" — it is a sentinel rather than something a user types, so a
+completion provider should drop it from the item list and read it as
+"this document is already valid".
+
+The query runs its own parse, forced fail-fast whatever the instance's
+`Parse.Recover` setting is: it must stop AT the query point, and a
+recovering parse would skip past it and answer about somewhere else.
+The instance is left untouched.
+
+Over-approximation caveat: conditions and counters may still reject a
+listed token.
+
 ## Configuration
 
 ### `(*Tabnas) Config() *LexConfig`
