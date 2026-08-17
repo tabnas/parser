@@ -387,10 +387,32 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		maxr = 100
 	}
 
+	// Opt-in parse budget: call OnCheck every budgetN rule iterations;
+	// a false return cancels. Off by default, costing one integer test
+	// per iteration. Hoisted out of the loop for the same reason TS
+	// hoists it — this loop is the engine's hot path.
+	budgetN := p.Config.ParseBudgetN
+	budgetCheck := p.Config.ParseBudgetCheck
+
 	kI := 0
 	for rule != NoRule && kI < maxr {
 		ctx.KI = kI
 		ctx.Rule = rule
+
+		// kI > 0 so the check never fires before any work is done: an
+		// interval of N means "every N iterations", not "immediately
+		// and then every N".
+		if budgetN > 0 && budgetCheck != nil && kI > 0 && kI%budgetN == 0 {
+			if !budgetCheck(ctx) {
+				tkn := ctx.T0
+				if tkn == nil {
+					tkn = NoToken
+				}
+				je := p.makeErrorIn(
+					ctx, "cancel", tkn.Src, src, tkn.SI, tkn.RI, tkn.CI)
+				return nil, p.finishErr(je, ctx, meta, tkn)
+			}
+		}
 
 		// Fire rule subscribers BEFORE process (matching TS).
 		if len(ctx.RuleSubs) > 0 {

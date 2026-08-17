@@ -581,12 +581,31 @@ Go remains fail-fast; the port is scheduled as phase P2 of the
 unified-LSP plan, at which point the recovery fixtures become shared
 parity fixtures.
 
-## Parse budget (`options.parse.budget`) — TS only, Go parity pending
+## Parse budget (`options.parse.budget`)
 
-TS supports an opt-in cancellation/budget hook: `parse.budget.onCheck`
-runs every `checkEveryN` rule-loop iterations and cancels the parse
-(error code `cancel`) on a false return. Go has no equivalent yet;
-scheduled with phase P2 of the unified-LSP plan.
+Both runtimes carry the opt-in cancellation/budget hook: a callback
+runs every N rule-loop iterations and cancels the parse with the
+`cancel` error code on a false return. Off by default in both, costing
+one test per iteration. Pinned by `ts/test/budget.test.js` and
+`go/budget_test.go`.
+
+| | TypeScript | Go |
+|---|---|---|
+| Option | `parse: { budget: { checkEveryN, onCheck } }` | `Parse: &ParseOptions{Budget: &BudgetOptions{CheckEveryN, OnCheck}}` |
+| Callback | `(ctx) => boolean \| void` | `func(ctx *Context) bool` |
+| On cancel | throws `TabnasError('cancel')` | returns a `"cancel"` `*TabnasError` |
+
+The callback signature is the one real difference. TS accepts
+`boolean | void`, so a checker that only observes can return nothing;
+Go has no undefined, so an observer returns `true`. Both halves of the
+option are required in both runtimes — an interval with no checker, or
+a checker with no interval, leaves the hook off rather than
+half-enabled.
+
+Cancellation is an ordinary error of the parse, so it is recorded in
+`ctx.Errs` / `ctx.errs` as the last entry like any other. In TS's
+recovery mode it surfaces through `{ value, errors }`; Go, still
+fail-fast, returns it directly.
 
 ## Post-process rule event (`sub({ ruleDone })`) — TS only, Go parity pending
 

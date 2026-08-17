@@ -257,7 +257,38 @@ Controls ANSI color codes in formatted error messages (TS:
 | `TokenSet` | `map[string][]string` | Customize named token sets (e.g. `VAL`, `KEY`); values are token names |
 | `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
-| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse |
+| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook (see below) |
 | `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
 | `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
 | `Tag` | `string` | Instance identifier tag, appended to the instance id and shown in the error suffix internal line. Unset defaults to `DefaultTag` (`"-"`), matching TS. `Merge` treats `"-"` as "no tag chosen" and rejects it |
+
+### `Parse.Budget` — cancellation
+
+Off by default. Set both fields to enable it: the main rule loop calls
+`OnCheck` every `CheckEveryN` iterations, and a `false` return cancels
+the parse with the `cancel` error code. One of the two alone leaves the
+hook off, so a config typo cannot half-enable it.
+
+```go
+deadline := time.Now().Add(200 * time.Millisecond)
+
+j := tabnas.Make(tabnas.Options{
+    Parse: &tabnas.ParseOptions{
+        Budget: &tabnas.BudgetOptions{
+            CheckEveryN: 64,
+            OnCheck: func(ctx *tabnas.Context) bool {
+                return time.Now().Before(deadline)
+            },
+        },
+    },
+})
+```
+
+`OnCheck` receives the live parse context, so a host can read `ctx.KI`
+(the iteration count) and `ctx.Rule` to decide. The first call happens
+after `CheckEveryN` iterations, never before any work is done.
+
+Pick `CheckEveryN` for the cost of the check, not the resolution you
+want: a `time.Now()` call every iteration is measurable on a hot parse,
+while reading an atomic abort flag is not. Cancellation is an ordinary
+parse error — it is recorded in `ctx.Errs` like any other.
