@@ -310,6 +310,17 @@ tn.sub({
 })
 ```
 
+**The `lex` stream is a trace of lexer activity, not a token list.**
+Re-served end tokens and rewind replays fire duplicate events, and
+under negotiated lexing (`lex.relex`) a speculative recut fires an
+event that a later failure retracts by re-announcing the RESTORED
+token. The reconciliation contract for consumers reconstructing "the
+tokens the parse used" (semantic tokens): process events in order,
+keep the **newest event per source position**, and let each kept
+token's **span shadow** any older events inside `[sI, sI + len)` —
+a restored longer token thereby shadows stale events fired at interior
+positions during the abandoned speculation.
+
 `rule` fires **before** each rule pass — the rule has not matched
 anything yet. `ruleDone` fires **after** the pass: the matched tokens
 are recorded on `rule.o` / `rule.c` (so `rule.o0.sI`-style spans are
