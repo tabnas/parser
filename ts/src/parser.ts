@@ -232,7 +232,32 @@ class Parser {
         ctx.sub.rule.map((sub) => sub(rule, ctx))
       }
 
+      const prev = rule
+      const prevState = rule.state
+
       rule = rule.process(ctx, lex)
+
+      // Post-process event: fires with the pass's matched tokens
+      // recorded on prev.o / prev.c and the state transition applied.
+      // Unlike the pre-process `rule` event, this one can see what the
+      // pass actually did (RuleDone: matched alternate's b/g/p/r).
+      if (ctx.sub.ruleDone) {
+        const dalt: any = (ctx as any)._dalt
+        const done = {
+          state: prevState,
+          alt:
+            null == dalt
+              ? null
+              : {
+                  b: (dalt.b as number) || 0,
+                  g: (dalt.g as string[]) || [],
+                  p: (dalt.p as string) || EMPTY,
+                  r: (dalt.r as string) || EMPTY,
+                  err: dalt.e,
+                },
+        }
+        ctx.sub.ruleDone.map((sub) => sub(prev, ctx, done))
+      }
 
       ctx.log && ctx.log(S.stack, ctx, rule, lex)
 

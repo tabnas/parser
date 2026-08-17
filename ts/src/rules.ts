@@ -556,6 +556,11 @@ class RuleSpec {
     let alt: AltMatch =
       0 < alts.length ? parse_alts(is_open, alts, lex, rule, ctx) : EMPTY_ALT
 
+    // Expose the alternate this pass resolved to, for the parser's
+    // post-process ruleDone event (a pointer store; snapshotting is
+    // done only when a subscriber exists).
+    ;(ctx as any)._dalt = alt
+
     // Custom alt handler.
     if (alt.h) {
       alt = alt.h(rule, ctx, alt, next) || alt
@@ -993,6 +998,13 @@ function attemptRecover(
       const r = ctx.rs[--ctx.rsI]
       if (null != r && acceptsClose(r.spec, cand.tin, rec.syncGroups, sig)) {
         return r
+      }
+      // Force-popped without a close pass: synthesize the close
+      // notification so structural consumers (outline/folding) see a
+      // balanced event stream even through recovery.
+      if (null != r && ctx.sub.ruleDone) {
+        const done = { state: CLOSE, alt: null, forced: true }
+        ctx.sub.ruleDone.map((s) => s(r, ctx, done))
       }
     }
     return undefined

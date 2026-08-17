@@ -774,6 +774,29 @@ export type LexSub = (tkn: Token, rule: Rule, ctx: Context) => void
 // Subscriber callback invoked for each processed rule.
 export type RuleSub = (rule: Rule, ctx: Context) => void
 
+// Post-process rule event payload: the state pass that just ran, a
+// snapshot of the matched alternate's routing fields (null when the
+// rule has no alternates for the pass), and whether this notification
+// was synthesized for a rule force-popped by error recovery.
+export type RuleDone = {
+  state: RuleState
+  alt: null | {
+    b: number         // Backtracked token count.
+    g: string[]       // Matched alternate's group tags.
+    p: string         // Pushed child rule name ('' if none).
+    r: string         // Replacement rule name ('' if none).
+    err?: Token       // Error token when the pass failed.
+  }
+  forced?: boolean    // True for synthesized closes during recovery.
+}
+
+// Post-process rule subscriber: fires AFTER a rule's open or close
+// pass has run (unlike RuleSub, which fires before), with the matched
+// tokens recorded on rule.o / rule.c and the state transition applied.
+// Consumed via tn.sub({ ruleDone }). This is the span-bearing
+// structural event stream (outline/folding in the LSP design).
+export type RuleDoneSub = (rule: Rule, ctx: Context, done: RuleDone) => void
+
 // Type-only re-export of the Parser runtime class (src/parser.ts).
 import type { Parser } from './parser'
 export type { Parser }
