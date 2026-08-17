@@ -10,6 +10,7 @@ informative and may differ (see `DIVERGENCE.md` "Not divergences" and
 |---|---|
 | [`diagnostic.schema.json`](diagnostic.schema.json) | JSON Schema (draft 2020-12) for the structured diagnostic a serialized parse error emits: TS `JSON.stringify(err)` via `TabnasError.toJSON`, Go `json.Marshal(err)` via `MarshalJSON`. Hand-maintained; pinned by the shared fixture `test/spec/diagnostic.tsv`. |
 | [`grammar.schema.json`](grammar.schema.json) | JSON Schema (draft 2020-12) for the serialized `GrammarSpec` — the pure-JSON grammar form fed to `tn.grammar()` (TS) and `GrammarSpecFromJSON` (Go). Models the portable JSON form only: no `ref` (functions are not JSON), no Go-only `OptionsMap`/`RuleOrder`. Hand-maintained; drift gates below. |
+| [`clib-artifacts-manifest.schema.json`](clib-artifacts-manifest.schema.json) | JSON Schema (draft 2020-12) for the per-release `manifest.json` the shared clib-release workflow attaches alongside prebuilt clib artifacts (ADR-12 clause 5 in `tabnas/admin`). Bindings' loaders parse it, so it is a contract: absence is explicit (`present:false`), and `sha256` is required — and must be verified — for every present artifact. Hand-maintained. |
 | [`error-codes.json`](error-codes.json) | **Generated** registry of the engine's error codes with their message and hint templates: the nine base codes from the TS merged catalogues, plus the Go-only `internal` code under `goOnly`. Do not edit by hand. |
 
 ## Drift gates (`grammar.schema.json`)
