@@ -86,17 +86,26 @@ func TestRecoverSingleErrorKeepsPartialValue(t *testing.T) {
 	}
 }
 
-func TestRecoverCollectsSeparatedErrors(t *testing.T) {
-	// Two independent faults far enough apart that cascade suppression
-	// does not merge them: recovery must report both, which is the
-	// whole point of the feature for a language server.
+func TestRecoverCoalescesAnUnlexableRun(t *testing.T) {
+	// An unlexable run is ONE fault, not one per character. The lexer
+	// hands each unclaimed rune over as a #BD token when recovery is on
+	// (the same deferral it already made for negotiated lexing), and
+	// the skip loop walks the whole run inside a single recovery — so
+	// the run yields a single diagnostic.
+	//
+	// Before that deferral the lexer latched Err and answered #ZZ, and
+	// this input produced THREE diagnostics at one offset for one
+	// mistake; `{"a": zzz, "b":2}` produced four.
 	j := mkRec(t, func(r *RecoverOptions) { r.Suppress = intp(0) })
 	v, errs, err := j.ParseRecover(`{"a":true blah blip,"b":1}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(errs) < 2 {
-		t.Fatalf("want both error regions, got %d", len(errs))
+	if 1 != len(errs) {
+		t.Fatalf("want one diagnostic for the run, got %d", len(errs))
+	}
+	if errs[0].Recovered == nil || 0 == errs[0].Recovered.Skipped {
+		t.Fatalf("the run was not walked: %+v", errs[0].Recovered)
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -104,6 +113,19 @@ func TestRecoverCollectsSeparatedErrors(t *testing.T) {
 	}
 	if true != m["a"] {
 		t.Fatalf("value before the fault lost: %s", enc(v))
+	}
+}
+
+func TestRecoverReportsOneFaultPerRunNotPerCharacter(t *testing.T) {
+	// The guard on the above: a run of arbitrary length is still one
+	// diagnostic. A per-character error stream would bury an editor.
+	j := mkRec(t)
+	_, errs, err := j.ParseRecover(`{"a": zzzzzzzzzzzzzzzzzzzz, "b":2}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if 1 != len(errs) {
+		t.Fatalf("want one diagnostic for a 20-character run, got %d", len(errs))
 	}
 }
 
@@ -162,14 +184,15 @@ func TestRecoverSuppressIsConfiguredAndBounded(t *testing.T) {
 }
 
 func TestRecoverCascadeParityGap(t *testing.T) {
-	t.Skip("known gap: Go reports one unlexable RUN as a single fault at a " +
-		"single offset, where TS sees two regions and suppresses the second. " +
-		"Go's lexer sets Lex.Err and answers #ZZ for unlexable input instead " +
-		"of emitting the #BD token stream TS skips over, so the two runtimes " +
-		"do not agree on how many errors that input contains — the window " +
-		"itself has nothing to suppress. Reconciling the counts is lexer " +
-		"work, not recovery work, and is tracked with the rest of A2's " +
-		"lexer-side parity. See doc/differences.md.")
+	t.Skip("known gap, now narrow: both runtimes coalesce an unlexable run " +
+		"into one diagnostic, but they scope it differently. TS reports one " +
+		"per RUN; Go reports one per RECOVERY, and a single sync search can " +
+		"span several runs — `{\"a\":true blah blip,\"b\":1}` is two " +
+		"diagnostics in TS and one in Go, so the suppress window has a " +
+		"second error to drop there and none here. Go also resumes at the " +
+		"sync token rather than just past the run, so it does not pick the " +
+		"trailing pair back up. Closing this means emitting per-run rather " +
+		"than per-recovery; see doc/differences.md.")
 }
 
 func TestRecoverRecordsMetadata(t *testing.T) {
