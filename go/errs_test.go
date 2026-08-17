@@ -121,3 +121,39 @@ func TestRecordErrIsNilSafe(t *testing.T) {
 		t.Fatal("recordErr(nil) must not append")
 	}
 }
+
+func TestErrsRecordsRecoveredPanic(t *testing.T) {
+	// startParse converts any panic into an "internal" error so the
+	// package never panics on a caller. That error is still an error of
+	// this parse, so it must land in ctx.Errs like every other one —
+	// otherwise a subscriber holding the context sees an empty list
+	// while Parse returns a failure.
+	j := makeJSON()
+	get := ctxOf(j)
+
+	j.Rule("val", func(rs *RuleSpec, p *Parser) {
+		rs.AddAO(func(r *Rule, ctx *Context) { panic("boom") })
+	})
+
+	_, err := j.Parse(`{"a":1}`)
+	if err == nil {
+		t.Fatal("panic should surface as an error")
+	}
+	je, ok := err.(*TabnasError)
+	if !ok {
+		t.Fatalf("want *TabnasError, got %T", err)
+	}
+	if "internal" != je.Code {
+		t.Fatalf("want internal code, got %s", je.Code)
+	}
+	ctx := get()
+	if ctx == nil {
+		t.Fatal("no context captured")
+	}
+	if 0 == len(ctx.Errs) {
+		t.Fatal("recovered panic was not recorded in ctx.Errs")
+	}
+	if ctx.Errs[len(ctx.Errs)-1] != je {
+		t.Fatal("returned error is not the last recorded error")
+	}
+}

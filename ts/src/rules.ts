@@ -958,6 +958,10 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
   const out = new Set<Tin>()
   if (null == rule || null == ctx || rule === ctx.NORULE) return []
 
+  // The buffer position being asked about: a token offered here must
+  // FOLLOW everything already buffered, never replace part of it.
+  const queryPos = null == atPos ? 0 : atPos
+
   // Path-aware tins recorded by parse_alts at the failure point; the
   // collated tcol is the fallback (exact at position 0, where no
   // prefix exists to disambiguate).
@@ -976,7 +980,13 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
     for (const a of stateAltsNow ?? []) {
       const aN = a.sN | 0
       const k = altMatchDepth(a, ctx)
-      if (k < aN) {
+      // An alternate speaks only for the position it actually reached.
+      // One that stopped short of the query (k < queryPos) mismatched a
+      // token that is already in the buffer, so the tokens it wants at
+      // k would have to REPLACE that token rather than follow it —
+      // offering them puts a sibling branch's opener in a completion
+      // list where it cannot legally appear.
+      if (k === queryPos && k < aN) {
         for (const t of a.t?.[k] ?? []) out.add(t)
       }
     }
@@ -1025,7 +1035,6 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
     }
   }
 
-  const queryPos = null == atPos ? 0 : atPos
   const stateAlts = (OPEN === rule.state
     ? (rule.spec as any).def?.open
     : (rule.spec as any).def?.close) as NormAltSpec[] | undefined
@@ -1038,7 +1047,13 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
     // only when those coincide. Without this, `[A] {b:1, p:child}`
     // would offer child's openers at the position after A even though
     // child re-consumes A itself.
-    const bN = 'number' === typeof a.b ? a.b : 0
+    // The functional form (`b: (rule, ctx, alt) => n`) resolves only
+    // while the alternate is being matched, and this runs outside that
+    // — there is no resolved count to read, so the handover point is
+    // unknown. Skip: a missing completion beats a wrong one.
+    const ab: any = a.b
+    if (null != ab && false !== ab && 'number' !== typeof ab) continue
+    const bN = 'number' === typeof ab ? ab : 0
     if (aN - bN !== queryPos) continue
     addOpeners(a.p as any)
     addOpeners(a.r as any)

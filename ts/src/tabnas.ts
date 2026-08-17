@@ -585,8 +585,21 @@ class Tabnas {
       // Annotated read: the write happens inside the lex subscriber,
       // which TypeScript cannot see from here.
       const atEnd = this.#contAtEnd as Tin[] | null
-      if (null != atEnd && 0 < atEnd.length) {
-        const tins = [...atEnd].sort((a: Tin, b: Tin) => a - b)
+      if (null != atEnd) {
+        // The prefix parsed, so stopping here is itself a legal
+        // continuation — add #ZZ unconditionally. Capturing only lexer
+        // FETCHES of #ZZ misses the rule that consumes an
+        // already-buffered end token (fetched while testing an earlier
+        // alternate, then reused from ctx.t without a second event).
+        //
+        // An EMPTY capture is a real answer, not a missing one: it says
+        // the end is all that is legal. Falling through to the start
+        // rule's openers here would offer tokens that restart the
+        // document — for `top.open([{s:['#A']}]).close([{s:[]}])`,
+        // `#A` after `a`, even though `aa` is trailing content.
+        const set = new Set<Tin>(atEnd)
+        set.add(inst.token('#ZZ') as Tin)
+        const tins = [...set].sort((a: Tin, b: Tin) => a - b)
         return { tins, tokens: tins.map((tin: Tin) => String(inst.token(tin))) }
       }
       // Empty source with lex.empty enabled returns before a lexer

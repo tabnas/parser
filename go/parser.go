@@ -295,10 +295,19 @@ func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ru
 // matchers, or engine bugs) into an "internal" TabnasError, upholding the
 // package guarantee that parsing never panics, whatever the input.
 func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
+	// Bound to the parse context as soon as one exists, so a panic
+	// raised after that point (plugin action, custom matcher, engine
+	// bug) still records into ctx.Errs. Without it a subscriber that
+	// captured the context sees an empty Errs while Parse returns an
+	// error, breaking the invariant that the returned error is the last
+	// entry. recordErr is nil-safe, so a panic raised before the
+	// context is built needs no extra guard.
+	var pctx *Context
 	defer func() {
 		if r := recover(); r != nil {
 			result = nil
-			err = p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1)
+			err = pctx.recordErr(
+				p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1))
 		}
 	}()
 
@@ -346,6 +355,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 	lex.Ctx = ctx
 	ctx.Lex = lex
+	pctx = ctx
 
 	startName := p.Config.RuleStart
 	if startName == "" {

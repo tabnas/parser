@@ -182,3 +182,81 @@ describe('continuations-eof-review', () => {
     assert.ok(t.includes('#A') && t.includes('#B'), 'openers offered: ' + t)
   })
 })
+
+describe('continuations-eof-review-2', () => {
+  const { Tabnas: T } = require('..')
+
+  function bare(tokens, rules, start) {
+    const tn = new T({ fixed: { token: tokens } })
+    const j = tn.make()
+    for (const rn of Object.keys(j.rule())) j.rule(rn, null)
+    for (const [name, def] of Object.entries(rules)) j.rule(name, def)
+    j.options({ rule: { start: start || 'top' } })
+    return j
+  }
+
+  // Every case below states the whole answer, not a membership probe:
+  // an over-approximation that quietly grows is exactly the defect
+  // these pin, so the assertions are deepStrictEqual on the full set.
+
+  it('drops alternates that mismatched before the queried position', () => {
+    // Alternates [A B], [C D], [A]. After `a` the third alternate has
+    // completed, so the end is legal, and the first wants B. The second
+    // never matched its C, so offering C would mean REPLACING the `a`
+    // already typed — `ac` does not parse.
+    const j = bare(
+      { '#A': 'a', '#B': 'b', '#C': 'c', '#D': 'd' },
+      {
+        top: (rs) =>
+          rs
+            .open([{ s: ['#A', '#B'] }, { s: ['#C', '#D'] }, { s: ['#A'] }])
+            .close([{ s: ['#ZZ'] }]),
+      },
+    )
+    assert.deepStrictEqual(j.continuations('a').tokens.sort(), ['#B', '#ZZ'])
+    assert.doesNotThrow(() => j.parse('ab'))
+    assert.throws(() => j.parse('ac'))
+  })
+
+  it('offers the end when a buffered EOF completes the parse', () => {
+    // The close rule consumes an end token that was already fetched
+    // while testing an open alternate, so no second lexer event fires.
+    // The end is still a legal stopping point and must be reported.
+    const j = bare(
+      { '#A': 'a', '#B': 'b' },
+      {
+        top: (rs) =>
+          rs.open([{ s: ['#A', '#B'] }, { s: ['#A'] }]).close([{ s: ['#ZZ'] }]),
+      },
+    )
+    assert.ok(j.continuations('a').tokens.includes('#ZZ'))
+  })
+
+  it('treats an empty end capture as "only the end is legal"', () => {
+    // top matches one A and closes on anything. `a` parses and nothing
+    // may follow it, so the answer is exactly #ZZ — NOT the start
+    // rule's openers, which would offer #A and imply `aa` parses.
+    const j = bare(
+      { '#A': 'a' },
+      { top: (rs) => rs.open([{ s: ['#A'] }]).close([{ s: [] }]) },
+    )
+    assert.deepStrictEqual(j.continuations('a').tokens, ['#ZZ'])
+    assert.throws(() => j.parse('aa'))
+  })
+
+  it('skips openers behind an unresolved functional backtrack', () => {
+    // `b` in its function form resolves only during matching, so the
+    // handover position cannot be known here. child re-consumes the A,
+    // so its #A opener is not legal after `a` — the static b:1 case is
+    // covered above, this pins the function form to the same answer.
+    const j = bare(
+      { '#A': 'a', '#B': 'b' },
+      {
+        top: (rs) => rs.open([{ s: ['#A'], b: () => 1, p: 'child' }]),
+        child: (rs) => rs.open([{ s: ['#A'] }]),
+      },
+    )
+    assert.deepStrictEqual(j.continuations('a').tokens, ['#ZZ'])
+    assert.throws(() => j.parse('aa'))
+  })
+})
