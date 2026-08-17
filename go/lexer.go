@@ -912,6 +912,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			// matching the #BD token TS synthesizes at the same point
 			// (ts/src/lexer.ts next; nextUnfiltered2 below does the same).
 			l.attachErrContext(je, r, "#BD", "")
+			l.Ctx.recordErr(je)
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
 		}
@@ -922,6 +923,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			}
 			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
 			l.attachErrContext(je, r, tkn.Name, tkn.Why)
+			l.Ctx.recordErr(je)
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: tkn.SI, RI: tkn.RI, CI: tkn.CI}
 		}
