@@ -607,14 +607,38 @@ Cancellation is an ordinary error of the parse, so it is recorded in
 recovery mode it surfaces through `{ value, errors }`; Go, still
 fail-fast, returns it directly.
 
-## Post-process rule event (`sub({ ruleDone })`) — TS only, Go parity pending
+## Post-process rule event (`sub({ ruleDone })` / `SubRuleDone`)
 
-TS adds a third subscriber kind: `ruleDone` fires after each rule pass
-with matched tokens recorded on the rule and a `RuleDone` payload
-(`state`, matched-alternate `b`/`g`/`p`/`r` snapshot, `forced` for
-recovery-synthesized closes). Go's subscriber surface remains
-`LexSubs`/`RuleSubs` (pre-process only); the port is scheduled with
-phase P2 of the unified-LSP plan.
+Both runtimes carry the third subscriber kind: it fires AFTER each rule
+pass, with the matched tokens recorded on the rule and the state
+transition applied, so it can report what the pass actually did — which
+the pre-process event cannot. This is the span-bearing structural
+stream an outline provider is built from. Pinned by
+`ts/test/ruledone.test.js` and `go/ruledone_test.go`.
+
+| | TypeScript | Go |
+|---|---|---|
+| Subscribe | `tn.sub({ ruleDone })` | `tn.SubRuleDone(fn)` |
+| Callback | `(rule, ctx, done) => void` | `func(rule *Rule, ctx *Context, done RuleDone)` |
+| Payload | `{ state, alt: { b, g, p, r, err }, forced }` | `RuleDone{State, Alt: *RuleDoneAlt{B, G, P, R, Err}, Forced}` |
+| Group tags | `g: string[]` | `G []string`, split from the comma-separated `AltSpec.G` |
+
+**The subscription is its own method in Go, and that is forced.** TS's
+`sub()` takes an options object, so a new event is a new key. Go's
+`Sub(lexSub, ruleSub)` is positional and public, and every sibling Go
+grammar repo calls it — widening it would break all of them for an
+event most do not use. Same constraint class as `ctx.ParseErr`.
+
+`Alt` is nil only when the rule state had no alternates at all. When it
+had some and none matched, `Alt` is non-nil with just `Err` set,
+mirroring TS's distinction between a null `_dalt` and a failed one —
+collapsing the two would make a grammar hole read as a syntax error.
+The `G` slice is a fresh copy on every event: `AltSpec.G` is live
+grammar configuration and a consumer must not reach it through the
+payload.
+
+One gap, and it closes with A2: `Forced` marks a close synthesized by
+error recovery, so it is always false in Go until Go has recovery.
 
 ## Lex-event retraction on unrelex — both runtimes
 

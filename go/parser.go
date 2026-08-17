@@ -42,7 +42,20 @@ type Context struct {
 	Meta     map[string]any       // Parse metadata (TS: meta).
 	LexSubs  []LexSub             // Lex event subscribers (TS: sub.lex).
 	RuleSubs []RuleSub            // Rule event subscribers (TS: sub.rule).
-	ParseErr *Token               // Error token; when set, halts the parse.
+
+	// Post-process rule event subscribers (TS: sub.ruleDone). Populated
+	// from the instance by startParse; see Tabnas.SubRuleDone.
+	RuleDoneSubs []RuleDoneSub
+
+	// The alternate the current rule pass resolved to, recorded by
+	// Rule.Process for the post-process event (TS: ctx._dalt). daltAny
+	// records whether the state had ANY alternates, which is how a rule
+	// with no alternates at all is told apart from one whose alternates
+	// all failed; daltErr carries the failure token in the latter case.
+	dalt     *AltSpec
+	daltAny  bool
+	daltErr  *Token
+	ParseErr *Token // Error token; when set, halts the parse.
 
 	// Errors recorded during this parse (TS: ctx.errs). Appended at
 	// each error's CONSTRUCTION site, so the error returned by Parse is
@@ -339,14 +352,19 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		LexSubs:  lexSubs,
 		RuleSubs: ruleSubs,
 		Opts:     opts,
-		Cfg:      p.Config,
-		Src:      src,
-		Inst:     inst,
-		U:        make(map[string]any),
-		TC:       0,
-		NOTOKEN:  NoToken,
-		NORULE:   NoRule,
-		F:        func(v any) string { return Str(v, 44) },
+		// Read off the instance rather than taken as a parameter:
+		// startParse's signature is mirrored by the exported StartMeta,
+		// and widening that would break every caller for an event they
+		// may not use.
+		RuleDoneSubs: ruleDoneSubsOf(inst),
+		Cfg:          p.Config,
+		Src:          src,
+		Inst:         inst,
+		U:            make(map[string]any),
+		TC:           0,
+		NOTOKEN:      NoToken,
+		NORULE:       NoRule,
+		F:            func(v any) string { return Str(v, 44) },
 	}
 
 	// Late-bind token-set positions only when this instance actually
@@ -421,7 +439,23 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			}
 		}
 
+		prev := rule
+		prevState := rule.State
+
 		rule = rule.Process(ctx, lex)
+
+		// Post-process event: fires with the pass's matched tokens
+		// recorded on prev and the state transition applied, so unlike
+		// the pre-process event above it can report what the pass
+		// actually DID. Dispatched here rather than inside Process for
+		// the same reason TS dispatches from its loop: Process has
+		// several return points, and one dispatch site cannot miss one.
+		if len(ctx.RuleDoneSubs) > 0 {
+			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
+			for _, sub := range ctx.RuleDoneSubs {
+				sub(prev, ctx, done)
+			}
+		}
 
 		// Check for parse error from alt.E or actions.
 		if ctx.ParseErr != nil {
@@ -660,6 +694,39 @@ func (ctx *Context) recordErr(je *TabnasError) *TabnasError {
 		ctx.Errs = append(ctx.Errs, je)
 	}
 	return je
+}
+
+// ruleDoneSubsOf reads the post-process subscribers off the parsing
+// instance. Nil-safe: Parser.Start and StartMeta parse without one.
+func ruleDoneSubsOf(inst *Tabnas) []RuleDoneSub {
+	if inst == nil {
+		return nil
+	}
+	return inst.ruleDoneSubs
+}
+
+// ruleDoneAlt renders the pass's recorded outcome as the event
+// payload. Nil when the rule state had no alternates at all; non-nil
+// with only Err set when it had some and none matched — the same
+// distinction TS draws between a null _dalt and a failed one.
+//
+// The group tags are split into a fresh slice on every call: AltSpec.G
+// is live grammar configuration, and a consumer must not be able to
+// reach it through the event.
+func (ctx *Context) ruleDoneAlt() *RuleDoneAlt {
+	if ctx == nil || !ctx.daltAny {
+		return nil
+	}
+	if ctx.dalt == nil {
+		return &RuleDoneAlt{Err: ctx.daltErr}
+	}
+	return &RuleDoneAlt{
+		B:   ctx.dalt.B,
+		G:   splitGroupTags(ctx.dalt.G),
+		P:   ctx.dalt.P,
+		R:   ctx.dalt.R,
+		Err: ctx.daltErr,
+	}
 }
 
 // makeErrorIn is makeError plus recording on the parse context.

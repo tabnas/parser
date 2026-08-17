@@ -41,6 +41,38 @@ type LexSub func(tkn *Token, rule *Rule, ctx *Context)
 // RuleSub is a subscriber callback invoked after each rule step.
 type RuleSub func(rule *Rule, ctx *Context)
 
+// RuleDoneAlt describes the alternate a rule pass resolved to
+// (TS: RuleDone.alt).
+type RuleDoneAlt struct {
+	B   int      // Backtracked token count.
+	G   []string // Matched alternate's group tags, split from AltSpec.G.
+	P   string   // Pushed child rule name ("" if none).
+	R   string   // Replacement rule name ("" if none).
+	Err *Token   // Failure token when alternates existed but none matched.
+}
+
+// RuleDone is the payload of the post-process rule event
+// (TS: RuleDone). State is the rule's state BEFORE the pass, so a
+// consumer can tell an open pass from a close one.
+//
+// Alt is nil when the rule had no alternates for that state at all.
+// When it had some but none matched, Alt is non-nil with only Err set —
+// the same distinction TS draws by pointing _dalt at the failed
+// alternate rather than at null.
+type RuleDone struct {
+	State  RuleState    // Rule state before the pass.
+	Alt    *RuleDoneAlt // Resolved alternate, or nil if the state had none.
+	Forced bool         // Synthesized close during recovery; always false until Go gains recovery (A2).
+}
+
+// RuleDoneSub is a post-process rule subscriber: it fires AFTER a
+// rule's open or close pass has run — unlike RuleSub, which fires
+// before — with the pass's matched tokens recorded on the rule and the
+// state transition applied. That is what lets it report what the pass
+// actually DID (the matched alternate's B/G/P/R), which the
+// pre-process event cannot see.
+type RuleDoneSub func(rule *Rule, ctx *Context, done RuleDone)
+
 // pluginEntry stores a registered plugin and its options.
 type pluginEntry struct {
 	plugin Plugin         // The registered plugin function.
@@ -596,6 +628,24 @@ func (j *Tabnas) Sub(lexSub LexSub, ruleSub RuleSub) *Tabnas {
 	return j
 }
 
+// SubRuleDone subscribes to the post-process rule event, which fires
+// after each rule pass rather than before it (see RuleDoneSub).
+//
+// It is a separate method rather than a third parameter on Sub because
+// Sub's signature is positional and public: the sibling Go grammar
+// repos all call Sub(lexSub, ruleSub), and widening it would break
+// every one of them. TS can add a key to its options object without
+// that cost, which is why the two APIs differ in shape while carrying
+// the same event.
+//
+// Returns the Tabnas instance for chaining.
+func (j *Tabnas) SubRuleDone(ruleDoneSub RuleDoneSub) *Tabnas {
+	if ruleDoneSub != nil {
+		j.ruleDoneSubs = append(j.ruleDoneSubs, ruleDoneSub)
+	}
+	return j
+}
+
 // Derive creates a new Tabnas instance inheriting this instance's config,
 // rules, plugins, and custom tokens. Changes to the child do not affect the parent.
 // This matches TypeScript's tabnas.make(options, parent).
@@ -718,6 +768,7 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 	// Copy subscriptions.
 	child.lexSubs = append(child.lexSubs, j.lexSubs...)
 	child.ruleSubs = append(child.ruleSubs, j.ruleSubs...)
+	child.ruleDoneSubs = append(child.ruleDoneSubs, j.ruleDoneSubs...)
 
 	// Copy decorations (TS: parent properties inherited by child).
 	if j.decorations != nil {
