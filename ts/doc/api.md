@@ -49,6 +49,22 @@ through plugin pipelines.
 with extra fields — used by the test harness; rarely needed in user
 code.
 
+### `ctx.errs`
+
+Every parse `Context` carries `errs: TabnasError[]`, the per-parse
+error list. Each `TabnasError` records itself there at construction,
+so after a failed parse the thrown error is also
+`err.internal.ctx.errs[errs.length - 1]` (today, fail-fast, always the
+only entry). The list is strictly per-parse: every parse starts empty,
+`parent_ctx` seeding never carries a parent's entries across, and a
+clean parse leaves it empty. Recording is best-effort — a degenerate
+context (missing or frozen `errs`) never prevents the error itself
+from being raised.
+
+This is the substrate for opt-in multi-error recovery
+(`ts/doc/lsp-feasibility.md`): in a future recovery mode the engine
+appends here and continues instead of throwing.
+
 ## Instance Management
 
 ### `tn.make(options?)`

@@ -80,6 +80,20 @@ class TabnasError extends SyntaxError {
       value: { token, rule, ctx },
       enumerable: false,
     })
+
+    // Record on the per-parse error list. Guarded: plugin code can
+    // construct errors with degenerate ctx values (including a frozen
+    // errs array), and construction must never throw (see toJSON's
+    // contract above) — a failed recording must not mask the error
+    // being constructed.
+    try {
+      const errs = (ctx as any)?.errs
+      if (Array.isArray(errs)) {
+        errs.push(this)
+      }
+    } catch (e) {
+      // Recording is best-effort; the error still throws to the caller.
+    }
   }
 
   // Structured diagnostic for JSON.stringify. Mirrors the Go

@@ -1154,6 +1154,7 @@ function parserwrap(parser: any) {
               inst: () => tabnas,
               rule: norule,
               sub: {},
+              errs: [],
               xs: -1,
               v2: token,
               v1: token,

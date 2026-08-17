@@ -125,6 +125,11 @@ class Parser {
     // instance in place, so getters/setters and methods survive.
     if (null != parent_ctx) {
       deep(ctx, parent_ctx)
+
+      // The error list is strictly per-parse: a parent context's
+      // recorded errors must not leak into this parse's list (the
+      // deep merge above would otherwise seed them).
+      ctx.errs = []
     }
 
     // The no-rule sentinel Rule is per-parse, but its (empty) spec is

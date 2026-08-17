@@ -540,3 +540,18 @@ has none. Go therefore records declaration order explicitly:
   order (deterministic, but alphabetical rather than as-declared).
   `GrammarText` fills it in automatically from the source text's key
   order, so text grammars need not supply it.
+
+## Per-parse error list (`ctx.errs`) — TS only, Go parity pending
+
+TS `Context` carries `errs: TabnasError[]`, a per-parse error list.
+Every `TabnasError` records itself there at construction, so after a
+fail-fast parse the thrown error is also `errs[errs.length-1]`; a clean
+parse leaves it empty. This is groundwork for opt-in multi-error
+recovery (`ts/doc/lsp-feasibility.md`) and is pinned by
+`ts/test/errs.test.js`.
+
+Go's `Context` has no equivalent yet — `ctx.ParseErr` remains a single
+error. The Go port is scheduled with the rest of the recovery work
+(unified-LSP plan, phase P2); until then this is a deliberate,
+TS-only surface with no behavioural effect on either runtime's
+fail-fast parse results.

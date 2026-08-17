@@ -21,6 +21,8 @@ import type {
   Token,
 } from './types'
 
+import type { TabnasError } from './error'
+
 
 // Fields the parser supplies up front to construct a Context (the rest are filled in later).
 export type ContextInit = {
@@ -57,6 +59,13 @@ export class Context {
   sub!: { lex?: LexSub[]; rule?: RuleSub[] }   // Lex and rule subscriber callbacks.
 
   xs: Tin = -1 as Tin                          // Lex state tin.
+
+  // Parse errors recorded during this parse. Every TabnasError records
+  // itself here at construction (see error.ts), so after a fail-fast
+  // parse the thrown error is also errs[errs.length - 1]. Groundwork
+  // for multi-error collection: a recovery mode appends here and
+  // continues instead of throwing (see ts/doc/lsp-feasibility.md).
+  errs: TabnasError[] = []
 
   // Consumed-token history; v1 / v2 (below) read from the top of this stack.
   v: Token[] = []
