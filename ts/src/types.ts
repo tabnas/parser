@@ -241,6 +241,15 @@ export type TabnasOptions = {
   }
   parse?: {                         // Parse-phase hooks.
     prepare?: { [name: string]: ParsePrepare }   // Pre-parse setup callbacks.
+    recover?: {                     // Opt-in error recovery (multi-error collection).
+      enabled?: boolean             // Off by default; on, parse returns { value, errors }.
+      syncGroups?: string[] | null  // Sync-edge g tags; null = engine default; an array REPLACES the set.
+      syncTokens?: string[]         // Extra explicit sync token names.
+      popUntilValid?: boolean       // Pop stack until a rule accepts the sync token.
+      maxSkip?: number              // Cap forward token skip per recovery.
+      maxRecoveries?: number        // Cap recorded errors per parse.
+      suppress?: number             // Cascade window (consumed tokens) after a recovery.
+    }
   }
   rule?: {                          // Rule engine settings.
     start?: string                  // Name of the start rule.
@@ -326,6 +335,15 @@ export type Config = {
 
   parse: {                          // Parse-phase hooks.
     prepare: ParsePrepare[]         // Pre-parse setup callbacks.
+    recover: {                      // Resolved error-recovery settings.
+      enabled: boolean              // Off by default.
+      syncGroups: string[]          // g tags marking close alts as sync edges.
+      syncTins: Tin[]               // Resolved explicit sync tokens.
+      popUntilValid: boolean        // Pop stack until a rule accepts the sync token.
+      maxSkip: number               // Cap forward token skip per recovery.
+      maxRecoveries: number         // Cap recorded errors per parse.
+      suppress: number              // Cascade window after a recovery.
+    }
   }
 
   rule: {                           // Rule engine settings.
