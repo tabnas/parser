@@ -1412,6 +1412,17 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			// slot has not been populated by a previous alt / fetch.
 			if ctx.T[i].IsNoToken() {
 				tkn := lex.Next(rule)
+				// Lexer soft mode: with recovery on and relex off, an
+				// unlexable span is absorbed HERE rather than handed to
+				// the alternates, so the parse carries on as though it
+				// were not there and the text after it still parses.
+				// Under relex the bad token belongs to the alternates
+				// instead — one of them may re-cut the span.
+				if !relex && ctx.Cfg != nil && ctx.Cfg.Recover.Enabled {
+					for tkn != nil && TinBD == tkn.Tin && absorbBad(ctx, lex, rule, tkn) {
+						tkn = lex.Next(rule)
+					}
+				}
 				ctx.T[i] = tkn
 				// Keep the legacy T0 / T1 aliases in sync so existing
 				// grammar / plugin code that reads them observes the

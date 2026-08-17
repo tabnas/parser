@@ -70,6 +70,11 @@ var defaultHints = map[string]string{
 type RecoveredAt struct {
 	Skipped int // Tokens skipped before reaching the sync token.
 	Sync    Tin // The token the parse resumed on.
+
+	// Bad marks a diagnostic for an unlexable RUN absorbed at fetch
+	// time, rather than one raised by a panic-mode resync. Skipped is
+	// then the run's length in tokens and Sync is unset.
+	Bad bool
 }
 
 type TabnasError struct {

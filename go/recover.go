@@ -242,6 +242,14 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 		return nil
 	}
 
+	// Check the cap BEFORE recording, not after. Recording first and
+	// then bailing overshoots by one on every give-up path, and now
+	// that the fetch-time absorber records too, a cap of 2 was letting
+	// four diagnostics through.
+	if rec.MaxRecoveries <= len(ctx.Errs) {
+		return nil
+	}
+
 	code := tkn.Err
 	if "" == code {
 		code = tkn.Why
@@ -266,10 +274,6 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 	suppressed := ctx.recoverAtSet && ctx.VAbs-ctx.recoverAt < rec.Suppress
 	if suppressed && 0 < len(ctx.Errs) && ctx.Errs[len(ctx.Errs)-1] == err {
 		ctx.Errs = ctx.Errs[:len(ctx.Errs)-1]
-	}
-
-	if rec.MaxRecoveries < len(ctx.Errs) {
-		return nil
 	}
 
 	// Strict-progress guard. When nothing has been consumed since the
@@ -434,4 +438,76 @@ func forceClose(ctx *Context, r *Rule) {
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
+}
+
+// absorbBad is the lexer soft mode: with recovery on, a bad token is
+// consumed at FETCH time rather than handed to the alternates. The
+// parse then continues as though the unlexable span were not there,
+// which is what lets the text after it still parse.
+//
+// Contiguous bad tokens are coalesced into one diagnostic whose region
+// grows with the run — an unlexable word is one squiggle, not one per
+// character. Returns false when the run has outgrown MaxSkip or the
+// parse has outrun MaxRecoveries; the caller then leaves the bad token
+// in place and the ordinary failure path takes over.
+func absorbBad(ctx *Context, lex *Lex, rule *Rule, tkn *Token) bool {
+	if ctx == nil || ctx.Inst == nil || tkn == nil {
+		return false
+	}
+	rec := ctx.Cfg.Recover
+
+	code := tkn.Why
+	if "" == code {
+		code = tkn.Err
+	}
+	if "" == code {
+		code = "unexpected"
+	}
+	bderr := ctx.Inst.parser.makeErrorIn(
+		ctx, code, tkn.Src, ctx.Src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
+
+	// makeErrorIn appended it, so it is the last entry — which is what
+	// makes coalescing a pop rather than a search.
+	isLast := 0 < len(ctx.Errs) && ctx.Errs[len(ctx.Errs)-1] == bderr
+
+	switch {
+	case ctx.badToSet && tkn.SI <= ctx.badTo && ctx.badErr != nil && isLast:
+		// Same run: grow the region rather than record it twice.
+		ctx.Errs = ctx.Errs[:len(ctx.Errs)-1]
+		if ctx.badErr.Recovered != nil {
+			ctx.badErr.Recovered.Skipped++
+			if rec.MaxSkip < ctx.badErr.Recovered.Skipped {
+				return false
+			}
+		}
+	case ctx.recoverAtSet && ctx.VAbs-ctx.recoverAt < rec.Suppress && isLast:
+		// A fresh bad region with nothing consumed since the last
+		// recovery is a follow-on of that same fault, not news.
+		ctx.Errs = ctx.Errs[:len(ctx.Errs)-1]
+		ctx.badErr = nil
+	default:
+		bderr.Recovered = &RecoveredAt{Skipped: 1, Bad: true}
+		ctx.badErr = bderr
+		ctx.recoverAt = ctx.VAbs
+		ctx.recoverAtSet = true
+	}
+
+	span := len(tkn.Src)
+	if span < 1 {
+		span = 1
+	}
+	ctx.badTo = tkn.SI + span
+	ctx.badToSet = true
+
+	if rec.MaxRecoveries < len(ctx.Errs) {
+		return false
+	}
+
+	// The bad token did not advance the lex point — move past it or the
+	// refetch loops in place. A fault raised mid-construct (a string
+	// escape or control character) resynchronizes at the next line end
+	// instead, since resuming inside the construct would mis-tokenize
+	// everything after it.
+	advanceLexPast(lex, tkn, midConstruct[tkn.Why])
+	return true
 }
