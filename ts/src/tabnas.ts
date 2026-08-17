@@ -116,7 +116,7 @@ import {
 } from './lexer'
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
-import { validateAlt, validateAlts } from './rules'
+import { validateAlt, validateAlts, continuationTins } from './rules'
 
 import { mergeInstances, deshareMatchTokens } from './merge'
 
@@ -207,6 +207,13 @@ class Tabnas {
   // JSON.stringify / tests. Read it through the public `internal()` method.
   #internal!: Internal
 
+  // Lazy fail-fast sibling used by continuations() — recovery must be
+  // off there so the parse stops exactly at the query point. Rebuilt
+  // whenever #gen changes (any grammar/options mutation).
+  #continst?: Tabnas
+  #continstGen = -1
+  #gen = 0
+
   // Static utility / constants for plugin code that holds the class.
   static util = util      // Shared utility bag.
   static S = S            // Interned string constants.
@@ -279,6 +286,7 @@ class Tabnas {
     // and any plugin code below can rely on `this.options` already
     // existing and working.
     const optionsFn = ((change?: Record<string, any>): Record<string, any> => {
+      if (null != change) this.#gen++
       return this.#setOptions(change)
     }) as ((change?: Record<string, any>) => Record<string, any>) & Record<string, any>
     deep(optionsFn, internal.merged)
@@ -376,6 +384,7 @@ class Tabnas {
   // the instance), that's what `use()` returns — matches the upstream
   // contract and lets plugins decorate or wrap the instance.
   use(plugin: Plugin, plugin_options?: Record<string, any>): Tabnas {
+    this.#gen++
     if (S.function !== typeof plugin) {
       throw new Error(
         'Tabnas.use: the first argument must be a function ' +
@@ -411,6 +420,7 @@ class Tabnas {
     name?: string,
     define?: RuleDefiner | null,
   ): RuleSpec | RuleSpecMap | this | undefined {
+    if (undefined !== define) this.#gen++
     const result = this.#internal.parser.rule(name, define)
     return result === undefined ? this : result
   }
@@ -477,6 +487,66 @@ class Tabnas {
   }
 
 
+  // Legal-continuation tokens after parsing `src` as a prefix: the
+  // completion surface of the unified-LSP design. Parses src on a
+  // fail-fast sibling; when the parse fails (the usual case for a
+  // mid-edit prefix), returns the failing rule's collated lookahead
+  // tins at the deepest matched position, widened by the pop-closure
+  // over empty-close ancestors. A prefix that parses completely
+  // returns an empty set. The set is an over-approximation:
+  // conditions and counters may still reject a listed token.
+  continuations(src: string): { tins: Tin[]; tokens: string[] } {
+    if (null == this.#continst || this.#continstGen !== this.#gen) {
+      const sib = this.make({
+        parse: { recover: { enabled: false } },
+      }) as Tabnas
+      // make() re-runs plugins but drops rules installed through the
+      // public rule()/grammar() APIs — transplant any missing specs so
+      // the sibling parses the same language as this instance.
+      const srcRsm: any = this.#internal.parser.rsm
+      const sibParser: any = sib.internal().parser
+      let transplanted = false
+      for (const rn of Object.keys(srcRsm)) {
+        if (null == sibParser.rsm[rn]) {
+          sibParser.rsm[rn] = filterRules(srcRsm[rn], sib.internal().config)
+          transplanted = true
+        }
+      }
+      if (transplanted) sibParser.norm()
+      this.#continst = sib
+      this.#continstGen = this.#gen
+    }
+    const inst = this.#continst
+
+    let err: any = undefined
+    try {
+      inst.parse(src)
+    } catch (e) {
+      if (e instanceof TabnasError) err = e
+      else throw e
+    }
+
+    if (null == err) return { tins: [], tokens: [] }
+
+    const ctx = err.internal?.ctx
+    let rule = err.internal?.rule ?? ctx?.rule
+    let tins = null != ctx ? continuationTins(ctx, rule) : []
+
+    // Empty/whitespace-only prefix: the parse fails before the start
+    // rule is built (ctx carries the NORULE sentinel), so offer the
+    // start rule's own opening tokens.
+    if (0 === tins.length) {
+      const cfg = inst.internal().config
+      const startspec: any = (inst.internal().parser as any).rsm[cfg.rule.start]
+      const at = startspec?.def?.tcol?.[0]?.[0]
+      if (Array.isArray(at)) tins = [...at].sort((a: Tin, b: Tin) => a - b)
+    }
+
+    const tokens = tins.map((tin: Tin) => String(inst.token(tin)))
+    return { tins, tokens }
+  }
+
+
   // Internal accessor used by parser, plugins, and debug code.
   internal(): Internal {
     return this.#internal
@@ -485,6 +555,7 @@ class Tabnas {
 
   // Apply a GrammarSpec (declarative rule definition) to this instance.
   grammar(gs: GrammarSpec, setting?: GrammarSetting): this {
+    this.#gen++
 
     // Install works on a private copy: the caller's spec is theirs, and
     // must read the same after this call as before it.

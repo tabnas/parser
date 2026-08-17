@@ -593,3 +593,13 @@ subscribers when a speculative recut is undone (unrelex), so a
 position-keyed last-write-wins reconstruction always ends on the token
 the parse proceeded with. Go's lex-sub dispatch does not yet mirror
 this; scheduled with phase P2 of the unified-LSP plan.
+
+## Continuations API (`tn.continuations(src)`) — TS only, Go parity pending
+
+TS exposes a completion primitive: legal-continuation tokens after
+parsing a prefix, position-aware and widened by a pop-closure over
+empty-close ancestors. The diagnostic `expected[]` field deliberately
+keeps its position-0 semantics in BOTH runtimes for now — it is pinned
+by the shared diagnostic.tsv parity fixtures; the improved computation
+lives only in the new API until the Go parity phase updates both
+together.
