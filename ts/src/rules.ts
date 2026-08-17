@@ -965,14 +965,21 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
   if (null != cont && 0 < cont.length) {
     for (const t of cont) out.add(t)
   } else {
-    const stateI = OPEN === rule.state ? 0 : 1
-    const tcol = (rule.spec as any).def?.tcol
-    // atPos is the lookahead position actually being fetched: a rule
-    // peeking at position 1 (having matched position 0) must be asked
-    // what is legal THERE, not at the start of its alternates.
-    const pI = null == atPos ? 0 : atPos
-    const at: Tin[] = tcol?.[stateI]?.[pI] ?? tcol?.[stateI]?.[0] ?? []
-    for (const t of at) out.add(t)
+    // No failure record (the prefix parsed): compute the same
+    // path-aware set directly from the buffer. Per alternate, only the
+    // position it is actually waiting on contributes — the collated
+    // tcol is path-blind and would offer a sibling alternate's later
+    // tokens whose own prefix never matched.
+    const stateAltsNow = (OPEN === rule.state
+      ? (rule.spec as any).def?.open
+      : (rule.spec as any).def?.close) as NormAltSpec[] | undefined
+    for (const a of stateAltsNow ?? []) {
+      const aN = a.sN | 0
+      const k = altMatchDepth(a, ctx)
+      if (k < aN) {
+        for (const t of a.t?.[k] ?? []) out.add(t)
+      }
+    }
   }
 
   // Pop-closure over empty-close ancestors: bounded by the finite rule
@@ -1018,14 +1025,23 @@ function continuationTins(ctx: Context, rule: Rule, atPos?: number): Tin[] {
     }
   }
 
+  const queryPos = null == atPos ? 0 : atPos
   const stateAlts = (OPEN === rule.state
     ? (rule.spec as any).def?.open
     : (rule.spec as any).def?.close) as NormAltSpec[] | undefined
   for (const a of stateAlts ?? []) {
-    if (altMatchDepth(a, ctx) === (a.sN | 0)) {
-      addOpeners(a.p as any)
-      addOpeners(a.r as any)
-    }
+    const aN = a.sN | 0
+    if (altMatchDepth(a, ctx) !== aN) continue
+    // Backtracking moves the handover point: an alternate that matches
+    // sN tokens and pushes back b of them leaves the target rule
+    // starting at sN-b, so its openers are legal at the QUERY position
+    // only when those coincide. Without this, `[A] {b:1, p:child}`
+    // would offer child's openers at the position after A even though
+    // child re-consumes A itself.
+    const bN = 'number' === typeof a.b ? a.b : 0
+    if (aN - bN !== queryPos) continue
+    addOpeners(a.p as any)
+    addOpeners(a.r as any)
   }
 
   return [...out].sort((a, b) => a - b)

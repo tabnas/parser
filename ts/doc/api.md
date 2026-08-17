@@ -69,15 +69,34 @@ appends here and continues instead of throwing.
 
 Legal-continuation tokens after parsing `src` as a prefix — the
 completion primitive of the unified-LSP design. Returns
-`{ tins, tokens }` (numeric tins and their `#`-names, sorted). The
-computation is position-aware — `{"a"` yields `['#CL']`, the colon,
-not key-starters — and widened by a pop-closure: while a rule's close
-state has an empty catch-all alternate, the parent's close
-continuations are legal too (`[1,` includes `#CS`). A prefix that
-parses completely returns an empty set. Over-approximation caveat:
-conditions and counters may still reject a listed token. Runs on a
-lazily-created fail-fast sibling, so it works identically on
-recovery-enabled instances.
+`{ tins, tokens }` (numeric tins and their `#`-names, sorted).
+
+The computation is **path-aware**: each alternate contributes only the
+position it is actually waiting on, so a sibling alternate whose own
+prefix never matched adds nothing (`{"a"` yields `['#CL']`, the colon,
+not key-starters). It is widened two ways — a **pop closure** (while a
+rule's close state has an empty catch-all alternate, the parent's
+close continuations are legal too) and a **push closure** (an
+alternate whose sequence is fully matched *and* whose backtrack leaves
+the handover exactly here contributes its pushed rule's openers, which
+is why `[1,` offers the next element's value starters as well as
+`]`).
+
+**Prefixes that parse successfully still answer.** Permissive grammars
+read most mid-edit prefixes as complete documents (jsonic takes `{a:`
+as an implicit null), and reporting nothing for them would leave
+completion empty exactly where an editor asks for it. The set is
+captured at each end-of-source fetch, while the rule stack is still
+live, at the lookahead position actually being read; captures
+accumulate, because the first can belong to an alternate that is later
+rejected. A finished document reports `['#ZZ']` — precisely "only the
+end may follow". An empty document reports the start rule's openers
+(with `lex.empty` enabled it parses without ever running a lexer, so
+there is no event to capture).
+
+Over-approximation caveat: conditions and counters may still reject a
+listed token. Runs on a lazily-created fail-fast sibling, so it works
+identically on recovery-enabled instances.
 
 Note: the structured diagnostic's `expected[]` field intentionally
 keeps its original position-0 semantics for now — it is pinned by the

@@ -531,13 +531,14 @@ class Tabnas {
       const ZZ = sib.token('#ZZ')
       sib.sub({
         lex: (tkn: Token, rule: Rule, ctx: Context) => {
-          // FIRST end-of-source fetch only: the engine re-serves the
-          // pinned end token as each open rule unwinds, and those later
-          // fetches see a stack that has already closed past the
-          // interesting point. `rule` is the rule that ASKED for the
-          // token — exactly the one whose alternates say what could
-          // have appeared here instead of the end.
-          if (ZZ === tkn.tin && null == this.#contAtEnd) {
+          // EVERY end-of-source fetch contributes. The first one can
+          // belong to an alternate that is later rejected, so pinning
+          // it would drop the continuations of the branch that actually
+          // made the prefix parse; each capture is itself path-aware,
+          // so the union stays meaningful. `rule` is the rule that
+          // ASKED for the token — the one whose alternates say what
+          // could have appeared here instead of the end.
+          if (ZZ === tkn.tin) {
             try {
               // Lookahead position being fetched: the count of slots
               // already filled in the buffer. A rule that matched a
@@ -553,9 +554,11 @@ class Tabnas {
               ) {
                 pos++
               }
-              this.#contAtEnd = continuationTins(ctx, rule, pos)
+              const got = continuationTins(ctx, rule, pos)
+              const acc = this.#contAtEnd
+              this.#contAtEnd = null == acc ? got : [...new Set([...acc, ...got])]
             } catch (e) {
-              this.#contAtEnd = null
+              // Leave whatever was already accumulated.
             }
           }
         },
@@ -586,7 +589,14 @@ class Tabnas {
         const tins = [...atEnd].sort((a: Tin, b: Tin) => a - b)
         return { tins, tokens: tins.map((tin: Tin) => String(inst.token(tin))) }
       }
-      return { tins: [], tokens: [] }
+      // Empty source with lex.empty enabled returns before a lexer
+      // exists, so no end-of-source event ever fires: answer with the
+      // start rule's own openers.
+      const startTins = this.#startOpeners(inst)
+      return {
+        tins: startTins,
+        tokens: startTins.map((tin: Tin) => String(inst.token(tin))),
+      }
     }
 
     const ctx = err.internal?.ctx
@@ -597,14 +607,21 @@ class Tabnas {
     // rule is built (ctx carries the NORULE sentinel), so offer the
     // start rule's own opening tokens.
     if (0 === tins.length) {
-      const cfg = inst.internal().config
-      const startspec: any = (inst.internal().parser as any).rsm[cfg.rule.start]
-      const at = startspec?.def?.tcol?.[0]?.[0]
-      if (Array.isArray(at)) tins = [...at].sort((a: Tin, b: Tin) => a - b)
+      tins = this.#startOpeners(inst)
     }
 
     const tokens = tins.map((tin: Tin) => String(inst.token(tin)))
     return { tins, tokens }
+  }
+
+
+  // The start rule's own opening tokens — the answer for a prefix so
+  // short that no rule ever ran.
+  #startOpeners(inst: Tabnas): Tin[] {
+    const cfg = inst.internal().config
+    const startspec: any = (inst.internal().parser as any).rsm[cfg.rule.start]
+    const at = startspec?.def?.tcol?.[0]?.[0]
+    return Array.isArray(at) ? [...at].sort((a: Tin, b: Tin) => a - b) : []
   }
 
 
