@@ -1518,6 +1518,19 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			lex.Unrelex(unSaved)
 			ctx.setT(unI, unTkn)
 			ctx.dropT(unI + 1)
+			// Re-announce the RESTORED token to lex subscribers. The
+			// recut fired an event when it was cut; without a matching
+			// event for the undo, a position-keyed consumer would keep
+			// the abandoned recut. After this, the newest event per
+			// source position (with each kept token's span shadowing
+			// older events inside it) is always the token the parse
+			// proceeded with. Mirrors ts/src/rules.ts; contract in
+			// ts/doc/api.md under tn.sub.
+			if ctx != nil && 0 < len(ctx.LexSubs) {
+				for _, sub := range ctx.LexSubs {
+					sub(unTkn, rule, ctx)
+				}
+			}
 			unI = -1
 		}
 	}
