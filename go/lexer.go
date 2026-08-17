@@ -305,6 +305,12 @@ type LexConfig struct {
 	// ParsePrepare hooks called before parsing begins.
 	ParsePrepare []func(ctx *Context)
 
+	// Opt-in parse budget / cancellation (TS cfg.parse.budget). The main
+	// rule loop calls ParseBudgetCheck every ParseBudgetN iterations; a
+	// false return cancels the parse with a "cancel" error.
+	ParseBudgetN     int
+	ParseBudgetCheck func(ctx *Context) bool
+
 	// ResultFail is a list of values that are treated as parse failures.
 	ResultFail []any
 

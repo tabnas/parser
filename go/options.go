@@ -314,6 +314,26 @@ type ParseOptions struct {
 	// Prepare holds named callbacks invoked once at the start of every parse, in
 	// name order. The map form matches TS so plugins can replace entries by name.
 	Prepare map[string]func(ctx *Context)
+
+	// Budget is the opt-in parse budget / cancellation hook (TS
+	// options.parse.budget). Nil, the default, costs one integer test
+	// per rule iteration.
+	Budget *BudgetOptions
+}
+
+// BudgetOptions is the opt-in parse budget / cancellation hook. With
+// CheckEveryN positive and OnCheck set, the main rule loop calls
+// OnCheck every CheckEveryN iterations; returning false cancels the
+// parse with a "cancel" error. Long-lived hosts (language servers) use
+// it to enforce a deadline or to observe an abort flag set from
+// another goroutine.
+//
+// OnCheck returns a plain bool where TS accepts `boolean | void`: Go
+// has no undefined, so a checker that only wants to observe returns
+// true rather than nothing. See doc/differences.md.
+type BudgetOptions struct {
+	CheckEveryN int                     // Call OnCheck every N rule iterations (0 = off).
+	OnCheck     func(ctx *Context) bool // Return false to cancel the parse.
 }
 
 // ResultOptions controls parse result validation (TS options.result).
@@ -1007,6 +1027,13 @@ func buildConfig(o *Options) *LexConfig {
 				cfg.ParsePrepare = append(cfg.ParsePrepare, fn)
 			}
 		}
+	}
+
+	// Opt-in parse budget. Both halves are required: a checker with no
+	// interval, or an interval with no checker, leaves the hook off.
+	if o.Parse != nil && o.Parse.Budget != nil {
+		cfg.ParseBudgetN = o.Parse.Budget.CheckEveryN
+		cfg.ParseBudgetCheck = o.Parse.Budget.OnCheck
 	}
 
 	// Result fail values.
