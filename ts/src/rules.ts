@@ -932,16 +932,24 @@ function continuationTins(ctx: Context, rule: Rule): Tin[] {
   const out = new Set<Tin>()
   if (null == rule || null == ctx || rule === ctx.NORULE) return []
 
-  const stateI = OPEN === rule.state ? 0 : 1
-  const eI = Math.max(0, ((ctx as any)._eMax | 0))
-  const tcol = (rule.spec as any).def?.tcol
-  const at: Tin[] = tcol?.[stateI]?.[eI] ?? tcol?.[stateI]?.[0] ?? []
-  for (const t of at) out.add(t)
+  // Path-aware tins recorded by parse_alts at the failure point; the
+  // collated tcol is the fallback (exact at position 0, where no
+  // prefix exists to disambiguate).
+  const cont: Tin[] | undefined = (ctx as any)._contTins
+  if (null != cont && 0 < cont.length) {
+    for (const t of cont) out.add(t)
+  } else {
+    const stateI = OPEN === rule.state ? 0 : 1
+    const tcol = (rule.spec as any).def?.tcol
+    const at: Tin[] = tcol?.[stateI]?.[0] ?? []
+    for (const t of at) out.add(t)
+  }
 
+  // Pop-closure over empty-close ancestors: bounded by the finite rule
+  // stack itself (d decrements to exhaustion), no arbitrary cap.
   let r: Rule = rule
   let d = ctx.rsI - 1
-  let guard = 64
-  while (0 < guard--) {
+  for (;;) {
     const info = closeInfo(r.spec, [], '')
     if (!info.any) break
     const parent = 0 <= d ? ctx.rs[d--] : undefined
@@ -1117,6 +1125,9 @@ function parse_alts(
   // keeps nested parses (a plugin action parsing with another instance)
   // from clobbering each other's in-flight match state.
   let out: AltMatch = (ctx as any)._palt || ((ctx as any)._palt = makeAltMatch())
+  // Reset the path-aware continuation record so an error raised later
+  // by an action never reads a stale set from a previous failure.
+  ;(ctx as any)._contTins = undefined
   out.b = 0 // Backtrack n tokens.
   out.p = EMPTY // Push named rule onto stack.
   out.r = EMPTY // Replace current rule with named rule.
@@ -1407,6 +1418,36 @@ function parse_alts(
     // the interesting continuation point for completion (the failing
     // rule's tcol at THIS position, not position 0).
     ;(ctx as any)._eMax = deepest
+    // Path-aware continuation tins: for each alternate, count how many
+    // leading positions actually match the buffered lookahead, and
+    // collect the alternate's OWN next-position tins — tcol collation
+    // is path-blind (after matching A of [A,B], a sibling [C,D] must
+    // not contribute D). Error path only; no hot-path cost.
+    {
+      const cont = new Set<Tin>()
+      for (let aI = 0; aI < len; aI++) {
+        const a = alts[aI] as NormAltSpec
+        const aN = a.sN | 0
+        let k = 0
+        while (k < aN) {
+          const tk = tbuf[k]
+          if (null == tk || NOTOKEN === tk) break
+          const Sk = a.S ? a.S[k] : null
+          if (null != Sk) {
+            const tin = tk.tin
+            const part = (tin / 31) | 0
+            const aaBit = 0 === part ? bitAA : 0
+            if (0 === (Sk[part] & ((1 << ((tin % 31) - 1)) | aaBit))) break
+          }
+          k++
+        }
+        if (k < aN) {
+          const next = a.t?.[k] ?? []
+          for (const tin of next) cont.add(tin)
+        }
+      }
+      ;(ctx as any)._contTins = [...cont]
+    }
     // No alternate could use the token and it is a bad one: raise the
     // lexer's own error, exactly as the non-negotiated path does at
     // fetch time. Deferring that throw is what let the alternates try to
