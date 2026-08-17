@@ -62,6 +62,14 @@ func GrammarSpecFromJSON(data []byte) (*GrammarSpec, error) {
 		}
 		gs.V = int(n)
 	}
+
+	// Engine-ignored tool metadata: preserved on the spec (not applied)
+	// so callers holding the parsed spec can read it back — the C ABI and
+	// bindings load specs through this door, and dropping meta here would
+	// silently strip a compiler's provenance map.
+	if m, ok := plain["meta"].(map[string]any); ok {
+		gs.Meta = m
+	}
 	return gs, nil
 }
 
@@ -94,6 +102,17 @@ type GrammarSpec struct {
 	OptionsMap map[string]any              // Map-form options; FuncRef values resolved via Ref before applying.
 	Rule       map[string]*GrammarRuleSpec // Open/close alternates keyed by rule name; a nil entry removes that rule.
 	V          int                         // Builtin config-schema version; engine refuses V > BUILTIN_SCHEMA_VERSION. Zero ⇒ 1.
+
+	// Meta is free-form tool metadata carried alongside the grammar. The
+	// engine ignores it entirely — it does not affect parsing, and
+	// Grammar() neither reads nor stores it. It exists so a serialized
+	// spec can carry facts ABOUT the grammar for tools that hold the spec
+	// itself: the BNF-family compilers record their synthetic-rule
+	// provenance here ("provenance"), and the LSP server reads it to
+	// canonicalize generated rule names. GrammarSpecFromJSON preserves a
+	// serialized spec's top-level "meta" object here so those tools can
+	// read it back through the cross-runtime door.
+	Meta map[string]any
 
 	// RuleOrder declares the order the Rule map's entries were written in.
 	// A Go map has none, so without it the engine falls back to sorted rule

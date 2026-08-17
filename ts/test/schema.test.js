@@ -214,6 +214,23 @@ describe('schema', function () {
       'alts+inject object form and rule:null must satisfy the schema')
   })
 
+  it('meta-passes-walk', () => {
+    // Top-level `meta` is declared engine-ignored tool metadata: a spec
+    // carrying it (e.g. a BNF-family compiler's provenance map) must
+    // still validate, and a non-object meta must not.
+    const schema = loadSchema()
+    const spec = JSON.parse(
+      '{"v":1,"meta":{"provenance":{"top$step1":"top"}},' +
+      '"rule":{"top":{"open":[{"s":"#NR"}]}}}')
+    assert.deepStrictEqual(walk(spec, schema, schema), [],
+      'a spec with meta must satisfy grammar.schema.json')
+
+    const bad = { v: 1, meta: 'nope', rule: {} }
+    assert.ok(
+      walk(bad, schema, schema).length > 0,
+      'a non-object meta must fail the walk')
+  })
+
   it('bogus-alt-key-fails-walk', () => {
     const schema = loadSchema()
     const spec = JSON.parse(Fs.readFileSync(

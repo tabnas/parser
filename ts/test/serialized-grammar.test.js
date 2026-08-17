@@ -80,6 +80,23 @@ describe('serialized-grammar', () => {
     assert.throws(() => filtered.parse('"s"'), (e) => 'unexpected' === e.code)
   })
 
+  // Mirror: go TestFromJSONPreservesMeta. `meta` is engine-ignored tool
+  // metadata (schema/grammar.schema.json): a spec carrying it must parse
+  // exactly as one without it, and the caller's own spec object must
+  // still hold the meta after grammar() (the install works on a private
+  // copy — meta is for whoever holds the spec, not for the engine).
+  it('meta-is-engine-ignored-passthrough', () => {
+    const spec = JSON.parse(
+      '{"clear":true,"options":{"rule":{"start":"top"}},' +
+      '"meta":{"provenance":{"top$step1":"top"}},' +
+      '"rule":{"top":{"open":[{"s":"#NR"}]}}}')
+    const tn = new Tabnas()
+    tn.grammar(spec)
+    assert.ok(accepts(tn, '42'))
+    assert.throws(() => tn.parse('"s"'), (e) => 'unexpected' === e.code)
+    assert.deepStrictEqual(spec.meta, { provenance: { top$step1: 'top' } })
+  })
+
   // Mirror: go TestFromJSONInjectClearReplacesAlts. inject {clear:true}
   // replaces a rule's alternates outright, from pure JSON.
   it('inject-clear-replaces-alts', () => {

@@ -64,6 +64,58 @@ func TestFromJSONRejectsMalformedVersion(t *testing.T) {
 	}
 }
 
+// `meta` is engine-ignored tool metadata (schema/grammar.schema.json):
+// the JSON door must preserve it on the spec — the C ABI and bindings
+// load specs through here, and dropping it would silently strip a
+// BNF-family compiler's provenance map — while a spec carrying it still
+// parses exactly as one without it. Mirrored by
+// ts/test/serialized-grammar.test.js meta-is-engine-ignored-passthrough.
+func TestFromJSONPreservesMeta(t *testing.T) {
+	spec := `{"clear":true,"options":{"rule":{"start":"top"}},` +
+		`"meta":{"provenance":{"top$step1":"top"}},` +
+		`"rule":{"top":{"open":[{"s":"#NR"}]}}}`
+	gs, err := GrammarSpecFromJSON([]byte(spec))
+	if err != nil {
+		t.Fatalf("GrammarSpecFromJSON: %v", err)
+	}
+	prov, ok := gs.Meta["provenance"].(map[string]any)
+	if !ok || prov["top$step1"] != "top" {
+		t.Fatalf("Meta not preserved: %#v", gs.Meta)
+	}
+	j := Make()
+	if err := j.Grammar(gs); err != nil {
+		t.Fatalf("Grammar: %v", err)
+	}
+	expectVerdicts(t, j, []string{"42"}, []string{`"s"`})
+
+	// A non-object meta is not an error at the loader (the schema is
+	// where shape is enforced); it is simply not preserved.
+	gs2, err := GrammarSpecFromJSON([]byte(`{"meta":"nope"}`))
+	if err != nil || gs2.Meta != nil {
+		t.Fatalf("non-object meta: err=%v Meta=%#v", err, gs2.Meta)
+	}
+}
+
+// The text-form door builds and applies the spec internally (nothing to
+// preserve for a caller), but a grammar text carrying meta must still
+// load and parse exactly as one without it.
+func TestGrammarTextToleratesMeta(t *testing.T) {
+	withStubTextParser(t, func(string) (any, error) {
+		return map[string]any{
+			"options": map[string]any{"rule": map[string]any{"start": "top"}},
+			"meta":    map[string]any{"provenance": map[string]any{"top$step1": "top"}},
+			"rule": map[string]any{
+				"top": map[string]any{"open": []any{map[string]any{"s": "#NR"}}},
+			},
+		}, nil
+	})
+	j := Make()
+	if err := j.GrammarText("(stubbed)"); err != nil {
+		t.Fatalf("GrammarText: %v", err)
+	}
+	expectVerdicts(t, j, []string{"42"}, []string{`"s"`})
+}
+
 // loadJSONGrammar builds a default instance and applies a serialized
 // spec through the JSON door, failing the test on any load error.
 func loadJSONGrammar(t *testing.T, spec string) *Tabnas {

@@ -14,6 +14,10 @@
       "minimum": 1,
       "description": "Builtin config-schema version this grammar was compiled against. Absent means version 1. The engine refuses a spec whose v exceeds the BUILTIN_SCHEMA_VERSION it implements; no maximum is declared here because that ceiling moves with the engine, not with this schema."
     },
+    "meta": {
+      "type": "object",
+      "description": "Free-form tool metadata carried alongside the grammar. The engine ignores it entirely: it does not affect parsing, and neither runtime reads or stores it at grammar() time. It lets a serialized spec carry facts ABOUT the grammar for tools that hold the spec itself — the BNF-family compilers record synthetic-rule provenance here (meta.provenance: generated rule name -> source production name), and the LSP server reads that to canonicalize generated rule names. Values must be JSON-serializable; no keys are contractual."
+    },
     "options": {
       "type": "object",
       "description": "JSON-serializable options applied before the rules (TabnasOptions). Deliberately free-form: constraining the full TabnasOptions tree is out of scope for this schema. Function-valued option fields use @-prefixed FuncRef strings resolved by the engine."
