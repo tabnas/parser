@@ -586,13 +586,26 @@ recovery-synthesized closes). Go's subscriber surface remains
 `LexSubs`/`RuleSubs` (pre-process only); the port is scheduled with
 phase P2 of the unified-LSP plan.
 
-## Lex-event retraction on unrelex — TS only, Go parity pending
+## Lex-event retraction on unrelex — both runtimes
 
-Under negotiated lexing, TS re-announces the RESTORED token to lex
-subscribers when a speculative recut is undone (unrelex), so a
-position-keyed last-write-wins reconstruction always ends on the token
-the parse proceeded with. Go's lex-sub dispatch does not yet mirror
-this; scheduled with phase P2 of the unified-LSP plan.
+Under negotiated lexing, both runtimes re-announce the RESTORED token
+to lex subscribers when a speculative recut is undone, so a
+position-keyed consumer's reconstruction ends on the token the parse
+actually proceeded with. Pinned by `ts/test/lexevents.test.js` and
+`go/lexevents_test.go`.
+
+The consumer contract (documented in `ts/doc/api.md` under `tn.sub`)
+is identical in both: process events in order, keep the newest per
+source position, and let each kept token's span shadow older events
+inside its extent — which is what retracts the interior events an
+abandoned speculation fired.
+
+**One unit difference, and it matters to consumers doing the span
+arithmetic**: TS `Token.sI`/`len` count UTF-16 code units, Go
+`Token.SI` is a BYTE offset and spans are byte lengths. The contract
+is the same; the arithmetic is in each runtime's own unit. A host
+mapping either to editor positions (an LSP server) converts as it
+already must for diagnostics.
 
 ## Continuations API (`tn.continuations(src)`) — TS only, Go parity pending
 
