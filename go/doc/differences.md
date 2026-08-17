@@ -567,19 +567,61 @@ before any `Context` exists, so that one error cannot be recorded
 — but the Go equivalent of TS's `{ value, errors }` result must
 synthesize a one-element list there.
 
-## Error recovery (`options.parse.recover`) — TS only, Go parity pending
+## Error recovery (`options.parse.recover`)
 
-TS supports opt-in multi-error recovery: with
-`parse: { recover: { enabled: true } }`, `parse()` returns
-`{ value, errors }` instead of throwing, skipping to sync points
-derived from the live rule stack × close-alternate `g` tags (with a
-structural fallback for untagged grammars), coalescing unlexable-input
-runs, suppressing cascades, and capping skip distance and error count
-(`ts/doc/options.md` "recover"). Pinned by `ts/test/recover.test.js`.
+Both runtimes support opt-in panic-mode recovery: a parse error is
+recorded, the lexer skips to a sync point derived from the live rule
+stack × close-alternate group tags (with a structural fallback for
+untagged grammars), the rule stack pops to a rule that accepts the sync
+token, and parsing continues. Pinned by `ts/test/recover.test.js` and
+`go/recover_test.go`.
 
-Go remains fail-fast; the port is scheduled as phase P2 of the
-unified-LSP plan, at which point the recovery fixtures become shared
-parity fixtures.
+| | TypeScript | Go |
+|---|---|---|
+| Enable | `parse: { recover: { enabled: true } }` | `Parse: &ParseOptions{Recover: &RecoverOptions{Enabled: true}}` |
+| Results | `parse()` returns `{ value, errors }` | `ParseRecover()` returns `(value, errs, err)` |
+| Sync tags | `syncGroups` (replaces the default set) | `SyncGroups` (same semantics) |
+| Extra tokens | `syncTokens: ['#CA']` | `SyncTokens: []string{"#CA"}` |
+| Caps | `maxSkip`, `maxRecoveries`, `suppress` | `MaxSkip`, `MaxRecoveries`, `Suppress` |
+
+**Go returns a third value where TS changes the shape of the first.**
+`Parse` is public and called throughout the fleet; returning a
+`{value, errors}` struct through `any` would force every existing
+caller into a type assertion just to learn whether they got a value or
+a wrapper. `Parse` therefore keeps its signature and yields the partial
+value with a nil error, and `ParseRecover` is how a caller asks what
+was recovered from. Same constraint class as `Sub` and `ctx.ParseErr`.
+
+Two Go-specific hazards the port has to handle, both stemming from Go
+signalling lexer failure through a different channel than TS:
+
+- **The lexer latches `Lex.Err`, and caches the `#ZZ` it answers while
+  latched.** Clearing only the error leaves that cached end token in
+  place, so every later fetch still reports end-of-source and recovery
+  syncs on EOF — silently abandoning the rest of the document.
+  Recovery clears both.
+- **On unlexable input Go sets `Lex.Err` and returns `#ZZ` rather than
+  emitting the `#BD` token TS produces**, claiming end-of-source with
+  source still ahead of the scan point. Recovery re-presents that as
+  the bad token it is, so the skip loop advances past it and counts it
+  against `MaxSkip` like any other.
+
+With recovery on, neither runtime's parse fails outright: a
+completeness failure after the rule loop is recorded as one more
+diagnostic and the partial value still comes back.
+
+### Known gap: cascade counting on unlexable runs
+
+The runtimes do not agree on **how many errors** a multi-token
+unlexable run contains. Go collapses such a run into a single fault at
+a single offset, where TS sees two regions and suppresses the second
+inside the `suppress` window — so in Go the window has nothing to
+suppress. That follows directly from the second hazard above: the two
+lexers disagree about the token stream before recovery ever sees it.
+
+Reconciling the counts is lexer work rather than recovery work.
+`TestRecoverCascadeParityGap` marks it explicitly, and the recovery
+fixtures become shared cross-runtime parity fixtures once it closes.
 
 ## Parse budget (`options.parse.budget`)
 

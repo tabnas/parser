@@ -257,10 +257,54 @@ Controls ANSI color codes in formatted error messages (TS:
 | `TokenSet` | `map[string][]string` | Customize named token sets (e.g. `VAL`, `KEY`); values are token names |
 | `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
-| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook (see below) |
+| `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook and `Recover` the opt-in error recovery (both below) |
 | `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
 | `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
 | `Tag` | `string` | Instance identifier tag, appended to the instance id and shown in the error suffix internal line. Unset defaults to `DefaultTag` (`"-"`), matching TS. `Merge` treats `"-"` as "no tag chosen" and rejects it |
+
+### `Parse.Recover` — multi-error recovery
+
+Off by default. With `Enabled`, a parse error no longer ends the parse:
+it is recorded, the lexer skips forward to a sync token, the rule stack
+pops to a rule that can accept it, and parsing continues. Read the
+results with `ParseRecover`.
+
+```go
+j := tabnas.Make(tabnas.Options{
+    Parse: &tabnas.ParseOptions{
+        Recover: &tabnas.RecoverOptions{Enabled: true},
+    },
+})
+
+value, errs, err := j.ParseRecover(`{"a":1,}`)
+// value = map[a:1], len(errs) = 1, err = nil
+```
+
+`Parse` keeps its two-value signature and returns the partial value
+with a nil error, so existing callers see a result rather than a
+failure; `ParseRecover` is how you learn there were errors at all.
+
+Sync points are derived from the grammar, not hard-coded: the leading
+tokens of close alternates whose `AltSpec.G` tags intersect
+`SyncGroups` (default `close`, `comma`, `end`). A grammar with no such
+tags falls back to the leading token of every close alternate on the
+rule stack, so recovery still works — less precisely. Tagging a
+grammar's close alternates is what sharpens it.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `Enabled` | `false` | Turn recovery on |
+| `SyncGroups` | `["close","comma","end"]` | Group tags marking sync edges; a supplied slice REPLACES the default |
+| `SyncTokens` | none | Extra sync token names, e.g. `[]string{"#CA"}`; additive |
+| `PopUntilValid` | `true` | Pop until a rule accepts the sync token, else pop exactly one |
+| `MaxSkip` | `64` | Cap tokens skipped per recovery |
+| `MaxRecoveries` | `32` | Cap recorded errors per parse |
+| `Suppress` | `4` | Drop errors within this many consumed tokens of the last recovery |
+
+Each recovered error carries `Recovered` (tokens skipped, and the sync
+token resumed on) for a consumer that wants to show the abandoned
+region. See `doc/differences.md` for the TS comparison and one known
+counting gap on unlexable runs.
 
 ### `Parse.Budget` — cancellation
 

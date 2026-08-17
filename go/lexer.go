@@ -311,6 +311,11 @@ type LexConfig struct {
 	ParseBudgetN     int
 	ParseBudgetCheck func(ctx *Context) bool
 
+	// Resolved opt-in recovery settings (TS cfg.parse.recover). Sync
+	// token NAMES are resolved to tins here, at config time, so
+	// recovery never does a name lookup at error time.
+	Recover RecoverConfig
+
 	// ResultFail is a list of values that are treated as parse failures.
 	ResultFail []any
 

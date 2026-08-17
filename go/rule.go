@@ -922,16 +922,22 @@ func NormAlts(spec *RuleSpec) error {
 
 // Rule is a rule instance created during parsing (the runtime counterpart of a RuleSpec).
 type Rule struct {
-	I      int       // Unique rule id within this parse run.
-	Name   string    // Rule name (matches its RuleSpec).
-	Spec   *RuleSpec // The RuleSpec this rule applies.
-	Node   any       // Value node this rule is building.
-	State  RuleState // Current phase: open ("o") or close ("c").
-	D      int       // Stack depth at which this rule was pushed.
-	Child  *Rule     // Rule pushed by this rule (NoRule if none).
-	Parent *Rule     // Rule that pushed this rule (NoRule if none).
-	Prev   *Rule     // Rule this one replaced (NoRule if none).
-	Next   *Rule     // Rule to process after this one.
+	I    int       // Unique rule id within this parse run.
+	Name string    // Rule name (matches its RuleSpec).
+	Spec *RuleSpec // The RuleSpec this rule applies.
+
+	// skipBefores suppresses the before-action phase on a pass resumed
+	// by error recovery, whose before actions already ran on the pass
+	// that failed. Re-running them would corrupt any that are not
+	// idempotent. Cleared as soon as it is honoured.
+	skipBefores bool
+	Node        any       // Value node this rule is building.
+	State       RuleState // Current phase: open ("o") or close ("c").
+	D           int       // Stack depth at which this rule was pushed.
+	Child       *Rule     // Rule pushed by this rule (NoRule if none).
+	Parent      *Rule     // Rule that pushed this rule (NoRule if none).
+	Prev        *Rule     // Rule this one replaced (NoRule if none).
+	Next        *Rule     // Rule to process after this one.
 
 	// Generalized per-position matched tokens. O[i] holds the token
 	// matched at the i-th lookahead position during OPEN (mirroring C
@@ -1072,8 +1078,15 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		alts = def.close
 	}
 
-	// Before actions
-	if isOpen && len(def.bo) > 0 {
+	// Before actions. Error recovery can resume a rule on a pass whose
+	// before actions already ran; running them again would apply a
+	// non-idempotent action twice — appending an element a second time,
+	// say. The flag is one-shot, so only the resumed pass skips them.
+	skipBefores := r.skipBefores
+	r.skipBefores = false
+	if skipBefores {
+		// Already run on the pass that failed; see attemptRecover.
+	} else if isOpen && len(def.bo) > 0 {
 		for _, action := range def.bo {
 			action(r, ctx)
 		}
