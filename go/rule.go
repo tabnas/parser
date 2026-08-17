@@ -1110,6 +1110,12 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// In TS, when alts exist but none match, out.e = ctx.t0 which triggers this.bad().
 	if alt == nil && len(alts) > 0 {
 		ctx.daltErr = ctx.T0
+		// Record the path-aware continuation set while this pass's
+		// lookahead is still buffered — Continuations answers from it.
+		// Each alternate contributes only the position it actually
+		// reached, so a sibling whose own prefix never matched adds
+		// nothing.
+		recordContTins(ctx, r, alts)
 		ctx.ParseErr = ctx.T0
 		ctx.parseErrDiag = captureDiag(ctx)
 		return next
