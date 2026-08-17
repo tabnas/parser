@@ -243,7 +243,7 @@ export type TabnasOptions = {
     prepare?: { [name: string]: ParsePrepare }   // Pre-parse setup callbacks.
     recover?: {                     // Opt-in error recovery (multi-error collection).
       enabled?: boolean             // Off by default; on, parse returns { value, errors }.
-      syncGroups?: string[]         // AltSpec.g tags marking close alts as sync edges.
+      syncGroups?: string[] | null  // Sync-edge g tags; null = engine default; an array REPLACES the set.
       syncTokens?: string[]         // Extra explicit sync token names.
       popUntilValid?: boolean       // Pop stack until a rule accepts the sync token.
       maxSkip?: number              // Cap forward token skip per recovery.
