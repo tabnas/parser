@@ -37,6 +37,10 @@
     "end_of_source": {
       "message": "unexpected end of source",
       "hint": "Unexpected end of source."
+    },
+    "cancel": {
+      "message": "parse cancelled",
+      "hint": "The parse was cancelled by the caller's parse.budget.onCheck callback\n(or exceeded its configured budget) before completing."
     }
   },
   "goOnly": {

@@ -34,6 +34,7 @@ var errorMessages = map[string]string{
 	"unterminated_comment": "unterminated comment: {src}",
 	"unknown_rule":         "unknown rule: {rulename}",
 	"end_of_source":        "unexpected end of source",
+	"cancel":               "parse cancelled",
 	"internal":             "internal error: {src}",
 }
 
@@ -57,6 +58,8 @@ var defaultHints = map[string]string{
 	"unknown_rule": "No rule named {rulename} is defined.",
 
 	"end_of_source": "Unexpected end of source.",
+
+	"cancel": "The parse was cancelled by the caller's parse.budget.onCheck callback\n(or exceeded its configured budget) before completing.",
 
 	"internal": "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input.",
 }

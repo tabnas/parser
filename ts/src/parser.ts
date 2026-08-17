@@ -206,6 +206,12 @@ class Parser {
     // Process rules on tokens
     let kI = 0
 
+    // Opt-in parse budget: invoke onCheck every checkEveryN rule
+    // iterations; a false return cancels the parse. Off (0) by
+    // default, costing one falsy test per iteration.
+    const budgetN = this.cfg.parse.budget.checkEveryN
+    const onCheck = this.cfg.parse.budget.onCheck
+
     try {
 
     // This loop is the heart of the engine. Keep processing rule
@@ -213,6 +219,12 @@ class Parser {
     while (norule !== rule && kI < maxr) {
       ctx.kI = kI
       ctx.rule = rule
+
+      if (budgetN && null != onCheck && 0 === kI % budgetN && 0 < kI) {
+        if (false === onCheck(ctx)) {
+          throw new TabnasError('cancel', {}, ctx.t0, rule, ctx)
+        }
+      }
 
       ctx.log && ctx.log(S.step, ctx.kI + ':')
 

@@ -250,6 +250,10 @@ export type TabnasOptions = {
       maxRecoveries?: number        // Cap recorded errors per parse.
       suppress?: number             // Cascade window (consumed tokens) after a recovery.
     }
+    budget?: {                      // Opt-in parse budget / cancellation.
+      checkEveryN?: number          // Invoke onCheck every N rule iterations (0 = off).
+      onCheck?: null | ((ctx: Context) => boolean | void)  // Return false to cancel.
+    }
   }
   rule?: {                          // Rule engine settings.
     start?: string                  // Name of the start rule.
@@ -343,6 +347,10 @@ export type Config = {
       maxSkip: number               // Cap forward token skip per recovery.
       maxRecoveries: number         // Cap recorded errors per parse.
       suppress: number              // Cascade window after a recovery.
+    }
+    budget: {                       // Resolved parse budget settings.
+      checkEveryN: number           // 0 = off.
+      onCheck: null | ((ctx: Context) => boolean | void)
     }
   }
 

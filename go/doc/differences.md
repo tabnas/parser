@@ -569,3 +569,10 @@ runs, suppressing cascades, and capping skip distance and error count
 Go remains fail-fast; the port is scheduled as phase P2 of the
 unified-LSP plan, at which point the recovery fixtures become shared
 parity fixtures.
+
+## Parse budget (`options.parse.budget`) — TS only, Go parity pending
+
+TS supports an opt-in cancellation/budget hook: `parse.budget.onCheck`
+runs every `checkEveryN` rule-loop iterations and cancels the parse
+(error code `cancel`) on a false return. Go has no equivalent yet;
+scheduled with phase P2 of the unified-LSP plan.
