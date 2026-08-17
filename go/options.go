@@ -364,6 +364,7 @@ type Tabnas struct {
 	nextTin         Tin                                                           // Next available Tin for allocation.
 	lexSubs         []LexSub                                                      // Lex event subscribers.
 	ruleSubs        []RuleSub                                                     // Rule event subscribers.
+	ruleDoneSubs    []RuleDoneSub                                                 // Post-process rule event subscribers (SubRuleDone).
 	hints           map[string]string                                             // Error hints per error code.
 	emptyAllow      bool                                                          // Allow empty source.
 	emptyResult     any                                                           // Result for empty source.

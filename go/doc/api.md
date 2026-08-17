@@ -350,6 +350,64 @@ the IGNORE set (whitespace, comments, line breaks) — the same stream the
 TypeScript runtime delivers. Filter on the token name if you only want
 grammar-significant tokens.
 
+`RuleSub` fires **before** each rule pass, so the rule it receives has
+not matched anything yet. For what a pass actually did, use
+`SubRuleDone`.
+
+### `(*Tabnas) SubRuleDone(sub RuleDoneSub) *Tabnas`
+
+Subscribe to the post-process rule event, which fires **after** each
+rule pass with the matched tokens recorded on the rule and the state
+transition applied.
+
+```go
+type RuleDoneSub func(rule *Rule, ctx *Context, done RuleDone)
+
+type RuleDone struct {
+	State  RuleState    // rule state BEFORE the pass: OPEN or CLOSE
+	Alt    *RuleDoneAlt // resolved alternate, nil if the state had none
+	Forced bool         // synthesized close during recovery
+}
+
+type RuleDoneAlt struct {
+	B   int      // backtracked token count
+	G   []string // matched alternate's group tags
+	P   string   // pushed child rule name ("" if none)
+	R   string   // replacement rule name ("" if none)
+	Err *Token   // failure token when alternates existed but none matched
+}
+```
+
+Because `State` is the state *before* the pass, open and close events
+for one rule can be paired by `rule.I` — which is how you recover
+balanced source spans:
+
+```go
+opens := map[int]*Token{}
+j.SubRuleDone(func(rule *Rule, ctx *tabnas.Context, done tabnas.RuleDone) {
+	if tabnas.OPEN == done.State && 0 < rule.ON {
+		opens[rule.I] = rule.O0
+	}
+	if tabnas.CLOSE == done.State && 0 < rule.CN {
+		if open, ok := opens[rule.I]; ok {
+			fmt.Printf("%s spans [%d,%d]\n", rule.Name, open.SI, rule.C0.SI)
+		}
+	}
+})
+```
+
+It is a separate method rather than a third parameter on `Sub` because
+`Sub`'s signature is positional and public: widening it would break
+every caller for an event most do not use.
+
+`Alt` is nil only when the rule state had no alternates at all; when it
+had some and none matched, `Alt` is non-nil with just `Err` set. The
+`G` slice is a fresh copy per event, so mutating it cannot reach the
+grammar.
+
+`Forced` is always false until Go gains error recovery — only recovery
+synthesizes a close.
+
 ## Configuration
 
 ### `(*Tabnas) Config() *LexConfig`

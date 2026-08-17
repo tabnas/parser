@@ -1086,9 +1086,17 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// Match alternates
 	alt, _ := ParseAlts(isOpen, alts, lex, r, ctx)
 
+	// Record this pass's outcome for the post-process event, which
+	// fires from the parse loop once Process returns (TS records the
+	// equivalent as ctx._dalt, inside parse_alts).
+	ctx.dalt = alt
+	ctx.daltAny = len(alts) > 0
+	ctx.daltErr = nil
+
 	// No alternate matched: immediate parse error (matching TS parse_alts behavior).
 	// In TS, when alts exist but none match, out.e = ctx.t0 which triggers this.bad().
 	if alt == nil && len(alts) > 0 {
+		ctx.daltErr = ctx.T0
 		ctx.ParseErr = ctx.T0
 		ctx.parseErrDiag = captureDiag(ctx)
 		return next
