@@ -65,6 +65,25 @@ This is the substrate for opt-in multi-error recovery
 (`ts/doc/lsp-feasibility.md`): in a future recovery mode the engine
 appends here and continues instead of throwing.
 
+### `tn.continuations(src)`
+
+Legal-continuation tokens after parsing `src` as a prefix — the
+completion primitive of the unified-LSP design. Returns
+`{ tins, tokens }` (numeric tins and their `#`-names, sorted). The
+computation is position-aware — `{"a"` yields `['#CL']`, the colon,
+not key-starters — and widened by a pop-closure: while a rule's close
+state has an empty catch-all alternate, the parent's close
+continuations are legal too (`[1,` includes `#CS`). A prefix that
+parses completely returns an empty set. Over-approximation caveat:
+conditions and counters may still reject a listed token. Runs on a
+lazily-created fail-fast sibling, so it works identically on
+recovery-enabled instances.
+
+Note: the structured diagnostic's `expected[]` field intentionally
+keeps its original position-0 semantics for now — it is pinned by the
+cross-runtime `diagnostic.tsv` parity fixtures, and changes there land
+with the Go parity phase.
+
 ## Instance Management
 
 ### `tn.make(options?)`

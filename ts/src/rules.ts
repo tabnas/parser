@@ -922,6 +922,39 @@ function acceptsClose(spec: RuleSpec, tin: Tin, groups: string[], sig: string): 
   return info.any || info.all.has(tin)
 }
 
+// Legal-continuation tokens at an error point: the failing rule's
+// collated lookahead tins at the deepest position any alternate
+// matched (ctx._eMax), widened by a pop-closure — while a rule's close
+// state has an empty-s catch-all alternate (it can close on anything),
+// the parent's close continuations are legal here too. Powers
+// tn.continuations() (completion in the unified-LSP design).
+function continuationTins(ctx: Context, rule: Rule): Tin[] {
+  const out = new Set<Tin>()
+  if (null == rule || null == ctx || rule === ctx.NORULE) return []
+
+  const stateI = OPEN === rule.state ? 0 : 1
+  const eI = Math.max(0, ((ctx as any)._eMax | 0))
+  const tcol = (rule.spec as any).def?.tcol
+  const at: Tin[] = tcol?.[stateI]?.[eI] ?? tcol?.[stateI]?.[0] ?? []
+  for (const t of at) out.add(t)
+
+  let r: Rule = rule
+  let d = ctx.rsI - 1
+  let guard = 64
+  while (0 < guard--) {
+    const info = closeInfo(r.spec, [], '')
+    if (!info.any) break
+    const parent = 0 <= d ? ctx.rs[d--] : undefined
+    if (null == parent || parent === ctx.NORULE) break
+    const ptcol = (parent.spec as any).def?.tcol
+    const pAt: Tin[] = ptcol?.[1]?.[0] ?? []
+    for (const t of pAt) out.add(t)
+    r = parent
+  }
+
+  return [...out].sort((a, b) => a - b)
+}
+
 // Panic-mode recovery: record the error, skip forward to a sync token,
 // pop the rule stack to a rule that can consume it, and return that
 // rule so the main loop continues. Returns undefined to give up (the
@@ -1134,6 +1167,8 @@ function parse_alts(
   let unQueue: Token[] | null = null
   let unEnd: Token | undefined = undefined
 
+  let deepest = 0
+
   for (altI = 0; altI < len; altI++) {
     alt = alts[altI] as NormAltSpec
 
@@ -1341,6 +1376,7 @@ function parse_alts(
       break
     }
     else {
+      if (matched > deepest) deepest = matched
       alt = null
       // This alternate renegotiated a token and then failed anyway —
       // put the cut back, so the alternates and rules that follow see
@@ -1367,6 +1403,10 @@ function parse_alts(
 
   if (!cond) {
     const bad = tbuf[0]
+    // Deepest lookahead position any alternate matched before failing:
+    // the interesting continuation point for completion (the failing
+    // rule's tcol at THIS position, not position 0).
+    ;(ctx as any)._eMax = deepest
     // No alternate could use the token and it is a bad one: raise the
     // lexer's own error, exactly as the non-negotiated path does at
     // fetch time. Deferring that throw is what let the alternates try to
@@ -1881,4 +1921,4 @@ function makeRuleCond(co: string, prop: string, val: any) {
 
 
 
-export { Rule, RuleSpec, AltMatch, makeRule, makeNoRule, makeRuleSpec }
+export { Rule, RuleSpec, AltMatch, makeRule, makeNoRule, makeRuleSpec, continuationTins }
