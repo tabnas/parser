@@ -585,3 +585,11 @@ with matched tokens recorded on the rule and a `RuleDone` payload
 recovery-synthesized closes). Go's subscriber surface remains
 `LexSubs`/`RuleSubs` (pre-process only); the port is scheduled with
 phase P2 of the unified-LSP plan.
+
+## Lex-event retraction on unrelex — TS only, Go parity pending
+
+Under negotiated lexing, TS re-announces the RESTORED token to lex
+subscribers when a speculative recut is undone (unrelex), so a
+position-keyed last-write-wins reconstruction always ends on the token
+the parse proceeded with. Go's lex-sub dispatch does not yet mirror
+this; scheduled with phase P2 of the unified-LSP plan.

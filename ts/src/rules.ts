@@ -1275,6 +1275,15 @@ function parse_alts(
         for (let j = unI + 1; j < tbuf.length; j++) {
           tbuf[j] = NOTOKEN
         }
+        // Re-announce the RESTORED token to lex subscribers: the recut
+        // fired an event when it was cut, and without a matching event
+        // for the undo, a position-keyed consumer's last-write-wins
+        // reconstruction would keep the abandoned recut. After this,
+        // "latest event per source position" is always the token the
+        // parse actually proceeded with.
+        if (ctx.sub.lex) {
+          ctx.sub.lex.map((sub) => sub(unTkn, rule, ctx))
+        }
         unI = -1
       }
     }
