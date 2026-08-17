@@ -86,34 +86,55 @@ func TestRecoverSingleErrorKeepsPartialValue(t *testing.T) {
 	}
 }
 
-func TestRecoverCoalescesAnUnlexableRun(t *testing.T) {
-	// An unlexable run is ONE fault, not one per character. The lexer
-	// hands each unclaimed rune over as a #BD token when recovery is on
-	// (the same deferral it already made for negotiated lexing), and
-	// the skip loop walks the whole run inside a single recovery — so
-	// the run yields a single diagnostic.
+func TestRecoverReportsOneDiagnosticPerUnlexableRun(t *testing.T) {
+	// Two unlexable runs, `blah` and `blip`, are two diagnostics — one
+	// each, not one per character and not one for the pair. The lexer
+	// hands each unclaimed rune over as a #BD token, and the fetch-time
+	// absorber coalesces contiguous ones into a single region, so the
+	// parse simply continues past each run.
 	//
-	// Before that deferral the lexer latched Err and answered #ZZ, and
-	// this input produced THREE diagnostics at one offset for one
-	// mistake; `{"a": zzz, "b":2}` produced four.
+	// Continuing is the point: the trailing `"b":1` still parses. An
+	// earlier shape skipped straight to the comma and lost it.
+	//
+	// Cross-checked against the TS engine on this exact input: two
+	// errors and {"a":true,"b":1}.
 	j := mkRec(t, func(r *RecoverOptions) { r.Suppress = intp(0) })
 	v, errs, err := j.ParseRecover(`{"a":true blah blip,"b":1}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if 1 != len(errs) {
-		t.Fatalf("want one diagnostic for the run, got %d", len(errs))
+	if 2 != len(errs) {
+		t.Fatalf("want one diagnostic per run (2), got %d", len(errs))
 	}
-	if errs[0].Recovered == nil || 0 == errs[0].Recovered.Skipped {
-		t.Fatalf("the run was not walked: %+v", errs[0].Recovered)
+	for i, e := range errs {
+		if e.Recovered == nil || !e.Recovered.Bad {
+			t.Fatalf("error %d is not marked as an absorbed run: %+v", i, e.Recovered)
+		}
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
 		t.Fatalf("want a map, got %s", enc(v))
 	}
 	if true != m["a"] {
-		t.Fatalf("value before the fault lost: %s", enc(v))
+		t.Fatalf("value before the faults lost: %s", enc(v))
 	}
+	if 1 != toInt(m["b"]) {
+		t.Fatalf("value AFTER the faults lost: %s", enc(v))
+	}
+}
+
+// toInt reads a JSON-ish number back as an int, whatever concrete
+// numeric type the grammar produced.
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return -1
 }
 
 func TestRecoverReportsOneFaultPerRunNotPerCharacter(t *testing.T) {
@@ -154,45 +175,43 @@ func TestRecoverCapsAtMaxRecoveries(t *testing.T) {
 	}
 }
 
-func TestRecoverSuppressIsConfiguredAndBounded(t *testing.T) {
-	// What is verified here: the option reaches the resolved config,
-	// and recovery over an unlexable run stays bounded rather than
-	// reporting an error per skipped token.
+func TestRecoverSuppressesCascades(t *testing.T) {
+	// Two unlexable runs close together. With no window both are
+	// reported; with a window of 8 consumed tokens the second reads as
+	// a follow-on of the first and is dropped. Either way the document
+	// parses and the values on both sides survive.
 	//
-	// What is NOT yet verified is the cross-runtime count — see
-	// TestRecoverCascadeParityGap below.
+	// Cross-checked against the TS engine on this input: 2 errors at
+	// suppress 0, 1 at suppress 8, {"a":true,"b":1} in both.
 	src := `{"a":true blah blip,"b":1}`
-	for _, sup := range []int{0, 8} {
-		j := mkRec(t, func(r *RecoverOptions) { r.Suppress = intp(sup) })
-		if sup != j.parser.Config.Recover.Suppress {
-			t.Fatalf("suppress %d not applied: got %d",
-				sup, j.parser.Config.Recover.Suppress)
-		}
-		v, errs, err := j.ParseRecover(src)
-		if err != nil {
-			t.Fatalf("suppress %d: unexpected error: %v", sup, err)
-		}
-		if len(errs) > 4 {
-			t.Fatalf("suppress %d: %d errors for one bad region — unbounded",
-				sup, len(errs))
-		}
-		m, ok := v.(map[string]any)
-		if !ok || true != m["a"] {
-			t.Fatalf("suppress %d: value before the fault lost: %s", sup, enc(v))
-		}
-	}
-}
 
-func TestRecoverCascadeParityGap(t *testing.T) {
-	t.Skip("known gap, now narrow: both runtimes coalesce an unlexable run " +
-		"into one diagnostic, but they scope it differently. TS reports one " +
-		"per RUN; Go reports one per RECOVERY, and a single sync search can " +
-		"span several runs — `{\"a\":true blah blip,\"b\":1}` is two " +
-		"diagnostics in TS and one in Go, so the suppress window has a " +
-		"second error to drop there and none here. Go also resumes at the " +
-		"sync token rather than just past the run, so it does not pick the " +
-		"trailing pair back up. Closing this means emitting per-run rather " +
-		"than per-recovery; see doc/differences.md.")
+	zeroInst := mkRec(t, func(r *RecoverOptions) { r.Suppress = intp(0) })
+	if 0 != zeroInst.parser.Config.Recover.Suppress {
+		t.Fatalf("suppress 0 not applied: got %d", zeroInst.parser.Config.Recover.Suppress)
+	}
+	_, zero, err := zeroInst.ParseRecover(src)
+	if err != nil {
+		t.Fatalf("suppress 0: %v", err)
+	}
+	if 2 != len(zero) {
+		t.Fatalf("suppress 0 should keep both regions, got %d", len(zero))
+	}
+
+	eightInst := mkRec(t, func(r *RecoverOptions) { r.Suppress = intp(8) })
+	if 8 != eightInst.parser.Config.Recover.Suppress {
+		t.Fatalf("suppress 8 not applied: got %d", eightInst.parser.Config.Recover.Suppress)
+	}
+	v, eight, err := eightInst.ParseRecover(src)
+	if err != nil {
+		t.Fatalf("suppress 8: %v", err)
+	}
+	if 1 != len(eight) {
+		t.Fatalf("suppress 8 should drop the follow-on, got %d", len(eight))
+	}
+	m, ok := v.(map[string]any)
+	if !ok || true != m["a"] || 1 != toInt(m["b"]) {
+		t.Fatalf("values around the suppressed region lost: %s", enc(v))
+	}
 }
 
 func TestRecoverRecordsMetadata(t *testing.T) {

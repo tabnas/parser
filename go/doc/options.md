@@ -303,8 +303,11 @@ grammar's close alternates is what sharpens it.
 
 Each recovered error carries `Recovered` (tokens skipped, and the sync
 token resumed on) for a consumer that wants to show the abandoned
-region. See `doc/differences.md` for the TS comparison and one known
-counting gap on unlexable runs.
+region. `Recovered.Bad` marks a diagnostic for an unlexable RUN
+absorbed at fetch time rather than one raised by a resync: an
+unlexable word is one diagnostic however many characters it has, and
+two separate words are two. See `doc/differences.md` for the TS
+comparison.
 
 ### `Parse.Budget` — cancellation
 

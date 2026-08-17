@@ -76,6 +76,14 @@ type Context struct {
 	// far each alternate actually got.
 	contTins []Tin
 	contRule *Rule
+
+	// Unlexable-run coalescing (TS: ctx._badTo / _badErr). badTo is the
+	// source offset just past the last absorbed bad token, so a token
+	// starting at or before it belongs to the SAME run and grows the
+	// existing diagnostic instead of recording another.
+	badTo    int
+	badToSet bool
+	badErr   *TabnasError
 	ParseErr *Token // Error token; when set, halts the parse.
 
 	// Errors recorded during this parse (TS: ctx.errs). Appended at

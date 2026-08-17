@@ -619,28 +619,34 @@ With recovery on, neither runtime's parse fails outright: a
 completeness failure after the rule loop is recorded as one more
 diagnostic and the partial value still comes back.
 
-### Known gap: per-run vs per-recovery diagnostics
+### Unlexable runs: lexer soft mode
 
-Both runtimes now coalesce an unlexable run into a single diagnostic —
-a twenty-character run is one error, not twenty — but they scope the
-coalescing differently:
+Aligned. With recovery on and relex off, an unlexable span is absorbed
+at token-FETCH time rather than handed to the alternates, so the parse
+continues as though it were not there and the text after it still
+parses. Contiguous bad tokens coalesce into one diagnostic whose region
+grows with the run, marked `Recovered.Bad` (TS: `recovered.bad`), and
+the same `suppress` window recoveries use applies to a fresh run with
+nothing consumed since the last one.
 
-- **TS emits one diagnostic per RUN.**
-- **Go emits one per RECOVERY**, and a single sync search can span
-  several runs.
+That is why an unlexable word is one squiggle rather than one per
+character, and why two separate words are two.
 
-So `{"a":true blah blip,"b":1}` is two diagnostics in TS and one in Go:
-TS resumes just past `blah`, fails again at `blip`, and reports both,
-while Go's sync search skips both runs on its way to the comma. The
-`suppress` window consequently has a second error to drop in TS and
-none in Go. Go also ends up not picking the trailing `"b":1` back up,
-for the same reason — it resumes at the sync token rather than
-immediately after the run.
+Verified against TS on `{"a":true blah blip,"b":1}`:
 
-Closing this means emitting per-run rather than per-recovery, and
-resuming at the end of a run when the run itself was the fault.
-`TestRecoverCascadeParityGap` marks it explicitly, and the recovery
-fixtures become shared cross-runtime parity fixtures once it closes.
+| | TypeScript | Go |
+|---|---|---|
+| `suppress: 0` | 2 errors, `{"a":true,"b":1}` | 2 errors, `{"a":true,"b":1}` |
+| `suppress: 8` | 1 error, `{"a":true,"b":1}` | 1 error, `{"a":true,"b":1}` |
+
+Beyond `MaxSkip` the run gives up like any other over-long recovery,
+and beyond `MaxRecoveries` the parse gives up — Go checks that cap
+before recording rather than after, so the list does not overshoot.
+
+The one remaining difference on these inputs is the `undefined`/`nil`
+value-model split described above, not the diagnostics: a key whose
+value never parsed is absent from `JSON.stringify` in TS and `null` in
+Go, in both cases with the key present.
 
 ## Parse budget (`options.parse.budget`)
 
