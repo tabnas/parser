@@ -555,3 +555,17 @@ error. The Go port is scheduled with the rest of the recovery work
 (unified-LSP plan, phase P2); until then this is a deliberate,
 TS-only surface with no behavioural effect on either runtime's
 fail-fast parse results.
+
+## Error recovery (`options.parse.recover`) — TS only, Go parity pending
+
+TS supports opt-in multi-error recovery: with
+`parse: { recover: { enabled: true } }`, `parse()` returns
+`{ value, errors }` instead of throwing, skipping to sync points
+derived from the live rule stack × close-alternate `g` tags (with a
+structural fallback for untagged grammars), coalescing unlexable-input
+runs, suppressing cascades, and capping skip distance and error count
+(`ts/doc/options.md` "recover"). Pinned by `ts/test/recover.test.js`.
+
+Go remains fail-fast; the port is scheduled as phase P2 of the
+unified-LSP plan, at which point the recovery fixtures become shared
+parity fixtures.

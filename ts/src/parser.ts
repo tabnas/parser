@@ -147,12 +147,29 @@ class Parser {
       prep(tabnas, ctx, meta),
     )
 
+    // Opt-in error recovery: parse returns { value, errors } instead of
+    // throwing, collecting multiple errors via sync-point recovery
+    // (rules.ts attemptRecover; see ts/doc/lsp-feasibility.md).
+    const recovering = this.cfg.parse.recover.enabled
+
     // Special case - avoids extra per-token tests in main parser rules.
     if ('' === src) {
       if (this.cfg.lex.empty) {
-        return this.cfg.lex.emptyResult
+        return recovering
+          ? { value: this.cfg.lex.emptyResult, errors: ctx.errs }
+          : this.cfg.lex.emptyResult
       } else {
-        throw new TabnasError(S.unexpected, { src }, ctx.t0, norule, ctx)
+        const emptyErr = new TabnasError(
+          S.unexpected,
+          { src },
+          ctx.t0,
+          norule,
+          ctx,
+        )
+        if (recovering) {
+          return { value: undefined, errors: ctx.errs }
+        }
+        throw emptyErr
       }
     }
 
@@ -171,7 +188,7 @@ class Parser {
     let startspec = this.rsm[this.cfg.rule.start]
 
     if (null == startspec) {
-      return undefined
+      return recovering ? { value: undefined, errors: ctx.errs } : undefined
     }
 
     let rule = makeRule(startspec, ctx)
@@ -188,6 +205,8 @@ class Parser {
 
     // Process rules on tokens
     let kI = 0
+
+    try {
 
     // This loop is the heart of the engine. Keep processing rule
     // occurrences until there's none left.
@@ -273,7 +292,24 @@ class Parser {
       throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)
     }
 
-    return result
+    return recovering ? { value: result, errors: ctx.errs } : result
+
+    } catch (err) {
+      // In recovery mode a terminal error (recovery gave up, trailing
+      // content, result.fail) has already been recorded on ctx.errs by
+      // the TabnasError constructor — convert to the { value, errors }
+      // result, keeping whatever partial value exists.
+      if (recovering && err instanceof TabnasError) {
+        let value: any = undefined
+        try {
+          value = ctx.root()?.node
+        } catch (rootErr) {
+          // No root yet: the error preceded the first rule.
+        }
+        return { value, errors: ctx.errs }
+      }
+      throw err
+    }
   }
 
   clone(options: TabnasOptions, config: Config, j: Tabnas) {

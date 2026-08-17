@@ -300,6 +300,33 @@ attempts one bounded re-lex first.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prepare` | object | `{}` | Named functions run to prepare the parse `Context` |
+| `recover` | object | see below | Opt-in error recovery (multi-error collection) |
+
+### `recover` — error recovery
+
+Off by default: fail-fast behaviour is unchanged. With
+`parse.recover.enabled: true`, `parse()` returns `{ value, errors }`
+instead of throwing: every error is recorded on the per-parse
+`ctx.errs` list, and after each error the parser skips forward to a
+*sync point* and resumes, so one parse reports every error in the
+document (the LSP use case; design in `ts/doc/lsp-feasibility.md`).
+
+Sync points are derived from the grammar itself: the leading tokens of
+close alternates whose `g` group tags intersect `syncGroups`, computed
+from the live rule stack at error time. A grammar with no tagged
+alternates falls back to *every* close-leading token in the stack
+(structural sync). Contiguous runs of unlexable input coalesce into a
+single recorded error whose `recovered.skipped` counts the region.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Turn recovery on; `parse()` then returns `{ value, errors }` |
+| `syncGroups` | string[] | `['close','comma','end']` | `AltSpec.g` tags marking close alternates as sync edges |
+| `syncTokens` | string[] | `[]` | Extra explicit sync token names (e.g. `['#CA']`) |
+| `popUntilValid` | boolean | `true` | Pop the rule stack until a rule's close state accepts the sync token |
+| `maxSkip` | number | `64` | Cap on tokens skipped per recovery |
+| `maxRecoveries` | number | `32` | Cap on recorded errors per parse; beyond it the parse gives up (still returning `{ value, errors }`) |
+| `suppress` | number | `4` | Errors within this many consumed tokens of the previous recovery are dropped as cascades |
 
 ## `result`
 

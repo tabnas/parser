@@ -441,8 +441,22 @@ function configure(
       : [],
   }
 
+  const rcv = opts.parse?.recover
   cfg.parse = {
     prepare: values(opts.parse?.prepare),
+    recover: {
+      enabled: !!rcv?.enabled,
+      syncGroups: (rcv?.syncGroups ?? ['close', 'comma', 'end']).slice(),
+      // Explicit sync tokens resolve to tins now, so recovery never
+      // does name lookups at error time.
+      syncTins: (rcv?.syncTokens ?? []).map((name: string) =>
+        tokenize(name, cfg),
+      ),
+      popUntilValid: false !== rcv?.popUntilValid,
+      maxSkip: null == rcv?.maxSkip ? 64 : rcv.maxSkip,
+      maxRecoveries: null == rcv?.maxRecoveries ? 32 : rcv.maxRecoveries,
+      suppress: null == rcv?.suppress ? 4 : rcv.suppress,
+    },
   }
 
   cfg.debug = {

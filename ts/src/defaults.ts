@@ -344,6 +344,36 @@ Unexpected end of source.`,
   parse: {
     // Plugin custom functions to prepare parser context.
     prepare: {},
+
+    // Opt-in error recovery (multi-error collection). Off by default:
+    // fail-fast consumers are untouched. When enabled, parse() returns
+    // `{ value, errors }` instead of throwing on the first error, and
+    // the parser skips to a sync point derived from the live rule
+    // stack (close-alternate `g` group tags) after each error.
+    // See ts/doc/lsp-feasibility.md for the design.
+    recover: {
+      enabled: false,
+
+      // AltSpec.g tags that mark close alternates as sync edges.
+      syncGroups: ['close', 'comma', 'end'],
+
+      // Explicit extra sync token names (e.g. ['#CA']).
+      syncTokens: [],
+
+      // Pop the rule stack until a rule accepts the sync token in its
+      // close state (else pop exactly one rule).
+      popUntilValid: true,
+
+      // Cap forward token skip per recovery.
+      maxSkip: 64,
+
+      // Cap recorded errors per parse; the parse gives up beyond this.
+      maxRecoveries: 32,
+
+      // Errors within this many consumed tokens of the previous
+      // recovery are dropped as cascades.
+      suppress: 4,
+    },
   },
 
   // Parser rule options.
