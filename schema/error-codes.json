@@ -1,6 +1,6 @@
 {
   "$comment": "Generated from the engine's merged catalogues. Regenerate with: cd ts && npm run gen-registry (or node tools/gen-error-codes.js). CI fails on drift.",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "codes": {
     "unknown": {
       "message": "unknown error: {code}",
