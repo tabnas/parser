@@ -326,7 +326,7 @@ class Tabnas {
       // alts we re-evaluated may include groups the user wanted to
       // strip (e.g. `make({ rule: { exclude: 'tabnas' } })`).
       const rsm: RuleSpecMap = internal.parser.rule() as RuleSpecMap
-      const filtered: RuleSpecMap = {}
+      const filtered: RuleSpecMap = Object.create(null)
       for (const rn of Object.keys(rsm)) {
         filtered[rn] = filterRules(rsm[rn], internal.config) as RuleSpec
       }

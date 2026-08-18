@@ -40,7 +40,14 @@ import { makeRule, makeRuleSpec } from './rules'
 class Parser {
   options: TabnasOptions    // Raw user options.
   cfg: Config               // Resolved configuration.
-  rsm: RuleSpecMap = {}     // Rule specs keyed by rule name.
+  // Keyed by rule name, so allocated without a prototype. On a plain literal
+  // a rule named __proto__ is not an ordinary key: `this.rsm[name]` reads back
+  // Object.prototype, the `||` guard below adopts it as the RuleSpec, and
+  // `rs.name = name` then writes onto Object.prototype - polluting every
+  // object in the process. Rule names reach here from grammar text (abnf/bnf
+  // compile user-supplied grammars), so this is not only a developer-typo
+  // path. `constructor` and `toString` hit the same read and threw instead.
+  rsm: RuleSpecMap = Object.create(null)  // Rule specs keyed by rule name.
   ji: Tabnas                // Owning Tabnas instance.
 
   // Per-Parser caches for per-parse setup that depends only on cfg.
@@ -400,7 +407,7 @@ class Parser {
     // Inherit rules from parent, filtered by config.rule
     parser.rsm = Object.keys(this.rsm).reduce(
       (a, rn) => ((a[rn] = filterRules(this.rsm[rn], this.cfg)), a),
-      {} as any,
+      Object.create(null) as any,
     )
 
     parser.norm()
