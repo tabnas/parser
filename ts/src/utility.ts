@@ -1184,7 +1184,7 @@ function parserwrap(parser: any) {
               kI: -1,
               rs: [],
               rsI: 0,
-              rsm: {},
+              rsm: Object.create(null),
               n: {},
               log: meta ? meta.log : undefined,
               F: srcfmt(tabnas.internal().config),
