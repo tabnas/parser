@@ -817,6 +817,15 @@ export type GrammarSpec = {
   // (see BUILTIN_SCHEMA_VERSION). Absent ⇒ version 1.
   v?: number
 
+  // Free-form tool metadata carried alongside the grammar. The engine
+  // ignores it entirely — it does not affect parsing, and grammar()
+  // neither reads nor stores it. It exists so a serialized spec can
+  // carry facts ABOUT the grammar for tools that hold the spec itself:
+  // the BNF-family compilers record their synthetic-rule provenance
+  // here (`meta.provenance`), and the LSP server reads it to
+  // canonicalize generated rule names. JSON-serializable by contract.
+  meta?: Record<string, any>
+
   // JSON-serializable options. Function-valued fields use FuncRef strings
   // that are resolved against `ref` before being applied.
   options?: Record<string, any>

@@ -286,6 +286,14 @@ Two consequences worth knowing:
   matchers with its own token numbers, so sharing one matcher between
   engines would make the second corrupt the first.
 
+`spec.meta` is free-form tool metadata, and the engine ignores it: it is
+neither read nor stored, so a spec carrying it installs exactly as one
+without it. It exists so a serialised grammar can carry facts *about*
+itself for whoever holds the spec — the BNF-family compilers record their
+synthetic-rule provenance under `meta.provenance`, which the language
+server reads to canonicalise generated rule names. It is declared in
+`schema/grammar.schema.json`, so a spec that uses it still validates.
+
 Before 0.6.1 the TypeScript runtime resolved refs in place, so a spec came
 back holding functions and serialising it after installing produced a
 grammar with every action silently missing. Go always copied.

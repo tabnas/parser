@@ -198,6 +198,14 @@ Apply a declarative grammar spec. Resolves `"@name"` function refs via
 `gs.Ref`. Returns an error for missing/mistyped refs; malformed specs
 produce an error, never a panic. See the [plugin guide](plugins.md).
 
+`gs.Meta` is free-form tool metadata and is ignored here: it is neither
+read nor applied, so a spec carrying it installs exactly as one without
+it. `GrammarSpecFromJSON` preserves a serialised spec's top-level `meta`
+object into that field, so a caller holding the spec can read it back —
+the BNF-family compilers record their synthetic-rule provenance under
+`meta.provenance`, which the language server reads to canonicalise
+generated rule names. Declared in `schema/grammar.schema.json`.
+
 ### `(*Tabnas) GrammarText(text string, setting ...*GrammarSetting) error`
 
 As `Grammar`, but parses a tabnas-format grammar string. Requires a
