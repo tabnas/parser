@@ -85,6 +85,51 @@ both halves: `make build|test|clean` run the TS and Go sides,
 `go/vX.Y.Z`. `make publish-ts` publishes the TS package at its
 `package.json` version. (`make -C ts test` runs the TS suite alone.)
 
+## Releasing
+
+Publishing is **tag-driven and runs in CI**, not locally: pushing a `ts/v*`
+tag fires `.github/workflows/release.yml`, which publishes to npm over GitHub
+OIDC trusted publishing (no token, provenance attached). A `go/v*` tag is the
+Go module release — the proxy serves it straight from the tag. Do not run a
+local `npm publish` for a release: it goes out over a token and bypasses OIDC
+entirely.
+
+Two things about this repo's version have bitten a release. Both fail loudly,
+but only after you have already bumped, so know them before you start.
+
+**The version lives in four places here, not three.** The usual three are
+`ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
+in `go/tabnas.go`; drift between them is caught by `ts/test/version.test.*`
+and `go/version_test.go`. The fourth is `schema/error-codes.json`, which
+embeds the engine version in its payload — so **a version bump on its own
+makes the registry stale**, with no code change involved. Both runtimes then
+fail:
+
+```
+schema/error-codes.json is stale: run npm run gen-registry
+registry version "0.8.7" != engine VERSION "0.8.8"
+```
+
+The fix is the one the test names: `cd ts && npm run gen-registry` (after
+`npm run build`), then commit the regenerated file with the bump.
+
+**A red `main` CI can mean "this engine is not published yet", not "this
+engine is broken".** CI git-clones the downstream closure and builds each
+sibling against the engine, and those siblings resolve `@tabnas/parser` from
+**npm**, not from this checkout. So adding an API here — a new field on
+`GrammarSpec`, say — and merging a sibling that uses it turns `main` red until
+the engine is published, even though nothing is wrong with either repo. That
+happened with the `meta` passthrough (#110): the field was on `main` and in no
+tag, `bnf` started using it hours later, and `ci / ts` failed with
+`Property 'meta' does not exist on type 'GrammarSpec'` in *bnf's* source.
+
+Read the failure before acting on it. If the failing compile is in a sibling's
+files and names an API this repo added but has not shipped, the fix is to
+publish the engine — not to patch the sibling or revert the API. Confirm by
+re-running that CI run after the release: it should go green untouched. The
+engine's own `ts` and `go` suites passing locally is the signal that the
+engine itself is sound.
+
 ## Shared spec fixtures (`test/spec/*.tsv`)
 
 Tab-separated, header row first, one case per line. `\n`, `\r`, `\t`
