@@ -33,7 +33,7 @@ Controls whitespace handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable space recognition |
-| `Chars` | `string` | `" \t"` | Characters treated as space |
+| `Chars` | `string` | `" \t"` | Characters treated as space. **`""` means UNSET, not "none"** — it is the zero value and cannot be told from an absent field, so the default stays. Set `Lex` to `false` to turn space lexing off |
 
 ## `Line`
 
@@ -42,7 +42,7 @@ Controls line ending handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable line recognition |
-| `Chars` | `string` | `"\r\n"` | Line ending characters |
+| `Chars` | `string` | `"\r\n"` | Line ending characters. **`""` means UNSET, not "none"** — see `Space.Chars`. Set `Lex` to `false` to turn line lexing off |
 | `RowChars` | `string` | `"\n"` | Characters that increment the row counter |
 | `Single` | `*bool` | `false` | Separate token per newline |
 
@@ -106,8 +106,8 @@ Controls quoted string parsing.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable string matching |
-| `Chars` | `string` | `"'\"\`` | Quote characters |
-| `MultiChars` | `string` | `` "`" `` | Multiline quote characters |
+| `Chars` | `string` | `"'\"\`` | Quote characters. **`""` means UNSET, not "none"** — it is the zero value, so the default quotes stay in force. TypeScript honours `chars: ''` and Go cannot; set `Lex` to `false` instead. See DIVERGENCE.md |
+| `MultiChars` | `string` | `` "`" `` | Multiline quote characters. **`""` means UNSET**, as for `Chars`. A character must also be in `Chars` to delimit a string at all |
 | `EscapeChar` | `string` | `"\\"` | Escape character |
 | `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |

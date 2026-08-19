@@ -101,6 +101,37 @@ Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
 spans on purpose, so changing either side fails loudly.
 
+### An explicitly empty option cannot be expressed in Go
+
+**Deferred, not deliberate** — this is a defect awaiting a breaking
+change, recorded here so consumers are not told it does not exist.
+
+`Chars`, `MultiChars`, `Space.Chars` and `Line.Chars` are plain `string`
+in the Go options, so `""` is their zero value and an explicitly empty
+value is indistinguishable from an unset one. `options.go` skips it
+(`o.String.Chars != ""`) and the defaults stay in force. TypeScript
+distinguishes `''` from `undefined` and honours it.
+
+The consequence is a **different result for the same input** whenever a
+plugin configures its lexer that way. `@tabnas/css` declared
+`string: { chars: '' }` in both ports:
+
+| input | TypeScript | Go |
+| --- | --- | --- |
+| `a"b` | `jsonic/unexpected` | `jsonic/unterminated_string` |
+
+The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
+`EscapeStrict`, which are pointers for exactly this reason. It is a
+breaking change across sixteen call sites in a published module, so it is
+outstanding rather than done. `TestEmptyCharsMeansUnset` pins the current
+behaviour and **fails when the repair lands** — the signal to delete this
+entry along with it.
+
+Sibling ports are not all exposed: of the four call sites in the fleet
+that set an empty value, only css's was live. `csv` sets `Lex: false`
+alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
+never a quote character to begin with.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
