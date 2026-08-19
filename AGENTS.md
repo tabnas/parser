@@ -193,6 +193,51 @@ Two loader details that are easy to break: the TS and Go TSV loaders
 step, and this repo does **not** use `@tabnas/support` — it carries its own
 loaders, so a fix there does not arrive here automatically.
 
+## Rule state: `n`, `u`, `k` — and which of them propagate
+
+A rule carries three key-value bags, all merged from the matching
+alternate before its action runs. **Two are inherited by child rules and
+one is not, and that is the single most important fact about them:**
+
+| bag | what it holds | inherited by a child rule? |
+|---|---|---|
+| `n` / `N` | named counters (`alt.n` increments; `0` resets) | **YES** |
+| `u` / `U` | user props — scratch for one rule | **NO** |
+| `k` / `K` | **keep** props — config and state meant to descend | **YES** |
+
+**`k` is named for "keep": its content is *kept* as the parse descends.**
+If you want a value to reach the rules below you, put it in `k`. If you
+want it to stay local to one rule, put it in `u`. That is the whole
+distinction, and picking the wrong bag is silent — nothing errors, the
+value simply does or does not appear further down.
+
+Both runtimes agree, on **push and on replace alike**:
+
+- TypeScript copies `rawn()` and `rawk()` into the new rule at
+  `ts/src/rules.ts:662-671` (push) and `:686-695` (replace). `rawu()`
+  exists (`:94`) but is never copied.
+- Go copies `r.N` and `r.K` at `go/rule.go:1224-1236` (push) and
+  `:1249-1261` (replace). `EnsureU()` is called only by the merge
+  (`:1161`), never by the propagation.
+
+Two consequences worth holding on to:
+
+1. **`k` is rule-scoped, not alternate-scoped.** The merge is
+   `rule.k = Object.assign(rule.k, alt.k)` (`ts/src/rules.ts:605`) and
+   its Go twin (`go/rule.go:1166-1170`), both running *before* the alt
+   action. So `k` accumulates across every alternate that fires on a
+   rule, and then descends. An alternate that sets `k` is not scoping
+   that value to itself.
+2. **`u` is the right bag for per-rule scratch.** `@key$` uses it
+   deliberately — `r.u[cfg.slot || 'key']` (`ts/src/builtins.ts:264`),
+   read back by `@setval$` (`:276`) on the same rule — precisely because
+   a captured key must not leak into child rules.
+
+When adding a builtin, an option, or a grammar that stashes state on a
+rule, say in its doc comment which bag it uses and why. The propagation
+rule is contract, not implementation detail: it is observable from any
+grammar, in both runtimes, and a port has to reproduce it exactly.
+
 ## Error codes
 
 The engine declares the base error codes every grammar inherits, in
