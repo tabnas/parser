@@ -2196,7 +2196,12 @@ func (l *Lex) matchNumber() *Token {
 }
 
 // matchText matches unquoted text and checks for value keywords (true, false, null).
-// Text is terminated by fixed tokens, whitespace, quotes, and comment starters.
+// Text is terminated by fixed tokens, whitespace, line chars, ender chars and
+// comment starters — NOT by a quote. `a"b` is one text token, matching TS,
+// whose ender regex is built from the space and line chars plus opts.ender,
+// the fixed tokens and the comment starters; cfg.string.chars is deliberately
+// absent from it. A grammar that wants a quote to end text adds it to
+// opts.ender, which is the documented way to say so.
 func (l *Lex) matchText() *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
@@ -2216,8 +2221,8 @@ func (l *Lex) matchText() *Token {
 			sI++
 			continue
 		case textStop:
-			// Definite terminator (enabled space/line/string char, ender
-			// char, or single-byte fixed token).
+			// Definite terminator (enabled space/line char, ender char, or
+			// single-byte fixed token). NOT a string char — see matchText.
 		default: // textVerify
 			if !l.textStopBase(sI) && !l.textStopComment(sI) {
 				_, chSize := utf8.DecodeRuneInString(src[sI:])
@@ -2455,8 +2460,13 @@ func isExponentStart(src string, pos int) bool {
 }
 
 // textStopBase reports whether the rune at pos terminates a text run for
-// reasons other than a comment starter: enabled space/line/string chars,
-// ender chars, and fixed tokens (with the standalone-lexer fallback).
+// reasons other than a comment starter: enabled space/line chars, ender chars,
+// and fixed tokens (with the standalone-lexer fallback).
+//
+// A QUOTE IS NOT ONE OF THEM. This used to test the string chars as well,
+// which made `a"b` two tokens here and one in TS — the largest divergence
+// class measured across the fleet. See matchText for where the rule is
+// written on the TS side.
 func (l *Lex) textStopBase(pos int) bool {
 	src := l.Src
 	ch, _ := utf8.DecodeRuneInString(src[pos:])
@@ -2506,7 +2516,8 @@ func (l *Lex) textStopComment(pos int) bool {
 }
 
 // isTextChar returns true if the character can continue a text token,
-// checking against the config's fixed tokens, ender chars, and string chars.
+// checking against the config's fixed tokens and ender chars. Quote chars
+// continue a text run — see textStopBase.
 func (l *Lex) isTextChar(pos int) bool {
 	if pos >= len(l.Src) {
 		return false
