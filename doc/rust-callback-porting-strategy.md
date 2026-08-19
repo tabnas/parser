@@ -598,28 +598,91 @@ covers.
 ### 5.1 M0 — Adjudicate (days, TypeScript and Go, no Rust)
 
 Four things, all of which are cheap at two runtimes and expensive at
-three:
+three. **All four were adjudicated on 2026-08-19; the decisions are
+recorded below and are the input to the work, not open questions.**
 
-1. **`alt.k` vs `r.K`.** TypeScript is canonical (`AGENTS.md` rule 1),
-   so Go moves: either give `AltAction` the alternate, or snapshot the
-   alternate's own `k` into a per-pass slot the builtins read. Pin it
-   with a shared fixture using the two-rule grammar in the Summary.
-   Correct `doc/value-builtins.md:17`, which currently records the two
-   spellings as equivalent.
-2. **The `p`/`r` and `e` orderings.** Both are latent. Add a shared
-   fixture that exercises function-form `p`/`r` (TypeScript already has
-   `ts/test/cover-engine.test.js:436`, `:455`; Go has nothing), and one
-   that combines `h` with `e`.
-3. **The `alt.b` re-read.** Decide whether `consumed` is computed once
-   pre-action (Go's shape, the simpler contract) or re-read after
-   (TypeScript's shape today). Adopting Go's is a behaviour change in
-   TypeScript and needs a fixture either way.
-4. **Generalise the two-runtime machinery to N.**
-   `go/spec_registration_test.go:27-30`'s `nonParity map[string]string`
-   has no per-runtime dimension; `schema/error-codes.json:46` carries a
-   literal `goOnly` block; the registry's embedded engine version is
-   coupled to the four version locations. None of this is Rust work and
-   all of it is currently one-line-per-fixture.
+1. **`alt.k` vs `r.K` — DECIDED: Go moves to alternate-scoped.**
+   TypeScript is canonical (`AGENTS.md` rule 1), so Go changes: either
+   give `AltAction` the alternate, or snapshot the alternate's own `k`
+   into a per-pass slot the builtins read. Config becomes local to the
+   alternate that declares it, and a parent can no longer silently
+   reconfigure a child's builtin. Pin it with a shared fixture using the
+   two-rule grammar in the Summary, plus its control (the same grammar
+   with the parent's `k` removed, where the runtimes already agree).
+   Correct `doc/value-builtins.md:17`, which records the two spellings
+   as equivalent, and `go/builtins.go:22-24`, which asserts "Equivalent
+   behaviour" outright. Tracked as #120.
+
+   *Known risk, accepted:* nothing currently tests inherited config, so
+   if a downstream Go grammar relies on a parent configuring a subtree,
+   this removes that capability silently. The fixture should land before
+   the behaviour change so the break is visible in one commit.
+
+2. **The `p`/`r` and `e` orderings — DECIDED: shared fixtures now.**
+   The `h` → `e` → `p`/`r` ordering itself is aligned
+   (`ts/src/rules.ts:568`, `:580`, `:653`; `go/rule.go:1125`, `:1136`,
+   `:1203`). What is unpinned is the function form and the combination:
+   TypeScript exposes one polymorphic field
+   (`p?: string | AltNext | null | false | FuncRef`,
+   `ts/src/types.ts:568`) with tests at `ts/test/cover-engine.test.js:436`
+   and `:455`; Go splits it into `P string` plus
+   `PF func(r,ctx) string` (`go/rule.go`) and has **zero** tests using
+   `PF:` or `RF:`. Write cross-runtime fixtures for function-form
+   `p`/`r` and for `h` combined with `e`, then adjudicate whatever they
+   expose. Promoting these to the parity contract is the point: the API
+   shapes already differ, so a port written from Go's shape would narrow
+   the contract with nothing to catch it.
+
+3. **The `alt.b` re-read — DECIDED: compute once, pre-action.**
+   Go's shape becomes the contract. `consumed` is engine state fixed
+   before the action runs, and `alt.b` is an input to the match rather
+   than a channel an action may write. This removes a way for a plugin
+   to desynchronise `ctx.t` and `ctx.v`: TypeScript evaluates
+   `rule[oN|cN] - (alt.b || 0)` twice today, at `ts/src/rules.ts:619`
+   (before the action, to move consumed tokens) and again at `:737`
+   (after it, to shift the lookahead), so an action that writes `alt.b`
+   makes the two disagree and a token moved to `ctx.v` is never shifted
+   out of `ctx.t`. It is a behaviour change in TypeScript and needs a
+   fixture. Verified: nothing in-tree writes `alt.b` —
+   `grep -rnE "alt\.b\s*=[^=]" ts/src ts/test` returns nothing, and
+   every occurrence in `ts/src` is a read (`merge.ts:246`, `:372`;
+   `parser.ts:259`, `:359`; `rules.ts:619`, `:737`, `:1592-1595`). So
+   the change should be observable only to a plugin already doing
+   something unsupported; confirm against the downstream closure before
+   landing, since that is the part this repository cannot check.
+
+   One nuance the same grep surfaced, worth handling in the same change:
+   `alt.b` may itself be a function, resolved at `ts/src/rules.ts:1595`
+   as `alt.b(rule, ctx, out)` during normalisation, whereas Go resolves
+   its `alt.BF(r, ctx)` inside the consumed computation at
+   `go/rule.go:1181`. Both are pre-action, so this is a resolution-point
+   difference rather than a behavioural one today — but it is a second
+   place the two runtimes spell the same feature differently, and the
+   fixture for this item should cover the function form as well as the
+   numeric one.
+
+   Also correct `go/rule.go:1176-1177`, whose comment claims the
+   single-evaluation form "Mirrors the TS rules.ts ordering". It does
+   not; after this change it will.
+
+4. **Generalise the two-runtime machinery to N — DECIDED: all of it,
+   now.** `go/spec_registration_test.go:27-30`'s
+   `nonParity map[string]string` has no per-runtime dimension;
+   `schema/error-codes.json:46` carries a literal `goOnly` block whose
+   key name already encodes an assumption that will not survive; and the
+   registry's embedded engine version is coupled to the four version
+   locations. The first two are one-line-per-fixture. The third —
+   decoupling the registry version from the engine version — is the
+   largest single item in M0 and is entangled with the release process
+   described in `AGENTS.md`, so sequence it last and on its own.
+
+   *Recorded for the record:* the recommendation attached to this
+   question was to defer until a third runtime is funded, on the grounds
+   that generalising costs about the same later and buys nothing until
+   then. The decision was to do it now, which is the maintainer's call;
+   the argument for it is that it converts a future decision-forcing
+   event into a typing exercise, and that `goOnly` is poorly named even
+   at two runtimes.
 
 Also worth doing here, and it is TypeScript-side design work where
 `AGENTS.md` says design belongs: **split the `funcRef` surface into two
