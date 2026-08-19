@@ -177,3 +177,73 @@ func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
 			"— TS reports 6", n)
 	}
 }
+
+// TestDivergenceRegexDialect pins the serialized-regex dialect gap, asserting
+// the OPPOSITE of ts/test/divergence.test.js: that pairing IS the test. See
+// DIVERGENCE.md, "Regex dialect in serialized terminals".
+//
+// This is the first PARSE-LEVEL reproduction of it. The gap was known at the
+// regex-engine layer and recorded in go/doc/differences.md, but nothing drove
+// it through a real GrammarSpec — so "a shared grammar that depends on either
+// will differ" was a prediction, not a measurement. It goes both ways: Go
+// REJECTS what TS accepts (`\s`) and ACCEPTS what TS rejects (`(?i)`).
+func TestDivergenceRegexDialect(t *testing.T) {
+	run := func(spec, src string) string {
+		gs, err := GrammarSpecFromJSON([]byte(spec))
+		if nil != err {
+			t.Fatalf("spec: %v", err)
+		}
+		j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+		if err := j.Grammar(gs); nil != err {
+			t.Fatalf("grammar: %v", err)
+		}
+		v, perr := j.Parse(src)
+		if nil != perr {
+			return "REJECTED"
+		}
+		s, _ := v.(string)
+		return "ACCEPTED:" + s
+	}
+
+	const specWS = `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^\\s+/"}}},` +
+		`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+	const specK = `{"options":{"rule":{"start":"top"},"match":{"token":{"#K":"@/^k/i"}}},` +
+		`"rule":{"top":{"open":[{"s":["#K"],"a":"@value$"}],"close":[{}]}}}`
+
+	// Control first: the ASCII whitespace RE2 and JS agree on. A change here
+	// means something other than the dialect gap broke.
+	for _, cp := range []rune{0x20, 0x09} {
+		if got := run(specWS, string(cp)); "ACCEPTED:"+string(cp) != got {
+			t.Errorf("\\s control U+%04X: got %s, want ACCEPTED", cp, got)
+		}
+	}
+
+	// RE2's `\s` is the Perl class [\t\n\f\r ]. JS's is Unicode-aware, so TS
+	// ACCEPTS every one of these. Pinned by name so a future RE2 that widened
+	// the class fails loudly rather than quietly aligning.
+	for _, c := range []struct {
+		n  string
+		cp rune
+	}{
+		{"NBSP", 0x00A0}, {"LINE SEPARATOR", 0x2028}, {"EN QUAD", 0x2000},
+		{"IDEOGRAPHIC SPACE", 0x3000}, {"ZERO WIDTH NO-BREAK SPACE", 0xFEFF},
+	} {
+		if got := run(specWS, string(c.cp)); "REJECTED" != got {
+			t.Errorf("\\s U+%04X (%s): got %s, want REJECTED — TS accepts it; "+
+				"if Go now accepts it too the divergence is GONE and the "+
+				"DIVERGENCE.md entry should be deleted", c.cp, c.n, got)
+		}
+	}
+
+	// The other direction. RE2 case-folds by Unicode rules, so `(?i)k` matches
+	// U+212A KELVIN SIGN; JS `/i` without `u` does not, and TS rejects it.
+	for _, s := range []string{"k", "K"} {
+		if got := run(specK, s); "ACCEPTED:"+s != got {
+			t.Errorf("(?i) control %q: got %s, want ACCEPTED", s, got)
+		}
+	}
+	if got := run(specK, string(rune(0x212A))); "REJECTED" == got {
+		t.Error("(?i) U+212A KELVIN SIGN: got REJECTED, want ACCEPTED — TS " +
+			"rejects it; if Go now rejects it too the divergence is GONE")
+	}
+}

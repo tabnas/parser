@@ -101,6 +101,59 @@ Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
 spans on purpose, so changing either side fails loudly.
 
+### Regex dialect in serialized terminals
+
+A grammar spec can carry a match token as a serialized regex
+(`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
+`RegExp` in TypeScript, RE2 in Go — and the two dialects disagree on two
+constructs. **It diverges in both directions.**
+
+| pattern | input | TypeScript | Go |
+|---|---|---|---|
+| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** |
+| `@/^\s+/` | U+2028, U+2000, U+3000, U+FEFF | accepted | **rejected** |
+| `@/^\s+/` | U+0020, U+0009 | accepted | accepted |
+| `@/^k/i` | `k`, `K` | accepted | accepted |
+| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted |
+
+JS `\s` is Unicode-aware; RE2's is the Perl class `[\t\n\f\r ]`. JS `/i`
+without `u` does not fold U+212A to `k`; RE2 case-folds by Unicode rules
+and does.
+
+**This is recorded rather than fixed, and the reason is worth stating
+plainly, because the two halves are not equally hard.**
+
+`\s` is mechanically repairable: a compile-time rewrite could expand it to
+the explicit JS class before handing the pattern to RE2. That is not free —
+it means this engine ships a regex-dialect translation layer, which has to
+parse enough of the pattern to know a `\s` inside a character class from a
+`\\s` that is a literal backslash, and it then owns that translation for
+every downstream grammar in both runtimes. `(?i)` is not repairable the same
+way: RE2 has no ASCII-only case-folding flag, so matching JS would mean
+rewriting the pattern into explicit alternations.
+
+Adding the layer for one of the two is a decision for the maintainer, not a
+mechanical fix, so it is written down here with the cost attached instead of
+being taken unilaterally.
+
+**The workaround, measured rather than assumed.** An explicit class in the
+serialized terminal makes RE2 agree with JS exactly:
+
+```
+@/^[\t\n\v\f\r \x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]+/
+```
+
+Go accepts U+0020, U+0009, U+00A0, U+2028, U+2000, U+3000 and U+FEFF with
+that pattern and still rejects `A` — the same verdicts TS gives for `\s`.
+Prefer it over `\s` in any serialized terminal a Go runtime will compile.
+
+Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect` and the
+matching case in `ts/test/divergence.test.js`, which assert **opposite**
+results on purpose. Both drive a real `GrammarSpec` through
+`grammar()` / `Grammar()` and parse: the gap was previously known only at
+the regex-engine layer, so "a shared grammar that depends on either will
+differ" was a prediction until this was wired.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
