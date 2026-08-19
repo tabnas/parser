@@ -15,6 +15,49 @@ const { json } = require('../dist-test/json-plugin')
 const { loadTSV } = require('./utility')
 
 describe('json-spec', function () {
+  // Shared cross-runtime fixture for rule.maxmul, the runaway-guard
+  // multiplier (the Go counterpart is TestSpecRuleMaxMul in
+  // go/spec_test.go). Columns: maxmul | via | input | expected, where
+  // expected is OK:<json> or ERROR:<code>.
+  //
+  // `via` is the half that matters as much as the value. Go honoured
+  // rule.maxmul at CONSTRUCTION and silently ignored it via SetOptions
+  // (MaxMul lives on the Parser, and only the Config was rebuilt), while
+  // TS reads it off the config at parse time and honoured both. A fixture
+  // that only ever constructed would have passed on a half-fixed port.
+  //
+  // maxmul 0 and -1 are the boundary the two runtimes disagreed on: TS
+  // honours a non-positive value literally, which is a zero budget — the
+  // rule loop never runs and the parse fails as `unexpected`. Go coerced
+  // it to the default 3 and parsed happily, so a guard you had explicitly
+  // disarmed silently rearmed itself.
+  it('rule-maxmul-spec', () => {
+    for (const { cols, row } of loadTSV('rule-maxmul')) {
+      const [maxmulStr, via, input, expected] = cols
+      const maxmul = parseInt(maxmulStr, 10)
+      try {
+        const j = 'construct' === via
+          ? new Tabnas({ plugins: [json], rule: { maxmul } })
+          : new Tabnas({ plugins: [json] }).make({ rule: { maxmul } })
+
+        let actual
+        try {
+          actual = 'OK:' + JSON.stringify(j.parse(input))
+        } catch (e) {
+          actual = 'ERROR:' + (e.code || e.message)
+        }
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `rule-maxmul row ${row}: maxmul=${maxmulStr} via=${via}` +
+          ` input=${JSON.stringify(input)}\n` + err.message
+        throw err
+      }
+    }
+  })
+
+
   it('include-json', () => {
     const j = new Tabnas({ plugins: [json] })
     for (const name of ['include-json', 'include-json-utf8']) {

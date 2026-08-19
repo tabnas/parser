@@ -192,11 +192,27 @@ normal parse flow in both implementations and resolves by grammar behavior.
 
 ### Rule-Iteration Budget
 
-The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul` in both.
-Go additionally coerces a non-positive `MaxMul` to the default `3` and floors
-the product at `100`; TS honors `rule.maxmul: 0` literally, which yields a zero
-budget and an `unexpected` error. Only reachable by setting `rule.maxmul` to
-zero or a negative number.
+Aligned. The runaway guard is `2 * ruleCount * srcLen * 2 * rule.maxmul` in
+both, and all three of its parts now agree:
+
+- A non-positive `rule.maxmul` is honored literally, in both. That is a zero
+  budget: the rule loop never runs and the parse fails as `unexpected`. Go
+  used to coerce it to the default `3`, so a guard you had explicitly
+  disarmed silently rearmed itself.
+- No floor. Go used to floor the product at `100`, handing a small grammar
+  over a short source a budget TS never gave it.
+- `srcLen` is UTF-16 code units in both (Go: `utf16Len`). Go used to measure
+  bytes, so the same non-ASCII text bought up to three times the budget.
+
+`rule.maxmul` also takes effect through `SetOptions` as well as at
+construction. It lives on the `Parser` rather than the `Config`, and
+`SetOptions` rebuilt only the config, so the option was silently dropped on
+that path while TS — which reads it off the config at parse time — honored
+both.
+
+Pinned by the shared fixture `test/spec/rule-maxmul.tsv`, which covers both
+paths; `TestUTF16Len` pins the length unit directly, since the budget is
+never the binding constraint for the grammars available to the suite.
 
 ### Token Consumption
 

@@ -811,6 +811,17 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// Rebuild config from merged options.
 	cfg := buildConfig(j.options)
 
+	// rule.maxmul lives on the Parser, not the Config, so the rebuild above
+	// does not carry it and SetOptions silently ignored the option entirely:
+	// `SetOptions(Options{Rule: &RuleOptions{MaxMul: &zero}})` left the
+	// runaway budget at whatever Make had computed. TS reads
+	// `ctx.cfg.rule.maxmul` at parse time off a config that IS rebuilt, so
+	// the same call took effect there. Read from the MERGED options so a
+	// value set by an earlier call survives a later unrelated one.
+	if nil != j.options.Rule && nil != j.options.Rule.MaxMul {
+		j.parser.MaxMul = *j.options.Rule.MaxMul
+	}
+
 	// Preserve per-instance state.
 	cfg.FixedTokens = j.parser.Config.FixedTokens
 	cfg.FixedSorted = j.parser.Config.FixedSorted

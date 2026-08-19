@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -293,6 +294,97 @@ func runErrorTSV(t *testing.T, file string, j *Tabnas) {
 func TestSpecIncludeJSON(t *testing.T) {
 	for _, name := range []string{"include-json.tsv", "include-json-utf8.tsv"} {
 		runParserTSV(t, name, makeJSON())
+	}
+}
+
+// TestSpecRuleMaxMul runs the shared rule-maxmul.tsv fixture (the TS
+// counterpart is 'rule-maxmul-spec' in ts/test/json-spec.test.js).
+// Columns: maxmul | via | input | expected, where expected is OK:<json> or
+// ERROR:<code>.
+//
+// `via` is the half that matters as much as the value. Go honoured
+// rule.maxmul at CONSTRUCTION and silently ignored it via SetOptions (MaxMul
+// lives on the Parser, and only the Config was rebuilt), while TS reads it
+// off the config at parse time and honoured both. A fixture that only ever
+// constructed would have passed on a half-fixed port.
+//
+// maxmul 0 and -1 are the boundary the two runtimes disagreed on: TS honours
+// a non-positive value literally, which is a zero budget — the rule loop
+// never runs and the parse fails as `unexpected`. Go coerced it to the
+// default 3 and parsed happily, so a guard you had explicitly disarmed
+// silently rearmed itself.
+func TestSpecRuleMaxMul(t *testing.T) {
+	for _, row := range loadSpecTSV(t, "rule-maxmul") {
+		maxmul, err := strconv.Atoi(tsvCol(row.cols, 0))
+		if nil != err {
+			t.Errorf("rule-maxmul line %d: bad maxmul %q", row.lineNo, tsvCol(row.cols, 0))
+			continue
+		}
+		via := tsvCol(row.cols, 1)
+		input := preprocessEscapes(tsvCol(row.cols, 2))
+		want := tsvCol(row.cols, 3)
+
+		var j *Tabnas
+		switch via {
+		case "construct":
+			o := jsonOptions()
+			o.Rule = &RuleOptions{MaxMul: &maxmul}
+			j = Make(o)
+			if err := registerJSONGrammar(j); nil != err {
+				t.Fatalf("rule-maxmul line %d: %v", row.lineNo, err)
+			}
+		case "setoptions":
+			j = makeJSON(Options{Rule: &RuleOptions{MaxMul: &maxmul}})
+		default:
+			t.Errorf("rule-maxmul line %d: unknown via %q", row.lineNo, via)
+			continue
+		}
+
+		got := ""
+		if v, err := j.Parse(input); nil != err {
+			if te, ok := err.(*TabnasError); ok {
+				got = "ERROR:" + te.Code
+			} else {
+				got = "ERROR:" + err.Error()
+			}
+		} else {
+			b, merr := json.Marshal(v)
+			if nil != merr {
+				t.Errorf("rule-maxmul line %d: marshal: %v", row.lineNo, merr)
+				continue
+			}
+			got = "OK:" + string(b)
+		}
+
+		if got != want {
+			t.Errorf("rule-maxmul line %d: maxmul=%d via=%s input=%q: got %q, want %q",
+				row.lineNo, maxmul, via, input, got, want)
+		}
+	}
+}
+
+// TestUTF16Len pins the source-length unit the rule budget is scaled by.
+// TS scales by `lex.src.length` — UTF-16 code units — and Go scaled by
+// len(src), which is BYTES, so the same text bought a non-ASCII source up to
+// three times the budget. Not observable through the grammars available here
+// (the budget is never the binding constraint for them), so it is pinned
+// directly rather than left to an integration test that cannot reach it.
+func TestUTF16Len(t *testing.T) {
+	cases := []struct {
+		s    string
+		want int
+	}{
+		{"", 0},
+		{"abc", 3},
+		{string(rune(0x00E9)), 1},  // 2 bytes, 1 unit
+		{string(rune(0x65E5)), 1},  // 3 bytes, 1 unit
+		{string(rune(0x1F600)), 2}, // 4 bytes, 1 rune, 2 units (surrogate pair)
+		{"a" + string(rune(0x1F600)) + "b", 4},
+	}
+	for _, c := range cases {
+		if got := utf16Len(c.s); got != c.want {
+			t.Errorf("utf16Len(%q) = %d, want %d (len=%d)", c.s, got, c.want, len(c.s))
+		}
 	}
 }
 

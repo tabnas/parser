@@ -322,6 +322,23 @@ func NewParser() *Parser {
 
 // Start parses the source string and returns the result.
 // Returns a *TabnasError if parsing fails.
+// utf16Len is len(s) as JavaScript would report it: the number of UTF-16 code
+// units, so an astral character counts 2 where a Go range loop counts 1 rune
+// and len() counts 4 bytes. The rule-iteration budget is scaled by the source
+// length in BOTH runtimes, and TS scales by `lex.src.length` — so measuring
+// bytes here handed a non-ASCII source a different budget for the same text.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if 0xFFFF < r {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
 func (p *Parser) Start(src string) (any, error) {
 	return p.startParse(src, nil, nil, nil, nil)
 }
@@ -434,15 +451,26 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 	}
 
-	// Maximum iterations: 2 * numRules * srcLen * 2 * maxmul
-	maxmul := p.MaxMul
-	if maxmul <= 0 {
-		maxmul = 3
-	}
-	maxr := 2 * len(p.RSM) * len(src) * 2 * maxmul
-	if maxr < 100 {
-		maxr = 100
-	}
+	// Maximum iterations: 2 * numRules * srcLen * 2 * maxmul.
+	//
+	// Computed EXACTLY as TS computes it, in all three of its parts. Go used
+	// to differ in every one, and each difference was a behaviour change for
+	// the same input and the same options:
+	//
+	//   - It coerced a non-positive MaxMul to the default 3. TS honours
+	//     `rule.maxmul: 0` literally, which is a zero budget: the rule loop
+	//     never runs and the parse fails as `unexpected`. Go parsed happily.
+	//     A knob documented as a get-out-of-jail multiplier that silently
+	//     ignores the value you set is worse than one that does nothing.
+	//   - It floored the product at 100. TS has no floor, so a small grammar
+	//     over a short source got a budget in Go that TS never gave it.
+	//   - It measured the source in BYTES (len). TS measures `lex.src.length`,
+	//     which is UTF-16 code units, so a non-ASCII source handed Go up to
+	//     three times the budget for the same text.
+	//
+	// The runaway guard is a public, documented option, so "only reachable at
+	// the boundary" is not a reason to leave the boundary different.
+	maxr := 2 * len(p.RSM) * utf16Len(src) * 2 * p.MaxMul
 
 	// Opt-in parse budget: call OnCheck every budgetN rule iterations;
 	// a false return cancels. Off by default, costing one integer test
