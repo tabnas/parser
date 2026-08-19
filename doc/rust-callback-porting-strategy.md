@@ -613,10 +613,35 @@ recorded below and are the input to the work, not open questions.**
    as equivalent, and `go/builtins.go:22-24`, which asserts "Equivalent
    behaviour" outright. Tracked as #120.
 
-   *Known risk, accepted:* nothing currently tests inherited config, so
-   if a downstream Go grammar relies on a parent configuring a subtree,
-   this removes that capability silently. The fixture should land before
-   the behaviour change so the break is visible in one commit.
+   **Scope it to the eight VALUE builtins.** The engine has two config
+   conventions and only one diverges. `node$`, `capture$`, `fold$`,
+   `object$`, `array$`, `key$`, `setval$` and `value$` read
+   `alt.k.<name>` in TS (`ts/src/builtins.ts:127`, `:138`, `:170`,
+   `:238`, `:249`, `:263`, `:273`, `:305`) and `r.K` in Go — those are
+   the divergence. The probe builtins (`probeInit$`, `probeDecide$`,
+   `probePhase0/1/2$`) read rule-scoped `r.k`/`r.K` in **both** runtimes
+   deliberately (`ts/src/builtins.ts:189-190`, `:203`, `:208-215`;
+   `go/builtins.go:199`, `:211`, `:218-220`), because `pd_phase` and
+   `pd_mark` are state written by one alternate and read by another on
+   the same rule, not per-alternate config. `@tabnas/bnf` depends on
+   exactly that — `bnf/ts/src/compiler.ts:1779-1780` and its Go twin
+   `bnf/go/emit_support.go:548` emit `k: { pd_d: … }` on a phase-0 open
+   that pushes — so every grammar the BNF family generates, ABNF, EBNF
+   and GBNF included, uses it. Changing `mapConfig`'s behaviour wholesale
+   would break all of them.
+
+   *The risk recorded here was checked and did not materialise.* All 36
+   `tabnas` repos were cloned and scanned. Value-builtin config is set on
+   an alternate in exactly four places — `jsonic/ts/src/grammar.ts:296-304`
+   and `:379-387`, `multisource/ts/src/multisource.ts:281-296`, and the
+   `bnf` emitters at `compiler.ts:2759`, `:2764`, `:2772` — and every one
+   pairs the config with its action on the *same* alternate. Two of them
+   push, but no descendant rule reads the inherited key. Confirmed by
+   execution: jsonic, which has both runtimes and both pushing sites,
+   produces byte-identical output in TS and Go across fifteen inputs
+   exercising implicit and explicit containers, with its own suites green
+   both sides (TS 438/438, Go ok). Land the fixture first anyway, but the
+   fleet scan is done, not outstanding.
 
 2. **The `p`/`r` and `e` orderings — DECIDED: shared fixtures now.**
    The `h` → `e` → `p`/`r` ordering itself is aligned
@@ -812,11 +837,25 @@ is not available, because `AGENTS.md` rule 3 forbids folding a grammar
 back into the engine.
 
 **Do not attempt the full port (option A).** Rome is the precedent: the
-rewrite outlived the company that started it. The fleet here is 21
-downstream TypeScript packages, of which exactly two — `json` and
-`jsonic` — have Go ports. The second runtime attracted 2/21 of the
-ecosystem; a third will attract less, and every one of those 21 is
-rewritten by hand against an API that does not exist yet.
+rewrite outlived the company that started it.
+
+An earlier draft of this paragraph argued that the second runtime had
+attracted only 2 of 21 downstream packages. **That was wrong, and the
+correct figure argues the same conclusion harder.** Measured across all
+36 `tabnas` repositories: 31 carry a TypeScript package depending on
+`@tabnas/parser`, and **29 carry a Go module depending on
+`github.com/tabnas/parser/go`**. The two-runtime figure came from
+`ci/parity/gotokdump/go.mod` and `ci/bench/gobench/go.mod`, which
+`replace` only `json` and `jsonic` — that is the parity harness's
+dependency set, not the fleet's Go coverage.
+
+So Go adoption is near-total, not marginal. That removes the "nobody
+followed the second runtime" argument and replaces it with a worse one:
+every engine change is already paid for across ~29 Go modules as well as
+~31 TypeScript packages, and a third runtime multiplies that base again
+against a maintainer who wrote 49 of this repository's 52 commits. The
+per-change tax measured in §6 of the feasibility report — 1.76x
+aggregate — is the cost of keeping *two* in step across that fleet.
 
 **Do not transliterate to `Rc<RefCell<Rule>>`.** §2.4 here. Boa filed the
 same borrow panic for six years. RustPython moved off it. The

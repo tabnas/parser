@@ -1168,14 +1168,28 @@ repo.
 
 One argument that should **not** be made: "there are no Rust plugins, so
 there is nothing to validate against." It is circular and proves too much.
-Go's own downstream closure is exactly two grammars (`json`, `jsonic`) out
-of 22 packages in `README.md:354-375` (21 of them downstream consumers),
-all TS+Go; the repo has one issue, opened by the maintainer, and zero
-external contributors across nine days of public history. The same
-argument at Go's adoption would have blocked Go. The sound version is an
-**option-value** argument: a third runtime multiplies the cost of every
-future change against demand that is currently unmeasured for every
-runtime, including Go's.
+The same argument at Go's adoption would have blocked Go, and the repo
+has one issue, opened by the maintainer, and zero external contributors
+across nine days of public history — so absence of a Rust ecosystem is
+evidence about the project's age, not about Rust.
+
+**Correction (measured after this report was first written).** An earlier
+version of this paragraph said Go's downstream closure was "exactly two
+grammars (`json`, `jsonic`)". That is wrong. It came from
+`ci/parity/gotokdump/go.mod` and `ci/bench/gobench/go.mod`, which
+`replace` only those two — the parity harness's dependency set, not the
+fleet's. Across all 36 `tabnas` repositories, **31 carry a TypeScript
+package depending on `@tabnas/parser` and 29 carry a Go module depending
+on `github.com/tabnas/parser/go`**. Go adoption is near-total.
+
+That strengthens the conclusion rather than weakening it. The sound
+argument was never "nobody followed Go"; it is an **option-value**
+argument, and the real numbers sharpen it: every engine change is
+already paid across ~29 Go modules and ~31 TypeScript packages, by a
+maintainer who wrote 49 of this repository's 52 commits. The 1.76x
+aggregate tax measured in §7 is what keeping *two* runtimes in step
+across that fleet costs. A third multiplies the base again, against
+demand that is unmeasured for every runtime.
 
 ---
 
