@@ -1,0 +1,12 @@
+lineLex	input	expected
+true	a b	ERROR:unexpected
+true	a b	ERROR:unexpected
+true	a\nb	#TX:a
+true	a\rb	#TX:a
+false	a b	#TX:a b
+false	a b	#TX:a b
+false	a\nb	#TX:a\nb
+false	a\rb	#TX:a\rb
+true	a—b	#TX:a—b
+true	a€b	#TX:a€b
+false	a—b	#TX:a—b

@@ -566,6 +566,64 @@ describe('lex', function () {
     }
   })
 
+  // Shared cross-runtime fixture for what terminates an unquoted text run
+  // at a line terminator (the Go counterpart is
+  // TestSpecLexTextLineTerminator in go/lexer_optionplumbing_test.go).
+  // Columns: lineLex | input | expected, same ERROR:<code> / <name>:<value>
+  // contract as lex-string-control above.
+  //
+  // The rule under test comes from the REGEX DIALECT, not the ender set:
+  // the TS ender is built as `cfg.line.lex ? 'y' : 'ys'`, so with line
+  // lexing on `.` cannot cross a JS line terminator. \n and \r are also
+  // enders, so they END the run; U+2028 and U+2029 are not, so the match
+  // FAILS and no text token is produced at all. Go, whose RE2 `.` excludes
+  // only \n, ran straight through both and made `a<U+2028>b` one token.
+  //
+  // The U+2028/U+2029 cells hold the RAW code point: the shared escape
+  // codec is deliberately minimal (\n \r \t \\ only, see
+  // support/ts/src/escape.ts) and has no \u form. The guard below is why
+  // that is safe to rely on — an editor or tool that normalised them away
+  // would otherwise leave these rows passing while testing nothing.
+  it('text-line-terminator-spec', () => {
+    const rows = [...loadTSV('lex-text-line-terminator')]
+
+    // The fixture must still contain the characters it is about.
+    const raw = rows.map(({ cols }) => cols.join('')).join('')
+    assert.ok(
+      raw.includes('\u2028') && raw.includes('\u2029'),
+      'lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — the ' +
+      'raw code points were normalised away and these rows now test nothing',
+    )
+
+    for (const { cols, row } of rows) {
+      const [lineLex, src, expected] = cols
+      try {
+        const inst = new Tabnas({ line: { lex: 'true' === lineLex } }).make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-text-line-terminator row ${row}: lineLex=${lineLex}` +
+          ` input=${JSON.stringify(src)} expected=${JSON.stringify(expected)}\n` +
+          err.message
+        throw err
+      }
+    }
+  })
+
+
   // options.string.check and options.comment.check were declared and
   // consulted by the lexer but never copied into the config, so the
   // hooks were dead. text.check (which always worked) is the control.

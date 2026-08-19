@@ -45,6 +45,51 @@ func lexOne(src string, cfg *LexConfig) string {
 	return tkn.Name + ":" + val
 }
 
+// TestSpecLexTextLineTerminator runs the shared
+// lex-text-line-terminator.tsv fixture (the TS counterpart is
+// 'text-line-terminator-spec' in ts/test/lex.test.js). Columns:
+// lineLex | input | expected, same ERROR:<code> / <name>:<value> contract as
+// lex-string-control.
+//
+// The rule under test comes from the REGEX DIALECT, not the ender set: the
+// TS ender is built as `cfg.line.lex ? 'y' : 'ys'`, so with line lexing on
+// `.` cannot cross a JS line terminator. \n and \r are also enders, so they
+// END the run; U+2028 and U+2029 are not, so the match FAILS and no text
+// token is produced. RE2's `.` excludes only \n, so Go ran straight through
+// both and made `a<U+2028>b` one text token.
+//
+// The U+2028/U+2029 cells hold the RAW code point — the shared escape codec
+// is deliberately minimal (\n \r \t \\ only) and has no \u form. The guard
+// below is why that is safe to rely on: a tool that normalised them away
+// would otherwise leave these rows passing while testing nothing.
+func TestSpecLexTextLineTerminator(t *testing.T) {
+	rows := loadSpecTSV(t, "lex-text-line-terminator")
+
+	all := ""
+	for _, row := range rows {
+		for _, c := range row.cols {
+			all += c
+		}
+	}
+	if !strings.ContainsRune(all, 0x2028) || !strings.ContainsRune(all, 0x2029) {
+		t.Fatal("lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — " +
+			"the raw code points were normalised away and these rows now test nothing")
+	}
+
+	for _, row := range rows {
+		lineLex := tsvCol(row.cols, 0) == "true"
+		src := preprocessEscapes(tsvCol(row.cols, 1))
+		want := preprocessEscapes(tsvCol(row.cols, 2))
+
+		cfg := buildConfig(&Options{Line: &LineOptions{Lex: &lineLex}})
+
+		if got := lexOne(src, cfg); got != want {
+			t.Errorf("lex-text-line-terminator line %d: lineLex=%v input=%q: got %q, want %q",
+				row.lineNo, lineLex, src, got, want)
+		}
+	}
+}
+
 // TestSpecLexStringControl runs the shared lex-string-control.tsv fixture.
 // Columns: allowControl | input | expected, where expected is either
 // ERROR:<code> or #ST:<string value>. \t \n \r are escaped in BOTH the input

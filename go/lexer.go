@@ -541,6 +541,22 @@ func buildLexTables(cfg *LexConfig) *lexTables {
 	stops(cfg.StringLex, cfg.StringChars)
 	stops(true, cfg.EnderChars)
 
+	// JS's `.` will not cross a LINE TERMINATOR, and JS has four of them:
+	// \n, \r, U+2028 and U+2029. The TS text-ender regex omits the `s`
+	// flag exactly when line lexing is on (`cfg.line.lex ? 'y' : 'ys'`), so
+	// that exclusion is part of the text contract rather than an accident of
+	// the pattern. \n and \r are LineChars and already stop here; U+2028 and
+	// U+2029 are not, and RE2's `.` excludes only \n — so `a<U+2028>b` was
+	// ONE text token in Go and an `unexpected` error in TS. The rule JS gets
+	// free from its regex dialect has to be written out.
+	//
+	// Both encode as e2 80 a8 / e2 80 a9, so routing the single lead byte
+	// 0xE2 to textVerify is enough. Setting `wide` instead would put ALL
+	// non-ASCII text on the slow path for the sake of two code points.
+	if cfg.LineLex && l.text[0xE2] == textContinue {
+		l.text[0xE2] = textVerify
+	}
+
 	if len(cfg.FixedSorted) > 0 {
 		var multi [256]bool
 		for _, fs := range cfg.FixedSorted {
@@ -2229,6 +2245,19 @@ func (l *Lex) matchText() *Token {
 		break
 	}
 
+	// The TS ender regex is `(.*?)` followed by ENDER alternatives, so a text
+	// run must be followed by an ender (or end of source) for the match to
+	// succeed at all. A character `.` merely cannot cross, and which is not
+	// an ender, makes the WHOLE match fail — TS emits no text token and the
+	// lexer reports a bad token. U+2028/U+2029 are the only such characters.
+	//
+	// This is the difference between "stop" and "fail", and it is why the
+	// textStopBase entry alone was not the whole repair: stopping here would
+	// emit `a` for `a<U+2028>b`, which TS never produces.
+	if l.textFailsAt(sI) {
+		return nil
+	}
+
 	if sI == start {
 		return nil
 	}
@@ -2470,6 +2499,13 @@ func (l *Lex) textStopBase(pos int) bool {
 		l.Config.EnderChars[ch] {
 		return true
 	}
+	// U+2028/U+2029 are line terminators to JS and ordinary runes to RE2.
+	// See the 0xE2 note in the text-table builder: this is the `.`-cannot-
+	// cross-a-line-terminator rule the TS ender regex gets from its dialect,
+	// and it applies on the same condition (line lexing on, so no `s` flag).
+	if l.Config.LineLex && (0x2028 == ch || 0x2029 == ch) {
+		return true
+	}
 	// Stop at fixed tokens (longest-first sorted list).
 	rest := src[pos:]
 	for _, fs := range l.Config.FixedSorted {
@@ -2485,6 +2521,27 @@ func (l *Lex) textStopBase(pos int) bool {
 		}
 	}
 	return false
+}
+
+// textFailsAt reports whether the character at pos is one JS's `.` cannot
+// cross but which is NOT an ender — the case where the TS text-ender regex
+// fails to match instead of terminating the run. See matchText.
+//
+// A config that puts U+2028/U+2029 in the ender (or space/line/string) sets
+// is not this case: there the TS regex matches the ender and the run ends
+// normally, so this returns false and the ordinary stop applies.
+func (l *Lex) textFailsAt(pos int) bool {
+	if !l.Config.LineLex || pos >= len(l.Src) {
+		return false
+	}
+	ch, _ := utf8.DecodeRuneInString(l.Src[pos:])
+	if 0x2028 != ch && 0x2029 != ch {
+		return false
+	}
+	return !(l.Config.EnderChars[ch] ||
+		(l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
+		l.Config.LineChars[ch] ||
+		(l.Config.StringLex && l.Config.StringChars[ch]))
 }
 
 // textStopComment reports whether a comment starts at pos (only when
