@@ -94,6 +94,13 @@ func runePos(src string, pos int) int {
 	if 0 >= pos {
 		return 0
 	}
+	// Nothing to convert against. fullSource is unexported, so an error
+	// constructed by a caller OUTSIDE this package always has it empty —
+	// converting there would clamp a position the caller deliberately set to
+	// 0 and silently destroy it. Hand back what was given.
+	if "" == src {
+		return pos
+	}
 	if pos >= len(src) {
 		return utf8.RuneCountInString(src)
 	}
