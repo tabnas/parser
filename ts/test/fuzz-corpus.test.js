@@ -55,6 +55,9 @@ function corpus(mode) {
 
 describe('fuzz-corpus', () => {
 
+  // U+2028 / U+2029, as a character class for building patterns.
+  const SEP = '[\u2028\u2029]'
+
   for (const mode of ['json', 'jsonic']) {
     it(`emits every recorded divergence class (${mode})`, () => {
       const all = corpus(mode)
@@ -62,27 +65,44 @@ describe('fuzz-corpus', () => {
       // P3 — malformed escapes. `parseInt` used as a validator stops at
       // the first non-hex character and returns what it read, so these
       // were accepted by one runtime and rejected by the other.
-      const malformed = ['\\u00st', '\\u12zz', '\\u1', '\\u 123', '\\u+123',
-        '\\x4z', '\\xZZ']
-      assert.ok(malformed.some((m) => all.includes(m)),
-        'no malformed \\u or \\x escape in the corpus: audit item P3 is ' +
+      //
+      // The two escape FAMILIES are asserted separately. One `some()` over
+      // both would stay green with every malformed `\x` removed as long as
+      // one malformed `\u` survived, silently restoring the blindness for
+      // half of what this is meant to protect.
+      assert.match(all, /\\u(?:00st|12zz|1"| 123|\+123|\{110000\})/,
+        'no malformed \\u escape in the corpus: half of audit item P3 is ' +
         'unreachable, and a clean run says nothing about it')
 
-      // A lone surrogate is a RECORDED, deliberate divergence — the
-      // control proving the runner still sees a difference it is supposed
-      // to see rather than having gone blind.
-      assert.ok(all.includes('\\uD800'),
-        'no lone surrogate: the recorded-divergence control is missing')
+      // Only shapes the pool alone can produce. An earlier cut also
+      // accepted `\x"`, which the lone-backslash entry makes incidentally
+      // whenever a random `x` follows it -- so the assertion passed with
+      // the entire \x family deleted. Digits and capitals cannot occur in
+      // the random-letter filler, so `4z` and `ZZ` can only come from here.
+      assert.match(all, /\\x(?:4z|ZZ)/,
+        'no malformed \\x escape in the corpus: half of audit item P3 is ' +
+        'unreachable, and a clean run says nothing about it')
 
-      // P4 — line and paragraph separators, RAW. Escaped they are
-      // ordinary \u sequences and exercise nothing.
-      assert.ok(all.includes(' ') || all.includes(' '),
-        'no raw U+2028/U+2029: audit item P4 is unreachable')
+      // P4 — line and paragraph separators, raw, and OUTSIDE a string.
+      //
+      // `jstr` also emits them inside quoted strings, where the text
+      // matcher is not the thing deciding. Asserting mere presence would
+      // stay green with the damage pass removed, which is exactly the
+      // context P4 is about. Pin the structure: a separator immediately
+      // after a `,` or `:`, which only the damage pass produces.
+      assert.match(all, new RegExp('[,:]' + SEP),
+        'no raw U+2028/U+2029 BETWEEN TOKENS: audit item P4 is ' +
+        'unreachable. Inside a string does not count -- that is not the ' +
+        'context the text matcher decides in')
 
       // P1/P2 — a value followed immediately by a quote. The shape whose
       // text run ended at the quote in Go and did not in TypeScript.
-      assert.match(all, /[a-z0-9]"/,
-        'no value-then-quote shape: audit items P1/P2 are unreachable')
+      //
+      // Pinned as the exact shape the damage pass produces. An earlier cut
+      // asserted /[a-z0-9]"/, which every ordinary `"abc"` satisfies: the
+      // guard passed with the class entirely absent.
+      assert.match(all, /:ab"cd/,
+        'no bare-text-then-quote shape: audit items P1/P2 are unreachable')
     })
   }
 
@@ -94,9 +114,14 @@ describe('fuzz-corpus', () => {
   })
 
   it('still emits ordinary well-formed documents', () => {
-    // The damage pass must not turn the corpus into nothing but malformed
-    // input: most of a differential run should still be documents both
-    // runtimes accept, or the run stops exercising the ordinary paths.
+    // A differential runner is at its strongest where BOTH runtimes accept
+    // and the values must match, so ordinary documents have to stay the
+    // BULK of the corpus, not merely a presence in it.
+    //
+    // json mode only. jsonic mode deliberately relaxes into things JSON
+    // rejects -- unquoted keys, comments, trailing commas -- so measuring
+    // it with JSON.parse would be measuring the relaxations, not the
+    // damage pass.
     const cases = corpus('json').split('\n').filter(Boolean)
     const clean = cases.filter((c) => {
       try {
@@ -107,8 +132,14 @@ describe('fuzz-corpus', () => {
         return false
       }
     })
-    assert.ok(clean.length > cases.length / 4,
+
+    // A real majority, with margin: the pinned corpus sits near 85%.
+    // Damage is chosen once per DOCUMENT rather than per character for
+    // exactly this reason -- per-character injection put something
+    // malformed in nearly half of these deeply nested documents.
+    assert.ok(clean.length > cases.length * 0.6,
       `only ${clean.length} of ${cases.length} cases are well-formed JSON; ` +
-      'the damage pass has taken over the corpus')
+      'the damage pass has taken over the corpus, and ordinary ' +
+      'accepted-value comparison is no longer the bulk of a run')
   })
 })

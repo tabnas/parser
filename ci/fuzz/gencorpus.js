@@ -56,17 +56,40 @@ const ESCS = ['\\n', '\\t', '\\r', '\\"', '\\\\', '\\/', '\\b', '\\f',
 // the first non-hex character and returns what it read, so `"\u00st"`
 // decoded and silently dropped the `st`.
 //
-// A lone surrogate is included deliberately: it is a RECORDED, deliberate
-// divergence, so it is the control that proves the runner still sees a
-// difference it is supposed to see rather than having gone blind.
+// NO LONE SURROGATE HERE, deliberately, and this is worth reading twice.
+//
+// `\uD800` looks like the ideal control: it is a RECORDED, permanent
+// divergence, so it would prove the runner still sees a difference it is
+// supposed to see. But run-diff is a ZERO-DIFFERENCE gate, and a permanent
+// difference in its corpus makes it permanently red — measured: with
+// `\uD800` as the only malformed entry, 103 of 300 cases diverge, and no
+// engine repair would ever bring that to zero.
+//
+// A control belongs where a difference is the expected answer: the
+// divergence register (ADR-14), or an explicit expected-difference list.
+// Putting one in a gate whose contract is "these must agree" does not test
+// the gate, it disables it.
 const MALFORMED = ['\\u00st', '\\u12zz', '\\u1', '\\u 123', '\\u+123',
-  '\\x4z', '\\xZZ', '\\x', '\\uD800', '\\u{110000}', '\\q', '\\']
+  '\\x4z', '\\xZZ', '\\x', '\\u{110000}', '\\q', '\\']
 
 // Line and paragraph separators (audit P4). JavaScript's `.` excludes
 // four line terminators; RE2's excludes one, so a text run crossing these
 // two code points split differently in the two ports. Raw, not escaped --
 // escaped they are ordinary \u sequences and exercise nothing.
 const SEPARATORS = ['\u2028', '\u2029']
+
+// Whether the document currently being built may carry malformed content.
+//
+// Decided PER DOCUMENT, not per character, and that distinction is the
+// whole of it. A differential runner is at its strongest on the case where
+// both runtimes accept and the values must match, so ordinary well-formed
+// documents have to stay the bulk of the corpus. But these documents are
+// deeply nested with many strings, so even a 5% per-character rate put a
+// malformed escape somewhere in nearly half of them: measured 55% well
+// formed, which is a majority only barely. Choosing once per document
+// keeps roughly three quarters clean while leaving the damaged quarter
+// dense enough to carry every class. fuzz-corpus.test.js pins both ends.
+let damaged = false
 
 function jstr(r, depthBias) {
   let s = '"'
@@ -76,10 +99,10 @@ function jstr(r, depthBias) {
     if (k < 0.30) {
       s += ESCS[Math.floor(r() * ESCS.length)]
     }
-    else if (k < 0.40) {
+    else if (damaged && k < 0.45) {
       s += MALFORMED[Math.floor(r() * MALFORMED.length)]
     }
-    else if (k < 0.44) {
+    else if (damaged && k < 0.52) {
       s += SEPARATORS[Math.floor(r() * SEPARATORS.length)]
     }
     else {
@@ -121,20 +144,30 @@ function value(r, depth) {
 // is still what most of the run should be, and a diff on a damaged case
 // should be traceable to the one edit that made it.
 function damage(r, doc) {
+  if (!damaged) {
+    return doc
+  }
   let s = doc
 
   // A value followed immediately by a quote character -- `a"b`. This is
   // the shape whose text run ended at the quote in Go and did not in
-  // TypeScript: ~2/3 of the 1,612 divergences in jsonic's own fuzz run,
-  // and the generator could not produce a single one, because it only
-  // ever emitted values that were already quoted or already delimited.
-  if (r() < 0.15) {
-    s = s.replace(/([a-z0-9])(?=[,\]}])/, (m, c) => c + '"' + 'q')
+  // TypeScript: ~2/3 of the 1,612 divergences in jsonic's own fuzz run.
+  //
+  // It has to be BARE text, not a number or a keyword. An earlier cut
+  // appended a quote before a `,]}`, but at that position this generator
+  // only ever emits numbers and true/false/null, and jsonic's relaxation
+  // unquotes KEYS, which are followed by a colon. So it produced `true"q`
+  // and never `a"b`, and the text matcher -- the thing under test -- was
+  // never reached. The value is replaced outright instead, which is the
+  // only way to be sure the text is text.
+  if (r() < 0.5) {
+    s = s.replace(/:\s*("(?:[^"\\]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/,
+      () => ':ab"cd')
   }
 
   // A bare line separator OUTSIDE a string, between tokens, where the
   // text matcher decides whether a run may cross it.
-  if (r() < 0.12) {
+  if (r() < 0.5) {
     s = s.replace(/([,:])/, (m, c) =>
       c + SEPARATORS[Math.floor(r() * SEPARATORS.length)])
   }
@@ -154,6 +187,7 @@ function relax(r, doc) {
 
 const r = prng(seed)
 for (let i = 0; i < count; i++) {
+  damaged = r() < 0.25
   let doc = value(r, 0)
   if ('jsonic' === mode) doc = relax(r, doc)
   doc = damage(r, doc)

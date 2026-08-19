@@ -129,14 +129,38 @@ cannot restore the blindness silently.
   races async pipe writes, which is also why outputs are captured via
   file redirection).
 
-Status at time of writing: with the extended pools, **300 cases give 13
-divergences and 600 give 22** (seeds 979899 and 4242), every one a
-malformed escape that TypeScript accepts and Go rejects — audit item P3,
-reproduced by this fuzzer for the first time. The previous "500/500 agree"
-was measured with pools that could not emit the class.
+Status at time of writing: with the extended pools, **300 cases give 12
+divergences** (seed 979899), in two classes:
 
-Those divergences are the ones `#123` repairs. Until it lands, this runner
-is red by design on main, which matters for the promotion note below.
+```
+  9  both reject, codes differ: ts=unexpected go=invalid_unicode
+  3  exit codes differ: ts=0 go=1
+```
+
+The previous "500/500 agree" was measured with pools that could not emit
+either class.
+
+The second class is audit item P3 — TypeScript accepting a malformed escape
+that Go rejects — reproduced by this fuzzer for the first time.
+
+The first class was **invisible to this runner until now**. It compared
+exit codes only when one side succeeded, and discarded stderr, so two
+runtimes rejecting the same input for *different reasons* counted as
+agreement. Agreeing that an input is invalid is not agreeing; AGENTS.md
+makes the code part of the contract. The runner now extracts and compares
+the rejection code whenever both sides reject.
+
+Both classes are what `#123` repairs. Until it lands, this runner is red by
+design on main, which matters for the promotion note below.
+
+**No `\uD800` in the corpus, deliberately.** The lone surrogate is a
+recorded, permanent divergence, so it looks like the ideal control — but
+this is a zero-difference gate, and a permanent difference in its corpus
+makes it permanently red. Measured: with `\uD800` as the only malformed
+entry, **103 of 300** cases diverge, and no engine repair would ever bring
+that to zero. A control belongs where a difference is the expected answer:
+the divergence register (ADR-14). Putting one in a gate whose contract is
+"these must agree" does not test the gate, it disables it.
 
 ## workflows/ — proposed GitHub workflows
 
