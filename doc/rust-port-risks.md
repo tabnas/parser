@@ -9,100 +9,110 @@ been overridden by the maintainer; the port is going ahead.** This
 document does not re-argue the decision and does not restate the case
 against it. Its job is the opposite one: find what will block the
 approved port, what will bite late, and what to do about each. Where a
-finding contradicts one of the earlier documents, it says so and gives
-the measurement.
+finding contradicts one of the earlier documents — or an earlier draft of
+this one — it says so and gives the measurement.
 
 Citation convention as before: a bare `§3.4` is a section of the
 feasibility report, `§2.3 strategy` is the callback strategy document,
 and sections of *this* document are written `§4 here`.
 
-> **Provenance.** This register was produced by a multi-agent sweep of the
-> engine, two of whose agents died mid-run — the options/config surface and
-> the ranking pass. The surviving draft's headline numbers were then
-> re-measured by hand and three were wrong: the `MapToOptions` counts, the
-> fleet matcher count, and a "port tax" correction that conflated two
-> distinct metrics. Those are fixed above and the offending claim is marked
-> unverified where it could not be reproduced. Treat any figure here without
-> a file:line or a measurement beside it with the same suspicion.
+> **Provenance.** Every figure below was re-measured against the tree at
+> `a9c8c67` unless it is explicitly marked as carried over from an earlier
+> sweep. Re-measurement changed six headline claims, three of them in ways
+> that change what to do next: the options-merge divergence is not in the
+> function the previous draft named (§2.2 here), the match-token gating
+> divergence is documented rather than silent and the documentation is
+> wrong (§2.1 here), and the "the utility fixtures are worthless" finding
+> is backwards (§2.3 here). Figures carried over without re-measurement
+> are marked *(unverified)*. Treat any number here without a file:line or
+> a measurement beside it with suspicion.
 
 ## Summary
 
-**Write the serialized-spec contract down, at two runtimes, before any
-Rust exists.** That is the single most important piece of advice in this
-document, and it is not a process nicety — it is a measurement. v0.1 is
-a serialized-spec engine, and the serialized surface is currently
-undefined in a way no test can see: Go's `MapToOptions` handles **18 of
-the 24** option groups `Options` declares and silently drops six —
-`budget`, `parse`, `parser`, `recover`, `result` and `rewind` — three of
-which are pure data with no closures to excuse them. Measured, one spec,
-both runtimes (filed as
-[#130](https://github.com/tabnas/parser/issues/130)):
-
-| option in the spec | TypeScript | Go |
-|---|---|---|
-| `rewind.history: 7` | applied | **dropped** |
-| `parse.recover.enabled: true` | applied, normalised | **dropped** |
-| `result.fail: ["x"]` | applied | **dropped** |
-
-`rewind.history` is one of the two bounds `AGENTS.md`'s untrusted-input
-section names against hostile input, and `go/clib` — and therefore `py/`
-— accepts *only* serialized specs, so every C-ABI and Python caller is
-silently on defaults for it. A Rust
-loader written with `#[derive(Deserialize)]` naturally applies
-everything, which is TypeScript's answer, so the Go↔Rust leg lights up on
-five option groups from the first load — for a reason that is neither
-Rust's fault nor the engine's.
+**Retire the demand question this week, before anything else, and rank
+the rest after the answer.** That is the single most important piece of
+advice in this document. The port's likely failure mode is not that it
+cannot be built — the feasibility report already established that it can,
+and the hard structural questions have answers. The likely failure mode
+is that it is built correctly into a niche that is already occupied. The
+incumbent is measurable: `go/clib` is 287 non-test lines
+(`go/clib/core.go` 183 + `go/clib/tabnas_c.go` 104) and `py/tabnas.py` is
+206 lines of `ctypes` over it, and `py/README.md:26-30` advertises
+exactly v0.1's stated audience — "supply a serialized GrammarSpec — the
+pure-data form a front-end compiler emits (`@tabnas/gbnf` for llama.cpp
+GBNF, `@tabnas/abnf` for RFC 5234 ABNF)". So the question is not "does a
+consumer exist"; it is whether v0.1's three genuine differentiators over
+that incumbent — a parsed value tree, the 15-field structured diagnostic,
+and no cgo — justify 15-18k non-test lines against roughly 500. That is
+answerable this week, and it is the single most decision-relevant
+sentence either of the earlier documents could have contained. Neither
+contains it.
 
 The three things most likely to kill this port, in order:
 
-1. **v0.1 succeeds into an empty niche.** Below it, the C ABI over
-   `go/clib` already delivers accept/reject on function-free serialized
-   specs for about a week of wrapper work. Above it, the imperative
-   plugin tier is out of scope, and of the 34 fleet repos **15 reference
-   the custom-matcher API and at least 6 register a matcher** through a
-   literal options form (`c`, `expr`, `ini`, `jsonic`, `markdown`,
-   `support`) — the true figure sits between, since a matcher can also be
-   wired programmatically, as `csv` does via `BuildCsvStringMatcher`. What is left as v0.1's
-   differentiated capability is structured diagnostics plus tree-building
-   specs — and the named first user, the BNF/ABNF/GBNF output family,
-   emits a *recognition-only* grammar by default
-   (`bnf/ts/src/spec.ts:418-423`, `abnf/ts/src/bin/tabnas-abnf-cli.ts:103`),
-   which is accept/reject, in jsonic text a v0.1 engine cannot read
-   (§6 here). This is checkable this week with three commands. It is the
-   most likely technical cause of failure and it is the cheapest one to
-   retire.
-2. **The contract that a third runtime must implement is not written
-   down at the tier the port targets.** Beyond the options surface above:
-   the lexer plugin tier has one shared fixture in eleven, the advanced
-   features have none, and where the two runtimes were measured they
-   already disagree — sometimes with Go's divergence *pinned as contract*
-   by its own tests (§3.1, §3.4 here). A Rust engine can be wrong in
-   every way listed in §3 here and still pass the entire shared corpus.
-3. **Availability, not throughput.** The two-runtime model works because
-   the TS→Go lag is measured in hours and paid by one head in one
-   sitting: six TypeScript features landed 18:12:08→18:17:15 and were
-   ported to Go by 21:30:32 the same day. A Rust branch that runs for
-   months cannot be in the same sitting as anything. This is not a claim
-   that adjudication here is slow — measured, it is fast (median closed-PR
-   lifetime 13.4 minutes across 53 closed PRs, maximum 17.0 hours, none
-   ever open a full day; issue #120 went filed→ruled in 1 h 53 m). The
-   risk is that one person is the only author, reviewer, merger and
-   releaser, and a third runtime triples the surface only they can
-   service.
+1. **v0.1 ships correct and irrelevant.** Zero Rust consumers exist
+   across the 34-repo fleet; 31 repos peer-depend on `@tabnas/parser` and
+   29 `go.mod` files require the Go module. Measured, **every fleet repo
+   with a `ts/src` carries arrow functions except one** — and that one,
+   `jsonc`, is still unreachable, because
+   `jsonc/ts/src/jsonc.ts:63` loads its grammar as *jsonic text* through
+   `new Tabnas().use(jsonic).parse(grammarText)`, which needs a jsonic
+   engine to read. And the named first user, the BNF/ABNF/GBNF family,
+   has a live defect on exactly the path v0.1 would consume (§5 here).
+2. **The contract at the tier v0.1 targets is not written down, and the
+   conformance artifact cannot see the gap.** Measured: the shared corpus
+   leaves `builtins.js` and `merge.js` at **0.00% function coverage** and
+   `context.js` at 9.09%, while the full TypeScript suite puts all three
+   above 92%. The lexer plugin tier has one fixture in eleven; the
+   advanced features have none. Where the two runtimes were measured they
+   already disagree — and in one case the *porting guide itself* asserts
+   there is no behavioural difference where there is one (§2.1 here).
+3. **Capacity, not adjudication.** 15-18k non-test lines and 7-10
+   engineer-months (§Summary feasibility) against one person who is also
+   sole maintainer of 31 dependent repos at two runtimes. Adjudication
+   throughput is *not* the constraint — `AGENTS.md:26` already supplies a
+   standing default answer for every TS/Go disagreement, which unblocks
+   most of the backlog without a single new ruling (§3 here). Nine open
+   PRs is a snapshot, not a trend.
 
-One clarification and one correction. The port tax is quoted two ways in
-the feasibility report and **both are legitimate measurements of
-different things**: 1.76x is aggregate churn (additions since root
-`22fdf19`: `ts/` +4,550, `go/` +7,971 as re-measured here, 1.75x), while
-"~4.5 lines of port work per line of canonical source changed" (that
-report, line 1269) is a per-line ratio, not an aggregate. Counting
-line-touches rather than additions gives 4,681 and 8,443 — 1.80x. Use
-whichever, but label it; treating the per-line figure as a wrong version
-of the aggregate is a category error, not a correction. And the engine is
-not unpinned today: the Go suite covers **90.6%** of statements in
-`github.com/tabnas/parser/go` (`go test -coverpkg=github.com/tabnas/parser/go ./...`).
-What is missing is *cross-runtime* pinning of a specific subset, which is
-a narrower and cheaper claim than "unverifiable".
+### Two things changed since the previous draft
+
+**A function-free serialized spec joins the parity contract.** The
+previous draft ranked "v0.1 as scoped cannot join the parity contract at
+all" as project-killing and certain, on the ground that 65 of 265 fixture
+rows run only through closure-carrying strict-JSON grammars. That is true
+of the *canonical* grammars — `ts/test/json-plugin.ts` declares eight
+named action closures plus `exclude: /^00+/` (`:43`) and
+`result: { fail: [undefined, NaN] }` (`:55`), which has no JSON form — but
+it is not true of the fixture rows. A 2,489-byte `json-core` spec built
+from `ts/test/json-builder.fixture.json` plus the declarative half of that
+plugin's options, with the regex serialized as `"@/^00+/"` and no `ref`
+bag at all, passes **55/55** `include-json*` rows with full value
+comparison in TypeScript (re-measured here) and **55/55** plus **10/10**
+`diagnostic.tsv` rows in Go (`go test`, re-measured here). The blocker is
+retired; it was about two hours of work. It is struck from the register
+below rather than left standing next to its own refutation.
+
+**The options-merge divergence is not in `Deep`.** The previous draft
+presented `deep` and `Deep` as diverging on six fields of the same input.
+Fed the identical plain `map[string]any` values, they do not:
+
+| field | TS `deep` | Go `Deep` (maps) | Go `Deep` (typed `Options`) |
+|---|---|---|---|
+| `space.chars: ""` over `" \t"` | `""` | `""` | `" \t"` |
+| `number.sep: ""` over `"_"` | `""` | `""` | `"_"` |
+| `ender: ["z"]` over `["a","b","c"]` | `["z","b","c"]` | `["z","b","c"]` | `["z"]` |
+| `comment.def.slash: {lex:false}` | keeps `start`/`line` | keeps `start`/`line` | erases both |
+
+The divergence lives in `deepMergeStruct` (`go/utility.go:182-305`) and
+its `IsZero()` absence test, which only runs on the typed tree. That is
+not a pedantic correction, because the previous draft's retirement — "a
+`test/spec/options-merge.tsv` fixture of ~30 rows" — would have driven
+`Deep` with JSON-decoded maps and passed green in both runtimes with the
+defect untouched. The risk is real and reaches serialized specs end to
+end (`MapToOptions({"number":{"sep":""}})` yields `Sep:""`, and
+`Deep(base, that)` then keeps `"_"` — measured), but the fixture has to
+drive the *options pipeline*, not the utility function.
 
 ---
 
@@ -112,1290 +122,1436 @@ Three categories, because they need different responses.
 
 **Blockers** must be decided by a human before Rust code is written,
 because they change a struct definition, a public signature, or the
-meaning of "conformant". No amount of engineering retires one. There are
-four.
+meaning of "conformant". No amount of engineering retires one.
 
-**Risks** are things that may bite, with a probability and a discovery
-point. Tooling, tests or a written contract retire them. Most of this
-document is risks.
+**Risks** may bite, with a probability and a discovery point. Tooling,
+tests or a written contract retire them.
 
 **Costs** are known work with a known shape. They belong in the estimate,
-not in the register. Where the earlier documents budgeted a cost that
-turns out not to exist, this document says so (§5.3 here retires one).
+not in the register.
 
-### 1.1 The ranked register
+### 1.1 Rank on residual damage, not on unmitigated damage
 
-Severity: *project-killing* = the port does not ship or does not get
-adopted; *major* = a milestone slips or a design is redone; *moderate* =
-days of rework; *minor* = an edit.
+The previous draft ranked by severity × likelihood and produced six
+blocker-or-project-killing entries out of twelve. That is the wrong
+arithmetic for a register whose own plan schedules cheap retirements for
+most of them. The expected damage of a risk you have costed a retirement
+for is severity × P(the retirement fails), plus the retirement's cost.
+Ranked that way the top of the table empties — and the items that stay at
+the top are the ones whose retirement is *not* an engineering task.
 
-| # | Item | Sev | Likely | Discovered | Cheapest retirement |
-|---|---|---|---|---|---|
-| 1 | The serialized-spec contract does not exist: Go's `MapToOptions` drops 5 of 27 option groups, and the proposed conformance artifact is itself an accepted-language divergence (§3.2 here) | project-killing | certain | early spike | One ruling — "the serialized options surface is exactly set S" — plus an exhaustiveness test over `Options` fields. 1-2 days |
-| 2 | v0.1 lands in an empty niche between the existing C ABI and the excluded plugin tier; the named first user's default artifact is recognition-only jsonic text (§6 here) | project-killing | likely | integration | Produce the `--full --strict` JSON artifact and name its reader, in Wave 0. Half a day |
-| 3 | Availability, not throughput: one collaborator with admin; the TS→Go model works only because the lag is hours (§4.4 here) | project-killing | certain | mid-build | A named second maintainer with commit access, or a written support-tier statement that Rust may lag arbitrarily |
-| 4 | The lexer plugin tier and the advanced features have ~zero shared-fixture coverage, and where measured the runtimes disagree — with Go's side sometimes pinned as contract by its own tests (§3.1, §3.4 here) | major | certain | production | A matcher-tier parity harness (~200 lines per runtime) plus an audit of Go's lexer tests against TS behaviour |
-| 5 | The honesty gate is blind to a third runtime, and `py/` already occupies that position (§5.1 here) | major | certain | production | Generalise `nonParity` to per-runtime and move the gate out of the Go suite. Under a week, entire |
-| 6 | `Token` layout: a borrowed `Token<'s>` cannot live in the untyped per-parse plugin bag, and the fleet stores tokens there (§3.1 here) | major | certain | early spike | Decide on day one: span + one `Arc<str>`, 12 bytes, `'static`. Port `ts/src/lexer.ts:99-131`, not Go's `Src string` |
-| 7 | The never-free arena's only bound is `rule.maxmul`, which permits 12 × rules × source-bytes rule passes (§3.4 here) | major | likely | mid-build | A `rule.maxrules` cap checked where `kI < maxr` already is, or generational slot reuse. Decide before `RuleId` is plugin-facing |
-| 8 | Two structurally incompatible matcher-pipeline models, both used downstream (§3.1 here) | major | certain | integration | An ADR picking one. Authority rule 1 says TypeScript, which means Go's hardcoded `nextRaw` interleave is the side that moves |
-| 9 | Plugin-supplied byte offsets reach `&src[a..b]`, turning a Go no-op into an engine-raised abort (§3.1 here) | major | likely | production | `clippy::string_slice` ban plus a `SrcIdx` newtype produced only by the scanner or `floor_char_boundary`. One afternoon, at the start |
-| 10 | `Continuations` and stateful subscribers need shapes rustc rejects outright; `&'g Subs` works only for `Fn` and the real subscribers are `FnMut` (§3.4 here) | major | certain | early spike | Decide the subscriber calling convention before `process()` is signed; return the Context from `start_parse` rather than smuggling it out |
-| 11 | Unified versioning across three registries, with `parser` first in the release wave and crates.io permanently immutable (§4.5 here) | major | likely | integration | Version the crate independently from 0.1.0 and have it report the engine version it implements, as `py/tabnas.py:138-142` already does |
-| 12 | The custom-matcher contract is unwritten and the fleet's real requirements exceed both runtimes' documented surface (§3.1 here) | major | certain | early spike | `doc/lex-matcher-contract.md`, one page, from the compiled probe signature. Worth doing for TS and Go regardless — but it is an M3 artifact, not a v0.1 one |
+Two severity columns below. **Raw** is damage if nothing is done. **Net**
+is damage given the cheapest retirement actually lands. An item whose Net
+is *minor* is not a risk, it is a task; it is listed because forgetting
+the task reinstates the Raw column.
 
-Everything below rank 12 is a fixture row, a doc edit or a day's work,
-and is described in §3 where it belongs rather than ranked here.
+| # | Item | Raw | Net | Likely | Discovered | Cheapest retirement |
+|---|---|---|---|---|---|---|
+| 1 | v0.1 lands in a niche already held by ~500 lines of C ABI plus binding; no Rust consumer exists in 34 repos; the named first user's default artifact is silently lossy (§5 here) | project-killing | **major** | likely | integration | Name the consumer and the exact artifact, and produce that artifact this week. Half a day. Nothing engineering can do retires the rest |
+| 2 | Capacity: 15-18k non-test lines against one head who also maintains 31 dependent repos at two runtimes (§3.4 here) | project-killing | **major** | certain | mid-build | A named second maintainer, or a written support tier saying the crate may lag arbitrarily and reports the engine version it implements |
+| 3 | The serialized-options surface is undefined: Go's `MapToOptions` reaches 65 of 92 `Options` leaves and drops both bounds `AGENTS.md:308-313` names against hostile input (§2.2 here) | project-killing | **moderate** | certain | early spike | One ruling naming the exact leaf set S, plus an exhaustiveness test over `Options` that fails on any leaf not in S and not handled. 1-2 days, both runtimes, no Rust. Filed as #130 |
+| 4 | The lexer plugin tier and the advanced features have ~zero shared-fixture coverage; where measured the runtimes disagree, and `go/doc/differences.md:94-105` asserts "No behavioural effect" for a difference that changes the accepted language (§2.1, §2.4 here) | major | **moderate** | certain | production | A matcher-tier parity harness (~200 lines per runtime) plus one correction to `differences.md`. The harness is the only thing that can see any of it |
+| 5 | The options overlay merge diverges on 29 of 92 leaves in the typed tree, silently, in the accepted language; three fleet packages already carry hand-written workarounds (§2.2 here) | major | **moderate** | certain | production | Four rulings (classes A-D), then a fixture that drives the **options pipeline**, not `deep`. Then delete the three workarounds; the diff is the proof |
+| 6 | `Config` lifetime and the matcher/check-hook calling convention: rustc rejects the TS capture-then-mutate shape twice, and the fix breaks every custom-matcher signature (§2.1 here) | major | **moderate** | certain | early spike | Decide the convention on day one — built-ins as an enum, hooks as `fn(&Config, &mut Lex)`. Precedes the lexer. Half a day |
+| 7 | `Token` layout: a borrowed `Token<'s>` cannot live in the untyped per-parse plugin bag and the fleet stores tokens there; `'s` would infect `Ctx`, `Rule`, `Node`, the diagnostic and `parse` (§2.1 here) | major | **minor** | certain | early spike | Decide on day one: span + one `Arc<str>`, 12 bytes, `'static`. Port `ts/src/lexer.ts:99-131`, not Go's `Src string` |
+| 8 | `parse(&self)` is contested in four places — recovery mints a Tin mid-parse, subscribers are `FnMut`, `ParsePrepare` hands out the live grammar, and Go keeps *lazy* scan-spec caches on `LexConfig`. The cache half is already solved and should not be reproduced: `buildScanSpecs` (`go/scan.go:278`) is called eagerly from `options.go:1175` precisely "so the shared LexConfig is read-only while parsing", the lazy getters surviving only as a fallback for hand-built configs. Measured on the configured path, TypeScript writes nothing to `Config` across seven parses covering strings, comments, escapes, unicode, maps and nesting (deep before/after snapshot, byte-identical). **A Rust port that always builds eagerly gets `&Config` for free** | major | **minor** | possible | mid-build unless probed | Four compiled probes in Wave B, each ~100 lines. Each one surfaces only when its feature is implemented, long after the signature is fixed |
+| 9 | Plugin- and engine-computed byte offsets reach `&src[a..b]`: a Go no-op becomes an *engine-raised* panic, outside any `catch_unwind`, unrecoverable under `panic=abort` (§2.1 here) | major | **minor** | likely | production | A `SrcIdx` newtype plus a `clippy::string_slice` ban, day one. Unaffordable later — 26 slicing sites in `ts/src/lexer.ts` alone |
+| 10 | The conformance machinery is two-runtime by construction: a Go-resident string-scan gate a comment satisfies, a binary `goOnly` registry key, pairwise "assert the opposite" divergence pins, five TSV loaders with five escape policies (§2.4, §4.1 here) | major | **moderate** | certain | production | Generalise `nonParity` and `goOnly` to N runtimes, extract one loader spec, add `assert ran == N` to every runner. Under a week, entire, and worth doing at two runtimes |
+| 11 | `configure()` has at least three raw-`TypeError` paths reachable from ordinary option input, one of them on the registration shape `@tabnas/toml` uses (§2.1, §2.2 here) | moderate | **minor** | certain | integration | Three small TypeScript fixes, plus a stated Rust invariant: no option value may produce a panic; every leaf validates into a `Fault` with a code |
+| 12 | The never-free arena's only bound is `rule.maxmul`; recovery adds two reachability paths not on §3.6 feasibility's list (§2.4 here) | moderate | **minor** | likely | mid-build | Measure retained bytes per source byte on the skeleton and decide once. Recovery does not multiply it (0.27-0.41 rules/byte against 0.7 clean) *(unverified)* |
 
-### 1.2 What was demoted, and why
+Items 1 and 2 are the only two whose Net stays at *major*, and they are
+the two that engineering cannot retire. That is the register's actual
+shape, and it is different from the shape a severity × likelihood sort
+produces.
 
-**"Unverifiability" is not the governing risk.** The first survey for
-this document ranked it first; it is now rank 5. Every component of its
-remedy is known, small and already designed: generalise `nonParity`
-(`go/spec_registration_test.go:27`) from `map[string]string` to
-per-runtime — one line per fixture across eleven fixtures; widen the
-two-directory scan at `:38-39`; add a `spec` mode to
-`ci/parity/tokdump.js` and `ci/parity/gotokdump/main.go` (about fifteen
-lines each); about thirty lines of corpus mutation; one
-`assert_eq!(ran, N)` per runner; a `divergence.tsv` data file. A risk
-that is fully understood, fully costed and under a week is a task. The
-word "unverifiable" also overstates the starting position: the engine's
-behaviour *is* pinned, by 499 Go test functions reaching 90.6% statement
-coverage. What is not pinned is the cross-runtime subset, and the honest
-statement of the risk is that a Rust tree can join the repo without
-anything checking it — which is rank 5, worth a week, and worth doing in
-Wave 0.
+### 1.2 What was struck, and what was demoted
 
-**The port tax is 1.76x aggregate / 1.80x by line-touches** (§4.4 here); the separate ~4.5 per-line figure measures something else, and conflating them deflates every
-drift extrapolation by about 2.5x. Canonical drift remains the strongest
-of the process risks, but it is a smaller number than the first survey
-reported.
+**Struck.** "v0.1 as scoped cannot join the parity contract at all",
+previously ranked project-killing and certain. Retired by `json-core`,
+measured 55/55 and 10/10 in both runtimes (§Summary here). The residual
+true statement is narrower and worth keeping: `json-core` is a *second*
+grammar equivalent to the canonical one, not a serialization of it, and
+that equivalence is asserted by 65 fixture rows rather than proved.
 
-**Three of the four "blocking" adjudications already have a PR.** #123
-implements the `\uXXXX`/`\x` fix with twelve new fixture rows, #124
-implements #115's `pos`-as-runes change, and #127 moves #118's
-regex-dialect gap into `DIVERGENCE.md`. That moves their cost out of the
-adjudication budget and into the integration queue, which is a different
-and cheaper problem.
+**Struck.** "`py/` is the base rate for a third runtime joining this
+repo." `py/README.md:1-5` says plainly: "This is a `ctypes` binding over
+`go/clib` — nothing here reimplements the engine, so what Python accepts
+is exactly what every other tabnas runtime accepts." It is 206 lines over
+183, it implements no accepted language, and it is outside
+`go/spec_registration_test.go`'s gate because that gate scans for
+*implementations*. It also landed in one sitting, so bandwidth was
+demonstrably not its constraint. `py/` is evidence about **demand** — it
+is unwired because nothing needs it wired — and it belongs under item 1,
+not under item 2. Using it as the base rate for a lagging third runtime
+was a category error, and it was the previous draft's only base rate for
+its top-ranked risk.
 
-**The rewind window is a positive finding, not a risk.** It ports for
-free: tokens all borrow one source, so the retention shape is a plain
-`Vec` with an amortised front-trim, and `mark`/`rewind` need only
-`&mut Ctx` once the pending queue and end cache are hoisted off `Lex` as
-§3.4 already requires. The only trap is a units one — TypeScript spells
-unbounded as `Infinity` (`ts/src/utility.ts:509-511`) and Go as any
-non-positive value (`go/options.go:88-93`), so a Rust `usize` where `0`
-means "retain nothing" is a third answer. Use `Option<usize>`.
+**Demoted to scope decisions**, on measurement rather than taste:
+`Continuations` (~1.1 MB/s, quadratic under editing, **zero** call sites
+across all 34 fleet repos *(unverified)*) and instance `Merge`
+(`ts/src/merge.ts` 614 + `go/merge.go` 847 = 1,461 implementation lines,
+zero fleet callers, and a TypeScript dedupe key — `fn.toString()` at
+`ts/src/merge.ts:336-346` — with no Rust spelling).
 
-**`Token.ignored`, the `@tabnas/debug` matcher model, and
-`RegisterTextParser` are minor.** Each is a real defect and each is an
-edit: delete the dead `ignored` field and its relex branch
-(`ts/src/lexer.ts:99`, `:1602-1603`) plus the row at
-`go/doc/differences.md:90-93` that describes a TypeScript capability
-which does not exist; make `MatchSpec` carry a registration name instead
-of reflecting a function name; and do not port the package-level
-`textParser` global (`go/plugin.go:934-955`) — make it an instance field,
-which needs no `Send + Sync + 'static` and loses nothing, since the
-driver-registration pattern buys convenience for `init()` and Rust has no
-`init()`.
+**Demoted to edits:** `Token.ignored` (declared at
+`ts/src/lexer.ts:99`, read once at `:1602-1603`, assigned nowhere in the
+engine, its tests, or the fleet — and described as a live TypeScript
+capability at `go/doc/differences.md:90-93`); `RegisterTextParser`; the
+`@tabnas/debug` matcher model; `info.marker`; the verbatim duplicate of
+`str`/`snip` in `ts/src/error.ts:698-712` and `ts/src/utility.ts:837-853`;
+and the three stale doc claims in §2.4 here.
 
----
+**Demoted to costs with known retirements:** versioning and crates.io, CI
+ownership, the matcher cursor idiom, arena generational indices, TSV
+loader policy.
 
-## 2. The Blockers
-
-Four items must be ruled by a human before Rust exists. Each is a
-decision, not a task; each changes a signature or the meaning of a
-passing test.
-
-**B1 — What may a serialized spec set?** §3.2 here. The measured answer
-today is "22 of 27 groups in Go, all of them in TypeScript, silently".
-Until this is ruled, "serialized-spec engine" does not name something a
-port can implement.
-
-**B2 — Does `Config` freeze at grammar-build time, or stay live for the
-instance's life?** `go/matchers.go:15-22` records the two runtimes taking
-opposite answers: TypeScript matchers close over the `Config` snapshot
-handed to their factory and the factories re-run on every `configure()`;
-Go's `SetOptions` does `*cfg = *newcfg` and matchers read `lex.Config`
-live at match time. The feasibility report's recommended `&'g Config` is
-TypeScript's model; the recommended eager derived tables
-(`go/scan.go:270-277`) are Go's. They are not the same choice, and
-`tn.options({...})` is public and callable at any time. This determines
-whether `&'g Config` spans the instance or only a parse, which changes
-every lexer and matcher signature.
-
-**B3 — Is mid-parse grammar mutation contract or bug?** `ctx.RSM` is
-handed to every `ParsePrepare` hook (`go/parser.go:431`,
-`ts/src/parser.ts:153-155`) and `@tabnas/debug` — a shipped sibling this
-repo dev-depends on — installs after-open/after-close state actions
-through it on every rule spec (`debug/go/trace.go:164-166`, `:178-191`).
-Under `&'g Grammar` that is a compile error. §3.9 dismissed the
-capability on the grounds that `ctx.inst()` has zero call sites; the
-route in use is not `ctx.inst()`. Same family as open item #121. If it is
-contract, Rust needs a declared pre-parse install phase; if it is a bug,
-fix Go first so a third runtime does not inherit it.
-
-**B4 — Do the Go-only Info carriers bind a third runtime?** `AGENTS.md`
-alignment rule 2 mandates `Info.Map`/`Info.List`/`Info.Text` and the
-introspection API, but it is worded about Go. 328 `MapRef`/`ListRef`
-references across the fleet make the answer expensive either way, and it
-decides whether Rust's `enum Value` carries the wrappers as variants
-(making the renderers exhaustive by construction — a place Rust is
-strictly better than both runtimes) or omits them.
+**Retired outright.** The boxed matcher pipeline is not the lexer's Rust
+performance risk: 13 boxed matchers, 12 declining on a first-byte test,
+cost 17-22 ns per source position — about 8 ns per source byte at the
+measured 0.4 lex attempts per byte, under 3% of the engine's ~300 ns/byte
+*(unverified)*. Do not trade the plugin tier for a static dispatch enum
+that buys 8 ns/byte. CI compute is likewise not a constraint: a fully
+cold `cargo build` with `serde_json` + `regex` is 8.6 s on four cores
+*(unverified)*.
 
 ---
 
-## 3. The Unexamined Surfaces
+## 2. The Unexamined Surfaces
 
-The feasibility work concentrated on `rules.ts` and `builtins.ts`. This
-section is the material that was not covered. Every claim carries a
-file:line or a measurement.
+The feasibility work concentrated on `rules.ts` and `builtins.ts`. Four
+surfaces had no porting analysis at all. They are where the new material
+is, and three of the four contain divergences that `ci/parity` cannot
+see.
 
-### 3.1 The lexer and the matcher API
+The shape of the problem, measured. Function coverage of the canonical
+engine, three lanes — the 254 shared parity rows driven directly; the 55
+`json-core` rows; and the full TypeScript suite:
 
-The lexer is the largest subsystem by port ratio — 1,878 canonical TS
-lines against 2,987 Go lines, 1.59x, the highest in the feasibility
-table — and it has the least settled contract. The scan state machine and
-the byte tables do port: `go/scan.go:70-110` is already the Rust shape,
-and `refwd()` disappears entirely because `&src[si..]` is free. Almost
-nothing above that layer is agreed between the two runtimes.
+| `ts/dist/` | shared corpus | `json-core` | full suite |
+|---|---|---|---|
+| `builtins.js` | **0.00%** | 38.89% | 100.00% |
+| `merge.js` | **0.00%** | 5.56% | 92.50% |
+| `context.js` | 9.09% | 9.09% | 100.00% |
+| `rules.js` | 50.53% | 44.21% | 88.60% |
+| `parser.js` | 52.63% | 52.63% | 84.21% |
+| `lexer.js` | 62.12% | 62.12% | 98.48% |
+| `utility.js` | 67.50% | 67.90% | 88.54% |
+| `error.js` | 72.73% | 68.18% | 96.43% |
 
-**Port `go/scan.go`, not `ts/src/lexer.ts`'s scan.** Two corrections to
-§2's "direct third copy". Go's driver decodes a full UTF-8 rune for any
-lead byte >= 0x80 and advances by `size`
-(`go/scan.go:80-90`), while TypeScript's advances one UTF-16 unit
-unconditionally (`ts/src/lexer.ts:283-297`); carry Go's `size` handling
-or column counting silently diverges from both. And `Fallback` is a
-closure over the config maps, so it is a dynamic call per non-ASCII byte
-unless it becomes a `&'g Config` parameter.
+Measured with `node --test --experimental-test-coverage`. Two things fall
+out. First, the shared corpus never executes a single value builtin, and
+never enters a `merge` function — so "passes 254 parity rows" says nothing
+about the tier `json-core` exercises, which is the tier v0.1 ships.
+Second, the *node* `all files` aggregate the previous draft quoted as the
+Rust coverage floor (98.56% line / 93.92% function) spans `dist-test/`
+and the 42 files under `test/`, which are at or near 100% by
+construction because running a test file covers it. A Rust floor must be
+set per-file over `dist/` — the right column above — or it is a number a
+crate can neither hit nor miss.
 
-**The pipeline cost is not the lexer's Rust performance risk, and
-believing it is would push the design toward a static enum the plugin
-tier cannot use.** Measured with a compiled probe: thirteen boxed
-matchers, twelve declining on a first-byte test, cost 17-22 ns per source
-position — about 1.5 ns per declining dynamic call, and about 8 ns per
-source byte at the measured 0.4 lex attempts per byte. That is under 3%
-of the engine's current ~300 ns/byte. Record the number in the porting
-guide so nobody trades the plugin tier away for it.
+### 2.1 The lexer and the matcher API
 
-#### The contract that does not exist
+Largest subsystem by port ratio — 1,878 canonical TS lines against 2,987
+Go (`lexer.go` 2,558 + `scan.go` 285 + `matchers.go` 144), 1.59x, the
+highest in the feasibility table (§1.1) — and the one with the least
+settled contract. The scan state machine and the byte tables really do
+port cleanly, and `refwd()` disappears entirely because `&src[si..]` is
+free. Almost nothing above that layer is agreed between the two runtimes.
+
+Coverage: of eleven shared fixtures, exactly one touches the lexer —
+`lex-string-control.tsv`, 14 rows, string control characters. Nothing
+covers custom matchers, matcher ordering, relex/unrelex, plugin-raised
+bad tokens, soft mode, match-token gating or `tokenSet`'s lexer effect.
+`ci/parity` and `ci/fuzz` are driven through `json` and `jsonic`, neither
+of which registers a custom matcher. So none of what follows is visible
+to any existing mechanical check.
+
+One useful property: `lex-string-control.tsv` needs no grammar.
+`ts/test/lex.test.js:538-560` constructs `makeLex({src, cfg, opts, sub})`
+and asserts on `lexer.next()` alone. A Rust lexer can join the parity
+contract before a rule engine exists. That is the basis of the skeleton
+recommendation in §4.3 here.
+
+#### The plugin surface is real, and larger than the fixtures suggest
+
+Measured across the fleet, and independently re-verified: **12 of the 34
+repos register custom lex matchers** — `c`, `chess`, `css`, `csv`, `hoover`, `ini`, `jsonic`,
+`markdown`, `toml`, `xml`, `yaml`, `zon`. `@tabnas/c` alone registers 13
+named matchers (`c/go/matchers.go:503-516`,
+`c/ts/src/matchers.ts:498-511`) and disables **eight of the nine**
+built-ins to do it: `c/ts/src/c.ts:2393-2402` sets `lex: false` on
+`fixed`, `space`, `line`, `text`, `number`, `string`, `comment` and
+`value`, then immediately sets `match: { lex: true }`. It lexes C from
+custom matchers plus the match matcher.
 
 There is no specification of what a `LexMatcher` may do. Reading the
-code, a matcher may mutate `lex.pnt.sI/rI/cI` arbitrarily including
-backwards (nothing checks monotonicity); push extra tokens onto the
+code, a matcher may mutate `lex.pnt.sI/rI/cI` arbitrarily — including
+backwards, since nothing checks monotonicity; push extra tokens onto the
 pending queue (documented only as a code comment at
 `ts/src/lexer.ts:626-632`); reach the whole Context through `lex.ctx` and
 mutate `ctx.meta`/`ctx.u`; read `ctx.rule` to lex context-sensitively;
 mint an arbitrary error code via `lex.bad`; throw (TypeScript converts it
 to a `#BD` token at `ts/src/lexer.ts:1782-1793`, Go turns it into a fatal
-`internal` error at `go/parser.go:348-352`); and re-enter `lex.next`.
+`internal` error at `go/parser.go:348-352`); and re-enter `lex.next`. The
+fleet uses most of that: a matcher mutates per-parse mode state
+(`c/ts/src/matchers.ts:192-195`), reads a symbol table the parser's
+actions write (`:298`), runs a whole sub-parser that appends AST nodes
+(`markdown/ts/src/engine-inline.ts:82-125`), and reads `lex.ctx.rule`
+(`hoover/ts/src/hoover.ts:215`).
 
-The fleet uses all of it. Twelve of the 34 repos register custom
-matchers, roughly 45 implementations in total, headed by `@tabnas/c`,
-which disables every built-in (`c/ts/src/c.ts:2393-2401`: fixed, space,
-line, text, number, string, comment and value all `lex:false`) and lexes
-C from thirteen custom matchers alone (`c/ts/src/matchers.ts:497-512`,
-`c/go/matchers.go:503-518`). Those matchers mutate per-parse mode state
-(`c/ts/src/matchers.ts:192-195`, `:207-215`), read a symbol table the
-parser's actions write (`:298`), run a whole sub-parser that appends AST
-nodes (`markdown/ts/src/engine-inline.ts:82-125`), and read `lex.ctx.rule`
-(`hoover/ts/src/hoover.ts:215`). Fleet Lex-API census, verified:
-`lex.src` 136, `lex.pnt` 80, `lex.token` 74, `lex.bad` 53, `lex.ctx` 27,
-`lex.refwd` 12, `lex.fwd` 4, `lex.relex` 3, `lex.next` 2.
+A Rust port must fix one signature and one capability set before writing
+any matcher, and every fleet matcher is rewritten against it. Get the
+capability set wrong — for instance by adopting the strategy document's
+S5 capability-restricted handle and dropping `&mut Ctx` — and `c`,
+`markdown`, `hoover` and `yaml` have no port at all.
 
-A compiled probe shows
-`Box<dyn for<'s,'g> Fn(&mut Lex<'s,'g>, &mut Ctx, RuleId, Option<u32>) -> Option<Token>`
-covers all of it with no `unsafe`, no `RefCell` and no `FnMut`. Adopt the
-strategy document's S5 capability-restricted handle and drop `&mut Ctx`,
-and `@tabnas/c`, `@tabnas/markdown`, `@tabnas/hoover` and `@tabnas/yaml`
-have no port at all.
+The retirement is a one-page `doc/lex-matcher-contract.md` listing the
+eight capabilities, what `speculate()` does and does not roll back, and
+whether the cursor may move backwards. Half a day, worth doing for
+TypeScript and Go regardless of Rust.
 
-This is an M3 artifact, not a v0.1 one — v0.1 excludes custom matchers —
-but write it before any Rust matcher exists, because the eight
-capabilities it lists are what B2 is really about.
+#### The universal matcher idiom does not compile
 
-#### The idioms that do not compile
+Every matcher in the fleet holds a cursor handle and then calls a `Lex`
+method: `const pnt = lex.pnt` / `pnt := lex.Cursor()`, read `lex.src`,
+call `lex.token(...)` or `lex.bad(...)`, advance `pnt.sI`. In Rust the
+held `&mut Point` conflicts with both the shared read of `lex.src` (E0502)
+and the `&mut self` of `lex.token` (E0499) *(unverified — compiled probe
+`p8_cursor.rs`)*. This is the lexer-tier twin of the action-aliasing
+problem in §3.1 and it was never examined.
 
-The universal fleet idiom is a held cursor handle: `const pnt = lex.pnt`
-then a read of `lex.src` then a call to `lex.token(...)`. In Rust the
-held `&mut Point` conflicts with both — a compiled probe reproducing
-`c/ts/src/matchers.ts:36-63` gets `error[E0502]` and `error[E0499]`. The
-count of sites holding a live cursor across another `Lex` call is **58**:
-40 `:= lex.Cursor()` in fleet Go and 18 `const pnt = lex.pnt` /
-`const { pnt` in fleet TS. `Lex.Cursor() *Point` has no sound Rust
-analogue a matcher can hold.
+Site counts, re-measured, because the previous draft's "51 sites
+fleet-wide" does not reproduce. Go is exact: **27** non-test sites match
+`:= lex.Cursor()` across the fleet, 29 broadening to any receiver.
+TypeScript does not land on the quoted 22 under any pattern I could
+construct: `const pnt = lex.pnt` gives 10 and `const { pnt … } = lex`
+gives 8, so 18 under the register's own idiom definition; broadening to
+any `const/let X = Y.pnt` gives 29. Quote Go's 27 and TypeScript as a
+range, or say "dozens across both runtimes" — the engineering conclusion
+is unaffected, and it is that `Lex.Cursor() *Point` has no sound Rust
+analogue a matcher can hold across another `Lex` call.
 
-The fix already exists in the fleet, written by the largest consumer,
-voluntarily: `c/go/matchers.go:21-34` defines
-`scanResult{name, consumed, bad}` and `:471-490` wraps pure `scan*`
-functions. Effects-as-returned-data ports with no aliasing at all. Adopt
-that shape as the Rust matcher contract.
+The fix already exists in the fleet, written voluntarily by the largest
+consumer: `c/go/matchers.go:21-31` defines `scanResult{name, consumed,
+bad}` and `:471-490` wraps pure `scan*` functions. Effects as returned
+data, no aliasing at all. Adopt that shape as the Rust matcher contract —
+`fn(&str, usize, &mut PluginState) -> ScanResult` plus an engine-owned
+wrapper — and say so in the porting guide.
 
-**A borrowed token source is incompatible with the untyped plugin bag.**
-`Token.src` looks borrowable — TypeScript already models it as a span
-(`#ref` + `sI` + `len`, `ts/src/lexer.ts:99-131`) and Go's `Token.Src` is
-a zero-copy subslice; 24,001 of 24,003 token `src` values on a real
-workload are substrings of the input. But `Token<'s>` cannot go in
+#### A borrowed token cannot live in the plugin bag
+
+`Token.src` looks borrowable: TypeScript already models it as a span
+(`#ref` + `sI` + `len`, `ts/src/lexer.ts:99-131`) and Go's `Token.Src
+string` is a zero-copy subslice. But `Token<'s>` cannot be stored in
 `ctx.meta`/`ctx.u`, because the only untyped bag Rust offers is
-`Box<dyn Any>` and `Any: 'static` — a probe gives "`'s` must outlive
-`'static`". `@tabnas/c`'s lex subscriber stores tokens in exactly that
-bag (`c/ts/src/c.ts:2530`, `:2536`; Go twin `c/go/c.go:241`, `:251`, with
-`PendingTrivia []any` at `c/go/symbols.go:209`). Measured cost, 400k
-tokens over ~1 MB: borrowed `&'s str` 4-8 ms, owned `String` 25-27 ms,
-span-only 3.4-4.0 ms; `size_of` 32 / 40 / 12 bytes. Go already
-de-borrows deliberately (`go/lexer.go:494-497`, interning "so interned
-values never pin the parsed source's backing array").
+`Box<dyn Any>` and `Any: 'static` — and `@tabnas/c`'s lex subscriber
+stores tokens in exactly that bag (`c/ts/src/c.ts:2530`
+`m.pendingTrivia.push(tkn)`; Go twin `c/go/c.go:241`, with
+`PendingTrivia []any` at `c/go/symbols.go:209`) *(unverified — compiled
+probe `p2_borrow.rs`)*.
 
-**Decide on day one:** `Token { tin, si: u32, len: u32 }` plus one
-`Arc<str>` on the `Lex`, with `src()` materialising on demand. That keeps
-tokens `'static`, keeps the plugin bag untyped, and costs 12 bytes per
-token instead of 40. Choosing wrong is a whole-crate refactor, because
-`'s` would infect `Ctx`, `Rule`, `Node`, the diagnostic and the public
-`parse` signature.
+So tokens must be `'static`. Measured costs, 400k tokens ≈ 1 MB source
+*(unverified)*: borrowed `&'s str` 4-8 ms and 32 bytes; owned `String`
+25-27 ms and 40 bytes; span-only 3.4-4.0 ms and 12 bytes. Owning costs
+about 22 ns per source byte — 7% of the engine's current throughput but
+15-30% of an optimistic Rust target. Go already de-borrows deliberately
+(`go/lexer.go:494-497` interns string and text values "so interned values
+never pin the parsed source's backing array").
 
-#### Six divergences and two live defects, none of them covered
+Decide on day one, in writing: `Token { tin, si: u32, len: u32 }` plus one
+`Arc<str>` on the `Lex`, with `src()` materialising on demand. That is
+porting `ts/src/lexer.ts:99-131`, not Go's `Src string`.
 
-Of eleven shared fixtures only `lex-string-control.tsv` (14 data rows)
-touches the lexer, and it tests string control characters. `ci/parity`
-and `ci/fuzz` run through `json` and `jsonic`, neither of which registers
-a custom matcher. So `ci/parity` cannot see any of the following.
+#### Two incompatible matcher-pipeline models, both used downstream
 
-**Two incompatible pipeline models.** TypeScript keeps one ordered list
-(`ts/src/utility.ts:422-441`) in which built-ins are ordinary entries, so
-a plugin can reorder a built-in by name or replace it by re-registering
-under its name. Go hardcodes the sequence in `nextRaw` and interleaves
-customs by integer priority (`go/lexer.go:1017-1135`, nine hardcoded
-loops), and `go/plugin.go:266-268` silently skips a `MatchSpec` with no
-`Make` — so built-ins can only be enabled or disabled.
-`expr/ts/src/expr.ts:179-181` reorders `comment` with no `make`, which Go
-cannot express; `toml/ts/src/toml.ts:23` replaces the string matcher by
-re-registering under `string`, while `toml/go/toml.go:389-399` installs a
-separate `"tomlstring"` at order 900000 and leaves the engine's string
-matcher installed. Equal-order ties also resolve differently: TypeScript
-yields declaration order (stable sort, `ts/src/utility.ts:440`), Go sorts
-by name (`go/plugin.go:285-291`) — `toml/go/datematcher.go:99,105` uses
-950000 and 950001 rather than a tie, which suggests the author met this.
+TypeScript keeps one ordered list (`cfg.lex.match`) in which built-ins are
+ordinary entries, sorted by `order` with a stable sort
+(`ts/src/utility.ts:429`, `:441`), so a plugin can reorder a built-in by
+name or replace it by re-registering under its name. Go hardcodes the
+built-in sequence in `nextRaw` and interleaves customs by integer
+priority (`go/lexer.go:1017-1135`, nine hardcoded interleave loops), so
+built-ins can only be enabled or disabled — a `MatchSpec` with no `Make`
+is silently skipped (`go/plugin.go:266-268`).
 
-**The 257-slot dispatch table keys a matcher's candidate byte set on its
-registration NAME.** `ts/src/utility.ts:766-798` branches on the string
-`(mat as any).matcher` and, for the six built-in names, derives the
-candidate first-char set from the engine's own config. A third-party
-matcher registered under one of those names inherits a candidate set that
-has nothing to do with what it matches. Measured: the identical
-`|`-delimited string matcher registered as `mystr` lexes `|hi there|` to
-one `#ST`; registered as `string` it is absent from dispatch slot 124 and
-the same input lexes to `#TX #SP #TX`. This is a live TypeScript defect
-and `toml/ts/src/toml.ts:23` sits on it, surviving only because `'` and
-`"` are in the default quote set. In the same function, a built-in
-carrying a `check` hook is promoted to every slot, so assigning a check
-hook silently disables the filter — and `ini/go/ini.go:799,826,841,856`
-assigns four check hooks directly onto the built config, which a
-`&'g Config` design cannot accept at all. Also measured: for
-`@tabnas/c` the table filters only 72 of 3,670 slot entries (2.0%),
-because every custom matcher is listed everywhere. Fix by having
-`MakeLexMatcher` return the byte set it can start on — Biome's
-`AnalyzerPlugin::query()` shape — which makes the Rust
-`[Vec<MatcherId>; 257]` correct by construction.
+Both capabilities are used. Reordering: `expr/ts/src/expr.ts:179-181`
+sets `lex: { match: { comment: { order: 1e5 } } }` with no `make`, and a
+grep of `expr/go/*.go` finds no counterpart — Go cannot express it.
+Reproduced here on a default instance: the pipeline goes from
+`fixed@2000000, space@3000000, line@4000000, string@5000000,
+comment@6000000, number@7000000, text@8000000` to
+`comment@100000, fixed@2000000, …, number@7000000, text@8000000` — the
+built-in moved by name, by an option, with no factory supplied.
+Replacing: `toml/ts/src/toml.ts:23` registers `string:` with a
+`make: '@make-toml-string-matcher'` ref, where `toml/go/toml.go:389-399`
+installs `"tomlstring"` at order 900000 and leaves the engine's string
+matcher installed.
 
-**Match-token position gating changes the accepted language, and
-`go/doc/differences.md` says it does not.** TypeScript gates a
-`match.token` matcher on the token column at the current lookahead
-position (`ts/src/lexer.ts:588-593`, using the fourth argument `tI` that
-Go's `LexMatcher` does not have); Go gates on slot 0 of every alternate
-with a second eager-only pass (`go/lexer.go:1257-1268`). Measured on the
-same grammar and input in both runtimes — `match.token {'#WORD': /^[a-z]+/}`,
-`fixed.token {'#AT': '@'}`, one alternate `s: ['#AT','#WORD']`, input
-`@abc` — TypeScript gives `#AT #WORD #ZZ` and the result `"pos1:abc"`;
-Go gives `#AT #TX` and `[tabnas/unexpected]: unexpected character(s): @`.
-This *is* documented, at `go/doc/differences.md:94-105`, which names the
-mechanism and then asserts "No behavioural effect, and it matters" before
-explaining the 25-98x performance win that motivated it. The performance
-argument is sound; the no-effect claim is false. That is a cheaper and
-sharper finding than an undocumented divergence: the fix is a two-line
-doc correction plus a two-row fixture, and it settles the `tI` argument
-question at the same time. As written, a Rust author reading the
-reference document is told there is nothing to decide.
+Equal-order ties also resolve differently — TypeScript by declaration
+order, Go by name (`go/plugin.go:285-291`) — and
+`toml/go/datematcher.go:99,105` uses 950000 and 950001 rather than a tie,
+which suggests the author already met this.
 
-**A serialized grammar's `options.lex.match` is honoured in TypeScript
-and silently dropped in Go.** TypeScript resolves the `@`-ref out of the
-ref bag and installs the matcher (`ts/src/tabnas.ts:775-778`); Go
-resolves the ref (`go/grammarspec.go:236-242`) and then loses it, because
-`MapToOptions`'s `lex` branch handles only `empty`, `emptyResult` and
-`relex`. No error is raised. Measured with identical bytes: TypeScript's
-pipeline becomes `boom@100000, fixed@2000000, …`; Go's
-`Config().CustomMatchers` has length 0. This is one instance of the much
-larger problem in §3.2 here.
+`AGENTS.md:26` says TypeScript wins, which means Go's `nextRaw`
+hardcoding is the side that moves. That is the ruling; the tie-break is a
+one-line fix plus a fixture row.
 
-**`lex.bad` is a different function in the two runtimes, and 87 fleet
-call sites depend on the difference.** TypeScript's
-`bad(why, pstart, pend)` takes a span and produces a `#BD` token whose
-`src` and `len` describe it (`ts/src/lexer.ts:1831-1842`, leaving `err`
-undefined); Go's exported `Lex.Bad(why)` takes only the code, produces
-`Src=""`, `Len=0`, and additionally sets `Err`
-(`go/lexer.go:685-694`) — the span-taking form is unexported at
-`go/lexer.go:1303`. Both feed the structured diagnostic
-(`go/lexer.go:1141`; `ts/src/rules.ts:1385-1391`), and `len` is a
-required field of `schema/diagnostic.schema.json`, so every plugin-raised
-lexer error reports a different `src`, `len` and caret width. Call sites,
-counted across the fleet clone: **53** `lex.bad(` in TypeScript across 8
-repos and **34** `lex.Bad(` in Go across 6 repos: **87** sites, every one
-of which changes the diagnostic it emits when the signature is unified.
+#### The dispatch table keys on the registration name, and crashes
 
-**`Lex.next` filters IGNORE tokens in Go and does not in TypeScript.**
-Go skips at `go/lexer.go:953-957` (`l.ignoreDense[tin] { continue }`);
-TypeScript's `Lex.next` has no IGNORE branch and the skip lives in the
-parser at `ts/src/rules.ts:1396`. The fleet codes around it in opposite
-directions: `c/ts/src/c.ts:2333-2336` loops
-`do { tkn = lex.next(...) } while (tkn && IGNORE[tkn.tin])`, while
-`c/go/refs_newpath.go:188-189` comments that Go's `Next()` already skips
-them. The same call exposes something worse: an `AltCond` re-enters the
-lexer and appends to `ctx.t`
-(`c/go/refs_newpath_handlers.go:28` → `c/go/refs_newpath.go:190-210`;
-TypeScript twin `c/ts/src/c.ts:2312-2342`, wired to four alternates at
-`c/ts/c-grammar.jsonic:124-133`). That falsifies the strategy document's
+`buildLexDispatch` branches on the string `(mat as any).matcher` and, for
+the six built-in names, derives the candidate first-char set from the
+engine's own config for that built-in — quote bitmap, space bitmap,
+comment starts (`ts/src/utility.ts:754-799`, with the name read at
+`:767`). A third-party matcher registered under one of those names
+inherits a candidate set that has nothing to do with what it matches.
+
+The previous draft called this a silent mis-dispatch. There are **two**
+behaviours, and the crashing one is the path a plugin consumer takes.
+Re-measured here:
+
+| registration | result |
+|---|---|
+| `options({lex:{match:{string:{order:5e6, make}}}})` on a configured instance | accepted silently, matcher inherits the stale `quoteBitmap` |
+| the same registration in the **constructor** | `TypeError: Cannot read properties of undefined (reading 'check')` |
+| `.make()` on an instance carrying that registration | the same `TypeError` |
+| a **new** name with no `make` | `TypeError: matchspec.make is not a function` |
+
+The crash is structural: `cfg.string` is constructed only inside the
+built-in string matcher's factory (`ts/src/lexer.ts:1149+`), so replacing
+that factory removes its only builder and `buildLexDispatch` then reads
+`cfg.string.check` on `undefined`. `toml/ts/src/toml.ts:23` is precisely
+that registration, and `.make()` is the ordinary way to derive a
+configured instance.
+
+Add `opts.result.fail is not iterable` (`ts/src/utility.ts:500-507`,
+re-measured here from `tn.options({result:{fail:null}})`) and
+`configure()` has at least three raw-`TypeError` paths reachable from
+ordinary option input — no error code, no source position, no
+`TabnasError` wrapper. That is a class, not an instance, and it is a
+stronger argument for the Rust invariant "no option value may produce a
+panic" than the previous draft made from its single example.
+
+Retirement: key the candidate-set derivation on the matcher's identity,
+not its name — have `MakeLexMatcher` return the byte set it can start on,
+Biome's `AnalyzerPlugin::query()` shape, defaulting to "all". About 30
+lines in TypeScript now, and it makes the Rust `[Vec<MatcherId>; 257]`
+correct by construction.
+
+#### Match-token position gating: documented, and the documentation is wrong
+
+TypeScript gates a `match.token` matcher on the token column at the
+**current lookahead position** (`ts/src/lexer.ts:592`,
+`!rule.spec.def.tcol[oc][tI].includes(...)`, where `tI` is a fourth
+argument TypeScript passes to matchers and Go's 2-arity `LexMatcher` does
+not have). Go gates on **slot 0** of every alternate
+(`go/lexer.go:1266-1276`) with a second pass that adds only eager
+fallbacks — reading `go/lexer.go:1282-1286`, a non-eager token that is not
+position-expected is skipped in *both* passes.
+
+Measured here: grammar `match.token {'#WORD': /^[a-z]+/}`, `fixed.token
+{'#AT': '@'}`, one alternate `s: ['#AT','#WORD']`, input `@abc`.
+TypeScript returns `"pos1:abc"`. Go's gate cannot produce `#WORD` at slot
+1 at all, so the same grammar rejects.
+
+The previous draft called this undocumented. It is documented, and that
+is worse. `go/doc/differences.md:94-105` says: "Go's match matcher carries
+a two-pass `positionExpected` scan that TS has no equivalent of (TS gates
+by token column instead). Under a want that scan is dead … **No
+behavioural effect**". The claim is sound for the want path it was written
+about and reads as global. A Rust author consulting the porting guide is
+told there is nothing to decide, and ships whichever side they
+transcribed.
+
+Retirement: correct `differences.md` to scope its claim to the want path,
+add one `DIVERGENCE.md` entry, and land the two-row fixture (accept and
+reject at position 1). About 40 lines, and it retires the `tI` argument
+question at the same time.
+
+#### A serialized `options.lex.match` is honoured in TS and dropped in Go
+
+The serialized tier is the one v0.1 targets and the one every BNF/ABNF/
+GBNF compiler emits. A spec can carry
+`options: { lex: { match: { name: { order, make: '@ref' } } } }`.
+TypeScript resolves the `@`-ref out of the ref bag and installs the
+matcher (`ts/src/tabnas.ts:775-778`). Go resolves the ref
+(`go/grammarspec.go:236-242`) and then throws the result away, because
+`MapToOptions`'s `lex` branch (`go/utility.go:1050-1062`) handles only
+`empty`, `emptyResult` and `relex`. No error is raised.
+
+A Rust loader that follows Go silently loads a TOML grammar without its
+string matcher and mis-parses instead of failing; a loader that follows
+TypeScript makes the serialized tier code-valued, which contradicts the
+premise that a serialized spec is function-free. Both are defensible;
+neither is written down. `toml/go/toml.go:389-399` exists only because the
+Go path does not work.
+
+#### `lex.bad` is two different functions
+
+TypeScript's `lex.bad(why, pstart, pend)` (`ts/src/lexer.ts:1831-1842`)
+takes a span and produces a `#BD` token whose `src` and `len` describe it.
+Go's exported `Lex.Bad(why)` (`go/lexer.go:685-694`) takes only the code,
+produces `Src=""`, `Len=0`, and additionally sets `Err`, which TypeScript
+leaves undefined. The span-taking form exists in Go but is unexported
+(`go/lexer.go:1303`). Both feed the structured diagnostic — `len` is a
+required field of `schema/diagnostic.schema.json` — so every
+plugin-raised lexer error reports a different `src`, `len` and caret
+width in the two runtimes. Roughly 34 fleet call sites across `xml`,
+`zon`, `c`, `hoover`, `csv` and `toml` depend on the difference
+*(unverified)*.
+
+Retirement: export a span-taking `Bad(why, start, end)` in Go, deprecate
+the one-arg form, pin one shared fixture row asserting `src`/`len`.
+
+#### `Lex.next` filters IGNORE in Go and does not in TypeScript
+
+Go skips IGNORE tokens inside `Next` (`go/lexer.go:955`); TypeScript
+returns them and the parser skips them in `parse_alts`
+(`ts/src/rules.ts:1395`). Any plugin that drives the lexer directly must
+filter or must not, depending on the runtime — and `@tabnas/c` does drive
+it directly, from an alternate condition, to arbitrary depth
+(`c/ts/src/c.ts:2333-2336` filters; `c/go/refs_newpath.go:188-189`
+comments that it need not).
+
+That same call exposes a worse fact: an `AltCond` re-enters the lexer and
+appends to `ctx.t`, which falsifies the strategy document's
 classification of `AltCond` as bucket B ("pure / inspection, a shared
 reference suffices") and its census of "exercised re-entrant callback
-types: 1". **Re-classify `AltCond` as bucket C/D**: its Rust signature
-changes from `&Ctx` to `&mut Ctx, &mut Lex`.
+types: 1". Re-classify `AltCond` as bucket C/D — a one-line correction
+that changes the Rust `AltCond` signature from `&Ctx` to
+`&mut Ctx, &mut Lex`.
 
-**The lexer is the main minting site for error codes outside the
-registry.** `lex.bad` takes an arbitrary string, and fleet grammars mint
-24 distinct codes, 19 of them absent from `schema/error-codes.json`'s ten
-base codes: `xml_invalid_tag` (8), `pi_target_invalid` (4),
-`zon_number` (3), `invalid_xml_char` (3), `invalid_text` (3), and a tail
-of twos and ones. A Rust `Code` therefore cannot be a closed enum — the
-natural, serde-friendly, registry-derived choice. Type it as
-`Cow<'static, str>` or `enum Code { Base(BaseCode), Custom(Box<str>) }`
-from the first commit. This is #116 landing on the lexer specifically.
+#### `speculate()` rolls back the lexer, not the matcher
 
-**Two live defects.** The dispatch-table name-keying above is one. The
-other: `json5/ts/src/json5.ts:472-476` deletes
-the backtick entry from `cfg.string.quoteMap` after configure, but the
-string matcher's Latin-1 fast path reads `cfg.string.quoteBitmap`
-(`ts/src/lexer.ts:1228`), which the delete does not touch — measured, the
-backtick still opens a string and `quoteBitmap[0x60] === 1`. It is the
-only downstream user of post-configure config mutation, and fixing it
-(call `options({string:{chars:...}})`, about ten lines) removes the last
-obstacle to B2 resolving as "freeze at build time".
+Under negotiated lexing the engine runs a custom matcher and restores the
+cursor, pending queue and cached end token if the result is not wanted
+(`ts/src/lexer.ts:1644-1670`; `go/lexer.go:790-805` snapshots
+`relexPoint{pnt, tokens, end}`). Neither restores anything the matcher
+wrote to the Context. `@tabnas/c`'s preprocessor matchers set
+`meta.mode.inDirective` as a side effect of matching, so a grammar
+combining stateful matchers with `lex.relex: true` corrupts that state —
+measured `fired=2` in both runtimes *(unverified)*. A Rust port
+reproduces this exactly unless someone decides otherwise, and both
+alternatives (fence `&mut Ctx` out of matchers, or require purity) remove
+capability the fleet uses.
 
-**One shared unspecified behaviour.** `speculate()` restores the cursor,
-the pending queue and the cached end token, in both runtimes, and nothing
-on the Context (`ts/src/lexer.ts:1644-1670`; `go/lexer.go:790-802`). So a
-matcher's side effects survive a rolled-back speculation.
-`@tabnas/c`'s preprocessor matchers set `meta.mode.inDirective` as a side
-effect of matching (`c/ts/src/matchers.ts:192-195`, `:207-215`, `:233`,
-`:246`), so any grammar combining stateful custom matchers with
-`lex.relex: true` corrupts that state. Untested in either runtime. A Rust
-port reproduces it exactly unless someone decides otherwise, and both
-alternatives — fence `&mut Ctx` out of matchers, or require purity —
-remove capability the fleet uses. One sentence in the matcher contract
-settles it; if the contract instead promises rollback, the cheapest
-implementation is the `ScanResult` shape `c/go/matchers.go` already uses.
-A smaller instance of the same family: `commentSuffixFnMatch`
-(`ts/src/lexer.ts:1042-1057`, `go/lexer.go:1596-1609`) restores the
-cursor and not the pending queue, so a suffix matcher that queues tokens
-leaks them.
+One sentence in the matcher contract retires it: "a matcher may be run
+speculatively and rolled back; it must not mutate Context state before it
+has committed to a token."
 
-**Plugin-supplied byte offsets reach `&src[..]`.** `lex.bad(why, pstart,
-pend)` slices the source with indices a matcher computed, and so does the
-recovery skip loop. In Go, slicing a string at any index is legal — the
-repo files invalid UTF-8 under "Not divergences" for exactly that reason.
-In Rust each is `&src[a..b]`, which panics off a char boundary, and the
-panic is raised by the *engine*, so it lands outside whatever
-`catch_unwind` story the port adopts and is unrecoverable under
-`panic=abort`. A probe: `&"a é b"[2..3]` panics, `src.get(2..3)` is
-`None`. No malicious input is needed — a matcher that counts characters
-rather than bytes produces a non-boundary index on the first non-ASCII
-source. Sites to audit: 26 in `ts/src/lexer.ts`, 69 `l.Src[...]` in
-`go/lexer.go`, `advanceLexPast` in `ts/src/rules.ts` and its Go twin at
-`go/recover.go:225-231`, and six in `ts/src/error.ts` that build the
-diagnostic's source extract. §4.5 flags the API-shape half of this; the
-plugin-index half is new.
+#### Plugin byte offsets reach `&src[a..b]`
 
-**relex/unrelex is cheap, but its save point straddles Lex and Ctx.**
-§3.4 requires the pending queue and cached end token to move onto the
-Context, because `ctx.rewind()` writes both. `relex` saves and restores
-exactly those two fields together with the cursor, so `relexPoint`
-becomes a cross-object snapshot needing both `&mut Lex` and `&mut Ctx`;
-and the call site passes a token living in `ctx.t[i]` plus a `&mut Ctx`
-in the same call, which is `error[E0502]`. A probe shows the whole cycle
-working once the four cursor scalars are copied out first and the queue
-is a moved `Vec`: `size_of(RelexPoint) = 64` bytes, no clone, no
-allocation on the restore path — structurally better than Go, whose
-`relexPoint.tokens` aliases the live slice and is sound only because
-`Relex` nils it immediately (`go/lexer.go:696-700`, `:745-746`). Land
-that probe as the first Rust file written; it fixes the Lex/Ctx field
-split for the whole port. Note also that `RelexUndo()` returns the
-unexported type `relexPoint` (`go/lexer.go:781-783`), so Go's save/restore
-pair is unusable from outside the package while `Relex` and `Unrelex` are
-both exported — which suggests relex is not intended as public plugin
-surface, and that decision determines whether Rust needs a public relex
-API at all.
+`lex.bad(why, pstart, pend)` slices the source with indices a matcher
+computed; so does the recovery skip loop, which walks the source from a
+bad token's plugin-supplied `len`. In Go, slicing a string at any index is
+legal — the repo files invalid UTF-8 under "Not divergences" for exactly
+that reason. In Rust each is `&src[a..b]`, which panics off a char
+boundary, and the panic is raised by the **engine**, not the plugin, so it
+lands outside whatever `catch_unwind` story the port adopts and is
+unrecoverable under `panic=abort`. No malicious input is needed: a matcher
+that counts characters rather than bytes produces a non-boundary index on
+the first non-ASCII source. Sites to audit: 26 in `ts/src/lexer.ts`, 69
+`l.Src[...]` in `go/lexer.go`, `advanceLexPast` in `ts/src/rules.ts`, its
+Go twin at `go/recover.go:225-231`, and six in `ts/src/error.ts` that
+build the diagnostic's source extract.
 
-**The unrelex re-announce is a behaviour decision hidden in a borrow
-error.** Both runtimes put a restored token back into the lookahead
-buffer and re-announce it to lex subscribers
-(`ts/src/rules.ts:1494-1508`, `go/rule.go:1553-1571`). In Rust
-`sub(&mut ctx.t[un_i], rid, ctx)` is `error[E0499]`. The two fixes are
-observably different when a subscriber mutates the token, and
-`@tabnas/c`'s does (`c/ts/src/c.ts:2522-2540`): announce-then-store
-leaves `use = Some("leading:0")` in the buffer; store-then-announce-a-clone
-leaves `use = None`. Pick announce-before-storing — it preserves today's
-semantics, where subscriber and buffer share one object — and pin it.
+Retirement: ban bare `&str` indexing with `clippy::string_slice` plus a
+`SrcIdx` newtype producible only by the scanner or
+`str::floor_char_boundary`, and make `bad()` take `SrcIdx`. One afternoon
+at the start.
 
-### 3.2 The options and config tree
+#### The error code cannot be an enum
 
-This is the surface that was least examined and is now rank 1.
+`lex.bad` takes an arbitrary string, and downstream grammars mint at
+least 20 distinct lexer error codes that appear nowhere in
+`schema/error-codes.json`, which carries ten base codes plus a `goOnly`
+`internal` *(unverified — fleet census)*. A Rust port modelling the
+diagnostic `code` as a closed enum — the natural, serde-friendly choice,
+and the one a port written from the registry reaches for — breaks every
+one of them. Type it as `Cow<'static, str>` (or
+`enum Code { Base(BaseCode), Custom(Box<str>) }`) from the first commit.
 
-**Go's `MapToOptions` handles 18 of the 24 groups `Options` declares** (verified; filed as [#130](https://github.com/tabnas/parser/issues/130)).
-Measured by diffing every `opts.<Field>` assignment inside
-`go/utility.go:749-1237` against the field list at `go/options.go:16-44`.
-Silently dropped: **`Parse`, `Parser`, `Property`, `Result`, `Rewind`**.
-No error, no warning. Direct probe:
+#### The scan driver ports from Go, not from TypeScript
 
-```
-MapToOptions({"parse":{"recover":{"enabled":true}},
-              "rewind":{"history":5},
-              "result":{"fail":[null]}})
-  => Parse=<nil> Rewind=<nil> Result=<nil> Parser=<nil> Property=<nil>
-```
+Two corrections to §2 feasibility's "direct third copy" claim. Go's
+driver decodes a full UTF-8 rune for any lead byte ≥ 0x80, advancing by
+`size` (`go/scan.go:82-89`), while TypeScript advances one UTF-16 unit
+unconditionally (`ts/src/lexer.ts:284-297`) — so a Rust port must carry
+Go's `size` handling and its `Fallback`, or column counting diverges from
+both. And `Fallback` is a closure over the config maps, so it is a
+dynamic call per non-ASCII byte unless replaced by a `&'g Config`
+parameter.
 
-TypeScript applies all of them, because `ts/src/tabnas.ts:775-776` runs
-`this.options(resolveFuncRefs(gs.options, ref))` — the generic deep-merge
-setter over the whole tree. So from identical spec bytes, TypeScript
-returns `{value, errors}` where Go throws; TypeScript honours
-`result.fail` where Go ignores it; and `rewind.history`, one of the two
-standing DoS bounds `AGENTS.md:308-313` names, is unsettable from a
-serialized grammar in Go.
+### 2.2 The options and config tree
 
-Two of these matter more than `lex.match`. `result.fail` is what the
-strict-JSON grammar uses to reject `undefined`/`NaN` results.
-`rewind.history` is a security bound. And the direction is hostile to the
-port: Rust with `#[derive(Deserialize)]` naturally applies everything,
-i.e. lands on TypeScript's answer, so the Go↔Rust leg diverges on five
-groups from the first load — and the proposed `divergence.tsv`
-classifier, seeded from `DIVERGENCE.md`, `go/doc/differences.md` and the
-mutation classes, contains no options-plumbing entries, so it would fail
-the build for a reason that is neither Rust nor the engine.
+Smaller than it looks and more divergent than anything else measured.
+Re-measured on a live default instance: the TypeScript options tree is
+**28 top-level groups, 51 interior objects, 136 leaves, depth 4** — 54
+strings, 44 booleans, 15 numbers, 9 functions, 6 arrays, 5 undefined, 3
+nulls (walker treats an array as a leaf). Go's `Options` has **92
+reachable leaf fields** across 27 top-level groups *(unverified —
+reflection walk from the sweep)*. The built TypeScript `Config` is a
+29-group nested tree with 53 interior nodes, 241 leaves, depth 4, of
+which exactly 1 is a function, 3 are RegExps and 6 are typed arrays; Go's
+`LexConfig` is a flat 92-field struct. A hand-written merge over that is
+~243 lines of mechanical Rust. The cost is not code, it is policy.
 
-**The proposed conformance artifact is itself an accepted-language
-divergence.** `ts/test/json-builder.fixture.json` carries
-`options.tokenSet: {KEY:["#ST"], VAL:["#ST","#NR","#VL"]}`. TypeScript's
-`deep` merges arrays element-by-element (`for (let k in over)` over an
-array, `ts/src/utility.ts:641-673`), so a shorter user array leaves the
-base's tail intact; Go's `applyTokenSets` (`go/plugin.go:381-401`) calls
-`SetTokenSet(name, tins)`, which replaces. Measured from the same bytes:
+*(An earlier census of this same object gave 65 strings and an implied
+147 option leaves. It does not reproduce; the walker above is the one the
+merge-codegen estimate should rest on, and its rule is stated.)*
 
-| | KEY tins | `{1:2}` | `diagnostic.tsv` |
-|---|---|---|---|
-| default (no spec) | `[10,8,9,11]` | — | — |
-| TypeScript + spec | `[9,8,9,11]` | `{"1":2}` | 4/10 † |
-| Go + spec | `[9]` | `[tabnas/unexpected]` | 6/10 † |
+#### The merge diverges in `deepMergeStruct`, not in `Deep`
 
-† **Treat these two rows as unverified.** `test/spec/diagnostic.tsv` is
-pinned against the strict-JSON *test grammar*
-(`ts/test/json-plugin.ts` / `go/jsonplugin_test.go`), not against
-`json-builder.fixture.json`. Scoring the serialized spec against it is a
-synthetic pairing in which rows can fail because the grammar differs
-rather than because the runtimes disagree, so the split may be an
-artifact of the pairing. The claim needs a harness that controls for the
-grammar before it can carry any weight.
+This is the correction from §Summary here, restated where it matters.
+Options are layered: engine defaults, then plugin defaults, caller,
+grammar spec, runtime `options()` calls — and `jsonic` adds a second full
+defaults tree. TypeScript merges every level uniformly with `deep`
+(`ts/src/utility.ts:641-673`), iterating arrays as objects. Go has *two*
+merges: `Deep` on `map[string]any`, which I measured to agree with
+TypeScript on all six divergent-class fields, and `deepMergeStruct`
+(`go/utility.go:182-305`) on the typed `Options` tree, which does not.
 
-The two rows that separate 4 from 6 are exactly the rows asserting
-`expected: ["#ST"]` at a map key position. The remaining four failures
-are shared (both runtimes lack `#TX` in `VAL`, because the spec does not
-disable the text matcher). So the artifact both earlier documents lean on
-as the runtime-neutral portable target is neither runtime-neutral nor
-passing, and the 13-line options patch that takes it to 10/10 in both
-(`text.lex:false`, `number.exclude`, and `tokenSet.KEY:["#ST",null,null,null]`)
-works by making the array length 4 — it masks the merge divergence rather
-than fixing it.
+Four classes, on the typed path:
 
-Audit the other array-valued options in the same change: `ender`,
-`result.fail`, `recover.syncTokens`, `recover.syncGroups`.
-
-**`deepMergeStruct` has no Rust spelling, and `Option<T>` changes the
-rule rather than expressing it.** `go/utility.go:182-305` is 124 lines of
-reflection implementing "a zero overlay field preserves base", per-Kind:
-`of.IsZero()` keeps base, pointer-to-struct recurses, pointer-to-primitive
-over-wins, `Map` merges entries base-then-over, everything else over-wins,
-and a struct with no exported fields replaces outright (the RegExp fix at
-`go/doc/differences.md:290-303`). Rust has no runtime reflection: this
-becomes a derive macro or hand-written merges across 29 structs and 131
-field declarations. `Option<T>` is not a drop-in — it changes what counts
-as absent, so `false`, `0` and `""` stop preserving the base the way they
-do in Go today, which is why Go already spells options `*bool`/`*int`
-(`go/options.go:55`, `:82-84`, `:93`). Prototype the macro on the three
-deepest groups before committing to the options tree design; this
-interacts directly with §2's note that `#[serde(default)]` is the wrong
-tool because it destroys presence information.
-
-### 3.3 Utility semantics and the value model
-
-This surface is not the low-risk "exported extras" the feasibility report
-treats it as. Three of the four fixtured functions are engine-internal
-and mandatory: `deep` runs the whole options merge
-(`ts/src/tabnas.ts:257,295,350,359,381,399`), the error-details clone
-(`ts/src/error.ts:75`), the token `use` merge (`ts/src/lexer.ts:152`) and
-lexer config (`:1169`); `modlist` runs the alternate-list mods
-(`ts/src/rules.ts:348`); `strinject` renders **every** error message and
-hint (`ts/src/error.ts:289`, `:491`). Only `str`/`snip` are debug-only
-inside the engine, and `debug/go/trace.go:440` calls `tabnas.Str` anyway.
-So "a spec-only engine may not retain the utility surface" is false for
-at least 152 of the 175 rows.
-
-**The 175-row corpus does not discriminate a correct port from a wrong
-one.** Two Rust implementations over `enum Value` + `IndexMap` were built
-and run against all four fixtures. The correct one passes 175/175. A
-deliberately wrong one — `format!("{}", n)` for numbers, `r"\{([\w.]+)\}"`
-for the placeholder (Rust's `regex` `\w` is Unicode), and TypeScript's
-sign-of-dividend modulo for `move` — **also passes 175/175**. Coverage
-census: `utility-modlist.tsv` is 72 delete rows, 2 move rows and 4 no-op
-rows with zero `custom`/`append`/`clear`; `utility-strinject.tsv` uses
-seven distinct placeholder characters, all ASCII; `utility-str.tsv` is 23
-ASCII rows with zero `\r\n\t` rows, so `snip`'s entire reason for existing
-is untested; and `utility-deep.tsv` cannot see key order at all, because
-both runners compare order-insensitively
-(`go/utility_spec_test.go:33-50`, `ts/test/utility.test.js:206`) and 38
-of its 39 multi-key objects are already alphabetical with zero
-integer-like keys.
-
-The divergences the corpus hides, all measured across three runtimes:
-
-| behaviour | TypeScript | Go | Rust default |
-|---|---|---|---|
-| `str(1e21)` | `1e+21` | `1000000000000000000000` | same as Go |
-| `str(Infinity)` | `Infinity` | `+Inf` | `inf` |
-| `str(-0)` | `0` | `0` | `-0` |
-| `str(1e-7)` | `1e-7` | `0.0000001` | same as Go |
-| `deep` base | mutated, returned by identity | fresh container | choice |
-| merged key order | integer-like first | insertion | sorted (`serde_json`) |
-| `strinject` `{é}` | literal | substitutes | substitutes (`regex` `\w`) |
-| `modlist move:[-5,0]` on 3 | `["a","c"]` — an element deleted | `["b","a","c"]` | forced choice |
-| `str("ααααα", 8)` | untouched | 8 bytes, truncated `α` | panics |
-
-Ship a single `fn js_number_to_string(f64) -> String` in the porting
-guide — about twenty lines, and every renderer must route through it.
-Write `[0-9A-Za-z_.]` explicitly next to §4.3's `\s`/`\d`/`\w` lowering
-note; this is the same trap in a second place and §4.3 does not mention
-it. And note that TypeScript's `move` path has no bounds check where the
-delete path does (`ts/src/utility.ts:1066` versus `:1075-1076`), so
-`move:[-5,0]` silently loses a list element — a TypeScript bug, not just
-an unpinned choice.
-
-**`deep`'s signature is a real fork, and downstream has already paid for
-both sides.** TypeScript mutates its base and returns it by identity; Go
-allocates (`go/utility.go:105`). `multisource/go/plugin.go:150-157`
-carries a nine-line comment about exactly this, against a one-line
-TypeScript counterpart at `multisource/ts/src/multisource.ts:248`; and
-`jsonic/ts/src/grammar.ts:216` tests `val === prev` to detect that
-`deep(prev,val)` returned the base allocation. Under the arena design the
-identity observable becomes `nid_a == nid_b`, which is expressible and
-cheap — so pick the `&mut`/arena form and record it.
-
-**A recursive `Value` enum aborts on Drop.** Measured with rustc 1.94.1,
-release, `panic=unwind`, 8 MB stack: a `Value` nested 51,562 deep drops
-cleanly; 52,500 aborts with `fatal runtime error: stack overflow`,
-SIGABRT, uncatchable by `catch_unwind`, with no user frame on the stack.
-Construction and traversal survive far past that — it is `Drop` alone.
-TypeScript overflows at depth 1538 with a *catchable* `RangeError`; Go
-handles 200,000 fine. The exact threshold is layout- and
-stack-dependent, so state the mitigation and not the number: extend the
-arena decision from rules and nodes to the value model (a flat `Vec<Node>`
-with `NodeId(u32)` children has no recursive Drop), and if a standalone
-`Value` is exported for the utility API, give it an iterative `Drop`.
-
-**Three Go-side defects to fix before a third runtime copies them.**
-`Str`/`Deep` on a cyclic value kill the process — `fmt.Sprintf("%v", …)`
-recurses forever (`go/utility.go:461-467`), `recover()` does not catch a
-stack overflow, and this is on the *error* path. `formatCompactValue`
-ranges a bare map (`go/utility.go:598-608`), so a multi-key object
-renders in randomised order — measured, 165 of 200 calls one way and 35
-the other in a single process, which makes any fixture row added for it a
-flake generator. And the three renderers have no cases for `*OrderedMap`,
-`MapRef`, `ListRef`, `Text` or `Undefined`, so they leak Go struct syntax
-into user-facing error text: `StrInject("{a}", {a: Text{...}})` returns
-`"{\" hi}"`. Rust's exhaustive `match` makes that omission a compile
-error — but only if B4 puts the wrappers in the enum.
-
-**The Go utility fixture runner unescapes nothing**, while
-`ts/test/utility.js:29-32` maps `unescape` over every column. The
-invariant holds today only because all four utility fixtures contain zero
-escapes, and `snip`'s behaviour is precisely `\r\n\t` replacement — so
-its rows cannot be written until this is fixed. Worse, the two written
-specifications contradict each other: `test/AGENTS.md:36-37` says the
-repo decodes escapes "in EVERY column"; `AGENTS.md:135-136` says "in the
-input column". Reconcile those two files before extracting a loader spec.
-
-### 3.4 Advanced engine features
-
-Recovery, Continuations, the rewind window, budget/cancellation,
-subscribers, the Go-only Info carriers, `RegisterTextParser`.
-
-**The algorithms port.** A compiled model of the whole recovery path —
-arena rules never freed, `&'g Grammar` and `&'g Tabnas` reached through
-the Context, tokens borrowing the source, ring-buffered `v`, forced-close
-dispatch, mark/rewind with eviction errors — runs with no `unsafe`, no
-`Rc` and no `RefCell`. Three questions have clean answers: recovery
-**never rewinds** (`go/recover.go:238-428` reads `ctx.V`/`VAbs` only for
-the progress guard and never writes them), **never synthesises tokens**
-(it reuses lexer tokens and the `NoToken` sentinel; `forceClose`
-synthesises an *event*, `go/recover.go:433-441`), and **does re-enter
-rules** — it flips `rule.State` and sets `rule.skipBefores` on a rule
-already on the stack (`:402-413`) and dispatches RuleDone for rules
-*after* popping them (`:419-426`), which is a second independent reason
-generational indices are mandatory if arena slots are ever reused.
-Budget/cancellation is trivial and does **not** force `Send + Sync`: a
-probe cancels a `parse(&self)` on an `Rc`-containing, `!Send`/`!Sync`
-instance from another thread via a captured `Arc<AtomicBool>`.
-
-**The plumbing does not port.** `Continuations` requires the Context to
-outlive the parse, and both runtimes reach it by a route rustc rejects
-outright. Go smuggles it out through a `RuleSub` closure
-(`go/continuations.go:275-278`, read at `:310-315` after `startParse`
-returned at `:284`) — `error[E0521]: borrowed data escapes outside of
-closure`. TypeScript hangs it off the thrown error
-(`ts/src/error.ts:66`, `:79`, read at `ts/src/tabnas.ts:615`) —
-`error[E0515]: cannot return value referencing local variable`. The fix
-compiles: `start_parse` returns `Outcome { value, ctx, err }` and
-`continuation_tins` runs on the returned Context. §3.6's "errors are
-snapshots, no back-pointer" is the correct call for Go and structurally
-removes what TypeScript's continuations reads, so record that
-`err.internal.ctx` has no Rust spelling.
-
-**Stateful subscribers cannot ride on the Context.** §3.4's table moves
-subscriber lists to `&'g Subs`, which is sufficient only for `Fn`. Every
-subscriber that matters here mutates captured state: `capture`
-accumulates `atEnd`/`haveEnd` (`go/continuations.go:246-272`), `watch`
-writes `failCtx` (`:275-278`), TypeScript's permanently-installed lex
-subscriber writes `this.#contAtEnd` (`ts/src/tabnas.ts:532-566`),
-`@tabnas/debug`'s tracer holds `*traceState` (`debug/go/trace.go:129`),
-and `@tabnas/c`'s buffers trivia into `ctx.Meta` *and writes the token*
-(`c/go/c.go:231-253`). A probe: `&'g [Box<dyn Fn(&mut Ctx)>]` dispatched
-from `ctx` compiles; `&'g mut [Box<dyn FnMut(&mut Ctx)>]` is
-`error[E0499]`. So the sub list becomes a sibling `&mut` parameter
-threaded through every dispatch site — five in Go
-(`go/parser.go:492`, `:510`; `go/recover.go:438`; `go/rule.go:1568`;
-`go/lexer.go:862`) and seven in TypeScript — which drags it into
-`Lex::next`, `Lex::relex`, `force_close` and `absorb_bad`. Neither the
-`k` ruling nor the argument-3 collapse touches this; it is orthogonal and
-currently unaddressed. **Decide the calling convention before `process()`
-is signed:**
-`fn process(g: &'g Grammar, subs: &mut Subs, ctx: &mut Ctx, lex: &mut Lex, rid: RuleId)`.
-
-**The arena's only remaining bound is four orders of magnitude too
-loose.** With rules never freed, retained memory is O(rule passes), and
-the only thing bounding rule passes is
-`maxr = 2 * |rsm| * len(src) * 2 * maxmul` (`ts/src/parser.ts:211`,
-`go/parser.go:442`, `maxmul: 3` at `ts/src/defaults.ts:408`) — that is
-**12 × rule-count × source-bytes**. `AGENTS.md:308-313` names
-`rule.maxmul` and `rewind.history` as the engine's two standing bounds on
-hostile input, but `rewind.history` bounds only `ctx.v` (measured peak
-128 tokens at the default 64, because both runtimes grow to `2*cap` then
-trim), and `maxmul` was written as a liveness guard. `unsafe.Sizeof(Rule{})`
-is 264 bytes, so a 5-rule grammar on 1 MB permits 60 M passes ≈ 15.8 GB,
-and a 100-rule ABNF-compiled grammar permits far more. Today the GC makes
-that fine; in an arena the process dies with an OOM rather than a
-`TabnasError`, losing the panic-free contract `go/doc/differences.md:474-489`
-declares and `go/clib` exports. Measured density is also worse than §3.6
-recorded: nesting-heavy input (`[`×5000 + `]`×5000) gives a flat **1.50
-rule passes per source byte** against the 0.7 measured on flat
-strict-JSON. Note PR #126 changes the budget formula, so re-derive after
-it lands.
-
-**Recovery's column bookkeeping counts bytes where the contract says
-runes.** `advanceLexPast` walks the source one byte at a time and does
-`lex.pnt.CI++` per byte (`go/recover.go:223-231`); its comment justifies
-this on the grounds that RowChars are ASCII, which is true for *row*
-detection and says nothing about the *column* counter. Measured: recovery
-off, `{"x":"éééé","z":@}` gives `col=17 pos=20` — 17 is the rune column,
-as `DIVERGENCE.md` contracts. Recovery on, `{"x":éééé,"z":@}` gives a
-second error at `col=14 pos=13`, where the offending `,` is at rune
-column 10 and byte column 14. Same engine, same instance; the unit flips
-because the position was reached through `advanceLexPast`. This is a
-second, independent instance of #115. Fix Go before #115 is ruled, so the
-ruling has one units question to settle instead of two.
-
-**Recovery is not in value parity, and the divergence is not a counting
-question.** Measured on each runtime's own strict-JSON fixture, input
-`{"a":\x01\x01,"b":\x01\x01,"c":\x01\x01,"d":\x01\x01,"e":1}` with
-`suppress:0`:
-
-| `maxRecoveries` | TS errors | TS value | Go errors | Go value |
+| class | fields | TypeScript | Go typed | naive Rust |
 |---|---|---|---|---|
-| 1 | 2 | `{}` | 1 | `null` |
-| 2 | 2 | `{}` | 2 | `{"a":null}` |
-| 3 | 2 | `{}` | 2 | `{"a":null}` |
-| 4 | 2 | `{}` | 2 | `{"a":null}` |
+| A — plain scalars | 20 (`space.chars`, `number.sep`, `string.multiChars`, `rule.include`/`exclude`, `parse.recover.enabled`, `tag`, …) | overlay's zero wins | zero discarded (`IsZero()`, `go/utility.go:249`) | `Option<T>` → TypeScript |
+| B — slices | 5 (`ender`, `result.fail`, `parse.recover.syncGroups`/`syncTokens`, `match.tokenOrder`) | index-wise merge | replace | `Vec` → Go |
+| C — maps of struct | 3 (`comment.def`, `value.def`, `match.value`) | recurse into the entry | replace the entry | undecided |
+| D — `tokenSet` | 1 | index-wise | replace | undecided |
 
-TypeScript's `ruleStack` also changes with the cap. So the proposed
-`test/spec/recover.tsv` must pin the recovered **value**, not just the
-error count — and this strengthens the case for keeping recovery out of
-v0.1. Related: `go/recover.go:249` tests `MaxRecoveries <= len(ctx.Errs)`
-*before* recording while `:502` tests `<` *after* recording; the comment
-at `:245-248` documents exactly this overshoot class and says it was
-fixed, but the fix landed on `attemptRecover` only, not on `absorbBad`.
+29 of 92 leaves, 32%, silently, in the accepted language rather than only
+in values. Rust's natural types produce a *fourth* combination: TypeScript
+for class A, Go for class B, and a coin-flip for C and D.
 
-**Recovery's error coalescing uses Go pointer identity.** Both the
-cascade-suppression pop (`go/recover.go:275`) and the unlexable-run
-coalescing (`:471`) compare `ctx.Errs[len-1] == err`. §3.6's design
-stores errors as values, which has no identity, so a transliteration
-silently becomes structural equality — and the engine's own notion of
-"the same error" is deliberately weaker
-(`alreadyRecorded` compares only `Code` and `Pos`, `go/parser.go:839-849`),
-so structural comparison would collapse two genuine faults at the same
-offset into one. Have `make_error_in` return the index it appended and
-compare indices. Two lines if written now, archaeology later.
+It reaches serialized specs. Measured end to end here:
+`MapToOptions({"number":{"sep":""}})` produces `Sep:""`, and
+`Deep(Options{Sep:"_"}, that)` returns `"_"` — so a serialized zero is
+applied in TypeScript and discarded in Go. Live fleet exposure in six
+lines: `jsonc/ts/src/jsonc.ts:26-29` carries `multiChars: ''` (class A),
+`sep: null`, and `comment: def: hash: { lex: false }` (class C), and the
+identical text is fed to Go at `jsonc/go/jsonc.go:21-28`.
 
-**`ctx.rewind()` across a recovery is undefined in both runtimes and
-untested in either.** Recovery skips the lexer forward and refills
-`ctx.T` (`go/recover.go:340-372`) but never touches `ctx.V`/`ctx.VAbs`,
-so a mark taken before an error stays valid afterwards, and rewinding to
-it re-feeds consumed tokens while the scan point has advanced past the
-sync token. `grep -n 'Rewind' go/recover_test.go ts/test/recover.test.js`
-and `grep -n 'recover' go/rewind_test.go ts/test/rewind.test.js` both
-return nothing — the two features have never been exercised together.
-Write one test in each runtime; even "the rewind errors" is a defensible
-answer and pins it.
+The fleet already carries three hand-written workarounds, each naming the
+engine merge as the cause: `jsonic/go/jsonic.go:66-109`
+`normalizeCommentDefs` ("needed because the engine's option `Deep` merge
+replaces map values wholesale per key"), `jsonic/go/jsonic.go:225-236`
+(strips `Include`/`Exclude` before merging), and
+`json5/go/json5.go:742-751` (deletes characters from the live Config
+because "Jsonic's `buildConfig` restores the default multi-line quote
+set … whenever `Options.String.MultiChars` is empty").
 
-**`parse(&self)` is right, but three shipped mechanisms hold instance
-state.** TypeScript's `continuations()` lazily builds and caches a
-fail-fast sibling (`ts/src/tabnas.ts:213-218`, `:502-517`) and
-accumulates into `#contAtEnd` from a permanent subscriber — which is
-additionally racy today, since two concurrent `continuations()` calls on
-one instance share it. Go's `Decorate`/`Decoration` map
-(`go/options.go:408-421`) is where `@tabnas/debug` parks its state. Go's
-continuations mechanism (a per-parse meta flag plus per-call subscriber
-slices, `go/continuations.go:21`, `:280-282`) has none of these problems
-and is the portable one; adopt it, declare TypeScript's sibling caching
-an implementation detail, and the only interior mutability left is the
-decoration map.
+**Retirement, corrected.** One ruling per class, written into
+`AGENTS.md` as "the option overlay rule", plus a fixture that drives the
+**options pipeline** — `tn.options(...)` in TypeScript, `MapToOptions` +
+`Deep` in Go — and asserts on the resulting Config. A `utility-deep`-style
+fixture cannot see any of it, because its columns are JSON and the Go
+runner would hand `Deep` maps, on which the two runtimes already agree.
+Then delete the three workarounds; the diff is the proof the rule is
+real.
 
-**`Continuations` costs a full parse per call, and Rust does not change
-the asymptote.** Measured against the Go engine via jsonic, 200
-iterations: prefix 341 B → 339 µs versus a plain parse at 325 µs (1.04x);
-3,401 B → 3.57 ms versus 3.27 ms; 17,001 B → 18.6 ms versus 18.8 ms.
-Typing a 3,401-byte document one character at a time with one call per
-keystroke costs 5.78 s of engine time; at an optimistic 2-4x for Rust
-that is 1.4-2.9 s against an LSP completion budget usually under 100 ms.
-Building it into the first engine spends the port's headline argument on
-the one feature where a constant-factor win is irrelevant.
+#### Only 65 of 92 leaves are reachable from a serialized spec in Go
 
----
+`MapToOptions` is 462 hand-written lines (`go/utility.go:749-1210`)
+touching 22 of 27 top-level groups and 65 of 92 leaves *(the two totals
+carried from the sweep; the individual misses below are re-measured here
+by grep over that line range)*. Beyond the five groups filed as #130, the
+per-leaf hole is worse than group counting shows: `m["rule"]` *is*
+handled, yet `rule.maxmul` appears nowhere in the function. Every one of
+these returns zero occurrences:
 
-## 4. Schedule Dependencies
+- pure data: `Rule.MaxMul`, `Rewind.History`, `Result.Fail`,
+  `Match.TokenOrder`, `Parse.Budget.CheckEveryN`, and all seven
+  `Parse.Recover.*` fields.
+- function-valued (14, not the previously quoted 12): **eight** `*.Check`
+  hooks — `go/options.go:117, 147, 154, 163, 173, 184, 211, 237`, not six
+  — plus `Lex.Match`, `Parse.Prepare`, `Parse.Budget.OnCheck`,
+  `Parser.Start`, `Property.ConfigModify`, `Text.Modify`.
 
-### 4.1 The adjudications, sequenced
+`rule.maxmul` and `rewind.history` are precisely the two bounds
+`AGENTS.md:308-313` names against hostile input, and `go/clib` — and
+therefore `py/` — accepts *only* serialized specs, so every C-ABI and
+Python caller is silently on defaults for both. A Rust loader written
+with `#[derive(Deserialize)]` naturally applies everything, i.e. lands on
+TypeScript's side, so the Go↔Rust leg lights up on ~15 pure-data fields
+from the first load for a reason that is neither Rust's nor the engine's.
 
-Four items genuinely block; five do not.
+Compounding it, the one bound a serialized spec might try to set is
+inverted. `ts/src/rules.ts:635-638`: `if (cap !== Infinity && ctx.v.length
+> 2 * cap)` — 0 means retain nothing. `go/parser.go:233-236`:
+`if cap > 0 && len(ctx.V) > 2*cap`, documented at `:231-232` as "a
+non-positive cap means unbounded (TS Infinity)". An operator hardening a
+service by setting `history: 0` gets bounded retention on TypeScript and
+unbounded on Go — the opposite of the intent, on the option the security
+note is about. Rust has no `Infinity`, so `Option<usize>` with `None` =
+unbounded forces the question to be answered rather than defaulted.
 
-**Blocking, in order:**
+#### `configure()` captures Config and then mutates it underneath itself
 
-1. **B1, the serialized options surface** (§3.2 here). New; not filed.
-   Nothing else in the port means anything until this is ruled.
-2. **#120**, ruled rule-scoped, unimplemented — including the five
-   guarded deletes at `go/builtins.go:248,269,285,302,340` and the
-   propagation fixture. Its third comment leaves a sub-question
-   (`value$` read-then-delete ordering on the child-wins path) explicitly
-   unpicked. TypeScript still reads `alt.k` at
-   `ts/src/builtins.ts:127,138,170,238,249,263,273,305`.
-3. **#122**, ruled compute-once, unimplemented —
-   `ts/src/rules.ts:619` and `:737` still both evaluate
-   `rule[oN|cN] - (alt.b || 0)` — plus the `alt.p`/`alt.r` post-action
-   channel it does *not* close.
-4. **#115** (`pos` units) and **#118** (serialized regex), both unruled
-   but both with an open PR (#124, #127).
+The TypeScript pipeline builds seven or eight matchers, each capturing a
+live sub-object of `cfg` by reference (`ts/src/utility.ts:429` →
+`ts/src/lexer.ts:198-212` `guardedMatcher(mcfg, body)`, "`mcfg` is
+captured once at matcher-build time"); then runs plugin config modifiers
+that mutate `cfg` (`ts/src/utility.ts:483-487`); then builds the 257-slot
+dispatch table from the mutated `cfg` (`:493`).
 
-**Not blocking:** #116 (a prose count — `AGENTS.md:243-249` and
-`schema/README.md:14` say nine codes, the registry carries ten), #117
-(clib doc contradiction), #119 (Go panics as control flow — blocks only
-if Rust must mirror the no-panic guarantee), #121 (a Go-only
-grammar-mutation bug, though it should be ruled together with B3), #113
-(a validator gap that blocks a Rust validator milestone, not the engine).
+The ordering is load-bearing, not incidental. `ini/ts/src/ini.ts:216-219`
+depends on it explicitly — "the parser has no `options.comment.check`
+pass-through …, so the hook is installed directly on the built config,
+which `configure()` does before `buildLexDispatch()`" — and then installs
+`cfg.comment.check` (`:221`), `cfg.text.check` (`:234`) and
+`cfg.string.check` (`:246`), the last of which reads
+`cfg.string.quoteMap[quote]` (`:252`). That is a Config field holding a
+closure that borrows Config. rustc rejects the shape twice: E0502 at the
+modifier loop, and a `'static` coercion failure at the matcher store
+*(unverified — compiled probes `r1_naive.rs`/`r1_fixed.rs`)*.
 
-**Three of the four blocking items already have a PR.** #123 implements
-the `\uXXXX`/`\x` fix — `ts/src/lexer.ts:1310` and `:1343` guarded with
-`/^[0-9a-fA-F]{4}$/` and `{2}` — with twelve rows added to
-`include-json-utf8-errors.tsv`; #124 serialises `pos` as a rune offset;
-#127 moves the regex-dialect gap into `DIVERGENCE.md`. So the cost is
-not adjudication, it is integration.
+The working shape — built-in matchers as a `Copy` enum plus
+`fn(&Config, &mut Lex)` hooks — compiles and preserves all four
+behaviours, but it changes the signature of every custom matcher and every
+check hook. That is a breaking public-API change for the 12 fleet repos
+that register matchers, and it must be decided before the `Config` struct
+is written.
 
-### 4.2 The integration queue is the current bottleneck
+Note also that the matcher factories are not factories:
+`ts/src/lexer.ts:1153-1201` writes about a dozen fields onto `cfg.string`
+and `:645` replaces `cfg.comment` wholesale, so `MakeLexMatcher` really
+wants `&mut Config` while returning something that borrows `&Config`.
 
-Seven PRs are open, all authored by the maintainer, all branched from
-`base.sha = 9c1903d`, none merged: #114, #123, #124, #125, #126, #127,
-#128. They will conflict with each other and each needs re-verification
-after the first merge. Three add new shared fixtures
-(`test/spec/lex-text-quote.tsv`, `lex-text-line-terminator.tsv`,
-`rule-maxmul.tsv`), taking the corpus from 11 files to 14 — which grows
-the third-runtime obligation before Rust exists, since the honesty gate
-requires a runner per runtime per fixture. Drain the queue before Wave 0
-starts and cap engine work-in-progress at one open PR for the duration.
+Follow Go: build every derived table eagerly at configure time, take
+`&'g Config`, and make `parse(&self)` with `Box<dyn Fn>` matchers a stated
+invariant. Go already fixed the same problem from the other side, for a
+documented data-race reason (`go/scan.go:272-277`: "called at config build
+time so the shared `LexConfig` is read-only while parsing — left to the
+lazy getters above, the specs are built during the FIRST parse, which
+races when concurrent parses share one instance").
 
-One of them carries a lesson worth more than its diff. **PR #128** fixes
-a Go text-run divergence and records: "That was the single largest
-divergence class measured across the fleet — `a"b`, `x:a"b`, `{k:a"b}`
-and `[a"b]` all parsed in TS and were parse errors here". It also shows
-that two Go tests had been *pinning the divergence as if it were the
-contract* (`TestMatchStringAbandon`,
-`TestRelexBadTokenStillRaisesItsOwnError`). The real hazard in the lexer
-tier is not an unpinned Go behaviour; it is a **pinned-but-wrong** one. A
-Rust author copying Go's tests inherits it. Audit Go's lexer tests
-against TypeScript behaviour as a Wave 0 task.
+#### `configure()` is documented as idempotent and is not
 
-### 4.3 Rulings reverse
+`ts/src/utility.ts:273-277` builds `cfg.text.modify` by concatenating the
+*existing* `cfg.text.modify` with the option's modifiers, so each run
+appends the whole set again. Go assigns instead
+(`go/options.go:830-831`). Re-measured here — and the previous draft's
+"3, 4, 5" does not reproduce in either direction:
 
-Issue #120 was ruled at 13:59:37Z and ruled the opposite way at
-15:35:35Z — 96 minutes — with the second comment noting that the earlier
-prototype "would have shipped the leakage bug". #115's stated fix
-direction has already flipped from "correct the documents" to "change
-Go" (PR #124). At two runtimes and hour-scale port lag this is a virtue.
-For a months-long branch it is a hazard, because a Rust implementation
-written against a reversed ruling is not a one-line fix — #120's reversal
-changed *which runtime moves*, which invalidates the `enum Act`
-config-scoping design the strategy document derives from it.
+| instance | at construction | after 1 `options({})` | after 2 | after 3 |
+|---|---|---|---|---|
+| default (no modifier) | 0 | 0 | 0 | 0 |
+| one `text.modify` installed | 1 | 2 | 3 | 4 |
 
-**Rule: the port consumes only rulings that have landed on `main` as code
-plus a shared fixture, and the port branch rebases on tagged engine
-releases, never on `main`.** Costs nothing; converts every reversal into
-a merge instead of a rewrite.
+So the defect fires only when a text modifier is configured, which no
+fleet package does — `xml/ts/src/xml.ts:184` explicitly declines to
+install one. That is why it has never been caught, and it is why a Rust
+port that rebuilds Config cleanly would silently *change* TypeScript
+behaviour while a transliterating port would carry the bug. Fix it in
+TypeScript (one line, assign not concat), assert the length is stable
+across three calls, and note in `DIVERGENCE.md` that Go was already
+correct. Under an hour, and it removes a Rust decision entirely.
 
-### 4.4 Canonical drift, correctly sized
+#### Config is an open bag in TypeScript
 
-Since root `22fdf19`: 59 commits over 10 calendar days (9 with commits;
-2026-08-16 is empty), 19 `feat:`, peak 16 on 2026-08-17. Churn:
+`config.modify` hooks write arbitrary new properties onto the built
+Config. The most common is `cfg.tokenDesc`, declared by neither
+`ts/src/types.ts` nor Go's `LexConfig`, written from **nine sites across
+eight fleet packages** (`css`, `csv`, `ini`, `markdown` ×2, `toml`,
+`xml`, `yaml`, `zon`) and read back by `railroad/ts/src/extract.ts` to
+label diagram legends — re-measured here. `grep -rn tokenDesc ts/src
+go/*.go` returns **zero**: the field exists in no type declaration in
+either runtime. A Rust `Config` cannot grow a field at runtime, so either
+the extension point is typed or Config carries an untyped side-table.
+Declare
+`tokenDesc` and add one typed `extra` beside it — one hour, but before the
+struct is public.
 
-| tree | added | deleted | total |
-|---|---|---|---|
-| `ts/src` | 1,712 | 98 | 1,810 |
-| `ts/test` | 2,497 | 4 | 2,501 |
-| `ts/doc` | 205 | 17 | 222 |
-| **`ts/` total** | **4,550** | **131** | **4,681** |
-| **`go/` total** | **7,971** | **472** | **8,443** |
+#### Post-construction Config mutation, and `SetOptions` wiping it
 
-**The port tax is 1.80x**, matching the feasibility report's own §6.1
-aggregate. The 4.51x figure that has circulated divides Go's
-implementation *plus tests plus docs* by TypeScript's implementation
-alone. Single-runtime commits are 15 of 59 (11 Go-only, 4 TS-only) —
-25%, not a third.
+Five fleet Go packages write lex check hooks and ender chars onto the live
+Config after construction, because the serialized path cannot carry them:
+`ini/go/ini.go:799,826,841,856`, `json5/go/json5.go:757-759`,
+`yaml/go/yaml.go:1298,1305,1313`, `multisource/go/plugin.go:29-30`.
+`SetOptions` then rebuilds Config with `buildConfig` and copies it over
+the old pointer, preserving only a hard-coded list of about eleven fields
+(`go/plugin.go:807-869`) — the check hooks and `EnderChars` are not on it
+*(unverified — probe measured `TextCheck set=true → false`,
+`EnderChars=map[60:true] → map[]`, `samePtr=true`)*. The fleet already
+knows: `ini/go/ini.go:798`, "Set after `Grammar()` to ensure it's not
+overwritten by `SetOptions`."
 
-Canonical rate is ~181 line-touches per day. Even discounting the launch
-burst to 10% of that, a 120-180 day build accumulates 2,200-3,300
-canonical lines ≈ 4,000-5,900 lines of Rust port work at 1.80x, on top of
-the base estimate. That is the number to budget as its own milestone,
-measured at branch time and re-measured monthly.
+TypeScript does not have this bug, because `config.modify` hooks are
+replayed inside every `configure()` run. Rust must pick one, and the two
+runtimes disagree on which is correct. Adopt TypeScript's shape: Config is
+rebuildable and carries an ordered `Vec<ConfigModifier>` replayed on every
+rebuild, with no public field-write path. Then add the Go regression test
+that fails today — it is the cheapest thing that makes the contract
+visible. Secondary: TypeScript iterates modifiers in insertion order, Go
+iterates a `map[string]ConfigModifier` unordered
+(`go/options.go:1165-1169`), so modifier order is nondeterministic in Go.
 
-### 4.5 Release and packaging
+#### The declarative condition compiler
 
-The version arithmetic in `/workspace/admin/publish.sh:6-9` computes one
-number as `max(npm latest, latest go/v tag, ts/package.json, Go VERSION
-const)` and applies it across a hand-ordered wave with `parser` first.
-There are 23 `go/v*` tags and 19 `ts/v*` tags on origin, plus one stray
-bare `v0.3.0`. **v0.8.9 does not exist anywhere**: commit `a3f286b`
-rewrote all four version locations, was never tagged in either runtime,
-and was never published — that release was agent-run, one failure in
-three.
+`COND_OPS`/`COND_PATH_ROOTS` compile object conditions into closures. In
+Rust this is genuinely bucket A — an operator enum plus a compiled path
+enum, matched at eval time, no closures and no allocation. But it cannot
+be written until four things are ruled, because the runtimes already
+differ *(unverified — carried from the sweep)*:
 
-Adding a crate makes it five version locations plus an immutable
-registry: crates.io has no unpublish at all, where npm has a 72-hour
-window and the Go proxy just serves a tag. A cargo failure halts the wave
-at repo 1 of 32.
-
-Two decisions before the first crate exists. **Version the crate
-independently, starting at 0.1.0, and have it report the engine version
-it implements** — `py/tabnas.py:138-142` already reads the version from
-the library and adds zero version locations. That keeps it out of the
-lockstep wave entirely. And **decide the cross-directory test idiom
-before the first `cargo package`**: measured with cargo 1.94.1, a runtime
-read of `../ts/package.json` (mirroring `go/version_test.go:23`) passes
-in-repo, packages with no warning, and *fails inside the published
-crate*; the idiomatic `include_str!("../../ts/package.json")` fails
-`cargo package --verify` outright. Gate such tests behind a feature, copy
-the registry into `OUT_DIR` from a build script, and add
-`cargo package --verify` — not just `cargo test` — to the pre-release
-check.
-
-**ADR-12 needs superseding.** `/workspace/admin/DECISIONS.md:207` says
-languages beyond TypeScript and Go get tabnas through C-ABI bindings,
-"not native ports"; its status is *proposed (2026-08-16) — merging this
-entry constitutes acceptance*, and it is the only ADR in the file not
-marked accepted. The same programme plans a Rust *binding* crate in its
-own repo (`notes/2026-08-16-clib-ffi-strategy.md:186-199`, "One `tabnas`
-crate (own repo, e.g. `tabnas/rust`)"), which claims the obvious name.
-Write ADR-13 superseding clause 1 and settle the naming collision in the
-same paragraph. Check crates.io availability first: the API returns 403
-from an automation environment, so this needs a browser or `cargo search`
-from an ordinary network, and the name is permanent.
-
-### 4.6 CI ownership
-
-Nothing under `ci/` is wired (`ci/README.md:1-5`). The sole gating
-workflow is a 17-line caller into `tabnas/.github`'s shared
-`polyglot-ci.yml`, which 22 repos use and which automation credentials
-cannot write (`admin/DECISIONS.md:82-91`, ADR-8). Build the Rust arm as
-`ci/rust/` plus `ci/workflows/rust.yml`, provably runnable locally, and
-batch the maintainer-only activation into one rollout — never a change to
-the shared workflow, so a Rust break can never redden the other 21 repos.
-Also put `git config --global core.autocrlf false` in any Rust job: the
-existing guard is in the ts lane only
-(`admin/rollout/workflows/dot-github__polyglot-ci.yml:72-73`); the go job
-never needed it because `bufio.Scanner` strips a trailing `\r`. A Rust
-loader splitting on `'\n'` leaves a stray `\r` on the last column of
-every fixture row.
-
-Cost is not the constraint. Measured here: `go test ./...` 0.13 s
-(0.58 s wall), `npm test` 3.0 s, and a 15k-line crate with serde_json and
-regex builds cold in about 15 s on four cores. Run the whole three-way
-loop every commit.
-
----
-
-## 5. The De-risking Plan
-
-### 5.1 Wave 0 — contract repairs at two runtimes, no Rust
-
-About three weeks, and worth doing whether or not Rust happens.
-
-1. Drain the seven open PRs.
-2. **B1**: publish the 27-vs-22 options table, get one ruling, and land
-   an exhaustiveness test over `Options`' fields so a future group cannot
-   be added without a serialized answer. Add one fixture row per group
-   asserting applied-or-refused.
-3. **The tokenSet array-merge divergence** and the other array-valued
-   options (`ender`, `result.fail`, `recover.syncTokens`,
-   `recover.syncGroups`).
-4. #120 with the five guarded deletes; #122 plus the `alt.p`/`alt.r`
-   adjudication; #115; #118.
-5. Correct `go/doc/differences.md:94-105` ("No behavioural effect") and
-   land the two-row match-token fixture. Delete the stale
-   `Forced`-is-always-false sentence at `:707-708` and the `ignored` row
-   at `:90-93`.
-6. Audit Go's lexer tests against TypeScript behaviour, per §4.2 here.
-7. Reconcile `AGENTS.md:135-136` with `test/AGENTS.md:36-37`, extract one
-   loader spec, fix the four runners, and add `preprocessEscapes` to
-   `go/utility_spec_test.go`'s column reads so `snip` becomes testable.
-8. Generalise `nonParity` to `map[fixture]map[runtime]reason`, move the
-   gate to `ci/gate/`, and wire `py/` into it first — it will go red for
-   the 220 rows it does not run, which is the point.
-9. Restructure `goOnly` into per-entry `runtimes: [...]`, and land the
-   `web` and `mcp` changes in the same wave (`web`'s copy has a rival
-   singular `"runtime"` field and is three patch releases stale, gated by
-   nothing). Fix the nine-versus-ten prose while there.
-10. Add the ~25 discriminating utility rows (numbers, non-ASCII
-    truncation, the placeholder charset, `move` out of range, a null
-    list element, integer-like key order) and fix Go's compact renderer
-    before adding any multi-key `strinject` row, or it flakes.
-11. Produce the `--full --strict` ABNF artifact and check it in
-    (§6 here).
-
-### 5.2 The differential harness — build it first, and call it what it is
-
-The four-spec corpus proposed as a "walking skeleton" contains no Rust,
-so it is not a skeleton of the system being built. It is the differential
-harness, and it should be built first on its own merits.
-
-- **Three legs, one format.** Add a `spec` mode to
-  `ci/parity/tokdump.js` and `ci/parity/gotokdump/main.go` (about fifteen
-  lines each), driven by function-free serialized specs rather than the
-  `json`/`jsonic` imports at `tokdump.js:44-50` and `gotokdump/main.go:20-22`.
-  Proven: 284 input cells from this repo's own fixtures, all token
-  streams byte-identical TS↔Go, with no downstream checkout. Report it
-  honestly — those 284 cells are 136 distinct strings, nineteen of which
-  are the fixtures' own `#` comment prose and 35 of which are bare
-  scalars. It is a real downstream-free lane, not a coverage claim.
-- **Compare in strictness order:** token stream (`name`/`sI`/`len`; `cI`
-  already excluded) → accept/reject → the structured-diagnostic subset
-  `diagnostic.tsv` already defines → canonicalized value. Put the
-  diagnostic before the value: it is a fixed-shape record, so mismatches
-  self-classify.
-- **Key order gets its own lane.** Measured, the divergence is *not* at
-  the 40% first reported: over 500 generated documents, 115 (23%)
-  serialize differently and **none** of them differs in key order — every
-  one is `-0` rendering (`JSON.stringify(-0)` → `0`,
-  `json.Marshal(-0.0)` → `-0`). 210 of the 500 contain a multi-key
-  object and all agree, because the value builders produce Go
-  `*OrderedMap` with insertion-order marshalling. Key order diverges on
-  the **tree-builder** path, where Go's `mkNode` (`go/builtins.go:38-43`)
-  returns a plain map that `json.Marshal` sorts — measured live: the same
-  tree fixture on input `a` gives TypeScript `{"src":"a","kids":[]}` and
-  Go `{"kids":[],"src":"a"}`. Canonicalize for the value lane, as
-  `ci/fuzz/run-diff.sh:45-61` already does, *and* run a separate
-  order-sensitive assertion.
-- **Mutation is mandatory.** `ci/fuzz/gencorpus.js:44-64` emits only
-  well-formed documents, so the error path — where every recorded
-  divergence lives — has never been differentially tested. A ~30-line
-  mutation stage (delete, insert poison token, truncate, case-flip,
-  duplicate) over the same seeded corpus found 44 mismatches in 500 cases
-  in five classes on one run. Treat the specific counts as
-  stage-dependent; the mechanism reproduces and it found the `\uXXXX`
-  leniency on its first run.
-- **Comparator honesty.** The valid corpus gives 500/500 agreement under
-  canonicalized JSON and 490/500 once Go `nil` is distinguished from JS
-  `null` — ten documents are the literal source `null`. That is a
-  representational decision the Rust port must make on day one
-  (`Option<Value>` versus `Value::Null`), not a fuzzer finding. Pick one
-  comparator and apply it in both places.
-- **Known divergences as data.** A `divergence.tsv` of
-  (class → allow | expect-and-pin | fail), seeded from `DIVERGENCE.md`,
-  `go/doc/differences.md`, the mutation classes **and the options-plumbing
-  entries from B1**. Any unclassified mismatch fails the build and prints
-  the class, the answers and the issue number.
-- **Row counts.** `assert_eq!(ran, N)` per runner per runtime — 265 data
-  rows total, 254 of them parity: diagnostic 10, happy 11 (TS-only),
-  include-json 34, utf8 12, errors 4, utf8-errors 5, lex-string-control
-  14, utility-deep 52, utility-modlist 78, utility-str 23,
-  utility-strinject 22. Without it, a subtly wrong third loader passes
-  vacuously; Go's own consumers already `continue` silently on short rows
-  (`go/spec_test.go:238-240`, `:267-269`).
-- **Pairwise labelling.** Run all three pairs. Go↔Rust needs no
-  normalization at all (both UTF-8, both byte-indexed, neither can hold a
-  lone surrogate) and is therefore the strictest and cheapest — and it
-  must **never** be cited as conformance, because `AGENTS.md` authority
-  rule 1 makes TypeScript canonical. Write that ADR before the first
-  Go↔Rust green, not after.
-- **Matcher-tier parity.** A fixed set of hand-written matchers — a
-  stateful one, a queueing one, a bad-token one, one registered under a
-  built-in name — implemented once per runtime against a shared token-dump
-  format. About 200 lines per runtime, and it is the only thing that can
-  see any of the divergences in §3.1 here.
-
-### 5.3 Wave 1 — the Rust thin slice, in parallel
-
-Run a genuine thin slice rather than four days of paper spikes:
-serialized spec → lexer with the `[Vec<MatcherId>; 257]` first-char
-dispatch → rule push/replace with `n`/`k` propagation → one tree builtin
-performing the upward `fold$` → one structured diagnostic. That single
-artifact answers most of the architecture questions as a by-product, and
-it is the only thing that exercises the arena under real control flow.
-
-The questions it must answer, and which must be settled before the
-corresponding struct is typed:
-
-| # | Question | Deliverable |
+| condition | TypeScript | Go |
 |---|---|---|
-| S1 | Does the never-free arena need a `rule.maxrules` bound, and what default? | A decision plus a default, not a `size_of`. The ceiling is 12 × rules × bytes at 264 B/Rule |
-| S2 | The Lex/Ctx field split | `Lex{cur, want, relex_undo}` + `Ctx{pending, end}` + `relex(&mut self, ctx, from, want)`; the compiled probe is 64 bytes and allocation-free |
-| S3 | Subscriber calling convention | `subs: &mut Subs` threaded through the five Go dispatch sites; confirm `Lex::next` still compiles with two disjoint `&mut`s |
-| **B2** | Does `Config` freeze at build time or stay live? | Replaces the matcher-contract spike in this wave. Determines whether `&'g Config` spans the instance or a parse |
-| S5 | `Value`: arena `NodeId` or recursive enum | Removes the uncatchable stack-overflow-on-Drop |
-| S6 | `SrcIdx` newtype + `clippy::string_slice` ban; `bad()` takes `SrcIdx` | The only affordable time to do it |
+| `{'need': {$gt: 0}}` | legal path root (`ts/src/rules.ts:1900-1907`) | rejected at grammar build (`go/rule.go:646-656`) |
+| `{'u.never': {$ne: null}}` | `false` (`ts/src/rules.ts:2022-2024`) | `true` (`go/rule.go:565-568`) |
+| `{'name': {$lt: 5}}`, `name='val'` | `false` (JS mixed-type compare) | `true` (fails open, `go/rule.go:571-580`) |
+| `{'u.x': {$eq: <map>}}` | `false` | **panic**: comparing uncomparable type (`go/rule.go:521-531`) |
 
-The matcher-contract document (`doc/lex-matcher-contract.md`) moves to
-**M3**, where custom matchers actually land. It changes no v0.1 struct.
+Fleet usage is small — 16 `$`-operator occurrences, 10 of them `$lte`,
+mostly counters in `jsonic/ts/src/grammar.ts` — so the rulings are cheap
+today. The single fleet use of a graph root (`prev.u.implist` at `:444`)
+means the condition evaluator must take the rule arena as a parameter, so
+its signature is fixed by this decision too. The Go panic is a #119 input
+worth fixing regardless.
 
-### 5.4 Wave 2 — the two go/no-go measurements
+### 2.3 Utility semantics and the value model
 
-**S7, the port-rate probe, is the highest-value single item in this
-document.** Port one already-shipped feature end to end to Rust and
-record the wall clock. Error recovery is the right probe: TypeScript
-`2b21c8d` (#96, 704 insertions), Go `308db48`+`bf50ac8`+`70773f1` (1,477
-insertions). **3-5 days.** Every schedule figure in both feasibility
-documents rests on line-count extrapolation and an unmeasured ratio.
+This is the surface the previous draft got most wrong, and the correction
+changes what to do.
 
-**S8, the publish probe.** Publish a trivial crate — a spec loader, or
-less — to crates.io before the engine work starts. **Half a day plus one
-maintainer round-trip.** It answers name availability, MSRV, trusted
-publishing, `cargo package --verify` and the release-checklist entry
-ADR-12 clause 4 demands, while the cost of getting it wrong is a wasted
-0.1.0 rather than a wasted engine. `py/` is the precedent: 435 lines
-landed in a single sitting on 2026-08-12 and have not moved since,
-because the wheel matrix needs a macOS runner nobody has stood up
-(`py/README.md:42-45`). Distribution, not code, is where the project's
-only previous third-language artifact stopped.
+**`deep`, `modlist` and `strinject` are engine code, not exported
+extras.** `deep` runs the whole options merge and is also called on the
+parse path — `ts/src/parser.ts:134` `deep(ctx, parent_ctx)` seeds a live
+Context, with the comment "deep mutates the class instance in place, so
+getters/setters and methods survive" — and on the token path,
+`ts/src/lexer.ts:152` `this.use = deep(this.use || {}, details)` inside
+`Token.bad`, which is the exact field `@tabnas/c`'s lex subscriber writes
+(`c/ts/src/c.ts:2533-2537`). `modlist` is the alternate-list mod machinery
+(`ts/src/rules.ts:348`, `alts = this.def[altState] = modlist(alts,
+mods)`). `strinject` renders every error message and hint
+(`ts/src/error.ts:289`). Only `str`/`snip` are debug-only.
 
-### 5.5 One budgeted cost that does not exist
+That relocates the merge risk. It is not four rulings on a config tree
+that the port waits on; it is a typed-API decision on Context seeding and
+`Token.use` that must be taken before `Ctx` and `Token` are typed — Wave
+B, alongside the `Token` layout, not Wave A behind #130.
 
-§5.4 concludes that `ci/parity` and `ci/fuzz` "cannot take a Rust leg at
-all" until `json` is ported, and tells the reader to budget that port.
-That is true only because both dumpers hard-code their grammar import.
-Both harnesses run on the in-repo function-free serialized spec with no
-downstream checkout at all — proven above. What genuinely stays
-unbudgeted is the relaxed `jsonic` leg: 1,878 TS / 1,516 Go non-test
-lines, 24 arrow functions in `jsonic/ts/src/grammar.ts` including two
-live actions at `:663` and `:670`, no serialized artifact and no Go CLI.
-That is what actually caps a Rust leg's `ci/parity` and `ci/fuzz`
-coverage.
+#### The utility fixtures are the Rust merge acceptance gate
 
-### 5.6 Staging: gate on engine reach, not row count
+The previous draft's stop condition — "never report the 175 utility rows
+as progress" — would delete the only cross-runtime pin the port has on
+its own class-A and class-B merge divergences. Measured here, scoring
+mutants that a Rust port actually produces against
+`test/spec/utility-deep.tsv`:
 
-The obvious staging metric is the wrong one. The 175 utility rows are 69%
-of the parity corpus and reach approximately none of the engine — and
-§4.7 establishes that those same four functions are the *most* divergent
-and *least* adjudicated surface in the repo, none of which appears in the
-175 benign ASCII rows. Staging on them simultaneously maximises the green
-number, concentrates the unadjudicated behaviour and retires zero engine
-risk. It is the same disease as a vacuous row count, expressed as a
-vacuous pass rate.
+| implementation | score | killed by |
+|---|---|---|
+| real `deep` | 52/52 | — |
+| last-arg-wins (the previous draft's stub) | 39/52 | rows 19, 20, 22, 23 |
+| **`null` == absent (serde `Option`)** | **44/52** | rows 3, 8, 11, 18 |
+| **arrays replaced wholesale (Go class B)** | **50/52** | rows 31, 34 |
+| `IsZero`-skip (Go class A) | 34/52 | rows 3, 7, 8, 10, … |
 
-A defensible ladder, reported with rows as a secondary number:
+The two middle rows are exactly the divergences ranked as item 5 in §1.1
+here, and `utility-deep.tsv` is the only artifact in the repo that
+discriminates them. The corpus looked weak because it was tested against
+mutants no Rust port would produce.
 
-1. Loader + schema + the `v` gate + `strinject` (needed because it
-   renders every error message).
-2. The lexer with the eight built-in matchers, against
-   `lex-string-control` and `include-json-utf8`.
-3. The rule engine + the twelve non-tree builtins + `diagnostic.tsv`.
-4. The four tree builtins.
+The stop condition should read: never report utility rows as *engine
+reach*; do report them as *value-model* progress, and treat
+`utility-deep.tsv` as the acceptance gate for the Rust merge before any
+option is parsed.
 
-Keep `deep`/`modlist`/`str` as exported APIs only if a consumer asks —
-and adjudicate them first either way, since they are the four a Rust
-author must otherwise guess at.
+**Corollary: the planned `deepStrictEqual` sweep buys nothing where it
+matters.** Measured, loose and strict scores are identical for every
+mutant above (52/52, 39/39, 44/44, 50/50, 34/34). And the looseness on the
+runtime that matters is deliberate: `go/utility_spec_test.go:29-51`
+normalises both sides through `encoding/json` "so map ordering and
+numeric types match", which is the only way a Go — or Rust — leg can
+compare against a TypeScript expectation at all. Keep the tightening as
+hygiene; do not budget it as a risk retirement. The value-model defence is
+fixture *rows* on the axes Rust actually differs: absent vs `null` vs
+`@SKIP` (`ts/src/utility.ts:1230-1232` makes `@SKIP` reachable from a
+serialized spec, i.e. from v0.1's surface), array merge, and key order.
+About ten new rows.
 
-**Note on the tree builtins.** All four — `@node$`, `@capture$`,
-`@bubble$`, `@fold$` — are 0% covered by every function-free fixture in
-the tree today, including `fold$`, whose `own === p` self-fold
-(`ts/src/builtins.ts:174`) is the exact aliasing case §3.6's
-`get_disjoint_mut` design rests on. A ~25-line function-free tree-builder
-spec closes that hole and agrees across runtimes; write it in Wave 0.
+#### The floor is real, and it is 63%, not 66%
+
+An implementation that does nothing still clears most of the corpus:
+`deep` = last-arg-wins 39/52, `modlist` = identity 58/78, `strinject` =
+template-unchanged 8/22 *(all unverified except `deep`, re-measured here
+at 39/52)*, and `str` = never-truncate **6/23** with the plainest stub or
+**10/23** with a stub that still JSON-stringifies non-strings
+(re-measured here, both). So the floor is 111/175 (63%) or 115/175 (66%)
+depending on which stub, and the previous draft quoted the second without
+saying so. Either way: "passes all shared fixtures" is not a conformance
+statement about the engine.
+
+#### The value model decisions
+
+- **An `Undefined` variant is required.** `deep` keeps a key whose value
+  is undefined; a Rust model without the variant drops the key and changes
+  enumeration of the options tree. `go/rule.go:47` already carries
+  `var Undefined any = &undefinedType{}`, and `ts/src/lexer.ts:1186-1191`
+  carries an explicit workaround comment about it.
+- **`info.text` boxes a value as `new String(v)` with a non-enumerable
+  marker** (`ts/src/builtins.ts:316-318`). Rust has no hidden-property
+  mechanism, so Go's `Text`/`MapRef`/`ListRef` structs (`go/text.go:6-25`)
+  are the only expressible carrier — which makes `info.marker` dead config
+  in Rust, exactly as it already is in Go (assigned at
+  `go/options.go:1068`, never read).
+- **`deep` merges an object *into a function*.** That is how `tn.options`
+  is built as a value that is simultaneously callable and indexable
+  (`ts/src/tabnas.ts:290-295`, `:359`; `ts/src/utility.ts:631-640`), and
+  the same construction gives `tn.token`, `tn.tokenSet` and `tn.fixed`.
+  Rust function values cannot carry named properties, so the public
+  options accessor must split into `options()` / `set_options()` /
+  `options_view()`. A rename, not a redesign, but it must precede the
+  serde work because it changes what the merge target is.
+- **`deep` returns its base by identity**, and the flagship downstream
+  grammar branches on that: `jsonic/ts/src/grammar.ts:201` tests
+  `val === prev` to detect a deep-merged duplicate key, which can never be
+  true if `deep` allocates — and Go's `Deep` allocates
+  (`go/utility.go:107`). `multisource/go/plugin.go:150-157` is a nine-line
+  comment explaining the same workaround. Pick the `&mut`/arena form now:
+  identity becomes `nid_a == nid_b`, cheap and expressible.
+- **Key order is decided by a Cargo feature flag.** Choosing `IndexMap`
+  does not buy insertion order if the decoder is `serde_json` without
+  `preserve_order` — the order is fixed before `IndexMap` sees a key. TS
+  gives integer-like-ascending-first, Go's `*OrderedMap` gives insertion,
+  a naive `HashMap` gives random, and the Rust default gives
+  lexicographic: a fourth answer arrived at by a dependency default
+  *(unverified)*. Either enable `preserve_order` or decode straight into
+  the engine's own `Value`.
+
+#### The rest, in one list
+
+Each is a real TS/Go difference, none is recorded in `DIVERGENCE.md`, and
+none is covered by a fixture *(all unverified — carried from the sweep,
+with code citations checked)*:
+
+- `Deep` on a cyclic value is an **uncatchable process kill** in Go
+  (stack overflow inside `deepClone`, `go/utility.go:392`; `recover()`
+  does not catch it) where TypeScript throws a catchable `RangeError`.
+  Reachable from `go/plugin.go:132,134,672,808`. A naive Rust recursive
+  merge aborts the same way.
+- `ModList` writes through the caller's backing array on **both** the
+  delete path (an unexported `sentinel{}` escapes into user data) and the
+  move path — so it is not argument-safe on either.
+- Negative `move` indices: TypeScript's `(len+m)%len`
+  (`ts/src/utility.ts:1076`) keeps the dividend's sign, so `move:[-5,0]`
+  on a three-list silently *deletes* an element; Go's
+  `((m%n)+n)%n` (`go/utility.go:685`) rotates; a literal Rust
+  transliteration panics.
+- `str`'s truncation unit is a genuine three-way fork, confined to
+  astral text: TypeScript slices UTF-16 units, Go slices bytes and can
+  emit invalid UTF-8, Rust's natural `chars()` slices scalar values.
+- Number rendering diverges on four inputs (`1e21`, `1e-7`, `-0`,
+  `Infinity`); a 20-line `js_number_to_string` retires it, and Go has
+  three independent formatters (`go/utility.go:446, 575, 636`).
+- `strinject` is polymorphic in TypeScript (`string | string[] |
+  Record<string,string>`, plus an `indent` option used by `errdesc` at
+  `ts/src/error.ts:289`) and string-only in Go
+  (`go/utility.go:484`); its placeholder charset differs
+  (`/\{([\w_0-9.]+)}/g` versus scan-to-next-`}`); it **mutates its values
+  object** on a dotted miss (`ts/src/error.ts:636` via `prop`), and that
+  object holds the caller's `details` by reference; and a `null` value
+  throws in TypeScript, which `errdesc`'s blanket catch
+  (`ts/src/error.ts:598-601`, body: `// TODO: fix`) converts into an
+  empty error description.
+- Go's renderers leak struct syntax into user-facing text for
+  `*OrderedMap`, `MapRef`, `ListRef`, `Text` and `Undefined`, and
+  `formatCompactValue` ranges a bare map, so multi-key objects render in
+  randomised order.
+
+### 2.4 Advanced engine features
+
+About 3,499 lines of Go and 2,054 of TypeScript *(unverified — §1035-1039
+feasibility)*, added over one sitting: `git log` here shows #97-#100
+landing 18:14:57 to 18:17:15 on 2026-08-17 — four TypeScript features in
+2m18s — their Go twins landing 19:13:22 to 20:34:47, and the sitting's
+last Go commit at 21:30:32. It is the least-defended code in the repo.
+None of the eleven shared fixtures exercises recovery, rewind, budget,
+continuations, `ruleDone` or `info`: grepping all eleven for those words
+returns zero. Every
+cross-runtime claim about this layer is prose coupling between two
+independently written suites (`go/recover_test.go` 412 lines / 18 funcs
+against `ts/test/recover.test.js` 184 lines / 18 cases, and so on).
+
+The `.tsv` format also cannot express what these features return —
+TypeScript recovery yields `{value, errors}` and Go yields
+`(value, errs, err)` — so a fixture family here needs a runner extension,
+not just rows.
+
+Structurally the news is better than expected. Recovery adds no arena
+pressure (0.27-0.41 rule passes per byte with 1,000 recoveries, against
+0.7 clean), synthesises no tokens, and never touches `ctx.v`; the whole
+layer compiles over the settled arena design with no `unsafe`;
+`Option<T>` collapses eight of Go's `xSet` companion booleans; `VecDeque`
+retires an O(n) prepend at `go/parser.go:285`; `mem::take` retires the
+relex slice-header dance *(all unverified)*.
+
+Five measured input→output divergences, none recorded in
+`DIVERGENCE.md` *(unverified — carried from the sweep; code paths
+checked)*:
+
+| behaviour | TypeScript | Go |
+|---|---|---|
+| `maxRecoveries` cap position | checked *after* the diagnostic is constructed (`ts/src/rules.ts:1096`) | checked *before* (`go/recover.go:249`) — deliberate, per its comment |
+| give-up partial value | walks `ctx.rs` for the outermost partial container (`ts/src/parser.ts:378-393`) | root replacement chain (`go/parser.go:628-647`); returns `null` where TS gives `{}` |
+| budget cancel under recovery | routed through the recovery contract; partial value plus a recorded cancel | `return nil, p.finishErr(...)` at `go/parser.go:477-489`; hard failure |
+| negative `checkEveryN` | hook runs every iteration (`0 === kI % -1`) | disabled (`budgetN > 0`) |
+| `rewind.history <= 0` | retain nothing | unbounded (re-measured here, §2.2) |
+
+The first three are the ones a language server branches on: "parse
+succeeded with diagnostics" versus "parse failed", from the same input and
+the same options.
+
+#### Recovery mints a token on the live instance mid-parse
+
+`parse.recover.syncTokens` names are deliberately resolved per-parse
+rather than at config-build time, and the resolver falls through to
+`Tabnas.Token()`, which allocates a new Tin and writes three
+instance-level maps when the name is unknown:
+`go/recover.go:150-152` → `go/grammarspec.go:1014-1021` →
+`go/plugin.go:204-223`. Measured, an unknown sync token takes `tinByName`
+from 17 to 18 and `nextTin` from 18 to 19 *(unverified)*. Under the
+recommended `&self` parse signature that is E0596 against `&'g Grammar`;
+under a shared instance it is a data race in Go today.
+
+The guard already exists elsewhere and was not applied here:
+`go/parser.go:164-165` refuses to resolve an unknown name in `ctx.altS`
+precisely because "resolving it would have to mint a token mid-parse".
+Resolve sync-token names once at parse start and treat an unknown name as
+a config error. About 15 lines in Go, worth landing independently of the
+port.
+
+#### `&'g Subs` cannot host the subscribers that exist
+
+§3.4 maps subscriber lists to `&'g Subs`. That mapping is right about the
+borrow and silent about `Fn` versus `FnMut`, and **every** subscriber in
+the tree and the fleet is stateful: `ci/parity/tokdump.js:76-78` pushes to
+`d.out`; `ci/parity/gotokdump/main.go:115-136` appends;
+`go/continuations.go:246-272` captures `atEnd`/`haveEnd`;
+`c/ts/src/c.ts:2522-2540` buffers trivia *and writes `tkn.use.leading`*.
+So the true signature is three-way — `Fn(&mut Ctx, &mut Token, RuleId)` —
+and if the list stays on the Context, where both runtimes keep it, the
+dispatch is E0502 *(unverified — three compiled probes)*.
+
+Fix the mapping in the design document now: subscribers are
+`&'g [Box<dyn Fn(&mut Ctx, …)>]`, hoisted off the Context alongside the
+grammar, with subscriber state in `ctx.u` or a `RefCell` the closure owns.
+Note that the parity harness itself is a stateful lex subscriber, so this
+is a precondition for a Rust `tokdump`, not an ergonomics nicety.
+
+#### The per-parse state lives in ten undeclared properties
+
+Recovery, continuations, the bad-token absorber and the `ruleDone`
+payload are built on ad-hoc `(ctx as any)._*` and `(rule as any)._*`
+properties that appear nowhere in `ts/src/types.ts`: `_dalt`, `_palt`,
+`_eMax`, `_contTins`, `_recoverAt`, `_recoverSI`, `_badTo`, `_badErr`,
+`_skipBefores`, plus `(err as any).recovered` — 22 read/write sites
+*(unverified)*. A port written from the declared canonical type surface,
+which is the obvious way to start, omits every one and therefore cannot
+implement any of the six features. Go declared them properly
+(`go/parser.go:59-95`, `go/rule.go:929-933`) and is the only readable
+reference. Declaring all ten on the TypeScript `Context`/`Rule` classes is
+additive, breaks nothing, and converts the port's reference from "read
+2,000 lines of Go" to "read a struct". Half a day.
+
+#### `ctx.rewind()` is token-only
+
+Rust invites implementing rewind as an arena checkpoint plus truncate,
+which is the natural idiom and is wrong. Rewind replays consumed tokens
+into the lexer's pending queue and decrements the absolute counter
+(`ts/src/context.ts:168-215`, `go/parser.go:252-289`); it does **not**
+undo node writes, rule pushes, `rule.o`/`rule.oN` records, or anything an
+action already did. `go/rewind_test.go:67-92` pins the observable: the
+asserted trace is `first:abc|after-rewind-v-len:0|second:abc` — the
+rewind empties the consumed history and the rule still pushes a child that
+re-consumes the same three tokens.
+
+`@probeDecide$` is the one builtin that uses it (`go/builtins.go:195-211`,
+`ts/src/builtins.ts:194-208`), and it is the re-entrant bucket the
+strategy document identified. It stays in v0.1 (§5 here).
+
+#### Three stale claims in the documents a port would read
+
+`go/doc/differences.md` and the Go doc comments are the porting guide, and
+three statements about this surface are false since #106 landed recovery
+in Go:
+
+1. `go/plugin.go:65` — "`Forced bool` … always false until Go gains
+   recovery (A2)", repeated at `go/doc/differences.md:706-708`, and
+   contradicted by `go/recover.go:437` `RuleDone{… Forced: true}`.
+2. `go/doc/differences.md:675-676` — "Go, still fail-fast, returns it
+   directly" for budget cancellation. Go has recovery, and the measured
+   behaviour under it differs from TypeScript.
+3. `ci/parity/tokdump.js:28` — "the Go engine's public `Sub` contract
+   fires after IGNORE skipping", contradicted by `go/lexer.go:834-836`
+   and `:861-865`, which deliver every raw token; `gotokdump/main.go`
+   filters by hand, so the harness is symmetric but its stated rationale
+   is not.
+
+Add the match-token "No behavioural effect" claim from §2.1 here and that
+is four. This is the same defect class §4.1 feasibility flagged for
+diagnostic `pos`: a port that passes every fixture while implementing
+what the prose says instead of what the code does. Three comment edits
+and one scope correction, twenty minutes, plus a `Forced == true`
+assertion so the
+claim cannot go stale again.
+
+#### Two arena reachability paths not on §3.6 feasibility's list
+
+Recovery **resumes** the failed rule — flipping OPEN→CLOSE at
+`go/recover.go:405` or setting a one-shot `skipBefores` flag at `:411`,
+consumed at `go/rule.go:1085-1088`, and decrementing `ctx.RSI` at
+`go/recover.go:419-426` to return a popped rule — and it hands every
+force-popped ancestor to the
+`ruleDone` subscribers as a synthesised close (`go/recover.go:433-441`;
+TypeScript twin `ts/src/rules.ts:1190-1206`). A slot-reuse scheme that
+frees on pop is therefore wrong under recovery specifically, not merely
+under the five paths already listed. A two-line edit to §3.6 feasibility
+changes the generational-index decision from "five paths" to "seven, two
+of which are error-path-only and therefore easy to forget".
+
+#### Cross-feature interactions, untested in both runtimes
+
+Two cells of the {recover, rewind, relex, budget} matrix are load-bearing
+and neither has a test in either runtime. `relex: true` silently disables
+the lexer soft mode recovery depends on (`ts/src/rules.ts:1324`
+`if (BD === tkn.tin && !RELEX)`; `go/rule.go:1420-1424`), so a grammar
+enabling both gets recovery *without* bad-token absorption — correct in
+both runtimes today, by identical guards nobody tests. And `ctx.rewind()`
+decrements `ctx.vAbs`, which is exactly the counter recovery's
+cascade-suppression and strict-progress guards key on
+(`go/recover.go:274, 285, 483` against `go/parser.go:283`), so a rewind
+between two faults can make the second look like a cascade of the first.
+Both runtimes share the arithmetic, so it is not a divergence — it is a
+semantic landmine a port must reproduce bit-for-bit with no test saying
+so. Four tests, two per runtime, one day.
 
 ---
 
-## 6. What v0.1 Is, and Who Uses It
+## 3. Schedule Dependencies
 
-**IN:** the serialized `GrammarSpec` loader, schema validation and the
-`v` gate; the eight built-in matchers over `&'g Config` with every
-derived table built eagerly; the rule engine; all 16 `$`-builtins with
-the documented `n`/`k` propagation; structured diagnostics matching
-`schema/diagnostic.schema.json`; `parse(&self)`; budget and cancellation
-(trivial, LSP-shaped, and demonstrably free of `Send`/`Sync`); and
-`strinject`, because it renders every error message.
+### 3.1 Most of the "adjudication backlog" is already ruled
 
-**OUT, stated in the README in the same voice option B's ceiling is
-stated:** custom lex matchers, subscribers, `ParsePrepare`, `Decorate`;
-error recovery (about 900 Go lines, zero shared fixtures, and the two
-runtimes disagree on the recovered *value*, §3.4 here); `Continuations`
-(one full parse per call); the Info/`MapRef`/`ListRef`/`Text` carriers,
-pending B4; `RegisterTextParser`; the imperative plugin tier.
+The previous draft treated roughly 25 outstanding TS/Go disagreements as
+blocking adjudications and sequenced the port behind them. That
+double-counts. `AGENTS.md:24-28` rule 1 is a standing ruling already on
+the books:
 
-**The first-user claim needs narrowing.** The proposed first user is the
-BNF/ABNF/GBNF output family — a Rust build script or CLI validating and
-running a compiled grammar artifact with no Node or Go toolchain. Three
-facts sit between the compiler and that consumer:
+> **TypeScript is canonical.** When TS and Go disagree on engine
+> behavior, TS wins; change Go (and add/extend a shared fixture when the
+> behavior is expressible as input → output).
 
-1. `bnf/ts/src/spec.ts:418-423` — `compileSpec` defaults to
-   `toRecognitionSpec`, and recognition mode drops all four tree
-   builtins (`TREE_BUILTINS` at `:39`, applied at `:140`). The ABNF CLI
-   wires this as `recognition: !args.full` with `full: false`
-   (`abnf/ts/src/bin/tabnas-abnf-cli.ts:30`, `:103`). **The default
-   `--compile` artifact is a recognition-only grammar: accept/reject** —
-   which is exactly what the C ABI already delivers for about a week of
-   wrapper work.
-2. `abnf/ts/src/compile.ts:46` returns "pure-data tabnas grammar as
-   jsonic text", and `toJsonic`'s `strict` flag is not surfaced by the
-   CLI — there is no `--strict`. So a v0.1 engine must parse relaxed
-   jsonic to read its own input, and jsonic is the grammar with no
-   function-free artifact.
-3. The whole family's function-free-ness rests on one non-default
-   boolean: `bnf/ts/src/compiler.ts:2511` sets
-   `refs.useBuiltins = !!opts?.builtins` (declared `false` at `:2743`),
-   and `abnf/ts/src/compile.ts:48` opts in with the comment "Always" at
-   `:44`, while `abnf/ts/src/abnf.ts:53` passes `false` on the actions
-   path.
+So every backlog item that is a TS/Go *disagreement* has a default answer
+today. Split the backlog three ways and only two of the three gate Rust:
 
-**So v0.1's differentiated capability over the existing C ABI is
-structured diagnostics plus `--full`/`toPureSpec` tree-building specs.**
-Say that in the README. Then make it an object rather than an argument,
-in Wave 0 and in half a day: add `--strict` to the ABNF CLI, run
-`--full --strict` on a real grammar, and check the emitted `.json` into
-`test/spec` as a fixture both existing runtimes load. Pin the builtins
-boolean with a test in `bnf`, `ebnf` and `gbnf` asserting the compile
-path emits zero non-`$` refs, in both runtimes.
+| kind | gates Rust? | what to do | examples |
+|---|---|---|---|
+| TS/Go disagreement | **no** | port TypeScript, file the fixture, do not wait | #130's dropped leaves, the four merge classes, `rewind.history <= 0`, `lex.bad`'s signature, `Lex.next` filtering, the recovery trio, the equal-order tie-break |
+| TypeScript is itself wrong | **yes** | genuine ruling; historically rare | #120 (the strategy document calls TS's `alt.k` read "the bug"), `configure()`'s `text.modify` concat |
+| both runtimes silent | **yes** | genuine ruling; nothing to default to | parsed key order, match-token gating (both have a rule, neither is written as contract), the matcher pipeline model, `Token` `'static`-ness |
 
-If that artifact does not exist by the end of Wave 0, the first-user
-story is a hypothesis and v0.1's scope should be reopened before M2b.
+That is roughly eight genuinely blocking items, not twenty-five, and it
+means Wave A's adjudication work runs *in parallel* with Wave B's type
+probes rather than in front of them. The guard is not a queue-wait; it is
+a measured one — track how many Rust lines a reversal would touch and
+keep that number small.
 
-**The fleet ceiling is harder than it looks.** Twelve of the 34 repos
-register custom lex matchers, so those twelve cannot run on v0.1 at any
-level of completeness — not "with reduced features", but at all. Zero
-repos depend on a Rust engine today; 29 depend on
-`github.com/tabnas/parser/go` and 31 on `@tabnas/parser`. The engine
-ships no grammar by rule (`AGENTS.md:24-41`), and only `json` (14 builtin
-refs, 0 closures) and `jsonl` (7/0) are function-free at the grammar
-level — and `json` is not function-free at the *options* level, because
-`json/ts/src/json.ts:44` uses a negative-lookahead regex neither RE2 nor
-Rust's `regex` can compile, implemented in Go as a host predicate with an
-extra overflow check (`json/go/json.go:46,63-69,81`). Budget `json` as
-the day-one grammar: 277 TS / 759 Go lines, 3 TSVs, 28 `it()` + 20 Go
-tests, and exactly one Rust predicate to hand-write.
+### 3.2 The sequence
 
----
+1. **Drain the queue and cap WIP.** Nine PRs are open on `tabnas/parser`
+   — #114, #123, #124, #125, #126, #127, #128, #129, #131 — all created
+   2026-08-19, all branched from base sha `9c1903d`, and #114 is the
+   document that plans this port. They conflict pairwise (`go/lexer.go` in
+   #125 and #128; `go/doc/differences.md` in #126, #127 and #128;
+   `go/spec_test.go` in #123 and #126) and #129 edits the two files #127
+   creates — a hard ordering dependency presented as a sibling branch.
+   Merge serially in dependency order, rebasing each, then **tag**. Cap
+   engine WIP at one open PR for the port's duration.
+2. **Rule #130 first and alone** — one sentence naming the exact leaf set
+   a serialized spec may set — backed by an exhaustiveness test over
+   `Options` in both runtimes. Include `rule.maxmul` and
+   `rewind.history` explicitly, and settle `rewind.history <= 0` in the
+   same ruling. This one genuinely blocks, because "serialized-spec
+   engine" does not otherwise name something a port can implement.
+3. **Rule the four merge classes**, then land the fixture that drives the
+   options pipeline (§2.2 here). Then delete the three fleet workarounds.
+4. **Rule the both-silent set**: key order, the matcher pipeline model,
+   match-token gating, `Token` representation.
+5. **Land #120 and #122**, which are ruled and unimplemented — TypeScript
+   still reads `alt.k` at `ts/src/builtins.ts:127, 138, 170, 238, 249,
+   263, 273, 305`.
+6. Everything else defaults to TypeScript and is filed as it is met.
 
-## 7. Stop Conditions
+### 3.3 Rulings reverse, so branch from tags
 
-Eight observations that should trigger a rethink, each with a threshold
-that can actually fire. Pin them in writing before M2b starts.
+Issue #120 was created 2026-08-19T13:42:20Z and its last update is
+15:35:35Z — a ruling and a reversal inside about 96 minutes.
+Ruled-to-landed is currently 0 for 2 (#120, #122); ruled-to-reversed is
+1 for 2. At hour-scale TS→Go lag that is a virtue; on a months-long
+Rust branch a
+reversal is a rewrite rather than a merge. **The port consumes only
+rulings that have landed on `main` as code plus a shared fixture, and the
+port branch rebases on tagged engine releases, never on `main`.** Costs
+nothing.
 
-1. **Port rate.** If S7 exceeds **2x** the Go leg's cost, the schedule is
-   wrong and should be re-derived before M2b rather than pushed through.
-2. **Divergence discovery rate.** After Wave 0 lands, if the mutational
-   differential still finds **more than five new unadjudicated TS/Go
-   divergences per 1,000 mutated cases**, the contract is not stable
-   enough to have a third runtime written against it.
-3. **Ruling implementation latency.** Not adjudication latency —
-   adjudication here is measurably fast (median closed-PR lifetime 13.4
-   minutes across 53 closed PRs, maximum 17.0 hours, none open a full
-   day; #120 filed→ruled in 1 h 53 m). The quantity at risk is
-   *ruled→landed*, currently 0-for-2 (#120 and #122 both ruled and
-   unimplemented). **A ruling unimplemented for more than 5 days** is
-   roughly seven times the worst observed PR lifetime and is a genuine
-   anomaly.
-4. **Canonical drift.** If unmerged `ts/src` churn since the branch point
-   exceeds **1,000 line-touches** (about 5-6 days at the measured rate),
-   freeze Rust feature work and catch up. Branch from a tag, never
-   `main`.
-5. **Engine reach.** If the Rust leg stalls below **stage 3** of §5.6
-   here for a month — the rule engine plus `diagnostic.tsv` — treat it as an
-   adjudication problem, not an engineering one. Do **not** use the
-   175-row utility floor as the alarm: a crate implementing four string
-   helpers clears 69% of the corpus.
-6. **Exemption regression.** Any Rust milestone that needs a *new*
-   per-runtime exemption for a fixture the other two runtimes run is the
-   `py/` failure mode starting. Hard stop.
-7. **Arena memory.** Measure against the `maxmul` ceiling on a
-   high-rule-count grammar (an ABNF-compiled one, 100+ rules), not
-   against the benign 112 KB benchmark. If retained bytes at the ceiling
-   are not bounded by a *configured cap* — not by input shape — the
-   never-free decision is not finished. This must be settled before
-   `RuleId` appears in any plugin-facing type.
-8. **Framing.** Any PR, badge or document citing Go↔Rust parity as the
-   gate inverts canonicality (`AGENTS.md` authority rule 1). Stop and fix
-   the framing before merging.
+The tree makes the same point: `git log` shows three commits in the last
+day, the most recent being the previous draft of this document.
 
-And one adoption gate, separate from the rest because it fires after
-shipping. ADR-12 conditions a port on recorded inbound requests, and none
-exists anywhere in this repo, the 34-repo fleet or `admin/notes` — the
-issue tracker has zero non-maintainer participants. **If v0.1 ships and
-nothing external depends on it in 90 days, freeze at v0.1 rather than
-building the plugin tier.** Better: retire the question *before* M2b, by
-producing the `--full --strict` artifact of §6 here and naming its
-reader. That is a day's work against a 90-day wait.
+### 3.4 Canonical drift, and why capacity is the process risk
 
----
+The two-runtime model works because the TS→Go lag is hours and paid by one
+head in one sitting: measured per feature, 0h56m (unrelex) through 9h36m
+(relex), median 1h42m, every one inside a single working session. 28 of 61
+commits touch both trees. Commits touching engine source (`ts/src` or
+`go/*.go`): 43, of which 39 are Richard Rodger's and 4 are Claude's —
+three version bumps and one doc comment. **No agent has ever authored an
+engine behaviour change.**
 
-## 8. Open Questions Only the Maintainer Can Answer
+A Rust branch that runs for months cannot be in the same sitting as
+anything, and the drift it must absorb is measurable: additions since root
+`22fdf19` are `ts/` **+4,501** and `go/` **+7,706** (1.71x), re-measured
+at `a9c8c67`. Over a 120-180 day build that is 4,000-5,800 lines of
+catch-up.
 
-- **B1-B4** in §2 here. All four are rulings, not measurements.
-- Which runtime is right about `maxRecoveries`, and whether the recovered
-  *value* divergence in §3.4 here is contract or bug. Belongs with the
-  #115-#122 batch and is not currently filed.
-- Whether `DIVERGENCE.md`'s "error message text ... only the error `code`
-  is contractual" covers the strinject **placeholder resolution set**
-  (TypeScript spreads five live engine objects into the ref bag,
-  `ts/src/error.ts:274-289`; Go builds six keys plus the `use` bag,
-  `go/tabnas.go:326-350`) or only wording. The Rust error-rendering
-  budget differs by a large factor.
-- Whether `Continuations` is in scope for a first Rust engine. Its cost
-  is measured; whether any named downstream consumer needs it is not.
-  `/workspace/tabnas/mcp`, `skills` and `web` were not examined for
-  LSP-shaped consumers.
-- Whether `str`/`snip` are contractually exported or incidentally
-  exported. If incidental, 23 of the 175 rows become optional.
-- Whether the crate name `tabnas` is available, and which of the engine
-  and the planned FFI binding takes it. crates.io names are first-come
-  and permanent; the API 403s from an automation environment.
+Two clarifications the previous draft muddled. The "port tax" is quoted
+two ways in the feasibility report and **both are legitimate measurements
+of different things**: 1.42x is the aggregate non-test line ratio (§1.1),
+and "~4.5 lines of port work per line of canonical source changed" is a
+per-line ratio. Neither extrapolates cleanly to a greenfield engine —
+they measure *incremental* porting between two existing trees. And the
+engine is not unpinned today: the Go suite covers 90.6% of statements in
+`github.com/tabnas/parser/go` *(unverified)*, and the TypeScript suite
+puts the nine engine files with callable functions between 73% and 100%
+function coverage, seven of them above 88% (§2 here). What is missing is
+*cross-runtime* pinning of a specific subset, which is a narrower and
+cheaper claim than "unverifiable".
+
+### 3.5 Release, packaging and CI ownership
+
+- **Version.** One number is shared across four locations
+  (`ts/package.json`, `ts/src/tabnas.ts`, `go/tabnas.go`,
+  `schema/error-codes.json`), gated by `go/version_test.go:23`, and
+  computed by `/workspace/admin/publish.sh:6-9` as
+  `max(npm latest, latest go/v tag, ts const, Go const)` across a serial
+  32-repo wave whose **repo 1 is `parser`**. Adding a fifth location and
+  an immutable sixth registry to that machinery puts `cargo publish` on
+  the wave's critical path. The practice has already failed five times in 24
+  releases: 23 `go/v*` tags against 19 `ts/v*`, four asymmetric Go
+  releases, and a v0.8.9 that exists in all four version locations
+  (commit `a3f286b`) and in no tag and no registry. npm allows a 72-hour
+  unpublish; crates.io versions are permanent and a yank does not free the
+  number. **Version the crate independently from 0.1.0 and have it report
+  the engine version it implements** — `py/tabnas.py:138-142` is the
+  working precedent and adds zero version locations.
+- **The crate name.** `cargo search tabnas` returns nothing here while
+  `cargo search serde` returns results, so the registry lookup works and
+  the name appears unclaimed. (The crates.io HTTP API returns **403** from
+  this environment, not the 404 the previous draft cited; do not repeat
+  that measurement as evidence.) Names are first-come and permanent, and
+  `admin/notes/2026-08-16-clib-ffi-strategy.md:186-199` plans a separate
+  FFI binding crate that would claim the same name. Claim it.
+- **The published crate cannot run its own parity tests.** Every parity,
+  registry and version test reads paths outside the crate root
+  (`../test/spec`, `../ts/package.json`, `../schema/`), and
+  `cargo package --verify` compiles the lib only — a crate whose tests
+  read those paths passes `cargo test` in-repo and passes the Verifying
+  step, then fails every test when unpacked *(unverified)*. The same is
+  already true of the published Go module. Decide the cross-directory test
+  idiom before the first `cargo package`: a `repo-tests` feature, or copy
+  `test/spec` and `schema/` into `OUT_DIR` from a build script.
+- **CI.** `ci/README.md:1-5` says nothing under `ci/` is wired.
+  `.github/workflows/ci.yml` is a 17-line caller into `tabnas/.github`'s
+  `polyglot-ci.yml`, which 31 repos call and which session credentials
+  cannot push (ADR-8). Build the Rust arm as `ci/rust/` plus a repo-local
+  workflow file, never as a change to the shared one, so a Rust break
+  cannot redden the other 30 repos. Fix the two stale paths first:
+  `ci/workflows/gate.yml:71` points at `json/ts/test/spec`, which the
+  fleet moved (the corrected path yields 125 inputs against
+  `ci/README.md:74`'s "84/84"), and `AGENTS.md:50` still names a
+  `.github/workflows/build.yml` that no longer exists.
+- **ADR-12** (`/workspace/admin/DECISIONS.md:207-216`) still says
+  languages beyond TypeScript and Go get tabnas through C-ABI bindings,
+  "not native ports". Its status is "proposed", the only ADR in the file
+  not marked accepted. Write ADR-13 superseding clause 1 in the same
+  batch.
+
+### 3.6 What only the maintainer can answer
+
+- Which side of each measured divergence is intended, where `AGENTS.md:26`
+  does not decide it — principally the recovery cap position, where
+  `go/recover.go:245-248` argues Go's change was a deliberate correction
+  of TypeScript.
 - Whether a second maintainer, funding or dedicated time exists. Nothing
-  in the repo, the fleet or `/workspace/admin` records a resourcing
-  commitment; the only signals are the commit ledger and a
-  single-collaborator ACL.
-- Whether `tabnas/.github`'s `polyglot-ci.yml` can express a Rust job,
-  and what changing it costs the other 33 repos. That repository is not
-  in the fleet clone.
+  in this repo, the 34-repo fleet or `/workspace/admin` records a
+  resourcing commitment; there is no `CONTRIBUTING.md`, `SECURITY.md` or
+  `FUNDING.yml`. This governs items 1 and 2 of the register.
+- Whether `strinject`'s `indent` option and its array/object template
+  forms are contractual or engine-private, and whether its placeholder
+  *resolution set* is a contract or an accident.
+- Whether `Config` is contractually mutable after construction. The Go
+  fleet mutates it from five packages; the TypeScript fleet does the same
+  through `config.modify`. Which is supported determines whether Rust's
+  Config is rebuildable-with-replayed-modifiers or
+  frozen-with-a-typed-extension-point.
+- Whether instance `Merge` has an unreleased or private consumer. It has
+  zero in the fleet.
+- Whether `Continuations` has a committed consumer. It has zero call
+  sites and there is no `lsp` repo; `ts/doc/lsp-feasibility.md` describes
+  a design nothing implements.
+- Whether `RelexUndo()` returning the unexported `relexPoint`
+  (`go/lexer.go:781-783`) is deliberate. It makes the save/restore pair
+  unusable outside the package, which suggests relex is not intended as
+  public plugin surface — and decides whether the Rust port needs a public
+  relex API at all.
+
+---
+
+## 4. The De-risking Plan
+
+Two waves before the walking skeleton, then the skeleton, then the
+harness. Wave A produces nothing in Rust; Wave B produces nothing but
+probes and a written contract.
+
+### 4.1 Wave A — contract repairs at two runtimes
+
+Everything here is worth doing whether or not Rust happens, which is the
+test a Wave-0 item should pass.
+
+1. **Land `test/spec/json-core.fixture.json` and a third runner in both
+   suites.** Done as a probe (§Summary here); about half a day to land. It
+   needs about ten lines of Go: `go/spec_test.go`'s `stripRefs` (`:102`)
+   and `normalizeValue` (`:135`) have no `*OrderedMap` case, so a
+   builtin-built value fails comparison — 30 of 55 rows "failed" on the
+   comparator alone until values were marshalled through
+   `encoding/json`.
+2. **Productionise the differential lane into `ci/`** (§4.4 here).
+3. **Rule #130, then the four merge classes, then the both-silent set**
+   (§3.2 here). Runs in parallel with Wave B.
+4. **Contract hygiene:** `assert ran == N` in every runner (265 rows:
+   diagnostic 10, happy 11, include-json 34, utf8 12, errors 4,
+   utf8-errors 5, lex-string-control 14, deep 52, modlist 78, str 23,
+   strinject 22); one TSV loader spec reconciling `test/AGENTS.md:35-36`
+   ("EVERY column") with `AGENTS.md:135-136` ("the input column");
+   `nonParity` and `goOnly` generalised from binary to N runtimes; the
+   `#` comment convention and `diagnostic.tsv` documented in
+   `test/AGENTS.md`.
+5. **The four doc corrections** from §2.1 and §2.4 here, plus the `pos`
+   repair §4.1 feasibility already recommends. Twenty minutes together.
+6. **Wire `py/` into CI, the Makefile and the release wave**, and apply
+   the "joined the parity contract" checklist to it first. If 390 lines of
+   Python cannot clear that bar, 15-18k lines of Rust will not either —
+   and the attempt costs under a week.
+
+### 4.2 Wave B — the type-fixing probes
+
+Each of these, answered wrong, is a whole-crate refactor discovered
+mid-build. Most are already compiled; the work is writing them into the
+porting guide, not re-deriving them.
+
+| # | decision | cost |
+|---|---|---|
+| B1 | `Token { tin, si: u32, len: u32 }` plus one `Arc<str>` on the `Lex` | decision only |
+| B2 | The `Lex`/`Ctx` field split and the relex save point: `Lex{cur, want, relex_undo}` + `Ctx{pending, end}` | 2 hours |
+| B3 | `SrcIdx` newtype plus `clippy::string_slice` ban | half a day, day one |
+| B4 | Config built eagerly; hooks as `fn(&Config, &mut Lex)`, not captures | half a day, precedes the lexer |
+| B5 | Four-state overlay `Ov<T>` (Absent / Skip / Null / Set) prototyped on `string`, `number`, `parse.recover` | 1 day, gated on the merge rulings |
+| B6 | Subscribers as `&'g [Box<dyn Fn(&mut Ctx, &mut Token, RuleId)>]`, hoisted off `Ctx` | 2 hours |
+| B7 | `Ctx` seeding and `Token.use`: what replaces `deep(ctx, parent_ctx)` and `deep(this.use, details)` (§2.3 here) | 1 day |
+| B8 | Arena retention measured on the skeleton; decide never-free versus generational indices against a number | with the skeleton |
+| B9 | The custom-matcher `ScanResult` contract — **written, not built** | half a day |
+
+`Option<T>` with `None` = unbounded for `rewind.history`, and
+`Cow<'static, str>` for the diagnostic code, are decisions not probes;
+record them alongside.
+
+### 4.3 The walking skeleton: the lexer first
+
+The previous plan made `json-core` the skeleton on the strength of its
+coverage number. That is the wrong selector, because TypeScript line
+coverage measures how much of the *reference* implementation executes, not
+how much *Rust-specific* risk is retired. An ASCII strict-JSON document
+falsifies none of B1-B4, and four of those nine Wave-B decisions — five
+with B6 — are lexer decisions.
+
+**Slice 1: the lexer.** 1,878 of 9,846 canonical TypeScript lines (19%),
+the worst measured port ratio at 1.59x, the largest file in both trees,
+26 source-slicing sites where the char-boundary panic lives, and it joins
+the parity contract with **no grammar at all**:
+`ts/test/lex.test.js:538-560` drives `makeLex` directly, so
+`lex-string-control.tsv`'s 14 rows are available before a rule engine
+exists. Join at the token tier with a `tokdump` spec mode.
+
+**Slice 2: `json-core`.** 55 `include-json*` rows with full value
+comparison plus 10 `diagnostic.tsv` rows, driving the scanner, the seven
+built-in matchers actually used, `tokenSet`, open/close/push/replace, the
+`b`-consume, seven of sixteen builtins, the ordered-map value tree, the
+15-field diagnostic, the serialized-options subset, and the `@/re/`
+FuncRef lowering — verified crossing to both runtimes (`{"a":001}`
+rejected in both). Critically it is the **only** lane that executes the
+value builtins at all: `builtins.js` goes from 0.00% function coverage
+under the entire shared corpus to 38.89% under these 65 rows (§2 here).
+
+**Slice 3:** `probe-grammar.fixture.json` (the re-entrant bucket,
+`@probeDecide$` → `ctx.rewind()`) and `eager-literal.fixture.json`, both
+already dual-runtime pinned at `ts/test/builtins.test.js:360, 409` and
+`go/builtins_test.go:373, 545`.
+
+**Stage on engine reach, not row count.** The 175 utility rows are 69% of
+the corpus and move engine coverage by essentially nothing — measured
+here, the per-file engine numbers are identical with and without them —
+so a plan that lands them first maximises the green number and retires no
+engine risk. Report rows as a secondary number and the per-file coverage
+delta as the primary one. (This does not contradict §2.3 here: the utility
+rows are the *merge* acceptance gate, which is a different claim from
+being engine-reach progress.)
+
+### 4.4 The differential harness, running from day one
+
+Star topology — `AGENTS.md:26` makes TypeScript canonical, so Rust needs
+TS↔Rust only, and `ci/parity/run-parity.sh:61-65` already writes `ts.tok`
+and `go.tok` and does one `cmp`, so a third redirect is about ten lines.
+
+One line per input, tab-separated: `OK <canonical-json> <raw-json>` or
+`ERR <code> <row> <col> <pos> <token-json> <len>`. Canonical = keys
+sorted, raw = as built, **so key order is a separate bucket from value** —
+the one thing an `IndexMap`-based Rust engine gets wrong by default.
+Compare in severity order and bucket every mismatch: accept/reject →
+value → error code → row/col → pos → token src → len, then key-order
+alone. Known divergences live in a data file keyed by (bucket, class:
+ascii-only / lone-surrogate / non-ascii), never in prose. The recorded
+`DIVERGENCE.md` entries account for the lone-surrogate and astral buckets
+exactly, so **anything ASCII-only is a bug by default**.
+
+Two things the harness must not inherit from `ci/fuzz`. It spawns one
+`node` and one Go process per input, measured at 7.2 cases/s, so the case
+count cannot scale; and its generator emits only well-formed documents
+(`ci/fuzz/gencorpus.js:44-64`), so the error path — where every recorded
+divergence lives — has never been differentially tested. In-process
+dumpers plus a seeded mutation stage measured 745 inputs/s on the
+TypeScript leg and roughly 5,000/s on Go *(unverified)*, and found
+mismatches on the first run.
+
+Neither dumper needs a downstream grammar port: both hard-code their
+grammar import (`ci/parity/tokdump.js:44-50`,
+`ci/parity/gotokdump/main.go:20-22`), and a spec mode driven from
+`json-core` reaches the engine with no `json`/`jsonic` checkout. What
+genuinely cannot get a Rust leg is the relaxed jsonic corpus — 1,158
+inputs, the richest in the fleet — because `jsonic` has live arrow
+functions and no serialized artifact. Budget that as out of scope for
+v0.1 and say so in the ADR rather than discovering it at the go/no-go.
+
+---
+
+## 5. What v0.1 Is, and Who Uses It
+
+### 5.1 The scope line
+
+**In.** Loader, schema validator and the `v` gate; the lexer with its
+eight built-in matchers; the rule engine; all 16 builtins; declarative
+conditions; `ctx.rewind` (the BNF/ABNF/GBNF probe grammars need it
+through `@probeDecide$`, and `bnf/ts/src/compiler.ts:1801` and
+`bnf/go/emit_support.go:574` carry hand-written twins); the serialized
+options field set ruled by #130; structured diagnostics;
+`parse(&self) -> Result<Value, Fault>`; the 79 engine rows plus the 175
+utility rows.
+
+**Out, in writing.** Custom lex matchers; ref-bag closures; subscribers;
+`Merge`; `Continuations`; error recovery; budget and cancellation;
+`Info`/`MapRef`/`ListRef`; `RegisterTextParser`.
+
+**The honest limit.** v0.1 serves **none** of the 12 fleet repos that
+register custom lex matchers, and it does not serve `jsonic`. It does not
+serve `jsonc` either, despite `jsonc` being the one fleet grammar whose
+source carries no closures, because `jsonc/ts/src/jsonc.ts:63` loads its
+grammar as jsonic text. State that; do not discover it.
+
+### 5.2 The incumbent, and the margin over it
+
+The niche is not empty. `go/clib` is 287 non-test lines and `py/` is 206
+lines of `ctypes` over it; a Rust FFI binding over the same C ABI is the
+same ~200 lines. What clib does **not** return is measurable —
+`go/clib/core.go:133-140` emits `{"ok": true, "accept": false, "error":
+{"code", "message"}}` and nothing else: no parsed value, no row, no
+column, no `pos`, no structured diagnostic.
+
+So the decision is a margin, not a vacancy. v0.1's three genuine
+differentiators over an existing ~500-line incumbent are the parsed value
+tree, the 15-field structured diagnostic, and no cgo / no Go runtime. That
+is a roughly 40:1 line ratio. Whether those three justify it is the
+question, and it is answerable this week.
+
+### 5.3 The first user, and the defect on its path
+
+The named first user is the BNF/ABNF/GBNF compiler family: a Rust
+build-script or CLI that validates and runs a `--full --strict` compiled
+grammar artifact with no Node or Go toolchain. Make that artifact a
+checked-in fixture this week or the user is notional.
+
+The emitter half already exists — `bnf/ts/src/spec.ts:415-424`'s
+`compileSpec` routes through `toRecognitionSpec` or `toPureSpec`, and both
+**throw** if closures remain (`:130-138`, `:158-165`) — so only the
+`--strict` CLI flag is unplumbed.
+
+But there is a live defect on the same path, and it is worse than the gap
+being fixed. The ABNF CLI's **default** output is JSON:
+`abnf/ts/src/bin/tabnas-abnf-cli.ts:154` prints `JSON.stringify(spec, …)`,
+where `spec` is built at `:83` by `abnfConvert(src, { start, tag })` —
+with **no** `builtins: true`, which only `abnfCompile` passes
+(`abnf/ts/src/compile.ts:47-49`). Neither guard runs on that path, and
+`JSON.stringify` drops function-valued keys silently. So the CLI's default
+JSON output is a spec that loads into any engine and accepts a *different
+language*, with no error and no diagnostic — landing precisely on v0.1's
+only supply chain. *(Cited from the code paths; not executed, because
+`abnf` has no `node_modules` in this workspace and could not be built.
+Verifying it is one `npm i && npm run build` plus one `JSON.stringify`
+round-trip.)*
+
+Two fixes, not one: plumb `--strict`, and either pass `builtins: true` at
+`:83` or refuse to stringify a spec containing functions. Then add a
+round-trip fixture asserting the CLI JSON and the closure form accept the
+same language over a shared input set.
+
+---
+
+## 6. Stop Conditions
+
+Thresholds, not vibes. Each is an observation that should trigger a
+rethink rather than a push.
+
+1. **No named Rust consumer and no checked-in artifact by the end of Wave
+   A.** Publish nothing. This is item 1 of the register and the only stop
+   condition that can fire before a line of Rust exists.
+2. **Unruled ASCII-only mismatch classes > 0 when the Rust lexer
+   starts.** The recorded divergences account for the Unicode buckets
+   exactly, so an ASCII-only disagreement means the two runtimes have
+   agreed on nothing and Rust has no canonical answer to implement.
+3. **Ruled-but-unimplemented > 0 for 30 days after the port branch
+   opens** (today: 2), or any ruling reverses while live Rust code depends
+   on it (#120 already reversed once, in 96 minutes).
+4. **Open PR queue on `parser` > 2 when the branch opens.** Nine today,
+   with five pairwise file conflicts and one hard ordering dependency.
+5. **Un-allowlisted Rust-vs-TypeScript mismatch rate not below 1% of
+   corpus rows within two weeks of first end-to-end parse.**
+6. **Crate past 8k non-test lines before the skeleton's engine rows are
+   green.** That means the arena or borrow shape is wrong; stop and
+   re-probe rather than adding code around it.
+7. **Throughput below Go's measured baseline** — 3.15 MB/s, 317 ns/byte
+   on a 151,801-byte strict-JSON document, against TypeScript's 1.36 MB/s
+   *(unverified)*. "Beat Go" is the only defensible floor: beating
+   `serde_json` was never available (§7.1 feasibility puts an optimistic
+   2-4x Rust factor one to two orders below it), and Go is already 2.3x
+   TypeScript on identical work.
+8. **Retained arena above ~200 bytes per source byte** (0.7 rule passes
+   per byte × 264-byte `Rule`) → take generational indices before more
+   code lands.
+9. **A fleet consumer asks for a custom matcher before v0.1 ships** →
+   refuse. That is the excluded imperative tier returning through the
+   back door, and admitting it converts v0.1 into the full port.
+10. **The Rust leg still below slice 2 (`json-core`, the rule engine and
+    `diagnostic.tsv`) after a month.** Treat that as an adjudication or
+    contract problem, not an engineering one, and re-read §3 here.
+
+And one reporting rule that is not a stop condition but prevents the
+others from firing late: **never report the 175 utility rows as engine
+progress.** Report them as value-model progress, where they are the merge
+acceptance gate (§2.3 here), and report engine progress as the per-file
+function-coverage delta against the table in §2 here.
