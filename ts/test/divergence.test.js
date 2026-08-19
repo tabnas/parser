@@ -183,6 +183,48 @@ describe('divergence', () => {
       'U+212A KELVIN SIGN must be rejected here — Go accepts it. If TS now ' +
       'accepts it too the divergence is GONE',
     )
+
+    // THE WORKAROUND, pinned rather than only written down. DIVERGENCE.md
+    // recommends an explicit class instead of `\s`, and the recommendation is
+    // worthless unless it works in BOTH runtimes: the first draft spelled it
+    // the RE2 way (\x{00a0}), which is a SyntaxError HERE and installs fine
+    // in Go. This is the same assertion as its Go counterpart — not the
+    // opposite — because the whole point is that the two agree.
+    const CLS =
+      '[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a' +
+      '\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+'
+    const SPEC_CLS = {
+      options: { rule: { start: 'top' }, match: { token: { '#WS': '@/^' + CLS + '/' } } },
+      rule: { top: { open: [{ s: ['#WS'], a: '@value$' }], close: [{}] } },
+    }
+    for (const cp of [0x20, 0x09, 0x00A0, 0x2028, 0x2000, 0x3000, 0xFEFF]) {
+      const ch = String.fromCharCode(cp)
+      assert.equal(
+        run(SPEC_CLS, ch), 'ACCEPTED:' + ch,
+        `workaround class U+${cp.toString(16)}: the class DIVERGENCE.md ` +
+        'recommends must work in both runtimes',
+      )
+    }
+    assert.equal(run(SPEC_CLS, 'A'), 'REJECTED', 'workaround class "A"')
+
+    // A HARSHER KIND OF DIVERGENCE: not a different result, but a grammar
+    // that will not load at all. RE2 implements neither lookahead nor
+    // backreferences, so these install and match here and are refused at
+    // install time in Go.
+    for (const [name, pattern, src] of [
+      ['lookahead', '(?=x)x', 'x'],
+      ['backreference', '(a)\\1', 'aa'],
+    ]) {
+      const spec = {
+        options: { rule: { start: 'top' }, match: { token: { '#WS': '@/^' + pattern + '/' } } },
+        rule: { top: { open: [{ s: ['#WS'], a: '@value$' }], close: [{}] } },
+      }
+      assert.equal(
+        run(spec, src), 'ACCEPTED:' + src,
+        `${name} (${pattern}) must install and match here — Go reports an ` +
+        'install error. If TS refuses it too the divergence is GONE',
+      )
+    }
   })
 
 })

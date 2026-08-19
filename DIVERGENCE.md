@@ -120,6 +120,20 @@ JS `\s` is Unicode-aware; RE2's is the Perl class `[\t\n\f\r ]`. JS `/i`
 without `u` does not fold U+212A to `k`; RE2 case-folds by Unicode rules
 and does.
 
+**And two constructs that do not diverge in the result but in whether the
+grammar loads at all**, which for a grammar author is worse:
+
+| pattern | TypeScript | Go |
+|---|---|---|
+| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** |
+| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** |
+
+RE2 implements neither, by design — both need backtracking. `go/utility.go`
+refuses them at compile time and `Grammar()` reports it, which is the right
+failure mode, but it means a spec written and tested against TypeScript can
+be unloadable in Go. The `v` flag is the same story. Treat "compiles in JS"
+as no evidence that a serialized terminal is portable.
+
 **This is recorded rather than fixed, and the reason is worth stating
 plainly, because the two halves are not equally hard.**
 
@@ -136,16 +150,25 @@ Adding the layer for one of the two is a decision for the maintainer, not a
 mechanical fix, so it is written down here with the cost attached instead of
 being taken unilaterally.
 
-**The workaround, measured rather than assumed.** An explicit class in the
-serialized terminal makes RE2 agree with JS exactly:
+**The workaround, measured rather than assumed — and spelled the JS way.**
+An explicit class in the serialized terminal makes the two agree exactly:
 
 ```
-@/^[\t\n\v\f\r \x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]+/
+@/^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/
 ```
 
-Go accepts U+0020, U+0009, U+00A0, U+2028, U+2000, U+3000 and U+FEFF with
-that pattern and still rejects `A` — the same verdicts TS gives for `\s`.
-Prefer it over `\s` in any serialized terminal a Go runtime will compile.
+**The `\uXXXX` spelling is load-bearing.** A serialized pattern is JS source:
+TypeScript hands it to `new RegExp`, and Go lowers it to RE2. Writing the
+class the RE2 way (`\x{00a0}`) makes it a *SyntaxError in TypeScript* — a
+"portable" workaround that only works in one runtime, which is the very
+defect this entry records. The first draft of this entry had it that way
+round; it was caught in review, which is why the workaround is now pinned in
+both runtimes rather than only written down.
+
+With the pattern above both runtimes accept U+0020, U+0009, U+00A0, U+2028,
+U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
+`\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
+compile.
 
 Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect` and the
 matching case in `ts/test/divergence.test.js`, which assert **opposite**

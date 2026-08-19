@@ -246,4 +246,46 @@ func TestDivergenceRegexDialect(t *testing.T) {
 		t.Error("(?i) U+212A KELVIN SIGN: got REJECTED, want ACCEPTED — TS " +
 			"rejects it; if Go now rejects it too the divergence is GONE")
 	}
+
+	// THE WORKAROUND, pinned rather than only written down. DIVERGENCE.md
+	// recommends an explicit class instead of `\s`, and the recommendation is
+	// worthless unless it works in BOTH runtimes: the first draft spelled it
+	// the RE2 way (\x{00a0}), which is a SyntaxError in TypeScript. This is
+	// the same assertion as its TS counterpart — not the opposite — because
+	// the whole point is that the two agree here.
+	const cls = `[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+`
+	specCls := `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^` + cls + `/"}}},` +
+		`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+	for _, cp := range []rune{0x20, 0x09, 0x00A0, 0x2028, 0x2000, 0x3000, 0xFEFF} {
+		if got := run(specCls, string(cp)); "ACCEPTED:"+string(cp) != got {
+			t.Errorf("workaround class U+%04X: got %s, want ACCEPTED — the "+
+				"class DIVERGENCE.md recommends must work in both runtimes", cp, got)
+		}
+	}
+	if got := run(specCls, "A"); "REJECTED" != got {
+		t.Errorf("workaround class %q: got %s, want REJECTED", "A", got)
+	}
+
+	// A HARSHER KIND OF DIVERGENCE: not a different result, but a grammar
+	// that will not load at all. RE2 implements neither lookahead nor
+	// backreferences (both need backtracking), so a spec written and tested
+	// against TypeScript can be unloadable here.
+	for _, c := range []struct{ name, pattern string }{
+		{"lookahead", `(?=x)x`},
+		{"backreference", `(a)\\1`},
+	} {
+		spec := `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^` +
+			c.pattern + `/"}}},` +
+			`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+		gs, err := GrammarSpecFromJSON([]byte(spec))
+		if nil != err {
+			t.Fatalf("%s spec: %v", c.name, err)
+		}
+		j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+		if err := j.Grammar(gs); nil == err {
+			t.Errorf("%s (%s): installed, want an install error — TS installs "+
+				"and matches it. If Go installs it too the divergence is GONE",
+				c.name, c.pattern)
+		}
+	}
 }
