@@ -1307,7 +1307,17 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI++
         } else if ('x' === ec && !escapeStrict) {
           sI++ // past 'x'
-          const xx = parseInt(src.substring(sI, sI + 2), 16)
+          // Exactly two hex digits, TESTED before conversion. parseInt is the
+          // wrong instrument here: it parses a PREFIX and stops at the first
+          // non-digit, so `\x4z` yields 4 rather than NaN and the rejection
+          // below never fires — the lexer then emits U+0004 and advances past
+          // BOTH characters, deleting a `z` that was never a digit. It also
+          // skips leading whitespace and accepts a leading sign, so `\x 4`
+          // and `\x+4` decode too. The braced `\u{...}` form below already
+          // tests its digits with a pattern before converting; this brings the
+          // other two escapes in line with it.
+          const xs = src.substring(sI, sI + 2)
+          const xx = /^[0-9a-fA-F]{2}$/.test(xs) ? parseInt(xs, 16) : NaN
           if (isNaN(xx)) {
             if (mcfg.abandon) return undefined
             sI -= 2
@@ -1340,7 +1350,13 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             cI += endI + 1 - sI + 1
             sI = endI + 1
           } else {
-            const uu = parseInt(src.substring(sI, sI + 4), 16)
+            // Exactly four hex digits, tested before conversion — see the
+            // `\x` case above for why parseInt cannot be trusted to reject.
+            // `"p\u00st"` decoded to `p` + U+0000 with the `s` and `t`
+            // silently consumed, which is data loss and not merely a lenient
+            // parse.
+            const us = src.substring(sI, sI + 4)
+            const uu = /^[0-9a-fA-F]{4}$/.test(us) ? parseInt(us, 16) : NaN
             if (isNaN(uu)) {
               if (mcfg.abandon) return undefined
               sI = sI - 2
