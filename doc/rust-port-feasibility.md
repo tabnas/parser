@@ -50,7 +50,11 @@ gate a serialized-spec-only Rust engine (option C) on a named downstream
 consumer; reject the full port (option A).** Be honest about B's ceiling:
 the C ABI returns accept/reject plus an error code and a one-line message,
 and nothing else — no structured diagnostic, no continuations, no
-recovery, no subscribers, no options, and no grammar with custom actions.
+recovery, no subscribers, and no grammar with custom actions. Declarative
+options *do* cross: a serialized spec's top-level `options` object is
+carried into `OptionsMap` (`go/grammarspec.go:35-37`) and applied via
+`MapToOptions`/`SetOptions` (`go/grammarspec.go:237-242`). What is
+unavailable is the function-valued surface, not options as such.
 That is a real limit, and it is the comparison a port has to beat.
 
 ---
@@ -146,11 +150,23 @@ tokens against bit-packed 31-bit-per-partition sets —
 grammar-normalisation time and only read during a parse. `Vec<u32>` /
 `&[u32]` beats `number[]` with no design work.
 
-**Every dispatch table is a fixed-size array.** `go/lexer.go:89-96`
+**Go's scalar dispatch tables are a fixed-size array.** `go/lexer.go:89-96`
 (`text:[256]uint8`, `fixedFirst:[256]bool`, `fixedTin:[256]int32`,
-`start:[256]uint8`) and TS's 257-entry first-char matcher table
-(`ts/src/utility.ts:754-802`) are `[u8;256]` / `[i32;256]` with bitflag
-start classes — idiomatic Rust and faster than either original.
+`start:[256]uint8`) become `[u8;256]` / `[i32;256]` with bitflag start
+classes — idiomatic Rust and faster than the original.
+
+TS's first-char table is **not** the same structure and must not be
+flattened into one. `buildLexDispatch` (`ts/src/utility.ts:754-802`)
+builds `LexMatcher[][]` — 257 slots each holding an *ordered subset of the
+matcher pipeline*, where slot 256 covers every non-Latin-1 leading
+character and "always holds the full pipeline", and any matcher that can
+fire on arbitrary input (the match matcher, the text matcher, custom
+matchers, a builtin carrying a check hook) is listed at every slot. The
+Rust shape is `[Vec<MatcherId>; 257]` over a matcher arena, not a scalar
+table: collapsing it to `[u8;256]` would drop both the Unicode fallback
+and custom-matcher ordering. Go gets away with a scalar table only because
+it dispatches on UTF-8 *bytes* and encodes builtin classes, not arbitrary
+ordered custom matchers.
 
 **`refwd()` becomes free.** `ts/src/lexer.ts:1541-1547` allocates a
 remainder substring and memoises it on the cursor; Go already replaced it
@@ -201,8 +217,17 @@ the single best-designed thing in the diagnostic area.
 `if v, ok := m["x"].(map[string]any); ok { … }` plumbing, one branch per
 option field, and visibly incomplete (function-form fields are commented
 as needing the typed Go API). `#[derive(Deserialize)]` on a 29-struct /
-131-field options tree replaces all of it, with `#[serde(default)]` giving
-the nil-means-default semantics Go emulates with pointer fields.
+131-field options tree replaces that *parsing* wholesale.
+
+It does not replace the overlay. A serialized spec is applied to an
+already-configured instance, so an omitted field must stay **absent** and
+leave the earlier plugin or caller setting standing — which is exactly why
+Go spells these fields `*bool` / `*int` (`go/options.go:55`, `:82-84`,
+`:93`). `#[serde(default)]` is the wrong tool for that: it materialises
+the default and destroys the presence information the merge depends on, so
+a missing nested option would silently overwrite a set one. The Rust shape
+is `Option<T>` fields (absent → `None`) plus an explicit merge step. Serde
+removes the hand-written extraction, not the overlay semantics.
 
 **`#[derive(Serialize)]` gives byte-identical diagnostics for free.** The
 diagnostic is a flat closed struct of `String` / `i64` / `Vec<String>`
@@ -449,11 +474,20 @@ that touch two nodes are E0502 on a bare `Vec<Node>`:
 
 ```rust
 // fold$ (ts/src/builtins.ts:171-177), transliterated: E0502.
-// The fix, stable since Rust 1.86:
-let [p, own] = ctx.nodes.get_disjoint_mut([pid, nid]).unwrap();
-p.src.push_str(&own.src);
-p.kids.append(&mut own.kids);
+// The fix — but the aliasing guard is load-bearing, not decoration:
+if pid != nid {
+    let [p, own] = ctx.nodes.get_disjoint_mut([pid, nid]).unwrap();
+    p.src.push_str(&own.src);
+    p.kids.append(&mut own.kids);
+}
 ```
+
+The guard is not defensive programming. §3.3 above is the reason: a child
+is seeded with the **parent's own node allocation**, so `pid == nid` is a
+routine state, and TS spells the same guard `own !== p`
+(`ts/src/builtins.ts:174`) to make it a no-op. `get_disjoint_mut` rejects
+duplicate indices (`Err(GetDisjointMutError)`), so an unguarded `.unwrap()`
+turns a canonical no-op into a panic on ordinary input.
 
 Routine, but it is exactly the action that proves the design, so say it
 out loud. Note also that the arena needs **no** parent write-back hack:
@@ -675,9 +709,26 @@ line boundaries (JS honours `\r`, U+2028, U+2029; Go and Rust honour only
 This is a property of the port's **lowering**, which the port controls,
 not an inherent third answer — and there is in-tree precedent for
 normalising at lowering time (`jsRegexToGo`, `go/utility.go:1238`,
-rewrites JS `\uHHHH`/`\u{…}` escapes on the serialized-regex path). Rewrite
-`\d`→`[0-9]`, `\w`→`[0-9A-Za-z_]`, `\s`→`[\t\n\f\r ]` in ~15 lines and
-Rust matches Go exactly. One trap worth writing into the porting guide:
+rewrites JS `\uHHHH`/`\u{…}` escapes on the serialized-regex path).
+
+Lower to **JavaScript's** classes, not to Go's. The tempting shortcut is
+to spell `\s`→`[\t\n\f\r ]` so that Rust agrees with Go, and it is
+wrong twice. It contradicts alignment rule 1 — TypeScript is canonical
+when the two disagree on engine behaviour, so a third port that copies the
+follower quietly elects the follower's answer for a 2-vs-1 majority the
+rule never granted. And it contradicts the repo's own stated regex
+philosophy: `go/doc/differences.md:384` opens the flag section with
+"Aligned, **by translation rather than by copying**", which is precisely
+the instruction to reproduce JS meaning rather than adopt the host
+engine's defaults.
+
+The prior question is therefore not a Rust question at all. `\s` is a
+recorded non-equivalence, but `\d`, `\w`, bare `.` and `(?m)` line
+boundaries differ between TS and Go and are recorded **nowhere** — an
+unadjudicated divergence in the existing pair, which by this repo's own
+standard is a bug in Go until argued otherwise. Adjudicate that first;
+then the Rust lowering is whatever the adjudication says, and is still
+about ~15 lines. One trap worth writing into the porting guide:
 the tempting POSIX shortcut `[[:space:]]` does **not** work — measured,
 Go RE2's `\s` does not match U+000B while Rust's `[[:space:]]` does, so
 the class must be spelled out.
@@ -738,10 +789,19 @@ The options are (a) scan `&[u8]` throughout and carry `Token.src`/`val` as
 `Cow<'a,[u8]>`, preserving Go's acceptance set and making boundary panics
 impossible but handing callers bytes; or (b) take `&str` and reject
 invalid UTF-8 at the door — clean, idiomatic, and a documented behaviour
-break plus a hole in the fuzz guarantee. Either way, **the mere existence
-of a Rust port retroactively invalidates an existing parity
-classification.** That is the structural finding: adding a runtime is not
-additive to `DIVERGENCE.md`; it re-partitions it.
+break plus a hole in the fuzz guarantee.
+
+**The consequence for `DIVERGENCE.md` follows from that choice, and only
+from (a).** Under (b) invalid UTF-8 is not an input the engine can
+receive, exactly as it is not an input to the TypeScript string API, so no
+same input yields a third result and the existing "Not divergences"
+classification stands untouched. Under (a) there is a byte-level behaviour
+to compare and the entry has to be re-read as a claim about two runtimes
+that is silent about a third. So the structural point is narrower than it
+first looks, but it is real: **a byte-oriented Rust API would not add a
+row to `DIVERGENCE.md` so much as re-partition an existing one** — and
+which happens is settled by an API decision taken before any parsing code
+is written.
 
 ### 4.6 Parsed-object key order — unadjudicated, and unpinned
 
@@ -1021,7 +1081,7 @@ maintained at the same cadence.
 | | **A — Full Rust port** | **B — Rust FFI binding over `go/clib`** | **C — Serialized-spec-only Rust engine** | **D — Wasm** |
 |---|---|---|---|---|
 | **Delivered capability** | Everything: plugins, custom matchers, subscribers, options, recovery, continuations, structured diagnostics, `no_std`/wasm targets, native speed | Accept/reject on precompiled function-free specs, plus an error `code` and a one-line message. Nothing else crosses the boundary. | The full engine minus code-valued extension points: all 16 `$`-builtins, declarative conditions, serialized regex terminals, options, diagnostics, recovery. The whole BNF/ABNF/GBNF front-end closure works. | Same as B, in a sandbox |
-| **Cost** | ~28-33k lines, **7-10 engineer-months**, plus the `json` (and ideally `jsonic`) Rust ports before `ci/parity` and `ci/fuzz` can run | **~1 week.** A working binding is ~94 lines over `libtabnas`; `py/` (206 + 184 lines) is the shipped precedent, delivered in a single commit (`94c2cf1`) | ~10-14k lines, **~4-6 engineer-months**. Cuts Go's 255 exported items to ~70 but only ~10% of the implementation — the lexer, rule engine, config resolution, error rendering and deep-merge all survive | Days, on top of B's work |
+| **Cost** | ~28-33k lines, **7-10 engineer-months**. The `json` parity leg needs no ported Rust grammar package — `ts/test/json-builder.fixture.json` is a function-free serialized spec (its only refs are the builtins `@object$ @array$ @key$ @setval$ @push$ @reset$ @value$`) that a Rust tokdump can load exactly as `go/clib` does; the relaxed `jsonic` leg has no such artifact and remains unbudgeted | **~1 week for the wrapper; distribution is the real work.** A working binding is ~94 lines over `libtabnas`, and `py/` (206 + 184 lines, one commit `94c2cf1`) is the precedent for the *binding* — but explicitly **not** for shipping: `py/README.md:42-45` says it is "not packaged as a wheel yet", requires the user to build the library, and still needs a `cibuildwheel` matrix "and a macOS runner because darwin cannot be cross-compiled with zig". A usable crates.io crate needs prebuilt libraries per target or a documented Go/C build-time dependency in its `build.rs`. Budget the wrapper in days and the artifact matrix separately | ~10-14k lines, **~4-6 engineer-months**. Cuts Go's 255 exported items to ~70 but only ~10% of the implementation — the lexer, rule engine, config resolution, error rendering and deep-merge all survive | Days, on top of B's work |
 | **Measured evidence** | Baselines: ts/src 9,846, go non-test 13,936 (1.42x), go tests 14,342 | 55 shared rows pass accept/reject; 2.72 MB/s vs ~3.1 MB/s in-process Go (~15% overhead); `-buildmode=c-archive` links statically into a 3.6 MB self-contained Rust binary with only libc/libgcc dynamic | A function-free serialized strict-JSON spec (`number.exclude` as `"@/^00/"`) passes include-json 34/34, include-json-utf8 12/12, include-json-errors 4/4, include-json-utf8-errors 5/5 and diagnostic **10/10 with full value and structured-diagnostic comparison**. `probe-grammar` and `eager-literal` fixtures — real BNF-compiler output with probe dispatch, regex terminals and eager matchers — parse with zero closures | `GOOS=wasip1`/`GOOS=js go build ./...` compile the engine; **`go/clib` fails, because cgo is unavailable under wasm**. A `//go:wasmexport` reactor builds at 4.7 MB |
 | **Failure modes** | Plugin API is a redesign, not a port; every downstream grammar rewritten by hand. Inherits every blocker in §3. Forces `DIVERGENCE.md`, the registry and the honesty gate to three runtimes. Triples the adjudication load on a bus-factor-1 maintainer | Go runtime in every consumer binary; no `no_std`; no wasm; darwin needs a native build host; the `os.fork` hazard `py/README.md:38-40` documents; two format clibs cannot be statically linked into one binary. **And the capability ceiling above is the real limit** | Still needs the string/number/regex adjudications (§4). The 175 utility fixture rows exercise `deep`/`modlist`/`str`/`strinject` — exported *utility* APIs a trimmed surface may not retain, so "passes all 254 rows" is asserted, not measured. Still cannot join `ci/parity`/`ci/fuzz` without the `json` port | Drags a multi-MB wasm runtime into the Rust binary, marshals through linear memory, keeps the Go GC, and gives up the native-speed argument that was the point |
 
@@ -1036,11 +1096,18 @@ Two clib defects worth fixing regardless, both cheap:
    insertion-order `MarshalJSON`, `go/orderedmap.go:99-110`.) Caveat: it
    creates a new, currently-unpinned cross-runtime surface, since TS's
    `JSON.stringify` orders integer-like keys first.
-2. The version document shape diverges from the header:
+2. The version document shape diverges from the header — **but this one is
+   not a free rename.**
    `go/clib/core.go:57-59` returns `{"ok":true,"version":…}` where
    `tabnas.h:35` specifies `{"ok":true,"lib":…,"format":…,"template":…}`,
    and the artifact manifest's `lib` pattern (`^libtabnas[a-z0-9]+$`) does
-   not admit the bare `libtabnas` name. (The `tabnas_grammar_json` vs
+   not admit the bare `libtabnas` name. Applying the header's shape
+   literally **removes** the `version` member, and `py/tabnas.py:141`
+   reads exactly that key — `_call(lib, lib.tabnas_version())["version"]`
+   — so every `tabnas.version()` call would raise `KeyError`. Either keep
+   `version` alongside the header's fields in the grammar-agnostic
+   library, or land the Python change in the same commit. Not an isolated
+   cheap fix. (The `tabnas_grammar_json` vs
    `tabnas_grammar` symbol difference is **not** a defect: the header
    describes the per-format libraries, and `go/clib` is deliberately
    grammar-agnostic because this repo ships no grammar, so it needs a
@@ -1118,8 +1185,10 @@ workaround.
 
 Before it lands, fix the two clib items in §7, and **document B's ceiling
 honestly**: accept/reject plus a code and a one-line message; no
-structured diagnostic, continuations, recovery, subscribers or options;
-serialized function-free specs only. If a Rust consumer needs the LSP-shaped
+structured diagnostic, continuations, recovery or subscribers;
+serialized function-free specs only. Declarative options do pass
+(`go/grammarspec.go:35-37`, `:237-242`) — it is the function-valued hooks
+that do not. If a Rust consumer needs the LSP-shaped
 surface or wants to author grammars in Rust, B does not serve them at any
 price — and that, not throughput, is the comparison C has to win.
 
@@ -1143,7 +1212,9 @@ consumer first, and resolve before any code:
    addition to `go/doc/differences.md`, one fixture row. Without it a port
    written from the documents ships a genuine third answer that passes
    every shared fixture.
-2. The **`DIVERGENCE.md` reclassification** forced by invalid UTF-8 (§4.5)
+2. The **`DIVERGENCE.md` reclassification** that invalid UTF-8 forces
+   *only if* the port takes a byte-oriented API (§4.5) — decide the API
+   shape first, and this precondition may simply not arise
    and the stale `bigint` note (§4.4).
 3. **Parsed key order, `str()`, `strinject`, `modlist`** (§4.6-4.7) —
    adjudicated, with fixture rows, probably changing one existing runtime.
@@ -1161,8 +1232,9 @@ choice the port controls, fixable in ~15 lines with in-tree precedent
 
 28-33k lines and 7-10 engineer-months; the plugin API is a redesign, not a
 port, so every downstream grammar is rewritten by hand; `ci/parity` and
-`ci/fuzz` — the tier that caught the real bugs — require porting `json`
-and ideally `jsonic` first; and the recurring tax lands on one person who
+`ci/fuzz` — the tier that caught the real bugs — need a `jsonic` grammar
+Rust has no function-free artifact for (the `json` leg can reuse
+`ts/test/json-builder.fixture.json`); and the recurring tax lands on one person who
 is already paying 1.76x aggregate and ~4.5 lines of port work per line of
 canonical source changed.
 
