@@ -299,8 +299,9 @@ func TestSpecIncludeJSON(t *testing.T) {
 
 // TestSpecRuleMaxMul runs the shared rule-maxmul.tsv fixture (the TS
 // counterpart is 'rule-maxmul-spec' in ts/test/json-spec.test.js).
-// Columns: maxmul | via | input | expected, where expected is OK:<json> or
-// ERROR:<code>.
+// Columns: maxmul | via | input | expected, where expected is a JSON value
+// (the parse result) or ERROR:<code> — the format test/AGENTS.md defines for
+// every shared fixture in this repo.
 //
 // `via` is the half that matters as much as the value. Go honoured
 // rule.maxmul at CONSTRUCTION and silently ignored it via SetOptions (MaxMul
@@ -340,25 +341,36 @@ func TestSpecRuleMaxMul(t *testing.T) {
 			continue
 		}
 
-		got := ""
-		if v, err := j.Parse(input); nil != err {
-			if te, ok := err.(*TabnasError); ok {
-				got = "ERROR:" + te.Code
-			} else {
-				got = "ERROR:" + err.Error()
+		v, perr := j.Parse(input)
+
+		if strings.HasPrefix(want, "ERROR:") {
+			got := "<no error>"
+			if nil != perr {
+				got = "ERROR:" + perr.Error()
+				if te, ok := perr.(*TabnasError); ok {
+					got = "ERROR:" + te.Code
+				}
 			}
-		} else {
-			b, merr := json.Marshal(v)
-			if nil != merr {
-				t.Errorf("rule-maxmul line %d: marshal: %v", row.lineNo, merr)
-				continue
+			if got != want {
+				t.Errorf("rule-maxmul line %d: maxmul=%d via=%s input=%q: got %q, want %q",
+					row.lineNo, maxmul, via, input, got, want)
 			}
-			got = "OK:" + string(b)
+			continue
 		}
 
-		if got != want {
-			t.Errorf("rule-maxmul line %d: maxmul=%d via=%s input=%q: got %q, want %q",
-				row.lineNo, maxmul, via, input, got, want)
+		if nil != perr {
+			t.Errorf("rule-maxmul line %d: maxmul=%d via=%s Parse(%q) error: %v",
+				row.lineNo, maxmul, via, input, perr)
+			continue
+		}
+		expected, eerr := parseExpected(want)
+		if nil != eerr {
+			t.Errorf("rule-maxmul line %d: bad expected %q: %v", row.lineNo, want, eerr)
+			continue
+		}
+		if !valuesEqual(stripRefs(v), expected) {
+			t.Errorf("rule-maxmul line %d: maxmul=%d via=%s Parse(%q)\n  got:      %s\n  expected: %s",
+				row.lineNo, maxmul, via, input, formatValue(stripRefs(v)), formatValue(expected))
 		}
 	}
 }
@@ -384,6 +396,61 @@ func TestUTF16Len(t *testing.T) {
 	for _, c := range cases {
 		if got := utf16Len(c.s); got != c.want {
 			t.Errorf("utf16Len(%q) = %d, want %d (len=%d)", c.s, got, c.want, len(c.s))
+		}
+	}
+}
+
+// TestBudgetOverflow pins the two ends of the multiplier range, where Go's
+// int arithmetic and TS's float64 arithmetic part company. The shared fixture
+// carries 9007199254740991 (JS Number.MAX_SAFE_INTEGER, the largest value
+// both runtimes can spell exactly); these are the values only Go has, so they
+// are asserted here rather than left unpinned.
+//
+// Before satMul the product WRAPPED, in both directions: MaxMul=MaxInt gave a
+// negative budget and refused a document TS accepts, while MaxMul=-MaxInt
+// wrapped positive and accepted one TS refuses. Exactly inverted, which is
+// the worst kind of "only reachable at the boundary".
+func TestBudgetOverflow(t *testing.T) {
+	cases := []struct {
+		maxmul  int
+		wantErr bool
+	}{
+		{math.MaxInt, false}, // enormous budget: parses, as in TS
+		{-math.MaxInt, true}, // negative budget: no iterations, as in TS
+		{math.MinInt, true},  // ditto, and the value satMul must not touch
+	}
+	for _, c := range cases {
+		m := c.maxmul
+		o := jsonOptions()
+		o.Rule = &RuleOptions{MaxMul: &m}
+		j := Make(o)
+		if err := registerJSONGrammar(j); nil != err {
+			t.Fatal(err)
+		}
+		_, err := j.Parse(`{"a":1}`)
+		if c.wantErr && nil == err {
+			t.Errorf("maxmul=%d: parsed, want an error", c.maxmul)
+		}
+		if !c.wantErr && nil != err {
+			t.Errorf("maxmul=%d: %v, want a successful parse", c.maxmul, err)
+		}
+	}
+}
+
+// TestSatMul pins the saturating multiply itself, including the case a plain
+// `a*b` gets wrong.
+func TestSatMul(t *testing.T) {
+	cases := []struct{ a, b, want int }{
+		{0, 5, 0},
+		{5, 0, 0},
+		{3, 4, 12},
+		{math.MaxInt, 1, math.MaxInt},
+		{math.MaxInt, 2, math.MaxInt},
+		{1 << 40, 1 << 40, math.MaxInt},
+	}
+	for _, c := range cases {
+		if got := satMul(c.a, c.b); got != c.want {
+			t.Errorf("satMul(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
 		}
 	}
 }

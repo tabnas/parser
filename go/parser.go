@@ -322,6 +322,23 @@ func NewParser() *Parser {
 
 // Start parses the source string and returns the result.
 // Returns a *TabnasError if parsing fails.
+// satMul multiplies without wrapping: an overflowing product saturates at
+// MaxInt. Both arguments are non-negative at every call site (a rule count, a
+// source length, a positive multiplier), which is what makes the `p/b != a`
+// test sufficient. Saturating is behaviour-identical to TS's float64 here —
+// no real parse reaches MaxInt iterations — whereas wrapping turns "an
+// enormous budget" into "no budget at all".
+func satMul(a, b int) int {
+	if 0 == a || 0 == b {
+		return 0
+	}
+	p := a * b
+	if p/b != a || 0 > p {
+		return math.MaxInt
+	}
+	return p
+}
+
 // utf16Len is len(s) as JavaScript would report it: the number of UTF-16 code
 // units, so an astral character counts 2 where a Go range loop counts 1 rune
 // and len() counts 4 bytes. The rule-iteration budget is scaled by the source
@@ -470,7 +487,16 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	//
 	// The runaway guard is a public, documented option, so "only reachable at
 	// the boundary" is not a reason to leave the boundary different.
-	maxr := 2 * len(p.RSM) * utf16Len(src) * 2 * p.MaxMul
+	// Non-positive first, then a SATURATING product. TS computes this in
+	// float64, where a huge product is simply a huge number; Go's int
+	// multiply wraps, and it wrapped in BOTH directions — MaxMul=MaxInt gave
+	// a negative budget and refused a document TS accepts, while
+	// MaxMul=-MaxInt wrapped positive and accepted one TS refuses. The loop
+	// guard is `kI < maxr`, so any value <= 0 is a zero-iteration budget.
+	maxr := 0
+	if 0 < p.MaxMul {
+		maxr = satMul(satMul(2*len(p.RSM), utf16Len(src)), 2*p.MaxMul)
+	}
 
 	// Opt-in parse budget: call OnCheck every budgetN rule iterations;
 	// a false return cancels. Off by default, costing one integer test

@@ -18,7 +18,8 @@ describe('json-spec', function () {
   // Shared cross-runtime fixture for rule.maxmul, the runaway-guard
   // multiplier (the Go counterpart is TestSpecRuleMaxMul in
   // go/spec_test.go). Columns: maxmul | via | input | expected, where
-  // expected is OK:<json> or ERROR:<code>.
+  // expected is a JSON value (the parse result) or ERROR:<code>, the format
+  // test/AGENTS.md defines for every shared fixture in this repo.
   //
   // `via` is the half that matters as much as the value. Go honoured
   // rule.maxmul at CONSTRUCTION and silently ignored it via SetOptions
@@ -36,18 +37,28 @@ describe('json-spec', function () {
       const [maxmulStr, via, input, expected] = cols
       const maxmul = parseInt(maxmulStr, 10)
       try {
-        const j = 'construct' === via
-          ? new Tabnas({ plugins: [json], rule: { maxmul } })
-          : new Tabnas({ plugins: [json] }).make({ rule: { maxmul } })
-
-        let actual
-        try {
-          actual = 'OK:' + JSON.stringify(j.parse(input))
-        } catch (e) {
-          actual = 'ERROR:' + (e.code || e.message)
+        let j
+        if ('construct' === via) {
+          j = new Tabnas({ plugins: [json], rule: { maxmul } })
+        } else {
+          // The public IN-PLACE setter, not make(). make() returns a child
+          // instance, so it exercises construction a second time — the Go
+          // runner calls SetOptions on the parser that already exists, and a
+          // fixture whose two runners take different paths compares nothing
+          // on the path it claims to cover.
+          j = new Tabnas({ plugins: [json] })
+          j.options({ rule: { maxmul } })
         }
 
-        assert.equal(actual, expected)
+        if (expected.startsWith('ERROR:')) {
+          assert.throws(
+            () => j.parse(input),
+            (e) => 'ERROR:' + (e.code || e.message) === expected,
+            expected,
+          )
+        } else {
+          assert.deepEqual(j.parse(input), JSON.parse(expected))
+        }
       } catch (err) {
         err.message =
           `rule-maxmul row ${row}: maxmul=${maxmulStr} via=${via}` +
