@@ -89,7 +89,38 @@ input, with deep-equal values on accept.
 
 - `gencorpus.js` — seeded generator biased toward grammar edges
   (escape sequences incl. surrogate pairs, exotic number forms, deep
-  nesting; jsonic mode adds comments/unquoted keys/trailing commas).
+  nesting; jsonic mode adds comments/unquoted keys/trailing commas),
+  plus **malformed** `\u`/`\x` escapes, raw U+2028/U+2029, and a
+  value-then-quote damage pass. See the blind-spot note below.
+
+### The blind spot this generator had, and what remains
+
+The 2026-08 fleet audit found four recorded accept/reject divergences in
+this engine that the generator was **structurally incapable of
+producing**: malformed `\u`/`\x` escapes (P3), a value followed
+immediately by a quote (P1/P2), and U+2028/U+2029 (P4). Its `ESCS` pool
+held only well-formed escapes, it assembled well-formed documents, and it
+had no line separators anywhere. A generator that cannot emit a class
+cannot find a bug in it, however many cases it runs — its clean runs were
+evidence about the generator, not about the engine.
+
+The pools now cover all four, and `ts/test/fuzz-corpus.test.js` asserts
+that each class actually appears in a generated corpus, so trimming a pool
+cannot restore the blindness silently.
+
+**Two limits remain, and neither is fixed by the pools.**
+
+1. `run-diff.sh` compares the **json** CLIs, and JSON has no unquoted
+   text. So P1/P2 and P4 can now be *emitted* but not *observed* here:
+   with the malformed pool disabled, 600 cases carrying separators and
+   value-then-quote shapes produced **0** divergences. Observing those
+   needs a jsonic-mode CLI (`jsonic-cli`). Until then the generator's
+   coverage of them is latent, and this file says so rather than letting a
+   green run imply otherwise.
+
+2. `run-diff.sh` hardcodes `json` mode, so the jsonic relaxations the
+   generator can produce are never exercised by the differential runner at
+   all.
 - `run-diff.sh [count] [seed]` — runs both CLIs per input and compares
   exit codes + values. Values are canonicalized with recursively
   sorted keys (Go json.Marshal sorts keys; JS preserves insertion
@@ -98,7 +129,14 @@ input, with deep-equal values on accept.
   races async pipe writes, which is also why outputs are captured via
   file redirection).
 
-Status at time of writing: 500/500 agree (seed 979899).
+Status at time of writing: with the extended pools, **300 cases give 13
+divergences and 600 give 22** (seeds 979899 and 4242), every one a
+malformed escape that TypeScript accepts and Go rejects — audit item P3,
+reproduced by this fuzzer for the first time. The previous "500/500 agree"
+was measured with pools that could not emit the class.
+
+Those divergences are the ones `#123` repairs. Until it lands, this runner
+is red by design on main, which matters for the promotion note below.
 
 ## workflows/ — proposed GitHub workflows
 
@@ -106,4 +144,13 @@ Status at time of writing: 500/500 agree (seed 979899).
   push/PR. Note the coupling caveat in its header (downstream clones at
   main can block engine PRs; pin refs or mark non-required if that
   bites).
+
+  **Not promoted**, so the fuzz diff has never run in CI. That is a second,
+  independent reason it caught none of the audit's items: even had the
+  pools been able to emit them, nothing was running the comparison. Both
+  reasons had to be true for the silence to hold, and fixing either one
+  alone would not have broken it.
+
+  **Promote it only after the Phase 1 escape repairs land** (`#123`), or it
+  opens red — see the status note above.
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
