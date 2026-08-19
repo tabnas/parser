@@ -538,7 +538,6 @@ func buildLexTables(cfg *LexConfig) *lexTables {
 	}
 	stops(cfg.SpaceLex, cfg.SpaceChars)
 	stops(cfg.LineLex, cfg.LineChars)
-	stops(cfg.StringLex, cfg.StringChars)
 	stops(true, cfg.EnderChars)
 
 	if len(cfg.FixedSorted) > 0 {
@@ -2466,7 +2465,6 @@ func (l *Lex) textStopBase(pos int) bool {
 	// (matching TS behavior where enderRE is built conditionally).
 	if (l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
 		(l.Config.LineLex && l.Config.LineChars[ch]) ||
-		(l.Config.StringLex && l.Config.StringChars[ch]) ||
 		l.Config.EnderChars[ch] {
 		return true
 	}
