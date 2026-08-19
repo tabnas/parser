@@ -72,19 +72,27 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 	}
 }
 
-// TestDivergenceNoRelexOption pins: "Negotiated lexing (lex.relex) —
-// TypeScript only".
+// TestRelexIsPortedAndDefaultsOff pins that negotiated lexing is NOT a
+// divergence: this port has it, TypeScript has it, and both default it off.
 //
-// The divergence is a feature's ABSENCE, so the assertion is that nothing
-// in the Go config surface accepts it. If Go ever gains relex, this fails
-// and the DIVERGENCE.md entry must go — which is the intended signal, not
-// a nuisance.
+// The header this replaces still described the test's predecessor — an
+// ABSENCE assertion pinning `"Negotiated lexing (lex.relex) — TypeScript
+// only"`. The body below had already been rewritten to assert the field IS
+// present; the comment above it had not, so the two contradicted each
+// other. Meanwhile the TypeScript half was still titled "lex.relex exists
+// here and does not in Go" and still cited that DIVERGENCE.md entry, which
+// no longer exists (`grep -in relex DIVERGENCE.md` returns nothing) — and
+// asserted nothing about Go, so it could not fail however far the two
+// ports drifted. That is the shape this file's own header warns about: a
+// divergence pinned on one side is half an assertion.
 //
-// Asserted structurally rather than behaviourally on purpose: the entry
-// says the practical impact is confined to scannerless front-ends, so for
-// every grammar in this fleet the two ports already behave identically.
-// A behavioural test would therefore pass in both ports and pin nothing.
-func TestDivergenceRelexOptionExists(t *testing.T) {
+// Asserted structurally rather than behaviourally on purpose: the
+// behaviour is covered by relex_test.go, and what this pin is for is the
+// CONFIG SURFACE agreeing across the two ports.
+//
+// TypeScript mirror: ts/test/divergence.test.js
+// 'lex.relex is ported, and defaults off, in both ports'.
+func TestRelexIsPortedAndDefaultsOff(t *testing.T) {
 	j := Make(Options{})
 	cfg := j.Config()
 
@@ -111,6 +119,24 @@ func TestDivergenceRelexOptionExists(t *testing.T) {
 	if !hasField(cfg, "Relex") {
 		t.Error("LexConfig lost its Relex field: negotiated lexing is a " +
 			"ported feature, not a divergence")
+	}
+
+	// And it is OFF by default, as in TypeScript. Without this the pair
+	// pins only that both ports HAVE the option, and one of them could
+	// start applying it to every grammar in the fleet with both suites
+	// still green.
+	if j.Config().Relex {
+		t.Error("Relex must default off, as it does in TypeScript. If " +
+			"either port changes this default, the two diverge for every " +
+			"grammar rather than only for scannerless front-ends")
+	}
+
+	// Settable, so the default above is a CHOICE this test observed and
+	// not merely a field nothing ever writes.
+	on := true
+	if !Make(Options{Lex: &LexOptions{Relex: &on}}).Config().Relex {
+		t.Error("Relex must be settable, as it is in TypeScript " +
+			"(new Tabnas({lex:{relex:true}}))")
 	}
 }
 
