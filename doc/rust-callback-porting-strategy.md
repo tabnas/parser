@@ -40,27 +40,71 @@ imperative ref-bag API — **is already the split the field converged
 on**, and the JSON tier is the tier that ports.
 
 **The finding from this repository is that the tier everyone recommends
-porting first is not, today, semantically closed.** TypeScript builtins
-read their per-alternate config from `alt.k.<name>` — the per-pass
-scratch `AltMatch`, reset every pass. Go builtins read it from `r.K`,
-which is a rule field and is *inherited* by every pushed or replaced
-child (`ts/src/rules.ts:670`, `:694`; `go/rule.go:1231-1235`). Measured
-on one pure-JSON grammar with no closures and only `$`-refs, input
-`ab`:
+porting first is not, today, semantically closed.** The claim stands.
+The evidence it was first written on has since been adjudicated, so it
+is restated here on what remains.
 
-| runtime | output |
-|---|---|
-| TypeScript | `{"rule":"P","src":"a","kids":[]}` |
-| Go | `{"kids":[{"kids":[],"rule":"P","src":"b"}],"rule":"P","src":"ab"}` |
+*Historical, and now settled.* TypeScript builtins read their
+per-alternate config from `alt.k.<name>` — the per-pass scratch
+`AltMatch`, reset every pass. Go builtins read it from `r.K`, a rule
+field *inherited* by every pushed or replaced child
+(`ts/src/rules.ts:662-671`, `:686-695`; `go/rule.go:1224-1236`).
+Measured on one pure-JSON grammar with no closures and only `$`-refs,
+input `ab` — the divergence #120 closes:
 
-`doc/value-builtins.md:17` records the two spellings — "`alt.k.<name>`
-(TS, 3rd action arg) / `r.K` (Go, merged before the action)" — as
-though they were equivalent. They are not. There is no `DIVERGENCE.md`
-entry, no `go/doc/differences.md` entry, and no shared fixture, so
-`ci/parity` cannot see it. A Rust `enum Act` with inline struct payloads
-must pick one scoping rule and will ship a third answer against
-whichever runtime it does not copy — §4.1 of the feasibility report,
-happening on the one tier the strategy depends on.
+| runtime | output | |
+|---|---|---|
+| TypeScript | `{"rule":"P","src":"a","kids":[]}` | the bug |
+| Go | `{"kids":[{"kids":[],"rule":"P","src":"b"}],"rule":"P","src":"ab"}` | ruled correct |
+
+**#120 rules builtin config RULE-SCOPED: `rule.k` is what a builtin
+reads.** TypeScript is the side that moves — eight reads at
+`ts/src/builtins.ts:127`, `:138`, `:170`, `:238`, `:249`, `:263`,
+`:273`, `:305` — and the Go row above is the answer to copy. The
+mechanism is that `rule.k = Object.assign(rule.k, alt.k)`
+(`ts/src/rules.ts:605`) and its Go twin (`go/rule.go:1166-1170`) both
+run *before* the action, so an alternate's own declared config is
+already in `r.k` when its action fires; the propagation contract that
+makes it inheritable is written down at `AGENTS.md:196-240` — `n` and
+`k` descend to a child on push AND replace, `u` does not.
+
+**The read change alone is not the fix, and shipping it alone creates a
+new divergence.** Go's five *value* builders delete their config key
+immediately after reading it — `go/builtins.go:248` (`object$`), `:269`
+(`array$`, `ListRef` branch only), `:285` (`key$`), `:302` (`setval$`),
+`:340` (`value$`) — with the rationale at `:233-238`; the three tree
+builders do not. So "rule-scoped" is two regimes: config descends for
+`node$`/`capture$`/`fold$` and is consumed once by the other five.
+Measured on a two-rule function-free spec (`top` matches `#NR #NR`,
+carries `k: { value$: { from: 1 } }`, and pushes `leaf`, which runs
+`@value$` bare), input `1 2 3 4` — `3` means the config did not reach
+the child, `4` means it did:
+
+| grammar shape | TS today | Go today | TS, naive `r.k` | TS, `r.k` + the five deletes |
+|---|---|---|---|---|
+| parent sets `k`, **runs** the builtin, pushes | 3 | 3 | **4** | 3 |
+| parent sets `k`, does **not** run it, pushes | 3 | 4 | 4 | 4 |
+
+Row 2 is the divergence #120 closes. Row 1 is the one it opens. There
+is still no `DIVERGENCE.md` entry, no `go/doc/differences.md` entry and
+no shared fixture for either, and none of the eleven `test/spec/*.tsv`
+files touches `n`, `u` or `k`, so `ci/parity` cannot see any of it.
+
+*What survives the ruling.* A Rust `enum Act` no longer has a scoping
+rule to pick, and — because config is read from `r.k` at invocation
+time — no inline struct payload either. What it can still ship is a
+*fourth* answer: Go's consume-once delete is a third scoping semantics
+that #120 does not name, and an `enum Act` written from post-#120
+TypeScript would not have it. Land the run-then-push fixture before
+anything is ported. Three further behaviours reachable from a pure
+function-free serialized spec also remain unadjudicated: diagnostic
+`pos` units (#115 — `schema/diagnostic.schema.json:35` and
+`DIVERGENCE.md:66-68` both say Go counts runes, while `go/lexer.go:482`
+seeds `Point{Len: len(src), SI: 0}` and `go/parser.go:564` passes
+`tkn.SI`, which are bytes), serialized regex terminals (#118 — recorded
+only as a declared non-fix at `go/doc/differences.md:441-451`, with no
+`DIVERGENCE.md` heading and no fixture), and parsed key order (§4.6,
+unpinned). The tier is not closed on one axis; it is not closed on four.
 
 Five further corrections to the shape a port should take, each
 compiled or measured:
@@ -70,12 +114,20 @@ compiled or measured:
   actions write the node arena, and `ctx.nodes[nid].src.push(..)` from
   `ctx: &Ctx` does not compile. Deferring the in-action rewind removes
   one reason an action needs `&mut Ctx`; the node arena is the reason.
-- **The read-back at `ts/src/rules.ts:737` *is* callback-dependent.**
-  Not through `rule.oN`/`cN`, which are engine-written before the
-  action, but through `alt.b` — argument 3, which the action can write
-  and the engine re-reads. Go computes the same quantity once,
-  pre-action (`go/rule.go:1178-1192`), and its `AltAction` cannot see
-  the alternate at all. That is a fourth unrecorded divergence.
+- **The engine reads back through argument 3 at three fields, and #122
+  closes one.** The `:737` re-read of `alt.b` is settled: compute once,
+  pre-action, Go's shape. The other two are not, and they are the ones
+  that steer the parse. `alt.p` (`ts/src/rules.ts:653`) and `alt.r`
+  (`:680`) are read *after* the action at `:646`, off the reusable
+  per-Context scratch (`:1226`), and an action that assigns them
+  redirects the push or the replace — measured. Go resolves both from
+  engine state at `go/rule.go:1203-1210` and its
+  `AltAction func(r *Rule, ctx *Context)` cannot reach the alternate, so
+  the channel is TypeScript-only and unrecorded. Nothing in-tree or in
+  the fleet writes any of the three. Dropping argument 3 closes all
+  three structurally — which is the argument for doing it, and which
+  makes it a declared narrowing to Go's contract rather than a free
+  consequence of #120.
 - **Fencing `ctx.rewind()` off a plugin handle is a capability loss,
   not a capability split** — it is documented option surface
   (`ts/doc/options.md:354-358`), budgeted in `AGENTS.md:265-267`, and
@@ -112,7 +164,7 @@ ids, a `&'g Grammar` parameter, and four things hoisted off the Context
 Three things that section does not carry, all of which change what a
 port must reproduce.
 
-### 1.1 The `:737` read-back is a data dependency on the callback
+### 1.1 The alternate is a post-action channel — and #122 closes only part of it
 
 §3.1 cites `ts/src/rules.ts:737` —
 `let consumed = rule[is_open ? 'oN' : 'cN'] - (alt.b || 0)` — as the
@@ -123,21 +175,47 @@ understates.
 `rule.oN` and `rule.cN` are written at exactly two sites,
 `ts/src/rules.ts:1468` and `:1474`, both inside `parse_alts`, which
 completes before the action runs at `:646`. No builtin, plugin or test
-writes them. So the `oN` half is engine state.
+writes them. So the `oN` half is engine state. That still holds.
 
-`alt.b` is not. It is a field of the scratch `AltMatch` handed to the
-action as argument 3. The same expression is evaluated twice — once at
-`ts/src/rules.ts:619` as `_cons`, before the action, to push consumed
-tokens onto the rewind history; and again at `:737`, after the action,
-to shift the lookahead buffer. An action that writes `alt.b` makes the
-two disagree, and a token that was moved to `ctx.v` is never shifted
-out of `ctx.t`.
+`alt.b` is not — it is a field of the scratch `AltMatch` handed to the
+action as argument 3, and the same expression is evaluated twice, at
+`:619` before the action and at `:737` after it, so an action that
+writes it desynchronises `ctx.t` and `ctx.v`. **Settled by #122:**
+compute once, pre-action, Go's shape (`go/rule.go:1178-1192`). Recorded
+honestly, and against this document's earlier emphasis: three separate
+probes failed to make a post-action `alt.b` write produce different
+output in-tree, so `alt.b` was the weakest example of the family, not
+the strongest.
 
-Go computes it once, pre-action, and comments that this "Mirrors the TS
-rules.ts ordering" (`go/rule.go:1178-1192`). It does not. Go's
-`AltAction func(r *Rule, ctx *Context)` cannot reach the alternate, so
-the divergence is currently unobservable from Go — which is exactly the
-condition under which a port settles it by accident.
+The strongest is `alt.p` and `alt.r`, which this document did not
+carry. Both are read *after* the action — `if (alt.p)` at
+`ts/src/rules.ts:653`, `else if (alt.r)` at `:680`, against the action
+call at `:646` — and both read the same reusable per-Context scratch
+(`:1226-1238`) the action holds as argument 3. Measured against
+`ts/dist`: an action assigning `alt.p` makes the engine push the name it
+wrote instead of the declared one, and a name that does not resolve
+kills the parse with `unknown_rule`. Go resolves `pushName`/`replaceName`
+at `go/rule.go:1203-1210` from a spec its `AltAction` cannot reach. That
+is a fifth unrecorded divergence, it is live routing surface rather than
+an unsupported write, and #122 does not touch it. The only thing that
+closes it structurally is dropping argument 3 (§5.5 here).
+
+One further property of argument 3 belongs here, because it bounds what
+"the action may write it" means. `parse_alts` assigns `out.n/h/a/u/k/g`
+straight off the matched `NormAltSpec` by reference
+(`ts/src/rules.ts:1568-1573`), so the scratch's `k` and `g` *are* the
+grammar's objects: an action doing `alt.k.cfg = 999` and
+`alt.g.push('injected')` leaves the grammar permanently altered for
+every subsequent parse on that instance — verified against `ts/dist`.
+This is the same defect §3.3 files against Go's `AltModifier`
+(`go/rule.go:1372`), on the TypeScript action path. It is not entirely
+unrecorded: `ts/src/parser.ts:260-263` names the `g` half in a comment
+("the alternate's own `g` array is live grammar configuration and must
+not be mutable through the event payload") and defends the *subscriber*
+with a `.slice()` — which the action path bypasses. Note also which way
+#120 moves this: after it, builtins read `r.k`, a per-rule copy made by
+the merge at `ts/src/rules.ts:605`, so the ruling *removes* the
+builtins' route into the live grammar rather than leaving it.
 
 ### 1.2 `ctx.log` is a fifth split, not a fourth
 
@@ -152,28 +230,46 @@ shared-only callback (`Fn(&Ctx, &Lex)` read from `ctx` and called with
 today's `log` receives a Context with an open index signature and could
 mutate it.
 
-### 1.3 The closed builtin tier is not semantically closed
+### 1.3 The closed builtin tier is closed now — except for five deletes
 
-Stated in the summary and measured there. Two consequences for the
-port. First, `enum Act` cannot be designed until the scoping rule is
-adjudicated, because the config source is part of the variant's
-meaning, not an implementation detail. Second, Go's `builtinValue`
-already carries the workaround — `delete(r.K, "value$")`
-(`go/builtins.go:340`) — which is evidence that `r.K` persistence was
-felt and patched locally rather than fixed.
+Stated in the summary and measured there. The first consequence this
+section used to draw is discharged: the scoping rule *is* adjudicated
+(#120, rule-scoped), and the config source is no longer part of any
+variant's meaning — it is a lookup in the rule's keep bag at invocation
+time, so `enum Act` is designable today and carries no payload.
 
-There are two further ordering divergences of the same family, both
-currently latent:
+The second consequence inverts, and is promoted from footnote to the
+live blocker. `delete(r.K, "value$")` (`go/builtins.go:340`) is not
+evidence that `r.K` persistence was felt and patched locally. Under the
+ruling it is the *contract*, and it is one of five —
+`go/builtins.go:248` (`object$`), `:269` (`array$`, `ListRef` branch),
+`:285` (`key$`), `:302` (`setval$`), `:340` (`value$`), documented at
+`:233-238` as running "before the push/replace K-copy, so a config set
+on one alt can never leak into a child rule". The three tree builders
+do not delete; TypeScript deletes nothing. So one ruling covers two
+config lifetimes, and the half TypeScript is missing is the half that
+matters for a grammar that both runs a value builtin and pushes (the
+measured table in the Summary). It is pinned only by
+`go/builtins_test.go:449-465`, which is Go-only, direct-invocation, and
+covers two of the five; and `doc/value-builtins.md`'s "Where builtin
+config lives" section states the descending lifetime for all eight. A
+third runtime reading that section builds five wrong builtins.
+
+Four ordering divergences of the same family, two still latent:
 
 | what | TypeScript | Go | pinned? |
 |---|---|---|---|
 | function-form `p` / `r` | resolved in `parse_alts`, `ts/src/rules.ts:1577-1589` — **before** the action | resolved at `go/rule.go:1203-1210` — **after** the action | TS side only, `ts/test/cover-engine.test.js:436`, `:455`; no shared fixture |
 | `e` relative to `h` | `e` evaluated in `parse_alts` (`ts/src/rules.ts:1575`), i.e. **before** `h` runs at `:569` | `H` at `go/rule.go:1126`, then `E` at `:1137` | no; `h` appears in zero shipped fixtures |
-| `alt.b` re-read after the action | yes, `ts/src/rules.ts:737` | no, computed once at `go/rule.go:1178` | no |
+| `alt.b` re-read after the action | yes, `ts/src/rules.ts:737` | no, computed once at `go/rule.go:1178` | **RULED (#122)** |
+| `alt.p` / `alt.r` written by the action, then read | yes — `ts/src/rules.ts:653`, `:680`, off the scratch at `:1226`; measured | structurally impossible — `AltAction` cannot reach the alternate | no |
+| `RuleDone.alt.p`/`r`/`b` with a function form | the **resolved** value: `_dalt` is the post-`h` scratch (`ts/src/rules.ts:1581` → `:577` → `ts/src/parser.ts:264`) | the **static** grammar field: `ctx.dalt` is a `*AltSpec` (`go/parser.go:55`, `go/rule.go:1105`) read at `go/parser.go:827-830`, while `PF` resolves into a local at `go/rule.go:1203-1210` and is never written back | no — Go's only `PF`/`RF`/`BF` tests are loader assertions (`go/grammarspec_cov_test.go:46`), and `ts/test/ruledone.test.js:90` asserts only that *some* event has a non-empty `p` |
 
 Function-form `b` matches (both pre-action). None of these is a Rust
-question. All three are decided, permanently, by whoever writes the
-Rust engine first.
+question. Two are now decided; the other three are decided,
+permanently, by whoever writes the Rust engine first — except the
+fourth, which is decided instead by whether `AltAction` keeps argument
+3.
 
 ---
 
@@ -244,8 +340,9 @@ callback.
 
 Compiled and run, rustc 1.94.1, no `unsafe`, no `Rc`, no `RefCell`.
 This is the shape a plugin tier should have; note that `rewind` is
-present, and that the engine performs the `:737` read-back *after* the
-callback loop with `alt.b` action-writable:
+present, that the handle takes one parameter (#120 leaves no builtin
+reading the alternate), and that `consumed` is fixed *before* the
+callback loop, per #122:
 
 ```rust
 /// A newtype over &mut Ctx exposing a chosen method set.
@@ -271,16 +368,17 @@ impl<'a> PluginCtx<'a> {
     }
 }
 
-type PluginAct = Box<dyn Fn(&mut PluginCtx, &mut AltMatch) -> Result<(), Fault>>;
+type PluginAct = Box<dyn Fn(&mut PluginCtx) -> Result<(), Fault>>;
 
-fn run_actions(ctx: &mut Ctx, rid: RuleId, alt: &mut AltMatch,
+fn run_actions(ctx: &mut Ctx, rid: RuleId,
                acts: &[PluginAct]) -> Result<(), Fault> {
+    // #122: `consumed` is engine state, fixed before any action runs.
+    let consumed = ctx.rules[rid.0 as usize].on.saturating_sub(ctx.palt.b);
     for a in acts {
         let mut pc = PluginCtx { c: ctx, rid };   // fresh reborrow per call
-        a(&mut pc, alt)?;
+        a(&mut pc)?;
     }
-    let consumed = ctx.rules[rid.0 as usize].on.saturating_sub(alt.b);
-    // ... the ts/src/rules.ts:737 read, after the actions
+    let _ = consumed;
     Ok(())
 }
 ```
@@ -308,11 +406,19 @@ for a in &alt.a { run(a, ctx, alt) }
 //               borrowed as immutable
 ```
 
-The second is a design constraint, not a defect: the action list must
-live in the grammar (`&'g [Act]`), never on the scratch, which is what
-TypeScript already does — `composedAction` closes over its function
-list at grammar-build time (`ts/src/rules.ts:1845-1864`) and the
-per-pass `out.a` merely points at it.
+The first still holds unconditionally: the node arena is why an action
+needs `&mut Ctx`, and no ruling touches that.
+
+The second was a design constraint only while the callback took the
+alternate. Recompiled with the two-argument action —
+`for a in &alt.a { a(ctx, rid)?; }` — it builds and runs (rustc 1.94.1),
+because the loop's shared borrow of `alt` no longer collides with a
+`&mut` handed to the callback. Keeping the action list in the grammar
+(`&'g [Act]`) is still the right shape and still what TypeScript does —
+`composedAction` closes over its function list at grammar-build time
+(`ts/src/rules.ts:1845-1864`) and the per-pass `out.a` merely points at
+it — but it is now a preference, not something the borrow checker
+enforces. Say which, because the two are not the same kind of claim.
 
 ### 2.4 Antipatterns — tried, shipped, and abandoned
 
@@ -466,9 +572,9 @@ non-re-entrant; **D** = re-entrant; **E** = lexer tier.
 
 | Callback | Signature (TS / Go) | Invoked at | Bucket | Serialized? |
 |---|---|---|---|---|
-| `AltAction` `a` | `(rule, ctx, alt) => any` / `func(r *Rule, ctx *Context)` | `ts/src/rules.ts:646`; `go/rule.go:1197` | **D** (one member); C otherwise | yes — `a`, scalar or array |
+| `AltAction` `a` | `(rule, ctx, alt) => any` / `func(r *Rule, ctx *Context)` — after #120 **argument 3 has no readers** | `ts/src/rules.ts:646`; `go/rule.go:1197` | **D** (one member); C otherwise | yes — `a`, scalar or array |
 | `AltCond` `c` | `(rule, ctx, alt) => bool` \| `Record` / `AltCond` + `CD` | `ts/src/rules.ts:1481`; `go/rule.go:1544` | B (by contract, not by construction) | yes — funcRef **or** declarative object |
-| `AltModifier` `h` | `(rule, ctx, alt, next) => AltMatch` / `func(alt *AltSpec, r, ctx) *AltSpec` | `ts/src/rules.ts:569`; `go/rule.go:1126` | C — and in Go it is handed the **live grammar** | yes |
+| `AltModifier` `h` | `(rule, ctx, alt, next) => AltMatch` / `func(alt *AltSpec, r, ctx) *AltSpec` — the two runtimes hand it **different objects**: TS the per-pass scratch `ctx._palt`, Go a grammar `*AltSpec` | `ts/src/rules.ts:569`; `go/rule.go:1126` | C — and in Go it is handed the **live grammar** | yes |
 | `AltNext` `p` / `r` | `(rule, ctx, alt) => string` / `PF`, `RF` | `ts/src/rules.ts:1577-1589` (pre-action); `go/rule.go:1203-1210` (post-action) | B | yes |
 | `AltBack` `b` | `(rule, ctx, alt) => number` / `BF` | `ts/src/rules.ts:1591`; `go/rule.go:1182` — both pre-action | B | yes |
 | `AltError` `e` | `(rule, ctx, alt) => Token?` / `func(r, ctx) *Token` | `ts/src/rules.ts:1575` (pre-`h`); `go/rule.go:1137` (post-`H`) | C | yes |
@@ -494,6 +600,43 @@ and 3 `AltCond` (`@probePhase0$/1$/2$`), frozen at
 `AltNext`, `AltBack`, `AltError`, `AltModifier`, `StateAction`, or
 anything in the lexer tier — `schema/grammar.schema.json:10` says
 outright that lexer matchers "are not grammar".
+
+Two facts about that bucket changed with #120, and both simplify the
+port. **The action half loses its payloads.** Config is read from `r.k`
+at invocation time, so no variant carries a literal: `#[repr(u8)] enum
+Act` is fieldless, one byte, `Copy + Eq + Hash`, its own dedupe key, no
+`Box` and no `dyn`. The lookup must stay dynamic, though — the
+propagation contract (`AGENTS.md:196-240`) means the key may have been
+set by an ancestor rule, so the variant resolves it from the rule bag
+at run time and never inlines it. **The condition half is already a
+data language.** The declarative form ships as a path DSL over 22 rule
+roots — including `n`, `u`, `k`, `parent`, `child`, `prev`
+(`ts/src/rules.ts:1900-1907`) — with seven operators (`:1884-1892`), and
+every generated leaf is `function ruleCond(r, _c, _a)` ignoring both
+context and alternate (`:2017-2052`). `COND_PATH_ROOTS` has no `alt`
+root, so before the ruling the phase guards could not be expressed in
+it; with `pd_phase` on `r.k` they can. A Rust engine therefore
+implements one payload-free action enum plus one path evaluator it
+needs anyway, not two dispatch mechanisms.
+
+On argument 3 specifically, the load-bearing statement is a negative
+one and it is what the §5.5 signature rests on: **no callback in either
+runtime, or in any of the 34 plugin repositories under
+`/workspace/tabnas`, reads the third argument of an action or a
+condition.** The only three-argument bodies are pass-through composers —
+`composedAction` (`ts/src/rules.ts:1856-1859`), `conjunctCond`
+(`:1799`), and `@tabnas/bnf`'s `composeActions`/`seqActions`
+(`bnf/ts/src/spec.ts:259-271`) — and the only genuine consumers are five
+`AltModifier` implementations (`ts/test/cover-engine.test.js:381`,
+`:427`; `jsonic/ts/test/custom.test.js:215`;
+`go/grammarspec_cov_test.go:21`, `:182`), every one of which returns its
+input unchanged. Zero shipped grammar sources in the fleet declare `h`
+at all. One caveat worth stating rather than asserting away: `@tabnas/bnf`
+*publishes* the three-argument shape as public API — `type ActionFn =
+(r, ctx, alt) => any` at `bnf/ts/src/spec.ts:252`, re-exported as
+`ActionsMap` from `bnf/ts/src/bnf.ts:66` and consumed by
+`attachActions` (`spec.ts:333`). Zero readers, one shipped public
+declaration.
 
 ### 3.2 The size of the re-entrant bucket
 
@@ -527,6 +670,20 @@ documented option surface (`ts/doc/options.md:354-358`) and a budgeted
 resource (`AGENTS.md:265-267`). Removing it from the plugin handle is a
 capability loss with eleven in-tree casualties, and §2.3 here shows it does
 not buy anything: a fenced handle that keeps `rewind` compiles.
+
+The fleet denominator, now that all the repositories are cloned,
+strengthens the first half and weakens the second. Across the 34 plugin
+repositories there are exactly **two** shipped `ctx.rewind` /
+`ctx.Rewind` call sites — `bnf/ts/src/compiler.ts:1801` and
+`bnf/go/emit_support.go:574` — both hand-written twins of
+`@probeDecide$` on the closure path, and both already reading
+rule-scoped `r.k.pd_mark` in both runtimes (which is #120's ruling,
+confirmed at source in shipped downstream code). `ctx.inst()` still has
+zero real call sites fleet-wide. So the shipped usage is one builtin
+plus one duplicate: "do not design a general re-entrant tier" gets
+stronger, and "eleven in-tree casualties" gets weaker as an argument
+against fencing. The argument that survives is §2.3 here's — a fence
+that keeps `rewind` compiles anyway, so nothing has to be given up.
 
 **Fence the things nothing exercises instead** — rule-stack push and
 pop, grammar access, the lexer cursor. That is a real `DeferredWorld`
@@ -564,10 +721,10 @@ substrate. S1 is listed in order to be rejected.
 
 | Option | What it is | Precedent | Cost | Verdict |
 |---|---|---|---|---|
-| **S0 — Adjudicate first** | Settle `alt.k` vs `r.K`, the `p`/`r` and `e` orderings, and the `alt.b` re-read, in TS and Go, with fixtures | The feasibility report's own §4.1 argument about `pos` | Days. One Go change (give `AltAction` the alternate, or snapshot the alt's own `k` per pass), three fixtures, one `DIVERGENCE.md` row if any is declared deliberate | **Prerequisite.** Cheap now, unfixable three-way argument later |
+| **S0 — Adjudicate first** | Settle `alt.k` vs `r.K`, the `p`/`r` and `e` orderings, the `alt.b` re-read and the `alt.p`/`alt.r` channel, in TS and Go, with fixtures | The feasibility report's own §4.1 argument about `pos` | Days. **One TypeScript change** — 8 builtin reads move `alt.k.<name>` → `r.k.<name>`, plus 5 guarded delete-after-read mirroring `go/builtins.go:248,269,285,302,340` and *not* for `node$`/`capture$`/`fold$`; Go unchanged; 4 direct-invocation tests in `ts/test/builtins.test.js` rewritten; a TS mirror of `go/builtins_test.go:449-465` covering all five; one shared run-then-push fixture, one propagation fixture, one each for the `p`/`r` and `e` orderings and the `alt.p`/`alt.r` channel; one `DIVERGENCE.md` row per deliberate difference | **Prerequisite.** Cheap now, unfixable three-way argument later |
 | **S1 — Transliterate the callback API** | `Rc<RefCell<Rule>>`, weak-capture macros, keep the signatures | gtk-rs `glib::clone!` — the largest callback-based Rust GUI codebase, whose most-used ergonomic tool exists to make capture-and-upgrade bearable, and whose users largely migrated to Relm4 to stop writing it | Every action becomes a `'static` closure over `Rc<RefCell<Ctx>>`, every body opens with upgrade-or-bail, and the runtime abort is replaced by a silent no-op. `clone!` manages capture *lifetime*, not *aliasing*, so arg1==arg3 is untouched | **Reject.** Boa #663→#5337 is six years of the same panic |
 | **S2 — Arena + `RuleId`/`NodeId`** | The §3.6 design: `Copy` ids, `&'g Grammar`, `node_parent` side table, one checked two-node accessor | Unanimous: rust-analyzer `Idx<T>`, oxc `parent_ids`, wasmtime `StoreId`, mlua `ValueRef`, starlark `Value<'v>` | Solves the aliasing, the cycles, and the two-node writes. Does **not** solve memory retention (~0.7 rule passes per source byte) or the API break. Every downstream plugin is rewritten by hand | **Mandatory** for any in-process engine |
-| **S3 — Closed `enum Act` for the 16 builtins** | Bucket A as `#[repr(u8)] enum Act` with struct payloads, dispatched by `match` inside `process()` | Biome `declare_lint_rule!` + GritQL; Ruff's in-tree rule set; chalk's closed `RustIrDatabase` | Zero `dyn` for specs loaded from JSON, zero aliasing on that path, and the dedupe key becomes an enum discriminant. Closes the world: a third party needs a new variant or a `Custom` arm that reinstates the problem. **Blocked on S0** | **Take**, after S0 |
+| **S3 — Closed `enum Act` for the 16 builtins** | Bucket A as `#[repr(u8)] enum Act`, **no payload** — config resolved from `r.k` at invocation; the three `AltCond` builtins fold into the declarative path language that already ships | Biome `declare_lint_rule!` + GritQL; Ruff's in-tree rule set; chalk's closed `RustIrDatabase` | Zero `dyn` and zero allocation for specs loaded from JSON, zero aliasing on that path, and the dedupe key is a `u8` discriminant (`Rc::ptr_eq` needed only for the open tier). Closes the world: a third party needs a new variant or a `Custom` arm that reinstates the problem. **No longer blocked on the scoping question** — blocked only on removing Go's five consume-once deletes, or adopting them in TS | **Take now** |
 | **S4 — Effects as a returned value** | Widen the action return to `Result<Effect, Fault>` with `Effect ∈ {None, Bad(Token), Backtrack(u32), Rewind(Mark)}` | Biome `RuleAction`, Ruff `Edit`, logos `FilterResult`, tree-sitter's engine-driven rewind | A strict superset of today's channel, which is used for exactly one thing (`ts/src/rules.ts:646-650`). Does **not** buy a shared receiver — E0596. Full deferral of value-tree edits is unnecessary once nodes are id-keyed | **Take the error/backtrack channel; skip full deferral** |
 | **S5 — Capability-restricted plugin handle** | `PluginCtx<'_>` newtype: no rule-stack mutation, no grammar, no lexer cursor — but keep `rewind` | Bevy `DeferredWorld`, rusqlite `Context<'a>`, tree-sitter `TSLexer` | Two context types to maintain. Makes §3.4's rule a type fact rather than a convention. Compiles (§2.3 here). A `Caller`-style *token* is not this: rlua shipped one, mlua withdrew it | **Take**, if there is ever a plugin tier |
 | **S6 — Out-of-process / FFI boundary** | Ship over `go/clib`; later, extend the ABI | esbuild's stdio manifest; SWC's wasm `Program` in/out; `py/tabnas.py` in this repo | Ships today. Cannot carry `AltAction` — not on throughput grounds, which the measured ~15% whole-parse overhead undercuts, but because the ABI has no representation for the live `Rule`/`Context` graph an action needs. Can carry `LexCheck`, `ParsePrepare` and subscribers | **Ship first** |
@@ -585,11 +742,15 @@ Fixing `go/clib/core.go:115` so accepted input returns `"value"` (as
 `go/clib/include/tabnas.h:17-18` already specifies) lifts B from
 validation-only, and is worth doing regardless.
 
-**On S3's blocker.** `enum Act` is not designable until S0 lands,
-because the config source — per-pass alternate versus inherited rule
-field — is part of each variant's meaning. Picking one now means
-picking a runtime to disagree with, silently, on a path no fixture
-covers.
+**On S3's payload.** The blocker recorded here is discharged: #120
+names the config source, so `enum Act` is designable now. What replaces
+it is a shape constraint. Config is not a property of the declaring
+alternate — it is read from the rule's merged, *inherited* keep bag,
+and for five of the eight variants it is removed from that bag after
+reading. So no variant may carry a static struct payload; each resolves
+its config by interned key at run time. That also gives `&mut Ctx` a
+second, independent justification alongside the node arena: a value
+builtin mutates the rule's keep bag, not only the value tree.
 
 ---
 
@@ -601,47 +762,99 @@ Four things, all of which are cheap at two runtimes and expensive at
 three. **All four were adjudicated on 2026-08-19; the decisions are
 recorded below and are the input to the work, not open questions.**
 
-1. **`alt.k` vs `r.K` — DECIDED: Go moves to alternate-scoped.**
-   TypeScript is canonical (`AGENTS.md` rule 1), so Go changes: either
-   give `AltAction` the alternate, or snapshot the alternate's own `k`
-   into a per-pass slot the builtins read. Config becomes local to the
-   alternate that declares it, and a parent can no longer silently
-   reconfigure a child's builtin. Pin it with a shared fixture using the
-   two-rule grammar in the Summary, plus its control (the same grammar
-   with the parent's `k` removed, where the runtimes already agree).
-   Correct `doc/value-builtins.md:17`, which records the two spellings
-   as equivalent, and `go/builtins.go:22-24`, which asserts "Equivalent
-   behaviour" outright. Tracked as #120.
+1. **`alt.k` vs `r.K` — DECIDED: builtin config is RULE-SCOPED.
+   TypeScript changes; Go does not. (#120)**
 
-   **Scope it to the eight VALUE builtins.** The engine has two config
-   conventions and only one diverges. `node$`, `capture$`, `fold$`,
-   `object$`, `array$`, `key$`, `setval$` and `value$` read
-   `alt.k.<name>` in TS (`ts/src/builtins.ts:127`, `:138`, `:170`,
-   `:238`, `:249`, `:263`, `:273`, `:305`) and `r.K` in Go — those are
-   the divergence. The probe builtins (`probeInit$`, `probeDecide$`,
-   `probePhase0/1/2$`) read rule-scoped `r.k`/`r.K` in **both** runtimes
-   deliberately (`ts/src/builtins.ts:189-190`, `:203`, `:208-215`;
-   `go/builtins.go:199`, `:211`, `:218-220`), because `pd_phase` and
-   `pd_mark` are state written by one alternate and read by another on
-   the same rule, not per-alternate config. `@tabnas/bnf` depends on
-   exactly that — `bnf/ts/src/compiler.ts:1779-1780` and its Go twin
-   `bnf/go/emit_support.go:548` emit `k: { pd_d: … }` on a phase-0 open
-   that pushes — so every grammar the BNF family generates, ABNF, EBNF
-   and GBNF included, uses it. Changing `mapConfig`'s behaviour wholesale
-   would break all of them.
+   `rule.k` is what a builtin reads. *This reverses the direction
+   recorded in the first draft of this section, which had Go moving to
+   alternate-scoped;* it is recorded here rather than deleted because
+   the two directions imply opposite fixes and opposite risks. The fix
+   has two halves.
 
-   *The risk recorded here was checked and did not materialise.* All 36
-   `tabnas` repos were cloned and scanned. Value-builtin config is set on
-   an alternate in exactly four places — `jsonic/ts/src/grammar.ts:296-304`
-   and `:379-387`, `multisource/ts/src/multisource.ts:281-296`, and the
-   `bnf` emitters at `compiler.ts:2759`, `:2764`, `:2772` — and every one
-   pairs the config with its action on the *same* alternate. Two of them
-   push, but no descendant rule reads the inherited key. Confirmed by
-   execution: jsonic, which has both runtimes and both pushing sites,
-   produces byte-identical output in TS and Go across fifteen inputs
-   exercising implicit and explicit containers, with its own suites green
-   both sides (TS 438/438, Go ok). Land the fixture first anyway, but the
-   fleet scan is done, not outstanding.
+   *Half one — the read.* The eight VALUE builtins change
+   `alt.k.<name>` to the rule bag: `node$`, `capture$`, `fold$`,
+   `object$`, `array$`, `key$`, `setval$`, `value$`, at
+   `ts/src/builtins.ts:127`, `:138`, `:170`, `:238`, `:249`, `:263`,
+   `:273`, `:305`. Those eight are the *only* reads of the third
+   argument anywhere in the file — `bubble$` (`:153`), `reset$`
+   (`:254`), `push$` (`:287`), `probeInit$` (`:184`), `probeDecide$`
+   (`:194`) and the three phase conditions already take two parameters
+   or fewer. After the change **13 of the 16 builtins touch `rule.k` and
+   none touches the alternate.** Read through the non-materialising
+   `r.rawk()` view (`ts/src/rules.ts:95`), not the `r.k` getter
+   (`:89`), which allocates an empty bag per invocation and then shows
+   up as a k-copy at every push.
+
+   *Half two — the delete, which the read alone gets wrong.* Go's value
+   builders CONSUME their key: `delete(r.K, …)` at `go/builtins.go:248`
+   (`object$`, unconditional), `:269` (`array$`, `ListRef` branch only),
+   `:285` (`key$`), `:302` (`setval$`), `:340` (`value$`), documented at
+   `:233-238`. The three tree builders do not. TypeScript must copy that
+   exactly — `r.rawk() && delete r.rawk().<name>` immediately after the
+   read, for those five only — or the fix ships a *new* divergence. The
+   measured four-way table is in the Summary; the short form is that a
+   grammar whose alternate both runs a value builtin and pushes gets
+   `3` on both runtimes today, `3` on Go after the change, and `4` on
+   TypeScript unless the deletes come with it. Guard the deletes: an
+   unguarded `delete r.k.X` throws on the hand-built mocks in
+   `ts/test/builtins.test.js` and raises the edit count from 4 to 10 for
+   no benefit.
+
+   That shape is not hypothetical. `jsonic/ts/src/grammar.ts:302-303`
+   pairs `k: { array$: { implicit: true } }` with `p: 'list'`, and
+   `:385-386` pairs `k: { object$: { implicit: true } }` with
+   `p: 'pair'` — config on an alternate that both runs the builtin and
+   pushes. `json/ts/src/json.ts:83-84` documents the reliance on the
+   key's *absence*: "Strict JSON containers are always explicit, so
+   @object$/@array$ take the default implicit:false (no `k` config
+   needed)." Without the deletes, the pushed child inherits `implicit:
+   true` and marks its own container implicit — silently, because the
+   `info` options that surface it are off by default.
+
+   *Measured cost.* The read-only prototype builds, and no
+   grammar-driven test changes behaviour: against a baseline of 388
+   tests / 386 passing (2 pre-existing README doc-example failures), it
+   gives 382 passing / 6 failing — the same 2 plus exactly **4** new
+   ones, all direct-invocation unit tests that hand-build a plain object
+   as argument 3: `@node$` at `ts/test/builtins.test.js:126` and `:158`,
+   `@key$` at `:448-453`, `@object$` at `:498-504`. The json-builder
+   parity test at `:405` does not move. jsonic against the patched
+   `dist` is 438/438 and byte-identical to Go across fifteen inputs
+   exercising implicit and explicit containers.
+
+   **There is no carve-out and no BNF risk.** The earlier direction
+   required exempting the probe builtins, because `probeInit$`,
+   `probeDecide$` and `probePhase0/1/2$` read rule-scoped `r.k`/`r.K` in
+   both runtimes deliberately (`ts/src/builtins.ts:189-190`, `:203`,
+   `:208-215`; `go/builtins.go:199`, `:211`, `:218-220`) and
+   `@tabnas/bnf` emits `k: { pd_d: … }` on a phase-0 open that pushes
+   (`bnf/ts/src/compiler.ts:1779-1780`; `bnf/go/emit_support.go:548`).
+   With everything rule-scoped there is nothing to exempt: the probe
+   builtins are already correct, and every grammar the BNF family
+   generates — ABNF, EBNF, GBNF — is unaffected. The carve-out is
+   deleted, not narrowed. `bnf`'s two hand-written `ctx.rewind` twins
+   (`bnf/ts/src/compiler.ts:1801`, `bnf/go/emit_support.go:574`) already
+   read `r.k.pd_mark` in both runtimes, which is the ruling confirmed at
+   source in shipped downstream code.
+
+   *The fleet scan is confirmation, not a risk register.* All 36
+   `tabnas` repos were cloned and scanned. Value-builtin config is set
+   on an alternate in exactly four places —
+   `jsonic/ts/src/grammar.ts:296-304` and `:379-387`,
+   `multisource/ts/src/multisource.ts:281-296`, and the `bnf` emitters
+   at `compiler.ts:2759`, `:2764`, `:2772` — and every one pairs the
+   config with its action on the *same* alternate. Two of them push;
+   with the deletes in place, no descendant reads the inherited key.
+
+   *Prose to correct.* Five comments in `ts/src/builtins.ts` say
+   "per-alt": `:19`, `:82`, `:98`, `:121`, `:218`. `go/builtins.go:19-25`
+   asserts "Equivalent behaviour" — true only once TypeScript adopts the
+   deletes, so it is rewritten rather than merely re-pointed.
+   `doc/value-builtins.md` has already been updated for the ruling but
+   still describes one config lifetime ("kept as the parse descends")
+   where there are two, and does not mention delete-after-read at all;
+   fix that in the same change, and fix its `test/json-builder.fixture.json`
+   path, which should be `ts/test/json-builder.fixture.json`.
 
 2. **The `p`/`r` and `e` orderings — DECIDED: shared fixtures now.**
    The `h` → `e` → `p`/`r` ordering itself is aligned
@@ -690,6 +903,28 @@ recorded below and are the input to the work, not open questions.**
    single-evaluation form "Mirrors the TS rules.ts ordering". It does
    not; after this change it will.
 
+   **#122 closes the `b` channel; it does not close the alternate.**
+   `alt.p` and `alt.r` are still read after the action, at
+   `ts/src/rules.ts:653` and `:680`, and `out` is the reusable
+   per-Context scratch (`:1226`) the action is holding. Measured against
+   `ts/dist`: an `AltAction` writing `alt.p` makes the engine push the
+   name it wrote instead of the declared one; writing `alt.r` redirects
+   the replace the same way; a name that does not resolve fails the
+   parse with `unknown_rule`. Go cannot do either —
+   `AltAction func(r *Rule, ctx *Context)` (`go/rule.go:95`), with
+   `pushName`/`replaceName` resolved from engine state at `:1203-1210`.
+   The `grep`-based confidence used for `alt.b` does **not** transfer:
+   an action writing `alt.p` is not obviously unsupported, because `p`
+   is documented routing surface. Adjudicate it the same way — Go's
+   shape wins, the alternate is not a post-action channel — and note
+   that this, not the builtin-config question, is what actually licenses
+   dropping the `AltMatch` parameter from `AltAction` (§5.5 here). It
+   needs its own fixture in this milestone. Conversely, three attempts
+   to make a post-action `alt.b` write observable in-tree all failed, so
+   sequence this item as the first half of a two-part change whose
+   second half is the signature, and do not lean on `b` as the
+   motivating example.
+
 4. **Generalise the two-runtime machinery to N — DECIDED: all of it,
    now.** `go/spec_registration_test.go:27-30`'s
    `nonParity map[string]string` has no per-runtime dimension;
@@ -708,6 +943,75 @@ recorded below and are the input to the work, not open questions.**
    the argument for it is that it converts a future decision-forcing
    event into a typing exercise, and that `goOnly` is poorly named even
    at two runtimes.
+
+5. **The `n`/`u`/`k` propagation contract — DECIDED by documentation,
+   pinned by nothing.** `n` and `k` are copied into a child on both push
+   and replace (`ts/src/rules.ts:662-671`, `:686-695`;
+   `go/rule.go:1224-1236`, `:1248-1261`); `u` is not — `rawu()`
+   (`ts/src/rules.ts:94`) is read at neither TS site, and `EnsureU()`
+   has exactly one non-definition caller, `go/rule.go:1161`, the alt
+   merge. The contract is now stated in `AGENTS.md:196-240`,
+   `ts/AGENTS.md`, `go/AGENTS.md`, `doc/value-builtins.md` and both
+   `plugins.md` files. It is pinned by no shared fixture: `test/spec`
+   holds eleven TSVs and none of them touches `n`, `u` or `k`.
+
+   Per-runtime coverage is accidental and lopsided. Ablation, both
+   runtimes: dropping the `n`/`k` copies on **push** breaks nothing —
+   TypeScript stays at its 386/388 baseline and Go stays fully green.
+   Dropping them on **replace** breaks three TS tests (builtins probe,
+   serialized-grammar round-trip, rewind) and Go's
+   `TestProbeFixtureParity`. Adding `u` propagation breaks one TS test
+   (recover) and two Go tests. So the obvious half is the unpinned half,
+   in both runtimes, and `ci/parity` and the honesty gate are blind to
+   it. Worse, `ts/test/probe-grammar.fixture.json` *looks* like it
+   covers push — `top$pd0` sets `k: { pd_d: '#T' }` on an alternate with
+   `p: 'top$pd0$probe'` — but does not: `pd_d` is read by
+   `@probeDecide$` on the same rule's close (`ts/src/builtins.ts:207`),
+   never by the child. A Rust port loading the shared fixtures catches
+   replace and the `u` exclusion and silently omits push.
+
+   Land the fixture in the **same change as item 1**, because the
+   k-propagation probe *is* the #120 divergence in miniature. Shape: a
+   function-free `GrammarSpec` at `test/spec/propagate.fixture.json`
+   plus `test/spec/propagate.tsv` with columns `start`, `input`,
+   `expected` — both runtimes already parse from a named start rule
+   (`ts/test/builtins.test.js:414`; `go/builtins_test.go:548-549`), and
+   `lex-string-control.tsv` is the three-column precedent. Rows that are
+   already measured today: a parent alternate carrying
+   `k: { value$: { from: 1 } }` that pushes a child running `@value$`
+   bare returns `4` on Go and `3` on TypeScript when the parent does
+   *not* run the builtin (red on TS, green on Go before item 1, green on
+   both after), and `3` on both when it does — which is the
+   run-then-push row that catches the missing deletes. Two rows the
+   fixture cannot yet carry: the replace edge, because neither runtime
+   updates `rule.parent.child` on replace (`ts/src/rules.ts:686-695`;
+   `go/rule.go:1246-1261`) so `@bubble$` reads a stale child and the
+   probe must deliver its result through the seeded node instead; and
+   the `u`-exclusion half, because `u` is observable only through
+   `@setval$`, whose missing-key path itself diverges (TS writes the key
+   `"undefined"`, Go writes `""` — `key, _ := r.U[slot].(string)` at
+   `go/builtins.go:307`, with the same coercion splitting a non-string
+   key into `{"2":4}` versus `{"":4}`). Fix that coercion, or give
+   `@setval$` a skip-on-unset-slot guard, before adding the `u` rows;
+   record it as a sixth divergence meanwhile. Wire both runners
+   (`ts/test/spec.test.js` and a new `go/propagate_spec_test.go`) or
+   `go/spec_registration_test.go:32` fails the build — which is the
+   point. `test/AGENTS.md`'s "if it needs a grammar, it belongs in that
+   grammar's repo" is aimed at dialect grammars; add a sentence carving
+   out engine-probe fixtures, or the next reader deletes this one.
+
+   The same contract constrains the Rust design, which is why it is an
+   M0 item and not a documentation chore: a builtin's config may have
+   been set by an ancestor rule, so an `enum Act` variant must resolve
+   it from `r.k` at run time and can never inline it (§4's S3 note). And
+   the descent is a *copy taken at push/replace time*, not a view — a
+   later write to the source rule's bag is invisible to the already-
+   created child — so a Rust port must not model it as a parent-chain
+   lookup. The asymmetry is load-bearing downstream, not decorative:
+   `expr/ts/src/expr.ts:1077` writes `r.u[pd] = r.n[pd] = 1` on paren
+   open and `:1094` tests `r.u[pd] === r.n[pd]` on close, which means
+   "am I the rule that opened this paren" and works only because `n`
+   propagates and `u` does not.
 
 Also worth doing here, and it is TypeScript-side design work where
 `AGENTS.md` says design belongs: **split the `funcRef` surface into two
@@ -766,10 +1070,24 @@ Five conditions, checkable, in order. All five, not a majority.
    the tier that caught the real engine bugs.
 3. **M0.4 landed** — `nonParity`, `goOnly` and the registry version
    generalised to N runtimes, before Rust exists rather than after.
-4. **The unpinned surface adjudicated** — M0.1-M0.3, plus the feasibility report's §4.1 `pos`
-   units, where two contract documents already misdescribe the Go
-   runtime and a port written from them ships a third answer that
-   passes every fixture.
+4. **The unpinned surface LANDED, not merely adjudicated.** M0.1 and
+   M0.3 are decided (#120, #122) and neither is implemented, so the
+   gate asks for code and fixtures, not rulings: (i) #120 in TypeScript
+   *including* the five guarded deletes and a TS mirror of
+   `go/builtins_test.go:449-465` covering all five; (ii) #122
+   implemented, and the `alt.p`/`alt.r` channel adjudicated with it;
+   (iii) M0.2, the function-form `p`/`r` and `h`-with-`e` orderings;
+   (iv) the M0.5 propagation fixture; (v) the feasibility report's §4.1
+   `pos` units (#115), where two contract documents —
+   `schema/diagnostic.schema.json:35` and `DIVERGENCE.md:66-68` —
+   already misdescribe the Go runtime as counting runes when it counts
+   bytes, so a port written from them ships a third answer that passes
+   every fixture; (vi) serialized regex terminals (#118), adjudicated as
+   a TS-vs-Go divergence rather than deferred as a Rust lowering choice;
+   (vii) parsed key order, pinned with a non-alphabetical
+   integer-like-key row; (viii) #113 and #119, which land on M2a's
+   validator and on the no-panic guarantee respectively. M0.4 remains
+   condition 3 and is untouched by any of this.
 5. **A second maintainer with Rust ownership**, or written acceptance
    that the third runtime is unmaintained.
 
@@ -779,8 +1097,20 @@ Validates against `schema/grammar.schema.json`, resolves `@name$`
 against the 16 builtins as a `#[repr(u8)] enum`, checks `v` against
 `BUILTIN_SCHEMA_VERSION`. Useful standalone — a build script validating
 a compiled grammar artifact — at roughly 1-2k lines and zero parity
-obligations. Its value is that it forces the `enum Act` decision, and
-therefore M0.1, before any engine exists.
+obligations.
+
+The rationale recorded here — "its value is that it forces the
+`enum Act` decision, and therefore M0.1, before any engine exists" — is
+spent: #120 settled the scoping question, so M2a now forces nothing.
+The honest, smaller rationale is schema validation, ref-name
+resolution and the `v` gate. State the ceiling with it, because it is
+permanent rather than a schema gap: `schema/grammar.schema.json:161-163`
+types `k` as a bare open object with no per-builtin shape, and
+rule-scoping makes that unclosable — the alternate that declares
+`k.value$` and the rule whose action consumes it are different objects
+at different depths, so no static validator can associate them. A
+loader can check ref names and the version gate; it can never check
+builtin config.
 
 One scoping honesty note: a loader that *rejects* `@name` ref-bag refs
 is narrower than what ships and narrower than option C in the
@@ -799,21 +1129,91 @@ a plugin tier is ever offered. The shape, restated with the corrections
 this document establishes:
 
 ```rust
-pub type Action =
-    Box<dyn Fn(&mut Ctx, RuleId, &mut AltMatch) -> Result<Effect, Fault>>;
+pub type Action = Box<dyn Fn(&mut Ctx, RuleId) -> Result<Effect, Fault>>;
 
 fn process(g: &Grammar, ctx: &mut Ctx, lex: &mut Lex, rid: RuleId)
     -> Result<RuleId, Fault>;
 ```
 
-`&mut Ctx`, not `&Ctx` (E0596). `Effect`, not `()`, because the return
-channel is free and the error-token short-circuit already uses it. Ids
-by value; the action list borrowed from the grammar as `&'g [Act]`, not
-owned by the scratch (E0502). `Send + Sync` behind a RustPython-style
+Two arguments, not three — identical to Go's
+`AltAction func(r *Rule, ctx *Context)` (`go/rule.go:95`). This
+supersedes the feasibility report's §3.6 note, "The callback must carry
+the `AltMatch`", whose argument was that "every built-in tree/value
+builder reads per-alternate config out of it
+(`ts/src/builtins.ts:127`, …, `:305`)". #120 moves every one of those
+eight citations to `r.k`, and they were the only reads of the alternate
+in the file, so that half of the objection is gone.
+
+**State the price rather than presenting it as free**, because an
+earlier draft that dropped the parameter was correctly refuted and the
+refutation was only half-demolished. Three things are true at once.
+
+*It is a narrowing of six public types, not one.* TypeScript still
+declares `AltCond` (`ts/src/types.ts:706`, called at
+`ts/src/rules.ts:1481`), `AltModifier` (`:716` / `:569`), `AltNext`
+(`:734` / `:1581`, `:1588`), `AltBack` (`:741` / `:1595`) and
+`AltError` (`:758` / `:1575`) as three-argument, and neither ruling
+touches them. Collapsing the whole surface to `(rule, ctx)` adopts Go's
+existing contract wholesale (`go/rule.go:92-104`, `:150-152`) — which
+is the right destination, and is exactly the kind of silent contract
+narrowing item 2 of §5.1 exists to forbid. Declare it as an M0
+adjudication. The two things it buys that are worth the declaration:
+it closes the `alt.p`/`alt.r` post-action channel structurally, and it
+takes argument-3 pass sites in `ts/src/rules.ts` from eight to zero.
+
+*It does not, by itself, remove the §3.4 scratch hoist.* Compiled,
+rustc 1.94.1: a three-argument `AltCond` called as
+`c(ctx, rid, &mut ctx.palt)` is `error[E0499]` ×2 **even when the
+action is already two-argument**. The hoist follows from the imperative
+tier's arity and from nothing else, in both directions. What the
+collapse actually buys is that the scratch's placement becomes *free*
+rather than forced: with no callback receiving it, leaving it on the
+`Context` compiles, and so does hoisting it. Pick one deliberately.
+
+*It costs no lifetime.* An argument-3 design does not force `'g` into
+`Ctx`/`Grammar`/`Tabnas`; a scratch holding `Copy` config indices
+reproduces TypeScript's aliasing with no borrow, and a higher-ranked
+callback type compiles the borrowing spelling too. Any claim that
+keeping the parameter costs a self-referential lifetime is an artifact
+of one probe's modelling, not a property of the design.
+
+`AltModifier` is the exception and stays one: it *replaces* the whole
+object (`alt = alt.h(rule, ctx, alt, next) || alt`,
+`ts/src/rules.ts:569`), so it keeps the alternate **by value** —
+`Fn(&mut Ctx, RuleId, AltMatch, RuleId) -> AltMatch` via `mem::take`
+and put-back — or, in Go's shape, as `&'g AltSpec`, which additionally
+makes the `go/rule.go:1372` grammar-corruption bug a compile error. Do
+not "make it mutate in place": that is E0499 against the arena and
+reinstates the hoist single-handedly (§6 here). At 152 bytes and zero
+shipped invocations across the fleet, §2.4's `Fold`/memmove warning
+does not bite here.
+
+**Do not delete the scratch along with the parameter**, and do not
+confuse it with what the `RuleDone` payload needs. The payload is a
+five-field resolved record — `b`, `g`, `p`, `r`, `err`, built at
+`ts/src/parser.ts:252-266` and again on the throwing path at `:352-366`
+— so it must be observable after a *failed* pass; it cannot be a value
+returned through `?`, and it is not the scratch, which also carries the
+callbacks and the config alias that no consumer sees. Whether that
+record reports the resolved or the static value is the open M0 question
+this creates: TypeScript reports resolved (`ts/src/rules.ts:1581` →
+`:577` → `ts/src/parser.ts:264`), Go reports the static grammar field
+(`go/parser.go:827-830`, because `PF` resolves into a local at
+`go/rule.go:1203-1210` and is never written back), measured, and
+unpinned on both sides. Go's answer is a divergence from canonical
+TypeScript, not a simplification to copy.
+
+The rest of the shape is unchanged. `&mut Ctx`, not `&Ctx` (E0596 —
+the node arena is the reason, and it survives the collapse). `Effect`,
+not `()`, because the return channel is free and the error-token
+short-circuit already uses it. Ids by value. The action list borrowed
+from the grammar as `&'g [Act]` — by preference now rather than by
+borrow-check necessity, since the E0502 that forced it dissolves with
+the third argument (§2.3 here). `Send + Sync` behind a RustPython-style
 trait alias gated on a feature, never as a consequence of the receiver.
-Dedupe keyed on ref *name* for the closed tier and on `Rc::ptr_eq` for
-the open one — `merge.ts`'s `toString()` fallback has no spelling and
-should be declared dead.
+Dedupe on the `Act` discriminant for the closed tier and `Rc::ptr_eq`
+for the open one — `merge.ts`'s `toString()` fallback has no spelling
+and should be declared dead.
 
 ### 5.6 M3 — The imperative plugin tier
 
@@ -843,7 +1243,7 @@ An earlier draft of this paragraph argued that the second runtime had
 attracted only 2 of 21 downstream packages. **That was wrong, and the
 correct figure argues the same conclusion harder.** Measured across all
 36 `tabnas` repositories: 31 carry a TypeScript package depending on
-`@tabnas/parser`, and **29 carry a Go module depending on
+`@tabnas/parser`, and **31 carry a Go module depending on
 `github.com/tabnas/parser/go`**. The two-runtime figure came from
 `ci/parity/gotokdump/go.mod` and `ci/bench/gobench/go.mod`, which
 `replace` only `json` and `jsonic` — that is the parity harness's
@@ -851,7 +1251,7 @@ dependency set, not the fleet's Go coverage.
 
 So Go adoption is near-total, not marginal. That removes the "nobody
 followed the second runtime" argument and replaces it with a worse one:
-every engine change is already paid for across ~29 Go modules as well as
+every engine change is already paid for across ~31 Go modules as well as
 ~31 TypeScript packages, and a third runtime multiplies that base again
 against a maintainer who wrote 49 of this repository's 52 commits. The
 per-change tax measured in §6 of the feasibility report — 1.76x
@@ -868,8 +1268,10 @@ the leak reaches the public signature.
 0.16 as its headline fix, and it was withdrawn: mlua dropped the
 `'lua` lifetime, and rlua 0.20 became a wrapper around mlua. A
 wasmtime-style `Caller` is also not an aliasing fix — reaching the
-`AltMatch` *through* the token is E0499, verified — it is a capability
-fence, which S5 provides more cheaply.
+`AltMatch` *through* the token is E0499, verified, which after #120
+applies to the `h`/`e`/`p`/`r`/`b` tier only, since no `AltAction`
+reaches the alternate any more — it is a capability fence, which S5
+provides more cheaply.
 
 **Do not ship any serialized ABI without versioning and
 unknown-variant tolerance in the first commit.** SWC's three years is
@@ -898,3 +1300,37 @@ split.** Eleven in-tree grammar actions use it, it is documented option
 surface, and §2.3 here shows a fenced handle that keeps it compiles. Fence
 the rule stack, the grammar and the lexer cursor instead — nothing
 in-tree reaches those from a callback, so the restriction is free.
+
+**Do not land #120 as eight read-site edits.** A move to `r.k` without
+Go's five consume-once deletes (`go/builtins.go:248`, `:269`, `:285`,
+`:302`, `:340`) makes a pushed child inherit its parent's value-builtin
+config — measured, and the shipped shape it hits is
+`jsonic/ts/src/grammar.ts:302-303` and `:385-386`, where an explicit
+container silently becomes implicit. The failure is invisible with the
+`info` options off, which is the default, so the ordinary suite will
+not catch it. Relatedly, **do not describe builtin config as uniformly
+"kept as the parse descends"** — that is true of
+`node$`/`capture$`/`fold$` and false of the other five, and
+`doc/value-builtins.md` currently says the first for all eight.
+
+**Do not make `AltModifier` mutate in place.** The feasibility report's
+§3.6 floats it as an alternative to dropping `h` from the Rust surface.
+It is E0499 against the arena and it single-handedly reinstates §3.4's
+scratch hoist. Take-and-return is correct here precisely because it *is*
+`h`'s semantics (`alt = alt.h(rule, ctx, alt, next) || alt`,
+`ts/src/rules.ts:569`), the value is 152 bytes, and `h` appears in zero
+shipped grammars across the fleet — the memmove SWC measured on its AST
+does not apply to a per-pass scratch nothing calls.
+
+**Do not drop the third `AltAction` parameter without writing down what
+it closes.** It is the right move and the fleet cost is zero readers,
+but `alt.p`/`alt.r` are a live TypeScript redirect channel (measured,
+`ts/src/rules.ts:653`, `:680`) with no Go equivalent and no fixture, and
+collapsing the other five alternate-taking types with it narrows five
+more public contracts. A Rust engine that drops the parameter silently
+ships all of that as an implementation detail — which is exactly the
+§4.1 failure mode this document exists to prevent. Declare it in M0,
+land a fixture, and **do not delete the scratch `AltMatch` along with
+the parameter**: Go has none, reports the static grammar fields to
+`RuleDone`, and that is a divergence from canonical TypeScript rather
+than a simplification to copy.

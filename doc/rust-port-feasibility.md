@@ -1179,13 +1179,16 @@ grammars (`json`, `jsonic`)". That is wrong. It came from
 `ci/parity/gotokdump/go.mod` and `ci/bench/gobench/go.mod`, which
 `replace` only those two — the parity harness's dependency set, not the
 fleet's. Across all 36 `tabnas` repositories, **31 carry a TypeScript
-package depending on `@tabnas/parser` and 29 carry a Go module depending
+package depending on `@tabnas/parser` and 31 carry a Go module depending
 on `github.com/tabnas/parser/go`**. Go adoption is near-total.
+
+(An intermediate correction in this document said 29. That counted only
+`<repo>/go/go.mod`; scanning every `go.mod` in each repository finds 31.)
 
 That strengthens the conclusion rather than weakening it. The sound
 argument was never "nobody followed Go"; it is an **option-value**
 argument, and the real numbers sharpen it: every engine change is
-already paid across ~29 Go modules and ~31 TypeScript packages, by a
+already paid across ~31 Go modules and ~31 TypeScript packages, by a
 maintainer who wrote 49 of this repository's 52 commits. The 1.76x
 aggregate tax measured in §7 is what keeping *two* runtimes in step
 across that fleet costs. A third multiplies the base again, against
