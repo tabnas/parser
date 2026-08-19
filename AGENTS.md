@@ -281,13 +281,16 @@ file to one job:
   complete.
 - **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
-  `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports) covers design and
-  rationale.
+  `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports and the
+  language-neutral
+  [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md)) covers
+  design and rationale.
 
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
-`ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only the two
-language-neutral files shared by both runtimes — `syntax.md` (syntax spec)
-and `architecture.md`.
+`ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only what is
+language-neutral — `syntax.md` (syntax spec), `architecture.md`,
+`value-builtins.md`, and `rust-port-feasibility.md` (a report about a
+prospective third runtime, so it belongs to neither existing one).
 
 READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the
