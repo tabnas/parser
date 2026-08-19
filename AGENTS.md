@@ -283,14 +283,18 @@ file to one job:
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
   `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports and the
   language-neutral
-  [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md)) covers
-  design and rationale.
+  [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md) with its
+  companion
+  [`doc/rust-callback-porting-strategy.md`](doc/rust-callback-porting-strategy.md))
+  covers design and rationale.
 
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
 `ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only what is
 language-neutral — `syntax.md` (syntax spec), `architecture.md`,
-`value-builtins.md`, and `rust-port-feasibility.md` (a report about a
-prospective third runtime, so it belongs to neither existing one).
+`value-builtins.md`, and the two Rust reports
+(`rust-port-feasibility.md` and `rust-callback-porting-strategy.md`),
+which concern a prospective third runtime and so belong to neither
+existing one.
 
 READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the
