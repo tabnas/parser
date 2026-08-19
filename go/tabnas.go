@@ -77,10 +77,33 @@ type RecoveredAt struct {
 	Bad bool
 }
 
+// runePos converts the struct's byte offset into the rune offset the
+// diagnostic actually documents.
+//
+// Pos is a byte index because the Go lexer scans UTF-8, but
+// schema/diagnostic.schema.json says "Go counts runes", DIVERGENCE.md says the
+// same, and Col genuinely is runes — so emitting the raw index mixed two units
+// inside a single diagnostic. `["é" 1]` reported col=6 (runes) beside pos=6
+// (bytes) where the rune offset is 5, and `["😀" 1]` reported pos=8 for a rune
+// offset of 5.
+//
+// Len is already converted at the same site, for the same reason; Pos was
+// simply missed. Converting here rather than at construction keeps the byte
+// index available internally, where the scanner needs it.
+func runePos(src string, pos int) int {
+	if 0 >= pos {
+		return 0
+	}
+	if pos >= len(src) {
+		return utf8.RuneCountInString(src)
+	}
+	return utf8.RuneCountInString(src[:pos])
+}
+
 type TabnasError struct {
 	Code   string // Error code keying errorMessages/defaultHints, e.g. "unexpected", "unterminated_string".
 	Detail string // Human-readable detail message (e.g. "unterminated string: \"abc")
-	Pos    int    // 0-based character position in source
+	Pos    int    // 0-based BYTE offset in source (the scan unit). Serialised as a rune offset — see runePos.
 	Row    int    // 1-based line number
 	Col    int    // 1-based column number
 	Src    string // Source fragment at the error (the token text)
@@ -512,7 +535,7 @@ func (e TabnasError) MarshalJSON() ([]byte, error) {
 		Hint:      e.Hint,
 		Row:       e.Row,
 		Col:       e.Col,
-		Pos:       e.Pos,
+		Pos:       runePos(e.fullSource, e.Pos),
 		Len:       utf8.RuneCountInString(e.Src),
 		Rule:      e.diagRule,
 		RuleStack: ruleStack,
