@@ -722,13 +722,27 @@ philosophy: `go/doc/differences.md:384` opens the flag section with
 the instruction to reproduce JS meaning rather than adopt the host
 engine's defaults.
 
-The prior question is therefore not a Rust question at all. `\s` is a
-recorded non-equivalence, but `\d`, `\w`, bare `.` and `(?m)` line
-boundaries differ between TS and Go and are recorded **nowhere** — an
-unadjudicated divergence in the existing pair, which by this repo's own
-standard is a bug in Go until argued otherwise. Adjudicate that first;
-then the Rust lowering is whatever the adjudication says, and is still
-about ~15 lines. One trap worth writing into the porting guide:
+The prior question is therefore not a Rust question at all. Measured
+directly, through a shared serialized regex terminal on a `#RX` match
+token, the existing pair already disagrees and the disagreement is
+recorded **nowhere**:
+
+| serialized terminal | input | TypeScript | Go |
+|---|---|---|---|
+| `@/^\s+/` | U+00A0 NBSP | accepts | **rejects** |
+| `@/^./` | U+2028, and `\r` | rejects | **accepts** |
+| `@/^\d+/` | U+0660 Arabic-Indic zero | rejects | rejects |
+| `@/^\w+/` | U+00E9 `é` | rejects | rejects |
+
+Same spec, same input, different answer — the definition of a
+`DIVERGENCE.md` entry, and by this repo's own standard a bug in Go until
+argued otherwise. (`\d` and `\w` agree, because JavaScript's are
+ASCII-only too; it is Rust that would differ on those, being Unicode-aware
+by default. That is the port's lowering to fix, not a pre-existing bug.)
+
+Adjudicate the `\s` and `.` rows first; then the Rust lowering is whatever
+the adjudication says, and is still about ~15 lines. One trap worth
+writing into the porting guide:
 the tempting POSIX shortcut `[[:space:]]` does **not** work — measured,
 Go RE2's `\s` does not match U+000B while Rust's `[[:space:]]` does, so
 the class must be spelled out.
