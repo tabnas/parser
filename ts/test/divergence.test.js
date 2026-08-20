@@ -67,27 +67,41 @@ describe('divergence', () => {
     )
   })
 
-  it('lex.relex exists here and does not in Go', () => {
-    // DIVERGENCE.md: "Negotiated lexing (lex.relex) — TypeScript only".
-    //
-    // Asserted as a real behaviour, not just a config key, so this cannot
-    // pass on a stub: with relex on, the engine re-cuts a buffered token's
-    // source span rather than failing the alternate outright.
+  // NOT a divergence. Negotiated lexing is PORTED, and this pair of tests
+  // used to say otherwise on both sides while agreeing with neither.
+  //
+  // This test was titled 'lex.relex exists here and does not in Go' and
+  // cited DIVERGENCE.md: "Negotiated lexing (lex.relex) — TypeScript
+  // only". That entry does not exist — `grep -in relex DIVERGENCE.md`
+  // returns nothing — and Go's LexConfig has carried Relex for some time.
+  // Its Go mirror had already been rewritten to assert the field IS
+  // present; only its header comment still described the old absence
+  // assertion. So the two halves asserted opposite things, and this half
+  // asserted nothing about Go at all, which is why it kept passing: it is
+  // exactly the failure both files' headers warn about — a divergence
+  // pinned on one side is half an assertion.
+  //
+  // Kept rather than deleted, because the two ports agreeing is worth an
+  // assertion of its own: relex is settable in both and OFF by default in
+  // both, which is why every grammar in the fleet behaves identically
+  // despite the feature existing. Measured 2026-08-19, both ports.
+  //
+  // Go mirror: go/divergence_test.go TestRelexIsPortedAndDefaultsOff.
+  it('lex.relex is ported, and defaults off, in both ports', () => {
     const j = new Tabnas({ lex: { relex: true } })
     assert.equal(
       j.options.lex.relex,
       true,
-      'relex must be settable here; Go has no such option at all',
+      'relex must be settable here, as it is in Go (Options.Lex.Relex)',
     )
 
-    // And it is OFF by default — which is why every grammar in the fleet
-    // behaves identically in both ports despite this entry.
     const d = new Tabnas()
-    assert.notEqual(
+    assert.equal(
       d.options.lex.relex,
-      true,
-      'relex must default off, or the two ports would diverge for real ' +
-      'grammars rather than only for scannerless front-ends',
+      false,
+      'relex must default OFF, as it does in Go. If either port changes ' +
+      'this default, the two diverge for every grammar in the fleet ' +
+      'rather than only for scannerless front-ends',
     )
   })
 
@@ -267,4 +281,113 @@ describe('divergence', () => {
     // column. Go's half asserts 4 and 5 for these two rows.
     assert.equal(diag('"\u{1F600}" 1').pos - diag('"\u20ac" 1').pos, 1)
   })
+
+  // Pins the serialized-regex dialect gap, asserting the OPPOSITE of
+  // TestDivergenceRegexDialect in go/divergence_test.go: that pairing IS the
+  // test. See DIVERGENCE.md, "Regex dialect in serialized terminals".
+  //
+  // This is the first PARSE-LEVEL reproduction. The gap was known at the
+  // regex-engine layer and recorded in go/doc/differences.md, but nothing
+  // drove it through a real GrammarSpec — so "a shared grammar that depends
+  // on either will differ" was a prediction, not a measurement. It goes both
+  // ways: TS accepts what Go rejects (`\s`) and rejects what Go accepts
+  // (`(?i)`).
+  it('a serialized `\\s` matches Unicode spaces here, ASCII-only in Go', () => {
+    const SPEC_WS = {
+      options: { rule: { start: 'top' }, match: { token: { '#WS': '@/^\\s+/' } } },
+      rule: { top: { open: [{ s: ['#WS'], a: '@value$' }], close: [{}] } },
+    }
+    const SPEC_K = {
+      options: { rule: { start: 'top' }, match: { token: { '#K': '@/^k/i' } } },
+      rule: { top: { open: [{ s: ['#K'], a: '@value$' }], close: [{}] } },
+    }
+
+    const run = (spec, src) => {
+      const j = new Tabnas({ rule: { start: 'top' } })
+      j.grammar(JSON.parse(JSON.stringify(spec)))
+      try {
+        return 'ACCEPTED:' + j.parse(src)
+      } catch {
+        return 'REJECTED'
+      }
+    }
+
+    // Control: the ASCII whitespace both engines agree on. A change here
+    // means something other than the dialect gap broke.
+    for (const cp of [0x20, 0x09]) {
+      const ch = String.fromCharCode(cp)
+      assert.equal(run(SPEC_WS, ch), 'ACCEPTED:' + ch,
+        `\\s control U+${cp.toString(16)}`)
+    }
+
+    // JS `\s` is Unicode-aware; RE2's is the Perl class [\t\n\f\r ], so Go
+    // REJECTS every one of these. Named, so a future JS that narrowed the
+    // class fails loudly rather than quietly aligning.
+    for (const [name, cp] of [
+      ['NBSP', 0x00A0], ['LINE SEPARATOR', 0x2028], ['EN QUAD', 0x2000],
+      ['IDEOGRAPHIC SPACE', 0x3000], ['ZERO WIDTH NO-BREAK SPACE', 0xFEFF],
+    ]) {
+      const ch = String.fromCharCode(cp)
+      assert.equal(
+        run(SPEC_WS, ch), 'ACCEPTED:' + ch,
+        `\\s U+${cp.toString(16)} (${name}) must be accepted here — Go rejects ` +
+        'it. If TS now rejects it too the divergence is GONE and the ' +
+        'DIVERGENCE.md entry should be deleted',
+      )
+    }
+
+    // The other direction. JS `/i` without `u` does not fold U+212A KELVIN
+    // SIGN to `k`; RE2 case-folds by Unicode rules and matches it.
+    for (const ch of ['k', 'K']) {
+      assert.equal(run(SPEC_K, ch), 'ACCEPTED:' + ch, `(?i) control ${ch}`)
+    }
+    assert.equal(
+      run(SPEC_K, String.fromCharCode(0x212A)), 'REJECTED',
+      'U+212A KELVIN SIGN must be rejected here — Go accepts it. If TS now ' +
+      'accepts it too the divergence is GONE',
+    )
+
+    // THE WORKAROUND, pinned rather than only written down. DIVERGENCE.md
+    // recommends an explicit class instead of `\s`, and the recommendation is
+    // worthless unless it works in BOTH runtimes: the first draft spelled it
+    // the RE2 way (\x{00a0}), which is a SyntaxError HERE and installs fine
+    // in Go. This is the same assertion as its Go counterpart — not the
+    // opposite — because the whole point is that the two agree.
+    const CLS =
+      '[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a' +
+      '\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+'
+    const SPEC_CLS = {
+      options: { rule: { start: 'top' }, match: { token: { '#WS': '@/^' + CLS + '/' } } },
+      rule: { top: { open: [{ s: ['#WS'], a: '@value$' }], close: [{}] } },
+    }
+    for (const cp of [0x20, 0x09, 0x00A0, 0x2028, 0x2000, 0x3000, 0xFEFF]) {
+      const ch = String.fromCharCode(cp)
+      assert.equal(
+        run(SPEC_CLS, ch), 'ACCEPTED:' + ch,
+        `workaround class U+${cp.toString(16)}: the class DIVERGENCE.md ` +
+        'recommends must work in both runtimes',
+      )
+    }
+    assert.equal(run(SPEC_CLS, 'A'), 'REJECTED', 'workaround class "A"')
+
+    // A HARSHER KIND OF DIVERGENCE: not a different result, but a grammar
+    // that will not load at all. RE2 implements neither lookahead nor
+    // backreferences, so these install and match here and are refused at
+    // install time in Go.
+    for (const [name, pattern, src] of [
+      ['lookahead', '(?=x)x', 'x'],
+      ['backreference', '(a)\\1', 'aa'],
+    ]) {
+      const spec = {
+        options: { rule: { start: 'top' }, match: { token: { '#WS': '@/^' + pattern + '/' } } },
+        rule: { top: { open: [{ s: ['#WS'], a: '@value$' }], close: [{}] } },
+      }
+      assert.equal(
+        run(spec, src), 'ACCEPTED:' + src,
+        `${name} (${pattern}) must install and match here — Go reports an ` +
+        'install error. If TS refuses it too the divergence is GONE',
+      )
+    }
+  })
+
 })
