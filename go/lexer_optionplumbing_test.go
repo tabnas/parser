@@ -17,6 +17,7 @@ package tabnas
 //     the base, not be "merged" field-by-field into a corrupt zero value.
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -41,8 +42,82 @@ func lexOne(src string, cfg *LexConfig) string {
 		return "ERROR:" + lex.Err.Error()
 	}
 
-	val, _ := tkn.Val.(string)
-	return tkn.Name + ":" + val
+	// Not a string assertion: the number matcher's Val is numeric, and a
+	// blank there would have made every #NR row in a fixture compare equal
+	// to every other. TS builds the same cell by string-concatenating
+	// tkn.val, which is what %v reproduces.
+	if str, ok := tkn.Val.(string); ok {
+		return tkn.Name + ":" + str
+	}
+	if nil == tkn.Val {
+		return tkn.Name + ":"
+	}
+	return tkn.Name + ":" + fmt.Sprintf("%v", tkn.Val)
+}
+
+// TestSpecLexTextLineTerminator runs the shared
+// lex-text-line-terminator.tsv fixture (the TS counterpart is
+// 'text-line-terminator-spec' in ts/test/lex.test.js). Columns:
+// lineLex | fixedSep | input | expected, same ERROR:<code> / <name>:<value>
+// contract as lex-string-control. `fixedSep` registers U+2028 as a fixed
+// token, the case where the separator DOES get an ender alternative and the
+// run ends normally instead of failing.
+//
+// The NUMBER matcher is covered here too, and it is the trap this port walks
+// into: one predicate (textStopBase, via isFollowingText) answers both "can
+// text continue?" and "can a number end here?". Teaching THAT about U+2028
+// makes Go emit `#NR:1` for `1<U+2028>b` where TS reports `unexpected` — the
+// TS number ender regex has its own alternatives and does not contain the
+// separators either. `1\nb` is the control that keeps the rule from being
+// read as "reject everything".
+//
+// The rule under test comes from the REGEX DIALECT, not the ender set: the
+// TS ender is built as `cfg.line.lex ? 'y' : 'ys'`, so with line lexing on
+// `.` cannot cross a JS line terminator. \n and \r are also enders, so they
+// END the run; U+2028 and U+2029 are not, so the match FAILS and no text
+// token is produced. RE2's `.` excludes only \n, so Go ran straight through
+// both and made `a<U+2028>b` one text token.
+//
+// The U+2028/U+2029 cells hold the RAW code point — the shared escape codec
+// is deliberately minimal (\n \r \t \\ only) and has no \u form. The guard
+// below is why that is safe to rely on: a tool that normalised them away
+// would otherwise leave these rows passing while testing nothing.
+func TestSpecLexTextLineTerminator(t *testing.T) {
+	rows := loadSpecTSV(t, "lex-text-line-terminator")
+
+	all := ""
+	for _, row := range rows {
+		for _, c := range row.cols {
+			all += c
+		}
+	}
+	if !strings.ContainsRune(all, 0x2028) || !strings.ContainsRune(all, 0x2029) {
+		t.Fatal("lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — " +
+			"the raw code points were normalised away and these rows now test nothing")
+	}
+
+	for _, row := range rows {
+		lineLex := tsvCol(row.cols, 0) == "true"
+		fixedSep := tsvCol(row.cols, 1) == "true"
+		src := preprocessEscapes(tsvCol(row.cols, 2))
+		want := preprocessEscapes(tsvCol(row.cols, 3))
+
+		cfg := buildConfig(&Options{Line: &LineOptions{Lex: &lineLex}})
+		if fixedSep {
+			// U+2028 as a fixed token: TS's rePart.ender gains an
+			// alternative that matches it, so the run ENDS there instead of
+			// failing, and the text before it is emitted.
+			sep := string(rune(0x2028))
+			cfg.FixedTokens = map[string]Tin{sep: Tin(500)}
+			cfg.TinNames = map[Tin]string{Tin(500): "#SEP"}
+			cfg.SortFixedTokens()
+		}
+
+		if got := lexOne(src, cfg); got != want {
+			t.Errorf("lex-text-line-terminator line %d: lineLex=%v fixedSep=%v input=%q: got %q, want %q",
+				row.lineNo, lineLex, fixedSep, src, got, want)
+		}
+	}
 }
 
 // TestSpecLexStringControl runs the shared lex-string-control.tsv fixture.
