@@ -129,8 +129,35 @@ plugin configures its lexer that way. `@tabnas/css` declared
 
 The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
 `EscapeStrict`, which are pointers for exactly this reason. It is a
-breaking change across sixteen call sites in a published module, so it is
-outstanding rather than done. `TestEmptyCharsMeansUnset` pins the current
+breaking change across a published module, so it is outstanding rather
+than done — and the blocking constraint is specific enough to write down.
+
+**The consumers must move in the same change, and seven of the call sites
+are in repos a session cannot write.** Counted across the fleet, excluding
+tests:
+
+| repo | affected call sites | |
+| --- | --- | --- |
+| `parser` | its own config branches | |
+| `jsonic` | 3 | writable |
+| `json` | 2 | writable |
+| `css`, `csv`, `yaml` | 1 each | writable |
+| **`ini`** | **3** | **read-only** |
+| **`chess`** | **2** | **read-only** |
+| **`zon`** | **2** | **read-only** |
+
+Changing the field type without updating `ini`, `chess` and `zon` leaves
+those three unable to compile against the engine. So this is not
+"deferred because it is breaking" — it is **gated on landing the engine
+change and three specific consumer updates together**, which needs write
+access to all of them at once.
+
+A non-breaking half-measure exists and is deliberately not taken: an
+additive `CharsSet *string` preferred when non-nil would give Go a way to
+SAY "no quote characters" without changing any existing caller. It closes
+the capability gap and leaves the divergence — `Chars: ""` would still
+mean two different things in the two ports — so it trades a recorded
+defect for an unrecorded one plus a second way to spell the same option. `TestEmptyCharsMeansUnset` pins the current
 behaviour and **fails when the repair lands** — the signal to delete this
 entry along with it.
 
