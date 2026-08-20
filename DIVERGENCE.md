@@ -11,6 +11,18 @@ plugin surface are covered in
 not a parity record. A reader asking "will these two engines agree on my
 input?" should be able to answer it from this page alone.
 
+**That last sentence has been false at least twice, in the same way.**
+`go/doc/differences.md` has a section headed *"Behavioral Differences —
+These affect parse output for the same input"*, which is this file's own
+definition of a divergence, and things that belonged here were filed
+there instead: the rule-iteration budget (repaired, P7) and the `\s` /
+`(?i)` regex non-equivalences (permanent, P8, and now recorded below).
+Both were accurately DESCRIBED — and neither was pinned, because that
+file is prose and this one is backed by tests in both ports. When adding
+to either, the test is not "is this about the Go port?" but "can the two
+engines produce a different result for the same input?" If yes, it
+belongs here, whatever else is true about it.
+
 ## Why this matters more here than elsewhere
 
 This engine is the root of a dependency graph. A divergence here reaches
@@ -65,10 +77,18 @@ and runes in Go (any character is 1). Forced by the scan unit — TS scans
 UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
 positions, never in parsed values. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
-a 0-based offset in UTF-16 units (TS) versus runes (Go). The diagnostic's
-`len` deliberately counts Unicode code points OF THE TOKEN SOURCE, so the
-string-unit arithmetic never diverges; `len` can still differ where the
-two lexers cut different token SPANS (next entry).
+a 0-based offset in UTF-16 units (TS) versus runes (Go).
+
+That sentence was aspirational until recently: Go emitted a BYTE offset,
+so `pos` diverged for every character above U+007F rather than only above
+the BMP. Both this file and the schema described runes, which told a
+BMP-only consumer that `pos` was as safe as `col`. Repaired at the
+marshal boundary — where `len` had always converted for the same reason —
+so the description above is now what the code does. Audit item P5.
+
+The diagnostic's `len` deliberately counts Unicode code points OF THE
+TOKEN SOURCE, so the string-unit arithmetic never diverges; `len` can
+still differ where the two lexers cut different token SPANS (next entry).
 
 The same scan unit shows in the error token synthesized for an UNCLAIMED
 astral character (one no matcher can produce): both ports name it `#BD`
@@ -77,29 +97,66 @@ surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
 
-### Bad-token spans for invalid string escapes
+## Repaired, and what replaced them
 
-The two lexers cut a DIFFERENT bad token for the same invalid escape:
-TypeScript's string matcher reports the offending escape sequence itself,
-Go's reports the string from its opening quote up to the escape. Same
-error `code` — the contract holds — but the token source, and therefore
-the diagnostic's `len`/`pos`/`col`, diverge even for pure-ASCII input:
+An entry that leaves this file should leave a forwarding address: a
+reader who remembers one and cannot find it needs to know whether it was
+fixed or quietly dropped.
 
-| input | TypeScript | Go |
+- **Bad-token spans and codes for invalid string escapes.** Carried a
+  table of `len`/`pos`/`col` differences and, at one point, the claim
+  that the error `code` always agreed. Both halves are repaired: the
+  TypeScript escape decode now requires the full fixed-width hex run
+  (it accepted any prefix, so `"\x4Z"` parsed as U+0004 with the `Z`
+  discarded), and the Go string matcher now positions its errors on the
+  offending construct rather than the opening quote. Swept 32 inputs for
+  the first and 19 for the second: 0 diverge.
+
+  Kept as PARITY tests rather than deleted —
+  `TestEscapeDecodeIsStrict` and `TestStringErrorsPointAtTheConstruct`
+  in both ports. Both defects are easy to reintroduce and silent when
+  they are: a plain `parseInt` is the obvious way to write the decode,
+  and dropping the point-move leaves the codes right and only the
+  positions wrong.
+
+### Rule-iteration budget: a fractional `rule.maxmul`
+
+The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
+Go, so a value between 0 and 1 shrinks the budget in one port and cannot
+be written in the other.
+
+| options | TypeScript | Go |
 |---|---|---|
-| `"\uZZZZ"` | code `invalid_unicode`, token src `\uZZZZ`, pos 1, col 2, len 6 | code `invalid_unicode`, token src `"\uZZZZ`, pos 0, col 1, len 7 |
+| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; through an options map it truncates to `0`, which coerces to the default `3`, and parses |
 
-This is span metadata on an already-agreed failure, not a disagreement
-about the input's value: both ports reject the document with the same
-code, and no parsed value exists to differ. Aligning the spans would mean
-rewriting one lexer's error recovery to match the other's internal
-matcher structure, for display-only gain. Consumers should treat
-`len`/`pos`/`col` on bad-token errors as advisory and anchor on `code`
-(and `row`, which agrees).
+That Go column was not true when first written: `MapToOptions` handled
+`rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
+entirely, so a shared options blob set the multiplier in TypeScript and
+left Go on its default with nothing to notice. Plumbed, and pinned by
+`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. `maxmul` is
+the only numeric option that path carries; the others (`rewind.history`,
+the `error.recover` caps, `parse.budget.checkEveryN`) are still dropped,
+which is an API gap rather than a divergence and is noted in
+[`go/doc/differences.md`](go/doc/differences.md).
 
-Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
-(`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
-spans on purpose, so changing either side fails loudly.
+Everything else about this guard is aligned, and was not. Three separate
+ways it produced a different result for the same input, all repaired:
+TypeScript honoured a zero or negative multiplier literally; Go wrapped
+the product and met its own floor of 100, so a LARGER multiplier was a
+STRICTER guard; and the two ports measured source length in different
+units — UTF-16 code units in TypeScript, bytes in Go — so any source
+above U+007F got a different budget in each. See "Rule-Iteration Budget"
+in [`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
+
+Not repaired here, because the fix is to the option's TYPE. Narrowing
+TypeScript's `maxmul` to an integer would break callers for a setting
+nobody tunes fractionally, and widening Go's would put a float in a
+loop counter. The floor of 100 bounds the damage: a fractional multiplier
+cannot make a SHORT parse fail in either port.
+
+Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
+expressible here and not in Go') alongside the aligned cases, so the two
+are read together.
 
 ## Not divergences
 

@@ -19,6 +19,11 @@ describe('json-spec', function () {
     const j = new Tabnas({ plugins: [json] })
     for (const name of ['include-json', 'include-json-utf8']) {
       for (const { cols, row } of loadTSV(name)) {
+        // Skip comment and short rows, matching diagnostic.test.js. loadTSV
+        // does not filter them, and the Go side skips them only INCIDENTALLY,
+        // via a `len(cols) < 2` guard — so a `#` line in a shared fixture was
+        // silently ignored by one runtime and a TypeError in the other.
+        if (cols.length < 2 || cols[0].startsWith('#')) continue
         const [input, expected] = cols
         assert.deepEqual(
           j.parse(input),
@@ -33,6 +38,7 @@ describe('json-spec', function () {
     const j = new Tabnas({ plugins: [json] })
     for (const name of ['include-json-errors', 'include-json-utf8-errors'])
     for (const { cols, row } of loadTSV(name)) {
+      if (cols.length < 2 || cols[0].startsWith('#')) continue
       const [input, expected] = cols
       assert.ok(
         expected.startsWith('ERROR:'),
