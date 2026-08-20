@@ -121,13 +121,26 @@ be written in the other.
 
 | options | TypeScript | Go |
 |---|---|---|
-| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; a shared options blob reaches `*int` as `0`, which coerces to the default `3`, and parses |
+| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; through an options map it truncates to `0`, which coerces to the default `3`, and parses |
 
-Everything else about this guard is aligned, and was not: both ports used
-to reject valid input at one end of `maxmul` — TypeScript by honouring a
-zero or negative multiplier literally, Go by wrapping the product and
-meeting its own floor of 100. Repaired; see "Rule-Iteration Budget" in
-[`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
+That Go column was not true when first written: `MapToOptions` handled
+`rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
+entirely, so a shared options blob set the multiplier in TypeScript and
+left Go on its default with nothing to notice. Plumbed, and pinned by
+`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. `maxmul` is
+the only numeric option that path carries; the others (`rewind.history`,
+the `error.recover` caps, `parse.budget.checkEveryN`) are still dropped,
+which is an API gap rather than a divergence and is noted in
+[`go/doc/differences.md`](go/doc/differences.md).
+
+Everything else about this guard is aligned, and was not. Three separate
+ways it produced a different result for the same input, all repaired:
+TypeScript honoured a zero or negative multiplier literally; Go wrapped
+the product and met its own floor of 100, so a LARGER multiplier was a
+STRICTER guard; and the two ports measured source length in different
+units — UTF-16 code units in TypeScript, bytes in Go — so any source
+above U+007F got a different budget in each. See "Rule-Iteration Budget"
+in [`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
 
 Not repaired here, because the fix is to the option's TYPE. Narrowing
 TypeScript's `maxmul` to an integer would break callers for a setting

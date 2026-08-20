@@ -96,6 +96,68 @@ describe('rule-budget', () => {
     assert.equal(ok.parse('a'), 'a')
   })
 
+  it('measures the source in UTF-16 units, as Go now does', () => {
+    // The budget scales with SOURCE LENGTH, and the two ports must
+    // measure that length in the same unit. They did not: UTF-16 code
+    // units here (`lex.src.length`, free) and BYTES in Go
+    // (`len(src)`). Same document, different budget, for anything above
+    // U+007F.
+    //
+    // Reachable, and found by review rather than by any sweep — every
+    // sweep so far varied the OPTION and left the source ASCII. The
+    // grammar below pushes N children before consuming the source,
+    // which separates the two: over 30 astral characters Go parsed to
+    // N = 2879 and this port only to N = 1439, so every N in between
+    // was accept-in-Go / reject-here on identical input.
+    //
+    // Aligned by counting UTF-16 units in Go too (`utf16Len`), which
+    // costs one non-decoding pass there and leaves ASCII untouched.
+    // NOT aligned on rune counts: this port would need an O(n) string
+    // iteration to get those, on a hot path where it reads a field.
+    //
+    // go/rule_budget_test.go asserts the same five rows with the same
+    // two numbers. Audit item P7.
+    const deepPushParses = (n, src) => {
+      const j = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+      j.rule('top', (rs) => rs
+        .open([{ s: [], p: 'deep' }])
+        .close([{ s: ['#ZZ'], a: (r) => { r.node = r.child.node } }]))
+      j.rule('deep', (rs) => rs
+        .open([
+          { s: [], p: 'deep', c: (r) => r.d < n },
+          { s: ['#TX'], a: (r) => { r.node = r.o0.val } },
+        ])
+        .close([{ a: (r) => { if (undefined === r.node) r.node = r.child.node } }]))
+      try {
+        j.parse(src)
+        return true
+      } catch (e) {
+        return false
+      }
+    }
+
+    const EM = '\u{1F600}'
+    const cases = [
+      // 60 UTF-16 units each, whatever their byte length: 60, 120 and
+      // 180 bytes respectively. All three had different budgets in Go
+      // before; all three have the same one now.
+      ['60 ascii', 'a'.repeat(60), 1439],
+      ['30 astral', EM.repeat(30), 1439],
+      ['60 U+20AC', '\u20ac'.repeat(60), 1439],
+      ['30 ascii + 15 astral', 'a'.repeat(30) + EM.repeat(15), 1439],
+
+      // The control: twice the units, twice the budget. Without this
+      // the rows above are also satisfied by ignoring source length.
+      ['120 ascii', 'a'.repeat(120), 2879],
+    ]
+
+    for (const [label, src, last] of cases) {
+      assert.equal(deepPushParses(last, src), true, label + ' N=' + last)
+      assert.equal(deepPushParses(last + 1, src), false,
+        label + ' N=' + (last + 1) + ' should exceed the budget')
+    }
+  })
+
   it('a fractional maxmul is expressible here and not in Go', () => {
     // `rule.maxmul` is a `number` in TypeScript and a `*int` in Go, so a
     // multiplier between 0 and 1 shrinks the budget here and cannot be

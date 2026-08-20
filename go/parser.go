@@ -447,7 +447,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	if maxmul <= 0 {
 		maxmul = 3
 	}
-	maxr := satMul(satMul(2*len(p.RSM)*2, len(src)), maxmul)
+	maxr := satMul(satMul(2*len(p.RSM)*2, utf16Len(src)), maxmul)
 	if maxr < 100 {
 		maxr = 100
 	}
@@ -1010,6 +1010,35 @@ func parseNumericString(s string) float64 {
 
 // maxInt is the largest value of the platform int.
 const maxInt = int(^uint(0) >> 1)
+
+// utf16Len counts s in UTF-16 code units — the unit ts/src/parser.ts gets
+// for free from `lex.src.length`.
+//
+// The rule-iteration budget scales with source length, and the two ports
+// used different units for it: UTF-16 there, BYTES here. Same document,
+// different budget, and reachable: a grammar that pushes N children
+// before consuming a 30-emoji source parsed for every N up to 2879 here
+// and only to 1439 there. Bytes are the wrong unit twice over — they
+// agree with UTF-16 only for ASCII, and they are not what any other
+// length in this engine counts. Audit item P7.
+//
+// One pass, no decoding: a byte that is not a UTF-8 continuation byte
+// starts a rune, and a rune whose lead byte is >= 0xF0 is outside the
+// BMP and so costs TWO UTF-16 units. Exact for well-formed input and
+// stable for malformed input, which this engine passes through rather
+// than rejecting.
+func utf16Len(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b&0xC0 != 0x80 {
+			n++
+			if 0xF0 <= b {
+				n++
+			}
+		}
+	}
+	return n
+}
 
 // satMul multiplies two non-negative ints, saturating at maxInt rather
 // than wrapping. Used for the rule-iteration budget, where a wrapped

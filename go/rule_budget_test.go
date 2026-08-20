@@ -54,13 +54,18 @@ func TestRuleBudgetNeverRejectsAValidParse(t *testing.T) {
 		// these literally and rejected the same input.
 		{"0", ip(0)},
 		{"-1", ip(-1)},
-		{"most negative int", ip(-9223372036854775808)},
+		{"most negative int", ip(-maxInt - 1)},
 
 		// The top end. Every one of these overflowed before the repair;
 		// only some of them landed negative, which is the point.
-		{"1e9", ip(1000000000)},
-		{"1e18", ip(1000000000000000000)},
-		{"maxint 2^63-1", ip(9223372036854775807)},
+		//
+		// Derived from maxInt rather than written out, so the file
+		// compiles on a 32-bit target: `1e18` is not a valid `int`
+		// there, and an untyped constant that large is a compile
+		// error, not a test failure.
+		{"maxInt / 8", ip(maxInt / 8)},
+		{"maxInt / 2", ip(maxInt / 2)},
+		{"maxInt", ip(maxInt)},
 	} {
 		j := Make(Options{Rule: &RuleOptions{MaxMul: c.maxmul}})
 		if err := j.Use(jsonPlugin, nil); err != nil {
@@ -123,10 +128,152 @@ func TestSatMulSaturatesRatherThanWrapping(t *testing.T) {
 		{maxInt, 2, maxInt},
 		{2, maxInt, maxInt},
 		{maxInt, maxInt, maxInt},
-		{1 << 32, 1 << 32, maxInt},
+		// Two factors whose product overflows on any platform width.
+		{maxInt/2 + 1, 4, maxInt},
 	} {
 		if got := satMul(c.a, c.b); got != c.want {
 			t.Errorf("satMul(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// The budget scales with SOURCE LENGTH, and the two ports must measure
+// that length in the same unit. They did not: UTF-16 code units in
+// TypeScript (`lex.src.length`, free) and BYTES here (`len(src)`). Same
+// document, different budget, for anything above U+007F.
+//
+// Reachable, and found by review rather than by any sweep — every sweep
+// so far varied the OPTION and left the source ASCII. A grammar that
+// pushes N children before consuming the source separates the two: over
+// 30 astral characters it parsed to N = 2879 here and only to N = 1439
+// there, so every N in between was accept-in-Go / reject-in-TypeScript
+// on identical input.
+//
+// Aligned by counting UTF-16 units here too (`utf16Len`), which costs
+// one non-decoding pass and leaves ASCII untouched. Not aligned on rune
+// counts: TypeScript would need an O(n) string iteration to get those,
+// on a hot path where it currently reads a field.
+//
+// ts/test/rule-budget.test.js asserts the same five rows with the same
+// two numbers. Audit item P7.
+func TestRuleBudgetMeasuresSourceInUTF16Units(t *testing.T) {
+	for _, c := range []struct {
+		label string
+		src   string
+		last  int // largest N that still parses
+	}{
+		// 60 UTF-16 units each, whatever their byte length: 60, 120 and
+		// 180 bytes respectively. All three had different budgets here
+		// before; all three have the same one now.
+		{"60 ascii", strings.Repeat("a", 60), 1439},
+		{"30 astral", strings.Repeat("\U0001F600", 30), 1439},
+		{"60 U+20AC", strings.Repeat("\u20ac", 60), 1439},
+		{"30 ascii + 15 astral",
+			strings.Repeat("a", 30) + strings.Repeat("\U0001F600", 15), 1439},
+
+		// The control: twice the units, twice the budget. Without this
+		// the rows above are also satisfied by ignoring source length.
+		{"120 ascii", strings.Repeat("a", 120), 2879},
+	} {
+		if !deepPushParses(c.last, c.src) {
+			t.Errorf("%s: N=%d should parse", c.label, c.last)
+		}
+		if deepPushParses(c.last+1, c.src) {
+			t.Errorf("%s: N=%d should exceed the budget", c.label, c.last+1)
+		}
+	}
+}
+
+// A grammar whose iteration count is driven by N and not by the source:
+// `top` pushes a `deep` chain N levels deep before `deep` consumes the
+// single text token.
+func deepPushParses(n int, src string) bool {
+	j := Make(Options{Rule: &RuleOptions{Start: "top", Exclude: "tabnas,imp"}})
+	j.Rule("top", func(rs *RuleSpec, p *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{}, P: "deep"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}},
+			A: func(r *Rule, ctx *Context) { r.Node = r.Child.Node }})
+	})
+	j.Rule("deep", func(rs *RuleSpec, p *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{}, P: "deep",
+			C: func(r *Rule, ctx *Context) bool { return r.D < n }})
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinTX}},
+			A: func(r *Rule, ctx *Context) { r.Node = r.O0.Val }})
+		rs.AddClose(&AltSpec{A: func(r *Rule, ctx *Context) {
+			if r.Node == nil && r.Child != nil {
+				r.Node = r.Child.Node
+			}
+		}})
+	})
+	_, err := j.Parse(src)
+	return err == nil
+}
+
+func TestUTF16Len(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		want int
+	}{
+		{"", 0},
+		{"abc", 3},
+		{"\u00e9", 1},       // 2 bytes, 1 unit
+		{"\u20ac", 1},       // 3 bytes, 1 unit
+		{"\U0001F600", 2},   // 4 bytes, a surrogate PAIR
+		{"a\U0001F600b", 4}, // 6 bytes
+		{"\u00e9\u20ac", 2}, // 5 bytes
+		// Malformed UTF-8, which this engine passes through rather
+		// than rejecting. The budget only needs a finite, stable
+		// number here, and these are what the rule gives: 0xFF is a
+		// non-continuation byte with a lead >= 0xF0, so it counts 2;
+		// a stray 0x80 is a continuation byte and counts 0.
+		{"\xff", 2},
+		{"a\x80b", 2},
+	} {
+		if got := utf16Len(c.s); got != c.want {
+			t.Errorf("utf16Len(%q) = %d, want %d", c.s, got, c.want)
+		}
+	}
+}
+
+// `rule.maxmul` reaches this port through an untyped options map — the
+// path SetOptionsText and a shared options blob take.
+//
+// It did not. MapToOptions handled `rule.start`, `finish`, `include` and
+// `exclude` and silently dropped `maxmul`, so a shared options blob that
+// set the runaway multiplier configured TypeScript and left Go on its
+// default, with nothing to notice. Found by review while checking a
+// claim in DIVERGENCE.md that described a conversion no code performed.
+func TestMaxMulSurvivesTheOptionsMap(t *testing.T) {
+	for _, c := range []struct {
+		label string
+		val   any
+		want  int
+	}{
+		{"JSON number", float64(7), 7},
+		{"Go int", 7, 7},
+		{"zero", float64(0), 0},
+		{"negative", float64(-1), -1},
+
+		// The DIVERGENCE.md entry's claim, now true: a fractional
+		// multiplier truncates to 0 here and is coerced to the default
+		// at parse time. TypeScript keeps the fraction.
+		{"fractional", float64(0.01), 0},
+	} {
+		opts := MapToOptions(map[string]any{"rule": map[string]any{"maxmul": c.val}})
+		if opts.Rule == nil || opts.Rule.MaxMul == nil {
+			t.Errorf("%s: maxmul dropped", c.label)
+			continue
+		}
+		if got := *opts.Rule.MaxMul; got != c.want {
+			t.Errorf("%s: maxmul = %d, want %d", c.label, got, c.want)
+		}
+	}
+
+	// Absent stays absent, rather than becoming a zero that the parse
+	// then reads as "coerce me".
+	opts := MapToOptions(map[string]any{"rule": map[string]any{"start": "val"}})
+	if opts.Rule != nil && opts.Rule.MaxMul != nil {
+		t.Errorf("maxmul invented from an options map that had none: %d",
+			*opts.Rule.MaxMul)
 	}
 }

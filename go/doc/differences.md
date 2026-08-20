@@ -196,14 +196,19 @@ The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul`, floored
 at `100`, with a non-positive multiplier coerced to the default `3`, in
 **both** ports.
 
+`srcLen` is counted in **UTF-16 code units** in both — free in
+TypeScript, one non-decoding pass (`utf16Len`) here.
+
 This subsection previously recorded a difference — Go coerced and floored,
 TypeScript honoured `rule.maxmul: 0` literally and rejected valid input
 with `unexpected`. It was a divergence by this document's own heading
 ("These affect parse output for the same input"), filed here rather than
-in `DIVERGENCE.md`, and so never pinned. Repaired at both ends: TypeScript
-now coerces, and Go's product is computed with a saturating multiply,
-because a wrapped negative product met that same `100` floor and made a
-LARGER multiplier a STRICTER guard. Audit item P7.
+in `DIVERGENCE.md`, and so never pinned. It also recorded only ONE of the
+three: repairing it turned up a second (Go's product wrapped, and the
+negative result met that same `100` floor, so a LARGER multiplier was a
+STRICTER guard) and review turned up a third (source length was measured
+in bytes here and UTF-16 units there, so anything above U+007F got a
+different budget in each port). Audit item P7.
 
 Pinned in `go/rule_budget_test.go` and `ts/test/rule-budget.test.js`,
 which assert the same table at both ends and, separately, that the guard
@@ -213,6 +218,23 @@ One thing about `maxmul` is still not aligned, and it is the option's
 TYPE rather than the guard: `number` in TypeScript, `*int` in Go, so a
 fractional multiplier is expressible only in TypeScript. Recorded in
 [`DIVERGENCE.md`](../../DIVERGENCE.md).
+
+### `MapToOptions` carries only some options
+
+Not a divergence — an API gap here, recorded so it is not mistaken for
+one. `MapToOptions` (the path `SetOptionsText` and a shared options blob
+take) builds `Options` field by field, and a field it does not name is
+dropped in silence rather than refused. `rule.maxmul` was dropped that
+way until it was plumbed for the repair above, so a shared blob
+configured the runaway guard in TypeScript and left this port on its
+default.
+
+The remaining numeric options take the same path and are still dropped:
+`rewind.history`, `error.recover`'s `maxSkip` / `maxRecoveries` /
+`suppress`, and `parse.budget.checkEveryN`. Set those on the `Options`
+struct directly. Unmarshalling JSON straight into `Options` is not a
+workaround for the fractional case — it rejects a fractional number
+rather than truncating it.
 
 ### Token Consumption
 
