@@ -664,8 +664,19 @@ add a `pos` note to `go/doc/differences.md`, and add one fixture row with
 a BMP non-ASCII character *before* the failing token (`["é" 2]`, where
 `col` agrees at 6 and `pos` differs 5-vs-6) with opposite assertions in
 `ts/test/divergence.test.js` and `go/divergence_test.go`, mirroring the
-pattern already used for `TestDivergenceBadEscapeSpanIncludesQuote`. That
-is roughly 30 lines now.
+opposite-assertion pattern those two files already use for the ASTRAL
+COLUMN — `'astral characters advance the column by TWO here, one in Go'`
+against `TestDivergenceAstralColumnIsOneRune`. That is roughly 30 lines
+now.
+
+(This paragraph used to name a different test as the pattern to copy. It
+was deleted in #139 along with the divergence entry it belonged to, and
+the name is not repeated here even to disown it: `ax-phantom-gates` flags
+any `Test`-shaped name a doc mentions and nothing defines, and it cannot
+tell "this exists" from "this used to". Review caught a first correction
+that pointed at the lone-surrogate and unclaimed-character pairs — those
+live in `surrogate-pairing.test.js` and the diagnostic tests, NOT here, so
+it swapped one unresolvable reference for another.)
 
 ### 4.2 Bad-token spans — the one genuinely free choice
 
@@ -1063,8 +1074,16 @@ replaced a section of `go/doc/differences.md` titled "Known gap: per-run
 vs per-recovery diagnostics" with "Aligned", and `git log -S "lexer soft
 mode" -- ts/src/rules.ts` shows the TS side arrived in `2b21c8d` (#96). So
 #106, #108 and #109 are three commits and 1,477 lines closing **one** TS
-feature, with a named gap test (`TestRecoverCascadeParityGap`) sitting in
-the tree meanwhile. The genuinely Go-only work is `94c2cf1` (the C ABI +
+feature, with a named gap test sitting in the tree meanwhile.
+
+(That test was real and is gone: #106 introduced it, and #109 deleted it
+while renaming the tests around it, because closing the gap is what
+removes a gap test. The name is not repeated here — `ax-phantom-gates`
+flags any `Test`-shaped name a doc mentions and nothing defines, and it
+cannot tell "this exists" from "this used to". Two passes over this
+paragraph got the history wrong before the log settled it: `grep` over the
+working tree says "never existed", `git log -S` says "existed, then did
+not". A snapshot is not a history.) The genuinely Go-only work is `94c2cf1` (the C ABI +
 Python binding), `83e8e23` (perf) and one Go-specific data race.
 
 ### 6.3 Who pays it
