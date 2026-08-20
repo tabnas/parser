@@ -156,11 +156,26 @@ func TestRelexCannotAcceptAnUnwantedCut(t *testing.T) {
 // the #BD to the parser instead of raising immediately, so an alternate
 // gets the chance to re-cut it; when none can, the SAME diagnostic must
 // still surface rather than a generic one.
+//
+// The wanted tin is #NR, and that is the whole point of the test rather than
+// an incidental choice. This case used to want #TX and `"unterminated` — but
+// a quote is not a text ender, so the span re-cuts to #TX perfectly well and
+// the parse SUCCEEDS. It only raised here because Go stopped a text run at a
+// quote char, which is the divergence removed in this commit; the test was
+// pinning that divergence while claiming to test diagnostic survival. TS
+// measured on the same three tins:
+//
+//	want #TX -> OK "\"unterminated"     (the re-cut succeeds)
+//	want #NR -> ERROR unterminated_string
+//	want #ST -> ERROR unterminated_string
+//
+// #NR keeps the property under test — no alternate CAN take this span — and
+// TestRelexBadTokenRecutsToText below covers the #TX half that now succeeds.
 func TestRelexBadTokenStillRaisesItsOwnError(t *testing.T) {
 	j := Make(Options{Lex: &LexOptions{Relex: relexTrue()}})
 	j.Rule("val", func(rs *RuleSpec, p *Parser) {
 		rs.AddOpen(&AltSpec{
-			S: [][]Tin{{j.Token("#TX")}},
+			S: [][]Tin{{j.Token("#NR")}},
 			A: func(r *Rule, ctx *Context) { r.Node = r.O0.Src },
 		})
 	})
@@ -171,6 +186,27 @@ func TestRelexBadTokenStillRaisesItsOwnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unterminated_string") {
 		t.Errorf("deferred bad token lost its own diagnostic: %v", err)
+	}
+}
+
+// The other half: an alternate that CAN take the span does, and the parse
+// succeeds. `"unterminated` re-cuts to #TX because a quote does not end a
+// text run — matching TS, which returns the same string here.
+func TestRelexBadTokenRecutsToText(t *testing.T) {
+	j := Make(Options{Lex: &LexOptions{Relex: relexTrue()}})
+	j.Rule("val", func(rs *RuleSpec, p *Parser) {
+		rs.AddOpen(&AltSpec{
+			S: [][]Tin{{j.Token("#TX")}},
+			A: func(r *Rule, ctx *Context) { r.Node = r.O0.Src },
+		})
+	})
+
+	v, err := j.Parse(`"unterminated`)
+	if nil != err {
+		t.Fatalf("expected the span to re-cut to #TX, got %v", err)
+	}
+	if s, _ := v.(string); s != `"unterminated` {
+		t.Errorf("re-cut text: got %q, want %q", s, `"unterminated`)
 	}
 }
 

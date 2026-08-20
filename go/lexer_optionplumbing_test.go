@@ -120,6 +120,34 @@ func TestSpecLexTextLineTerminator(t *testing.T) {
 	}
 }
 
+// TestSpecLexTextQuote runs the shared lex-text-quote.tsv fixture (the TS
+// counterpart is 'text-quote-spec' in ts/test/lex.test.js). Columns:
+// input | expected, same ERROR:<code> / <name>:<value> contract as
+// lex-string-control.
+//
+// The rule: a quote char is NOT a text ender. TS builds cfg.rePart.ender from
+// the space and line chars, plus opts.ender, fixed tokens, comment starters
+// and EOF — cfg.string.chars is deliberately absent. textStopBase here
+// included the string chars, so a text run stopped at the quote, and that was
+// the single largest divergence class measured across the fleet: `a"b`,
+// `x:a"b`, `{k:a"b}` and `[a"b]` all parse in TS and were parse ERRORS here,
+// while `ab"c"d` came back as ["ab","c","d"] against "ab\"c\"d" there.
+//
+// The last two rows are the boundary: a text run may CONTAIN a quote, but a
+// source that STARTS with one is still a string, and an unterminated one is
+// still an error in both runtimes.
+func TestSpecLexTextQuote(t *testing.T) {
+	for _, row := range loadSpecTSV(t, "lex-text-quote") {
+		src := preprocessEscapes(tsvCol(row.cols, 0))
+		want := preprocessEscapes(tsvCol(row.cols, 1))
+
+		if got := lexOne(src, buildConfig(&Options{})); got != want {
+			t.Errorf("lex-text-quote line %d: input=%q: got %q, want %q",
+				row.lineNo, src, got, want)
+		}
+	}
+}
+
 // TestSpecLexStringControl runs the shared lex-string-control.tsv fixture.
 // Columns: allowControl | input | expected, where expected is either
 // ERROR:<code> or #ST:<string value>. \t \n \r are escaped in BOTH the input

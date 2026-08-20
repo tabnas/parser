@@ -241,6 +241,39 @@ rather than truncating it.
 When no grammar alternate matches, both implementations raise an immediate
 parse error. Token consumption behavior is aligned.
 
+### Unquoted Text and Quote Characters
+
+Aligned. **A quote character does not end an unquoted text run**, in either
+runtime: `a"b`, `a'b` and `` a`b `` are each ONE `#TX` token, and `ab"c"d` is
+one token whose value contains both quotes.
+
+TS builds `cfg.rePart.ender` from the space and line chars plus `opts.ender`,
+the fixed tokens and the comment starters; `cfg.string.chars` is deliberately
+not among them. A grammar that wants a quote to end text says so through
+`opts.ender`, which is the documented extension point.
+
+Go's `textStopBase` used to test the string chars as well, which stopped a
+text run at the quote. That was the largest divergence class measured across
+the fleet — `a"b`, `x:a"b`, `{k:a"b}` and `[a"b]` all parsed in TS and were
+parse errors here, and `ab"c"d` came back as `["ab","c","d"]` against
+`"ab\"c\"d"` there.
+
+**The boundary, which is the part worth getting right:** a text run may
+CONTAIN a quote, but a source that STARTS with one is still a string. `"ab"`
+is `#ST`, and `"a` is an `unterminated_string` error, in both. A string only
+begins where a text run is not already in progress.
+
+Two consequences for callers, both aligned with TS:
+
+- With `string.abandon`, `matchString` returns nil and the text matcher takes
+  the span, so an abandoned string lexes as `#TX` rather than raising.
+- With `lex.relex`, a bad string token's span can be re-cut to `#TX` by an
+  alternate that wants one; when no alternate can take it, the original
+  diagnostic still surfaces.
+
+Pinned by the shared fixture `test/spec/lex-text-quote.tsv`, run by both
+suites.
+
 ## Aligned Error Handling
 
 Both implementations now share the same error model:

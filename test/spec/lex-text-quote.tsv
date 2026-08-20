@@ -1,0 +1,8 @@
+input	expected
+a"b	#TX:a"b
+a'b	#TX:a'b
+ab"c"d	#TX:ab"c"d
+"ab"	#ST:ab
+a b	#TX:a
+a"	#TX:a"
+"a	ERROR:unterminated_string
