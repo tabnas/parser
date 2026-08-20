@@ -29,6 +29,21 @@ func TestEmptyCharsMeansUnset(t *testing.T) {
 		}
 	}
 
+	// The same trap on the two fields the first pass missed. Not
+	// cosmetic: rowChars decides reported POSITIONS and escapeChar
+	// decides string-token CONTENT, so an author who sets either to ""
+	// gets different output from TypeScript, silently.
+	rowCfg := Make(Options{Line: &LineOptions{RowChars: ""}}).Config()
+	if !rowCfg.RowChars['\n'] {
+		t.Error("an empty RowChars now means NONE rather than UNSET, so " +
+			"LineOptions.RowChars's comment and DIVERGENCE.md are out of date")
+	}
+	escCfg := Make(Options{String: &StringOptions{EscapeChar: ""}}).Config()
+	if '\\' != escCfg.EscapeChar {
+		t.Error("an empty EscapeChar now means NONE rather than UNSET, so " +
+			"StringOptions.EscapeChar's comment and DIVERGENCE.md are out of date")
+	}
+
 	// And the documented way to actually turn it off still works, so the
 	// comment's advice is executable rather than merely stated.
 	off := false

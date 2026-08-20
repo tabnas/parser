@@ -163,8 +163,12 @@ type LineOptions struct {
 	// Chars: line characters. Default: "\r\n". EMPTY MEANS UNSET, not
 	// "no line characters" — see StringOptions.Chars for why, and set
 	// Lex to false to turn line lexing off.
-	Chars    string
-	RowChars string   // Row-counting characters. Default: "\n".
+	Chars string
+	// RowChars: row-counting characters. Default: "\n". EMPTY MEANS
+	// UNSET here too — options.go restores "\n" — so a grammar cannot
+	// stop rows being counted, and TypeScript honours `rowChars: ''`.
+	// Same defect, same repair, and it changes reported POSITIONS.
+	RowChars string
 	Single   *bool    // Generate separate tokens per newline. Default: false.
 	Check    LexCheck // Hook invoked before the line matcher runs (TS options.line.check).
 }
@@ -251,7 +255,11 @@ type StringOptions struct {
 	// harmless — measured, both reject a backtick string correctly.
 	MultiChars string
 
-	EscapeChar   string            // Escape character. Default: "\\".
+	// EscapeChar: the escape character. Default: "\\". EMPTY MEANS
+	// UNSET — options.go restores "\\" — so a grammar cannot turn
+	// escaping off, and TypeScript honours `escapeChar: ''`. Same
+	// defect, same repair, and it changes string-token CONTENT.
+	EscapeChar   string
 	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}. An entry mapped to "" removes a built-in escape (e.g. {"v": ""} rejects \v).
 	AllowUnknown *bool             // Allow unknown escapes. Default: true.
 

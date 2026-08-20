@@ -106,9 +106,16 @@ spans on purpose, so changing either side fails loudly.
 **Deferred, not deliberate** — this is a defect awaiting a breaking
 change, recorded here so consumers are not told it does not exist.
 
-`Chars`, `MultiChars`, `Space.Chars` and `Line.Chars` are plain `string`
-in the Go options, so `""` is their zero value and an explicitly empty
-value is indistinguishable from an unset one. `options.go` skips it
+`String.Chars`, `String.MultiChars`, `String.EscapeChar`, `Space.Chars`,
+`Line.Chars` and `Line.RowChars` are plain `string` in the Go options, so
+`""` is their zero value and an explicitly empty value is
+indistinguishable from an unset one. Each config branch tests `!= ""` and
+restores the default when empty.
+
+Six fields, not four: `Line.RowChars` and `String.EscapeChar` were
+missed on the first pass, and they are not cosmetic — `rowChars: ''`
+changes reported POSITIONS and `escapeChar: ''` changes string-token
+CONTENT. `options.go` skips it
 (`o.String.Chars != ""`) and the defaults stay in force. TypeScript
 distinguishes `''` from `undefined` and honours it.
 
