@@ -241,6 +241,39 @@ rather than truncating it.
 When no grammar alternate matches, both implementations raise an immediate
 parse error. Token consumption behavior is aligned.
 
+### Unquoted Text and Quote Characters
+
+Aligned. **A quote character does not end an unquoted text run**, in either
+runtime: `a"b`, `a'b` and `` a`b `` are each ONE `#TX` token, and `ab"c"d` is
+one token whose value contains both quotes.
+
+TS builds `cfg.rePart.ender` from the space and line chars plus `opts.ender`,
+the fixed tokens and the comment starters; `cfg.string.chars` is deliberately
+not among them. A grammar that wants a quote to end text says so through
+`opts.ender`, which is the documented extension point.
+
+Go's `textStopBase` used to test the string chars as well, which stopped a
+text run at the quote. That was the largest divergence class measured across
+the fleet — `a"b`, `x:a"b`, `{k:a"b}` and `[a"b]` all parsed in TS and were
+parse errors here, and `ab"c"d` came back as `["ab","c","d"]` against
+`"ab\"c\"d"` there.
+
+**The boundary, which is the part worth getting right:** a text run may
+CONTAIN a quote, but a source that STARTS with one is still a string. `"ab"`
+is `#ST`, and `"a` is an `unterminated_string` error, in both. A string only
+begins where a text run is not already in progress.
+
+Two consequences for callers, both aligned with TS:
+
+- With `string.abandon`, `matchString` returns nil and the text matcher takes
+  the span, so an abandoned string lexes as `#TX` rather than raising.
+- With `lex.relex`, a bad string token's span can be re-cut to `#TX` by an
+  alternate that wants one; when no alternate can take it, the original
+  diagnostic still surfaces.
+
+Pinned by the shared fixture `test/spec/lex-text-quote.tsv`, run by both
+suites.
+
 ## Aligned Error Handling
 
 Both implementations now share the same error model:
@@ -485,7 +518,12 @@ Both predate the flag question and are independent of `u`:
 - **`(?i)`** case-folds by Unicode rules in RE2, which matches JS `iu`
   rather than JS `i` alone.
 
-A shared grammar that depends on either will differ between the runtimes.
+A shared grammar that depends on either will differ between the runtimes,
+which makes these DIVERGENCES rather than porting notes — this file is a
+porting guide, and a different parse result for the same input belongs in
+the parity record. They are now recorded in
+[`DIVERGENCE.md`](../../DIVERGENCE.md) under "Regex dialect in serialized
+terminals", with a parse-level reproduction pinned in both runtimes.
 Prefer an explicit class over `\s` in a serialized terminal.
 
 ## Unicode / UTF-8
@@ -514,9 +552,27 @@ characters (TS counts 2, Go counts 1).
 TypeScript throws `TabnasError`; Go returns errors — and the Go API
 guarantees it **never panics**:
 
-- Parsing wraps a recover guard that converts any panic (including
-  panics thrown by plugin callbacks or custom matchers) into an
-  `"internal"`-code `*TabnasError`.
+- Parsing wraps a recover guard that converts a panic (including one
+  from a plugin callback or a custom matcher) into an `"internal"`-code
+  `*TabnasError` — with **one deliberate exception**. A non-nil
+  `*TabnasError` keeps its own code, because an action raising one is
+  reporting a defect in the INPUT, not an engine bug, and relabelling it
+  would leave a grammar unable to diagnose what it parses. That mirrors
+  TypeScript, whose catch is
+  `if (e instanceof TabnasError) err = e; else throw e`.
+
+  The preserved error is rebuilt through the normal error funnel, so it
+  arrives with the source excerpt, tag, hint and rule context every other
+  error carries — a plugin can populate only the exported fields.
+
+  A typed **nil** (`var te *TabnasError; panic(te)`) is not a usable
+  error and still becomes `"internal"`.
+
+  Where the ports still differ: with `Options.Parse.Recover` enabled,
+  TypeScript turns a terminal `TabnasError` into a `{value, errors}`
+  recovery result, while Go returns it as fatal. That is true of every
+  panic in this port, not only a preserved one, and predates the
+  exception above.
 - `Grammar` has the same guard for malformed specs.
 - APIs that previously panicked now return errors: `Derive` returns
   `(*Tabnas, error)` (a failing plugin during child derivation mirrors

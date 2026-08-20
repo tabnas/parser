@@ -566,6 +566,127 @@ describe('lex', function () {
     }
   })
 
+  // Shared cross-runtime fixture for what terminates an unquoted text run
+  // at a line terminator (the Go counterpart is
+  // TestSpecLexTextLineTerminator in go/lexer_optionplumbing_test.go).
+  // Columns: lineLex | fixedSep | input | expected, same ERROR:<code> /
+  // <name>:<value> contract as lex-string-control above. `fixedSep` registers
+  // U+2028 as a fixed token, which is the case where the separator DOES get
+  // an ender alternative and the run ends normally instead of failing.
+  //
+  // The rule under test comes from the REGEX DIALECT, not the ender set:
+  // the TS ender is built as `cfg.line.lex ? 'y' : 'ys'`, so with line
+  // lexing on `.` cannot cross a JS line terminator. \n and \r are also
+  // enders, so they END the run; U+2028 and U+2029 are not, so the match
+  // FAILS and no text token is produced at all. Go, whose RE2 `.` excludes
+  // only \n, ran straight through both and made `a<U+2028>b` one token.
+  //
+  // The NUMBER matcher is covered here too. Its ender regex has its own
+  // alternatives and does not contain these separators either, so
+  // `1<U+2028>b` is `unexpected` rather than `#NR:1` — and `1\nb` is the
+  // control that keeps the rule from being read as "reject everything".
+  // Getting this wrong is easy in the Go port, where one predicate answers
+  // both "can text continue?" and "can a number end here?".
+  //
+  // The U+2028/U+2029 cells hold the RAW code point: the shared escape
+  // codec is deliberately minimal (\n \r \t \\ only, see
+  // support/ts/src/escape.ts) and has no \u form. The guard below is why
+  // that is safe to rely on — an editor or tool that normalised them away
+  // would otherwise leave these rows passing while testing nothing.
+  it('text-line-terminator-spec', () => {
+    const rows = [...loadTSV('lex-text-line-terminator')]
+
+    // The fixture must still contain the characters it is about.
+    const raw = rows.map(({ cols }) => cols.join('')).join('')
+    assert.ok(
+      raw.includes('\u2028') && raw.includes('\u2029'),
+      'lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — the ' +
+      'raw code points were normalised away and these rows now test nothing',
+    )
+
+    for (const { cols, row } of rows) {
+      const [lineLex, fixedSep, src, expected] = cols
+      try {
+        const opts = { line: { lex: 'true' === lineLex } }
+        if ('true' === fixedSep) {
+          opts.fixed = { token: { '#SEP': '\u2028' } }
+        }
+        const inst = new Tabnas(opts).make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-text-line-terminator row ${row}: lineLex=${lineLex}` +
+          ` fixedSep=${fixedSep} input=${JSON.stringify(src)}` +
+          ` expected=${JSON.stringify(expected)}\n` +
+          err.message
+        throw err
+      }
+    }
+  })
+
+  // Shared cross-runtime fixture for what a QUOTE does to an unquoted text
+  // run (the Go counterpart is TestSpecLexTextQuote in
+  // go/lexer_optionplumbing_test.go). Columns: input | expected, same
+  // ERROR:<code> / <name>:<value> contract as lex-string-control above.
+  //
+  // The rule: a quote char is NOT a text ender. `cfg.rePart.ender` is built
+  // from the space and line chars, plus opts.ender, fixed tokens, comment
+  // starters and EOF — `cfg.string.chars` is deliberately not in it. So `a"b`
+  // is one text token, and a string only starts where a text run is not
+  // already running.
+  //
+  // Go's textStopBase included the string chars, so it stopped at the quote.
+  // That was the single largest divergence class measured across the fleet:
+  // `a"b`, `x:a"b`, `{k:a"b}` and `[a"b]` all parse in TS and were parse
+  // ERRORS in Go, and `ab"c"d` came back as ["ab","c","d"] there against
+  // "ab\"c\"d" here.
+  //
+  // The last two rows are the boundary, and are why this is a fixture rather
+  // than a one-liner: a text run may CONTAIN a quote, but a source that
+  // STARTS with one is still a string, and an unterminated one is still an
+  // error in both runtimes.
+  it('text-quote-spec', () => {
+    for (const { cols, row } of loadTSV('lex-text-quote')) {
+      const [src, expected] = cols
+      try {
+        const inst = new Tabnas().make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-text-quote row ${row}: input=${JSON.stringify(src)}` +
+          ` expected=${JSON.stringify(expected)}\n` + err.message
+        throw err
+      }
+    }
+  })
+
+
   // options.string.check and options.comment.check were declared and
   // consulted by the lexer but never copied into the config, so the
   // hooks were dead. text.check (which always worked) is the control.

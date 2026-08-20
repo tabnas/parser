@@ -964,7 +964,20 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
                     if (null == vspec.val) {
                       out = lex.token('#VL', remsrc, remsrc, pnt)
                     } else {
-                      let val = vspec.val(res)
+                      // `val` may be a FUNCTION of the match, or a plain
+                      // value. A serialized grammar can only carry the
+                      // second: JSON has no functions, and `@REF` reaches
+                      // only names the host registered. Calling a string
+                      // threw a TypeError, which the matcher loop turns
+                      // into a #BD bad token — so a legal shared spec
+                      // reported `unexpected` on VALID input, naming the
+                      // character rather than the option. go/lexer.go has
+                      // carried both shapes all along (`ValFunc` and
+                      // `Val`). Audit item P10.
+                      let val =
+                        'function' === typeof vspec.val
+                          ? vspec.val(res)
+                          : vspec.val
                       out = lex.token('#VL', val, remsrc, pnt)
                     }
 

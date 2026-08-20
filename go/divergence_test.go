@@ -72,19 +72,33 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 	}
 }
 
-// TestDivergenceNoRelexOption pins: "Negotiated lexing (lex.relex) —
-// TypeScript only".
+// TestRelexIsPortedAndDefaultsOff pins that negotiated lexing is NOT a
+// divergence: this port has it, TypeScript has it, and both default it off.
 //
-// The divergence is a feature's ABSENCE, so the assertion is that nothing
-// in the Go config surface accepts it. If Go ever gains relex, this fails
-// and the DIVERGENCE.md entry must go — which is the intended signal, not
-// a nuisance.
+// The header this replaces still described the test's predecessor — an
+// ABSENCE assertion pinning `"Negotiated lexing (lex.relex) — TypeScript
+// only"`. The body below had already been rewritten to assert the field IS
+// present; the comment above it had not, so the two contradicted each
+// other. Meanwhile the TypeScript half was still titled "lex.relex exists
+// here and does not in Go" and still cited that DIVERGENCE.md entry, which
+// no longer exists (`grep -in relex DIVERGENCE.md` returns nothing) — and
+// asserted nothing about Go, so it could not fail however far the two
+// ports drifted. That is the shape this file's own header warns about: a
+// divergence pinned on one side is half an assertion.
 //
-// Asserted structurally rather than behaviourally on purpose: the entry
-// says the practical impact is confined to scannerless front-ends, so for
-// every grammar in this fleet the two ports already behave identically.
-// A behavioural test would therefore pass in both ports and pin nothing.
-func TestDivergenceRelexOptionExists(t *testing.T) {
+// Asserted structurally rather than behaviourally on purpose: the
+// behaviour is covered by relex_test.go, and what this pin is for is the
+// CONFIG SURFACE agreeing across the two ports.
+//
+// The dead name is not repeated here on purpose. tasks/ax-phantom-gates
+// flags any Test-shaped name a comment mentions but nothing defines, and
+// it cannot tell "this test exists" from "this test used to"; writing the
+// name even to disown it would leave the gate red forever, and a gate
+// that is permanently red is one people learn to skip.
+//
+// TypeScript mirror: ts/test/divergence.test.js
+// 'lex.relex is ported, and defaults off, in both ports'.
+func TestRelexIsPortedAndDefaultsOff(t *testing.T) {
 	j := Make(Options{})
 	cfg := j.Config()
 
@@ -111,6 +125,24 @@ func TestDivergenceRelexOptionExists(t *testing.T) {
 	if !hasField(cfg, "Relex") {
 		t.Error("LexConfig lost its Relex field: negotiated lexing is a " +
 			"ported feature, not a divergence")
+	}
+
+	// And it is OFF by default, as in TypeScript. Without this the pair
+	// pins only that both ports HAVE the option, and one of them could
+	// start applying it to every grammar in the fleet with both suites
+	// still green.
+	if j.Config().Relex {
+		t.Error("Relex must default off, as it does in TypeScript. If " +
+			"either port changes this default, the two diverge for every " +
+			"grammar rather than only for scannerless front-ends")
+	}
+
+	// Settable, so the default above is a CHOICE this test observed and
+	// not merely a field nothing ever writes.
+	on := true
+	if !Make(Options{Lex: &LexOptions{Relex: &on}}).Config().Relex {
+		t.Error("Relex must be settable, as it is in TypeScript " +
+			"(new Tabnas({lex:{relex:true}}))")
 	}
 }
 
@@ -342,6 +374,118 @@ func TestDiagnosticPosCountsRunes(t *testing.T) {
 		if o.Pos != c.pos {
 			t.Errorf("%s: pos = %d, want %d (runes). A byte offset would "+
 				"report the character's UTF-8 width instead.", c.src, o.Pos, c.pos)
+		}
+	}
+}
+
+// TestDivergenceRegexDialect pins the serialized-regex dialect gap, asserting
+// the OPPOSITE of ts/test/divergence.test.js: that pairing IS the test. See
+// DIVERGENCE.md, "Regex dialect in serialized terminals".
+//
+// This is the first PARSE-LEVEL reproduction of it. The gap was known at the
+// regex-engine layer and recorded in go/doc/differences.md, but nothing drove
+// it through a real GrammarSpec — so "a shared grammar that depends on either
+// will differ" was a prediction, not a measurement. It goes both ways: Go
+// REJECTS what TS accepts (`\s`) and ACCEPTS what TS rejects (`(?i)`).
+func TestDivergenceRegexDialect(t *testing.T) {
+	run := func(spec, src string) string {
+		gs, err := GrammarSpecFromJSON([]byte(spec))
+		if nil != err {
+			t.Fatalf("spec: %v", err)
+		}
+		j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+		if err := j.Grammar(gs); nil != err {
+			t.Fatalf("grammar: %v", err)
+		}
+		v, perr := j.Parse(src)
+		if nil != perr {
+			return "REJECTED"
+		}
+		s, _ := v.(string)
+		return "ACCEPTED:" + s
+	}
+
+	const specWS = `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^\\s+/"}}},` +
+		`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+	const specK = `{"options":{"rule":{"start":"top"},"match":{"token":{"#K":"@/^k/i"}}},` +
+		`"rule":{"top":{"open":[{"s":["#K"],"a":"@value$"}],"close":[{}]}}}`
+
+	// Control first: the ASCII whitespace RE2 and JS agree on. A change here
+	// means something other than the dialect gap broke.
+	for _, cp := range []rune{0x20, 0x09} {
+		if got := run(specWS, string(cp)); "ACCEPTED:"+string(cp) != got {
+			t.Errorf("\\s control U+%04X: got %s, want ACCEPTED", cp, got)
+		}
+	}
+
+	// RE2's `\s` is the Perl class [\t\n\f\r ]. JS's is Unicode-aware, so TS
+	// ACCEPTS every one of these. Pinned by name so a future RE2 that widened
+	// the class fails loudly rather than quietly aligning.
+	for _, c := range []struct {
+		n  string
+		cp rune
+	}{
+		{"NBSP", 0x00A0}, {"LINE SEPARATOR", 0x2028}, {"EN QUAD", 0x2000},
+		{"IDEOGRAPHIC SPACE", 0x3000}, {"ZERO WIDTH NO-BREAK SPACE", 0xFEFF},
+	} {
+		if got := run(specWS, string(c.cp)); "REJECTED" != got {
+			t.Errorf("\\s U+%04X (%s): got %s, want REJECTED — TS accepts it; "+
+				"if Go now accepts it too the divergence is GONE and the "+
+				"DIVERGENCE.md entry should be deleted", c.cp, c.n, got)
+		}
+	}
+
+	// The other direction. RE2 case-folds by Unicode rules, so `(?i)k` matches
+	// U+212A KELVIN SIGN; JS `/i` without `u` does not, and TS rejects it.
+	for _, s := range []string{"k", "K"} {
+		if got := run(specK, s); "ACCEPTED:"+s != got {
+			t.Errorf("(?i) control %q: got %s, want ACCEPTED", s, got)
+		}
+	}
+	if got := run(specK, string(rune(0x212A))); "REJECTED" == got {
+		t.Error("(?i) U+212A KELVIN SIGN: got REJECTED, want ACCEPTED — TS " +
+			"rejects it; if Go now rejects it too the divergence is GONE")
+	}
+
+	// THE WORKAROUND, pinned rather than only written down. DIVERGENCE.md
+	// recommends an explicit class instead of `\s`, and the recommendation is
+	// worthless unless it works in BOTH runtimes: the first draft spelled it
+	// the RE2 way (\x{00a0}), which is a SyntaxError in TypeScript. This is
+	// the same assertion as its TS counterpart — not the opposite — because
+	// the whole point is that the two agree here.
+	const cls = `[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+`
+	specCls := `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^` + cls + `/"}}},` +
+		`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+	for _, cp := range []rune{0x20, 0x09, 0x00A0, 0x2028, 0x2000, 0x3000, 0xFEFF} {
+		if got := run(specCls, string(cp)); "ACCEPTED:"+string(cp) != got {
+			t.Errorf("workaround class U+%04X: got %s, want ACCEPTED — the "+
+				"class DIVERGENCE.md recommends must work in both runtimes", cp, got)
+		}
+	}
+	if got := run(specCls, "A"); "REJECTED" != got {
+		t.Errorf("workaround class %q: got %s, want REJECTED", "A", got)
+	}
+
+	// A HARSHER KIND OF DIVERGENCE: not a different result, but a grammar
+	// that will not load at all. RE2 implements neither lookahead nor
+	// backreferences (both need backtracking), so a spec written and tested
+	// against TypeScript can be unloadable here.
+	for _, c := range []struct{ name, pattern string }{
+		{"lookahead", `(?=x)x`},
+		{"backreference", `(a)\\1`},
+	} {
+		spec := `{"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^` +
+			c.pattern + `/"}}},` +
+			`"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}`
+		gs, err := GrammarSpecFromJSON([]byte(spec))
+		if nil != err {
+			t.Fatalf("%s spec: %v", c.name, err)
+		}
+		j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+		if err := j.Grammar(gs); nil == err {
+			t.Errorf("%s (%s): installed, want an install error — TS installs "+
+				"and matches it. If Go installs it too the divergence is GONE",
+				c.name, c.pattern)
 		}
 	}
 }

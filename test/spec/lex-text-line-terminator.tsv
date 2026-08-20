@@ -1,0 +1,17 @@
+lineLex	fixedSep	input	expected
+true	false	a b	ERROR:unexpected
+true	false	a b	ERROR:unexpected
+true	false	a\nb	#TX:a
+true	false	a\rb	#TX:a
+true	false	1 b	ERROR:unexpected
+true	false	12 	ERROR:unexpected
+true	false	1 b	ERROR:unexpected
+true	false	1\nb	#NR:1
+true	true	a b	#TX:a
+false	false	a b	#TX:a b
+false	false	a b	#TX:a b
+false	false	a\nb	#TX:a\nb
+false	false	a\rb	#TX:a\rb
+true	false	a—b	#TX:a—b
+true	false	a€b	#TX:a€b
+false	false	a—b	#TX:a—b

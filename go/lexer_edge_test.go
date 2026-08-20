@@ -122,9 +122,23 @@ func TestMatchStringUnknownEscapeRejected(t *testing.T) {
 }
 
 func TestMatchStringAbandon(t *testing.T) {
-	// string.abandon: matchString returns nil instead of a bad token,
-	// allowing other matchers to try; with nothing else matching, an
-	// "unexpected" error results (TS string.abandon behavior).
+	// string.abandon: matchString returns nil instead of a bad token, so
+	// other matchers get a turn — and the TEXT matcher takes it, because a
+	// quote is not a text ender. Every one of these lexes as a #TX token
+	// spanning the abandoned string.
+	//
+	// This test used to assert ZZ + "unexpected" and cite "(TS
+	// string.abandon behavior)" for it. TS does no such thing: it produces
+	// exactly the #TX tokens below, and it produced them before this change
+	// too. The old expectation described the Go-only consequence of Go
+	// stopping a text run at a quote char — the divergence, pinned as if it
+	// were the contract. Measured in TS with the option off as a control:
+	// abandon=false gives BD/unterminated_string, abandon=true gives #TX, so
+	// the option is doing what it says.
+	//
+	// The values matter as much as the kind. `"\u{GG}"` stops at `{` because
+	// `{` is a fixed token (an ender); `"a\nb"` stops at the newline. Both
+	// runtimes agree on all nine.
 	srcs := []string{
 		`"\xZZ"`,           // invalid ascii
 		`"\x4`,             // truncated ascii
@@ -136,18 +150,35 @@ func TestMatchStringAbandon(t *testing.T) {
 		`"a` + "\n" + `b"`, // control char
 		`"\q"`,             // unknown escape (with AllowUnknownEscape off)
 	}
+	// The text each abandoned string lexes as, taken from TS.
+	want := map[string]string{
+		`"\xZZ"`:           `"\xZZ"`,
+		`"\x4`:             `"\x4`,
+		`"\uZZZZ"`:         `"\uZZZZ"`,
+		`"\u4`:             `"\u4`,
+		`"\u{GG}"`:         `"\u`,
+		`"\u{42`:           `"\u`,
+		`"abc`:             `"abc`,
+		`"a` + "\n" + `b"`: `"a`,
+		`"\q"`:             `"\q"`,
+	}
 	for _, src := range srcs {
 		cfg := DefaultLexConfig()
 		cfg.StringAbandon = true
 		cfg.AllowUnknownEscape = false
 		lex := NewLex(src, cfg)
 		tkn := lex.Next()
-		if tkn.Tin != TinZZ {
-			t.Errorf("%q: expected ZZ, got %s", src, tkn.Name)
+		if nil != lex.Err {
+			t.Errorf("%q: expected no error after abandon, got %v", src, lex.Err)
+			continue
 		}
-		je, ok := lex.Err.(*TabnasError)
-		if !ok || je.Code != "unexpected" {
-			t.Errorf("%q: expected unexpected after abandon, got %v", src, lex.Err)
+		if tkn.Name != "#TX" {
+			t.Errorf("%q: expected #TX, got %s", src, tkn.Name)
+			continue
+		}
+		got, _ := tkn.Val.(string)
+		if w, ok := want[src]; ok && got != w {
+			t.Errorf("%q: text value %q, want %q", src, got, w)
 		}
 	}
 }

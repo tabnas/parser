@@ -22,6 +22,8 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
 
+const { Tabnas } = require('..')
+
 // Keep in step with regexFlagCases in go/regexflags_test.go.
 const CASES = [
   ['bmp class, no flag', /^[a-z]$/, 'q', true],
@@ -72,4 +74,42 @@ describe('regex-flags', () => {
     assert.throws(() => new RegExp('^[\\u{1F600}-\\u{1F64F}]$'), SyntaxError)
   })
 
+})
+
+describe('serialized-value-def', () => {
+  // A serialized `value.def` entry can only carry a LITERAL `val` — JSON
+  // has no functions, and `@REF` reaches only names the host registered.
+  //
+  // This port called `val` unconditionally, so a string threw a
+  // TypeError that the matcher loop turned into a #BD bad token: a legal
+  // shared grammar reported `unexpected` on VALID input, naming the
+  // character rather than the option. Go has taken both shapes from the
+  // start (`ValueDef.Val` alongside `ValFunc`), so it built the same
+  // spec and parsed it — the canonical port takes Go's shape here, per
+  // ADR-13. go/regexflags_test.go TestSerializedValueDefTakesALiteralVal
+  // is the twin. Audit item P10.
+  const top = (tn) => {
+    tn.rule('top', (rs) => rs
+      .open([{ s: ['#VL'], a: (r) => { r.node = r.o0.val } }])
+      .close([{ s: ['#ZZ'] }]))
+    return tn
+  }
+
+  it('takes a literal val from a serialized spec', () => {
+    const spec =
+      '{"options":{"value":{"def":{"kay":{"match":"@/^k$/i","val":"KAY"}}}}}'
+    const tn = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+    tn.grammar(JSON.parse(spec))
+    assert.equal(top(tn).parse('k'), 'KAY')
+  })
+
+  it('still calls a function val with the match', () => {
+    // The other shape, which a host-registered @REF supplies. Without
+    // this row the repair is also satisfied by never calling `val`.
+    const tn = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+    tn.options({
+      value: { def: { kay: { match: /^k$/i, val: (res) => 'fn:' + res[0] } } },
+    })
+    assert.equal(top(tn).parse('k'), 'fn:k')
+  })
 })

@@ -33,7 +33,7 @@ Controls whitespace handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable space recognition |
-| `Chars` | `string` | `" \t"` | Characters treated as space |
+| `Chars` | `string` | `" \t"` | Characters treated as space. **`""` means UNSET, not "none"** — it is the zero value and cannot be told from an absent field, so the default stays. Set `Lex` to `false` to turn space lexing off |
 
 ## `Line`
 
@@ -42,8 +42,8 @@ Controls line ending handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable line recognition |
-| `Chars` | `string` | `"\r\n"` | Line ending characters |
-| `RowChars` | `string` | `"\n"` | Characters that increment the row counter |
+| `Chars` | `string` | `"\r\n"` | Line ending characters. **`""` means UNSET, not "none"** — see `Space.Chars`. Set `Lex` to `false` to turn line lexing off |
+| `RowChars` | `string` | `"\n"` | Characters that increment the row counter. **`""` means UNSET, not "none"** — see `String.Chars`. Affects reported positions |
 | `Single` | `*bool` | `false` | Separate token per newline |
 
 ## `Text`
@@ -106,9 +106,9 @@ Controls quoted string parsing.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable string matching |
-| `Chars` | `string` | `"'\"\`` | Quote characters |
-| `MultiChars` | `string` | `` "`" `` | Multiline quote characters |
-| `EscapeChar` | `string` | `"\\"` | Escape character |
+| `Chars` | `string` | `"'\"\`` | Quote characters. **`""` means UNSET, not "none"** — it is the zero value, so the default quotes stay in force. TypeScript honours `chars: ''` and Go cannot; set `Lex` to `false` instead. See DIVERGENCE.md |
+| `MultiChars` | `string` | `` "`" `` | Multiline quote characters. **`""` means UNSET**, as for `Chars`. A character must also be in `Chars` to delimit a string at all |
+| `EscapeChar` | `string` | `"\\"` | Escape character. **`""` means UNSET, not "none"** — see `String.Chars`. Affects string-token content |
 | `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |
 | `EscapeStrict` | `*bool` | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `AllowUnknown: false`, yields JSON-conformant escapes |
