@@ -179,42 +179,67 @@ func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
 	}
 }
 
-// The bad-token CODE diverges for a truncated escape at end of input.
+// TypeScript's `parseInt` escape decode diverges from Go's fixed-width
+// hex requirement. Swept exhaustively — every prefix length of \x and \u,
+// with and without trailing non-hex junk, with and without a closing
+// quote, 32 cases — 16 diverge. One mechanism: as soon as ONE hex digit
+// is present, `parseInt` succeeds on that prefix, so TypeScript treats
+// the escape as complete, consumes the full width, and then either runs
+// off the end (reporting unterminated_string) or accepts a value the
+// input never specified.
 //
-// DIVERGENCE.md used to say "same error `code` — the contract holds" and
-// told consumers to anchor on it. That is false for exactly these two
-// shapes: TypeScript sees a string that ran out before its closing quote,
-// Go sees an escape that ran out of hex digits.
+// This is P3, a correctness bug in the canonical port on its own terms,
+// so the repair belongs in TypeScript and NOT here — verified by making
+// the TS \x decode require two hex digits, after which it reports
+// invalid_ascii for `"\x4`, `"\x4Z"` and `"\xZZ"` alike, matching Go.
 //
-//	`"\x4`  TS unterminated_string   Go invalid_ascii
-//	`"\u4`  TS unterminated_string   Go invalid_unicode
-//
-// Measured across the family: `"\x`, `"\u`, `"\u{42`, `"\xZZ"` and
-// `"\uZZZZ"` all agree on the code. Only these two — SOME hex digits
-// present, but not enough, and no closing quote — disagree.
-//
-// This pins what Go DOES, so it goes red when the divergence is repaired
-// and cannot outlive the entry it belongs to (admin ADR-14).
-// ts/test/divergence.test.js asserts the TypeScript half.
-func TestDivergenceTruncatedEscapeCodeDiverges(t *testing.T) {
+// These pins therefore assert what GO does, which is also what both
+// ports should do once P3 lands. They go red if Go is changed toward the
+// defect. ts/test/divergence.test.js pins the TypeScript half, and those
+// are the ones that must go red when P3 is repaired.
+func TestDivergenceEscapeDecodeIsStrict(t *testing.T) {
+	// Class 1: TypeScript ACCEPTS these, silently dropping the junk
+	// character. Go rejects.
+	for _, c := range []struct{ src, code string }{
+		{`"\x4Z"`, "invalid_ascii"},     // TS: accepts, value U+0004
+		{`"\u414Z"`, "invalid_unicode"}, // TS: accepts, value U+0414
+	} {
+		assertLexCode(t, c.src, c.code,
+			"TypeScript accepts this and discards the junk character")
+	}
+
+	// Class 2: a truncated escape carrying at least one hex digit.
+	// TypeScript reports unterminated_string for all of these.
 	for _, c := range []struct{ src, code string }{
 		{`"\x4`, "invalid_ascii"},
+		{`"\x4"`, "invalid_ascii"},
 		{`"\u4`, "invalid_unicode"},
+		{`"\u41"`, "invalid_unicode"},
+		{`"\u414Z`, "invalid_unicode"},
 	} {
-		j := Make(Options{})
-		lex := NewLex(c.src, j.Config())
-		lex.Next()
+		assertLexCode(t, c.src, c.code,
+			"TypeScript reports unterminated_string here")
+	}
 
-		je, ok := lex.Err.(*TabnasError)
-		if !ok || je == nil {
-			t.Fatalf("%s: expected a *TabnasError lex error, got %v",
-				c.src, lex.Err)
-		}
-		if je.Code != c.code {
-			t.Errorf("%s: code = %q, want %q. If this is now "+
-				"\"unterminated_string\" the divergence is REPAIRED — "+
-				"delete this test and the DIVERGENCE.md rows with it.",
-				c.src, je.Code, c.code)
-		}
+	// The control: no valid hex prefix at all, and the ports agree.
+	assertLexCode(t, `"\xZZ"`, "invalid_ascii", "both ports agree here")
+	assertLexCode(t, `"\uZZZZ"`, "invalid_unicode", "both ports agree here")
+}
+
+func assertLexCode(t *testing.T, src, want, note string) {
+	t.Helper()
+	j := Make(Options{})
+	lex := NewLex(src, j.Config())
+	lex.Next()
+
+	je, ok := lex.Err.(*TabnasError)
+	if !ok || je == nil {
+		t.Fatalf("%s: expected a *TabnasError lex error, got %v — %s",
+			src, lex.Err, note)
+	}
+	if je.Code != want {
+		t.Errorf("%s: code = %q, want %q (%s). If Go has been changed to "+
+			"match TypeScript's current behaviour, that is the wrong "+
+			"direction — see DIVERGENCE.md and P3.", src, je.Code, want, note)
 	}
 }

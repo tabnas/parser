@@ -124,39 +124,66 @@ describe('divergence', () => {
     )
   })
 
-  it('truncated escape at end of input: code diverges, not just the span', () => {
-    // DIVERGENCE.md used to say "same error code — the contract holds"
-    // and told consumers to anchor on it. False for exactly these two
-    // shapes: this port sees a string that ran out before its closing
-    // quote; Go sees an escape that ran out of hex digits.
+  it('parseInt escape decode: accepts short hex runs, where Go rejects', () => {
+    // DIVERGENCE.md: swept exhaustively — every prefix length of \x and
+    // \u, with and without trailing non-hex junk, with and without a
+    // closing quote, 32 cases — 16 diverge. One mechanism: `parseInt`
+    // stops at the first non-hex character and succeeds on whatever
+    // prefix it found, so as soon as ONE hex digit is present this port
+    // treats the escape as complete, consumes the full width, and then
+    // either runs off the end or accepts a value the input never gave.
     //
-    //   `"\x4`  TS unterminated_string   Go invalid_ascii
-    //   `"\u4`  TS unterminated_string   Go invalid_unicode
-    //
-    // Measured across the family: `"\x`, `"\u`, `"\u{42`, `"\xZZ"`
-    // and `"\uZZZZ"` all agree. Only these two — SOME hex digits
-    // present, but not enough, and no closing quote — disagree.
-    //
-    // go/divergence_test.go TestDivergenceTruncatedEscapeCodeDiverges
-    // pins the Go half. Both assert what their port DOES, so a repair
-    // turns them red rather than leaving the record standing.
-    for (const src of ['"\\x4', '"\\u4']) {
-      const j = new Tabnas()
-      const lex = makeLex({
-        src: () => src,
-        cfg: j.internal().config,
-        opts: j.options,
-        sub: {},
+    // This is P3 — a correctness bug in this port on its own terms — so
+    // THESE are the assertions that must go red when it is repaired.
+    // go/divergence_test.go TestDivergenceEscapeDecodeIsStrict pins the
+    // Go half, which is already what both ports should do.
+    const parse = (src) => {
+      const j = new Tabnas({
+        string: { allowUnknown: false },
+        rule: { start: 'val', exclude: 'tabnas,imp' },
       })
-      const t = lex.next()
-      assert.equal(t.name, '#BD', src)
+      j.rule('val', (rs) => {
+        rs.open({ s: [j.token('#ST')], a: (r) => { r.node = r.o0.val } })
+      })
+      try {
+        return { ok: true, val: j.parse(src) }
+      } catch (e) {
+        return { ok: false, code: e.code }
+      }
+    }
+
+    // Class 1: accepted here, rejected by Go, and the junk character is
+    // silently discarded.
+    assert.deepEqual(
+      parse('"\\x4Z"'),
+      { ok: true, val: '\u0004' },
+      'if this now throws, P3 is REPAIRED — Go already reports ' +
+        'invalid_ascii; delete these assertions and the DIVERGENCE.md ' +
+        'rows with them',
+    )
+    assert.deepEqual(
+      parse('"\\u414Z"'),
+      { ok: true, val: '\u0414' },
+      'if this now throws, P3 is REPAIRED — Go already reports ' +
+        'invalid_unicode',
+    )
+
+    // Class 2: a truncated escape carrying at least one hex digit is
+    // reported here as an unterminated string; Go names the escape.
+    for (const src of ['"\\x4', '"\\x4"', '"\\u4', '"\\u41"', '"\\u414Z']) {
+      const r = parse(src)
+      assert.equal(r.ok, false, src)
       assert.equal(
-        t.why,
+        r.code,
         'unterminated_string',
-        src + ': if this is now invalid_ascii/invalid_unicode the ' +
-          'divergence is REPAIRED — delete this test and the ' +
-          'DIVERGENCE.md rows with it',
+        src + ': Go reports invalid_ascii/invalid_unicode. If this is now ' +
+          'one of those, P3 is REPAIRED — delete these assertions and the ' +
+          'DIVERGENCE.md rows with them',
       )
     }
+
+    // The control: no valid hex prefix at all, and the ports agree.
+    assert.equal(parse('"\\xZZ"').code, 'invalid_ascii')
+    assert.equal(parse('"\\uZZZZ"').code, 'invalid_unicode')
   })
 })

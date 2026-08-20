@@ -95,26 +95,51 @@ before raising (`pnt.sI = sI; pnt.cI = cI` at each raise site in its
 string matcher); Go leaves the point at the opening quote and spans from
 `l.pnt.SI`. Five raise sites, one behaviour.
 
-**And the code does NOT always agree.** An earlier version of this entry
-said "same error `code` — the contract holds" and told consumers to
-anchor on it. That is false for a truncated escape at end of input, where
-the two ports disagree about which failure they are even looking at:
+**And the code does not always agree — nor does accept-versus-reject.**
+An earlier version of this entry said "same error `code` — the contract
+holds" and told consumers to anchor on it. A first correction then said
+only two shapes disagreed. Both claims were made from hand-picked inputs.
+Swept properly — every prefix length of `\x` and `\u`, with and without
+trailing non-hex junk, with and without a closing quote, 32 cases —
+**16 diverge.**
+
+One mechanism explains all 16. TypeScript decodes with `parseInt`, which
+stops at the first non-hex character and succeeds on whatever prefix it
+found. So as soon as ONE hex digit is present, TypeScript treats the
+escape as complete, consumes the full escape width regardless, and then
+either runs off the end of the source or accepts a value the input never
+specified. Go requires the full fixed-width hex run and rejects otherwise.
+
+Two visible classes:
+
+**Accept vs reject — TypeScript accepts and silently drops characters.**
 
 | input | TypeScript | Go |
 |---|---|---|
-| `"\x4` | **`unterminated_string`** | **`invalid_ascii`** |
-| `"\u4` | **`unterminated_string`** | **`invalid_unicode`** |
+| `"\x4Z"` | accepts, value `U+0004` — the `Z` is consumed and discarded | `invalid_ascii` |
+| `"\u414Z"` | accepts, value `Д` (`U+0414`) — the `Z` is consumed and discarded | `invalid_unicode` |
 
-TypeScript sees a string that ran out before its closing quote; Go sees an
-escape that ran out of hex digits. Both are defensible readings and only
-one can be the contract. Measured across the whole family — `"\x`,
-`"\u`, `"\u{42`, `"\xZZ"`, `"\uZZZZ"` all agree on the code; only the
-two shapes above, where SOME hex digits are present but not enough,
-disagree.
+**Code — every truncated escape with at least one hex digit.**
 
-So: `row` agrees everywhere. `len`/`pos`/`col` are advisory on this path.
-`code` is reliable EXCEPT for a truncated escape at end of input, which is
-the one case a consumer branching on `code` must not assume.
+TypeScript reports `unterminated_string`; Go reports `invalid_ascii` or
+`invalid_unicode`. Fourteen cases, covering `"\x4`, `"\x4"`, `"\x4Z`
+and every `\u` prefix of one to three digits in the same four shapes.
+
+**This is P3, and the repair belongs in TypeScript.** `parseInt`
+leniency is already recorded as a correctness bug in the canonical port
+on its own terms, not merely a divergence. Demonstrated rather than
+argued: with the `\x` decode changed to require exactly two hex digits,
+TypeScript reports `invalid_ascii` for `"\x4`, `"\x4Z"` and `"\xZZ"`
+alike, and still accepts `"\x41"` — which is what Go already does. So
+Go is not the port to change here; moving Go to `unterminated_string`
+would carry a consequence of the defect into the port that does not have
+it.
+
+Until P3 lands: `row` agrees everywhere, `len`/`pos`/`col` are advisory
+on this path, and `code` is reliable on this path only when the escape
+has NO valid hex prefix. A truncated or junk-terminated escape is where
+a consumer branching on `code` — or on acceptance at all — must not
+assume.
 
 Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
