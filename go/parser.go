@@ -481,11 +481,19 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	// Maximum iterations: 2 * numRules * srcLen * 2 * maxmul
+	//
+	// Multiplied with saturation, not with wrapping. A runaway guard
+	// whose budget can go NEGATIVE is worse than no guard: the floor
+	// below turns any negative product into 100, so a large MaxMul made
+	// the guard STRICTER and rejected valid input with `unexpected` — a
+	// syntax code for what is purely a configuration value. Measured at
+	// MaxMul = 2^63-1, which rejected a 61-element array that the
+	// default 3 accepts. Audit item P7.
 	maxmul := p.MaxMul
 	if maxmul <= 0 {
 		maxmul = 3
 	}
-	maxr := 2 * len(p.RSM) * len(src) * 2 * maxmul
+	maxr := satMul(satMul(2*len(p.RSM)*2, utf16Len(src)), maxmul)
 	if maxr < 100 {
 		maxr = 100
 	}
@@ -1044,4 +1052,51 @@ func parseNumericString(s string) float64 {
 	// unary + preserves -0) and encoding/json — caught by the
 	// cross-runtime token parity harness (ci/parity).
 	return val
+}
+
+// maxInt is the largest value of the platform int.
+const maxInt = int(^uint(0) >> 1)
+
+// utf16Len counts s in UTF-16 code units — the unit ts/src/parser.ts gets
+// for free from `lex.src.length`.
+//
+// The rule-iteration budget scales with source length, and the two ports
+// used different units for it: UTF-16 there, BYTES here. Same document,
+// different budget, and reachable: a grammar that pushes N children
+// before consuming a 30-emoji source parsed for every N up to 2879 here
+// and only to 1439 there. Bytes are the wrong unit twice over — they
+// agree with UTF-16 only for ASCII, and they are not what any other
+// length in this engine counts. Audit item P7.
+//
+// One pass, no decoding: a byte that is not a UTF-8 continuation byte
+// starts a rune, and a rune whose lead byte is >= 0xF0 is outside the
+// BMP and so costs TWO UTF-16 units. Exact for well-formed input and
+// stable for malformed input, which this engine passes through rather
+// than rejecting.
+func utf16Len(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b&0xC0 != 0x80 {
+			n++
+			if 0xF0 <= b {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// satMul multiplies two non-negative ints, saturating at maxInt rather
+// than wrapping. Used for the rule-iteration budget, where a wrapped
+// (negative) product would be silently converted into the smallest legal
+// budget by the floor that follows it. See ts/src/parser.ts, which needs
+// no equivalent: its arithmetic is float64 and saturates at Infinity.
+func satMul(a, b int) int {
+	if a <= 0 || b <= 0 {
+		return 0
+	}
+	if a > maxInt/b {
+		return maxInt
+	}
+	return a * b
 }

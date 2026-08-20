@@ -178,7 +178,15 @@ func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 | `RF` | `func(r *Rule, ctx *Context) string` | dynamic replace |
 | `BF` | `func(r *Rule, ctx *Context) int` | dynamic backtrack |
 | `CD` | `map[string]any` | declarative condition, converted to `C` by `NormAlt` |
-| `N`  | `map[string]int` | increment named counters (setting `0` **resets**) |
+| `N`  | `map[string]int` | increment named counters (setting `0` **resets**); **propagates** to child rules |
+| `U`  | `map[string]any` | custom props merged into `Rule.U`; **does NOT propagate** — per-rule scratch |
+| `K`  | `map[string]any` | custom "**keep**" props merged into `Rule.K`; **propagates** via push and replace. Rule-scoped, not alternate-scoped |
+
+> **Which bags propagate.** `N` and `K` are inherited by child rules on
+> both push and replace; `U` is not. `K` is named for "keep" — its content
+> is kept as the parse descends. Put per-rule scratch in `U` and anything
+> that must reach child rules in `K`. Picking the wrong bag fails silently.
+> See the root [`AGENTS.md`](../../AGENTS.md) section "Rule state".
 
 ### Counter conditions
 
