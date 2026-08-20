@@ -101,58 +101,81 @@ Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
 spans on purpose, so changing either side fails loudly.
 
-### `\s` and `(?i)` in a shared serialized regex terminal
+### Regex dialect in serialized terminals
 
-A serialized grammar carries a regex terminal as `@/pattern/flags`, a
-string SHARED between the runtimes. The flags are translated (see
-"Serialized Regex Flags" in [`go/doc/differences.md`](go/doc/differences.md)),
-but two constructs mean different things in the two regex dialects and no
-translation fixes them. A terminal using either matches a different
-LANGUAGE in each runtime.
+A grammar spec can carry a match token as a serialized regex
+(`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
+`RegExp` in TypeScript, RE2 in Go — and the two dialects disagree on two
+constructs. **It diverges in both directions.**
 
-| terminal | input | TypeScript | Go |
+| pattern | input | TypeScript | Go |
 |---|---|---|---|
-| `@/^\s+$/` | U+00A0 NBSP | **accept** | reject |
-| `@/^\s+$/` | U+2000 EN QUAD | **accept** | reject |
-| `@/^\s+$/` | U+3000 IDEOGRAPHIC SPACE | **accept** | reject |
-| `@/^\s+$/` | U+FEFF | **accept** | reject |
-| `@/^k$/i` | U+212A KELVIN SIGN | reject | **accept** |
+| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** |
+| `@/^\s+/` | U+2028, U+2000, U+3000, U+FEFF | accepted | **rejected** |
+| `@/^\s+/` | U+0020, U+0009 | accepted | accepted |
+| `@/^k/i` | `k`, `K` | accepted | accepted |
+| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted |
 
-- **`\s`** is Unicode-aware in JavaScript (NBSP, U+2028/9, U+3000, U+2000,
-  U+FEFF …) and ASCII-only in RE2 (`[\t\n\f\r ]`), with or without `u`.
-- **`(?i)`** case-folds by Unicode rules in RE2, which is JavaScript's
-  `iu` rather than `i` alone. So `/^k$/i` misses U+212A where RE2's
-  `(?i)^k$` matches it.
+JS `\s` is Unicode-aware; RE2's is the Perl class `[\t\n\f\r ]`. JS `/i`
+without `u` does not fold U+212A to `k`; RE2 case-folds by Unicode rules
+and does.
 
-It diverges in **both directions**, which is why "prefer the stricter
-port" is not available as a rule of thumb here. Prefer an explicit
-character class over `\s` in a shared terminal, and prefer a class over
-`i` where the input may carry a Unicode case fold.
+**And two constructs that do not diverge in the result but in whether the
+grammar loads at all**, which for a grammar author is worse:
 
-Not repairable without giving one runtime the other's regex engine. `\s`
-could be rewritten to an explicit class at translation time, but `(?i)`
-cannot: case folding is applied by the engine, not spelled in the
-pattern.
+| pattern | TypeScript | Go |
+|---|---|---|
+| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** |
+| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** |
 
-Pinned by `go/regexflags_test.go`
-(`TestSerializedRegexDialectDivergesAtParseLevel`) and
-`ts/test/regex-flags.test.js` ('regex-terminal-dialect'), which assert
-**opposite** accept/reject answers over the same table, at the PARSE
-level through the serialized door — not at the regex-engine layer, where
-the difference was already known and where no one had shown that it
-reaches a grammar. Each table carries controls in both directions so
-"this port accepts everything" and "this port rejects everything" both
-fail.
+RE2 implements neither, by design — both need backtracking. `go/utility.go`
+refuses them at compile time and `Grammar()` reports it, which is the right
+failure mode, but it means a spec written and tested against TypeScript can
+be unloadable in Go. The `v` flag is the same story. Treat "compiles in JS"
+as no evidence that a serialized terminal is portable.
 
-*Not* in either table: U+2028. It is a line terminator in the JavaScript
-regex dialect AND, separately, in the TypeScript text matcher, so its row
-moves for a reason that has nothing to do with this entry.
+**This is recorded rather than fixed, and the reason is worth stating
+plainly, because the two halves are not equally hard.**
 
-This was recorded in `go/doc/differences.md` as a porting note, under a
-heading reading *"Behavioral Differences — These affect parse output for
-the same input"*. Its own text said *"A shared grammar that depends on
-either will differ between the runtimes"* — a divergence, described
-exactly, in the wrong file and with no test. Audit item P8.
+`\s` is mechanically repairable: a compile-time rewrite could expand it to
+the explicit JS class before handing the pattern to RE2. That is not free —
+it means this engine ships a regex-dialect translation layer, which has to
+parse enough of the pattern to know a `\s` inside a character class from a
+`\\s` that is a literal backslash, and it then owns that translation for
+every downstream grammar in both runtimes. `(?i)` is not repairable the same
+way: RE2 has no ASCII-only case-folding flag, so matching JS would mean
+rewriting the pattern into explicit alternations.
+
+Adding the layer for one of the two is a decision for the maintainer, not a
+mechanical fix, so it is written down here with the cost attached instead of
+being taken unilaterally.
+
+**The workaround, measured rather than assumed — and spelled the JS way.**
+An explicit class in the serialized terminal makes the two agree exactly:
+
+```
+@/^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/
+```
+
+**The `\uXXXX` spelling is load-bearing.** A serialized pattern is JS source:
+TypeScript hands it to `new RegExp`, and Go lowers it to RE2. Writing the
+class the RE2 way (`\x{00a0}`) makes it a *SyntaxError in TypeScript* — a
+"portable" workaround that only works in one runtime, which is the very
+defect this entry records. The first draft of this entry had it that way
+round; it was caught in review, which is why the workaround is now pinned in
+both runtimes rather than only written down.
+
+With the pattern above both runtimes accept U+0020, U+0009, U+00A0, U+2028,
+U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
+`\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
+compile.
+
+Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect` and the
+matching case in `ts/test/divergence.test.js`, which assert **opposite**
+results on purpose. Both drive a real `GrammarSpec` through
+`grammar()` / `Grammar()` and parse: the gap was previously known only at
+the regex-engine layer, so "a shared grammar that depends on either will
+differ" was a prediction until this was wired.
 
 ## Not divergences
 
