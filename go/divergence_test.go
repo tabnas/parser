@@ -179,37 +179,27 @@ func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
 	}
 }
 
-// TypeScript's `parseInt` escape decode diverges from Go's fixed-width
-// hex requirement. Swept exhaustively — every prefix length of \x and \u,
-// with and without trailing non-hex junk, with and without a closing
-// quote, 32 cases — 16 diverge. One mechanism: as soon as ONE hex digit
-// is present, `parseInt` succeeds on that prefix, so TypeScript treats
-// the escape as complete, consumes the full width, and then either runs
-// off the end (reporting unterminated_string) or accepts a value the
-// input never specified.
+// Escape decoding is strict in BOTH ports, and this asserts it here.
 //
-// This is P3, a correctness bug in the canonical port on its own terms,
-// so the repair belongs in TypeScript and NOT here — verified by making
-// the TS \x decode require two hex digits, after which it reports
-// invalid_ascii for `"\x4`, `"\x4Z"` and `"\xZZ"` alike, matching Go.
+// This was a divergence pin. TypeScript decoded with `parseInt`, which
+// succeeds on any hex prefix, so it accepted `"\x4Z"` as U+0004 —
+// discarding the `Z` — and reported truncated escapes as
+// unterminated_string where Go named the escape. Swept then: 32 cases,
+// 16 diverged. The repair (P3) made TypeScript require the full
+// fixed-width hex run, which is what Go already did; swept after: 0.
 //
-// These pins therefore assert what GO does, which is also what both
-// ports should do once P3 lands. They go red if Go is changed toward the
-// defect. ts/test/divergence.test.js pins the TypeScript half, and those
-// are the ones that must go red when P3 is repaired.
-func TestDivergenceEscapeDecodeIsStrict(t *testing.T) {
-	// Class 1: TypeScript ACCEPTS these, silently dropping the junk
-	// character. Go rejects.
-	for _, c := range []struct{ src, code string }{
-		{`"\x4Z"`, "invalid_ascii"},     // TS: accepts, value U+0004
-		{`"\u414Z"`, "invalid_unicode"}, // TS: accepts, value U+0414
-	} {
-		assertLexCode(t, c.src, c.code,
-			"TypeScript accepts this and discards the junk character")
-	}
+// Kept as a PARITY test rather than deleted, because the boundary is
+// easy to relax again by accident — a plain `parseInt` is the obvious
+// way to write this and it is the wrong way. ts/test/divergence.test.js
+// asserts the same inputs.
+func TestEscapeDecodeIsStrict(t *testing.T) {
+	// A junk-terminated escape is not a valid escape.
+	assertLexCode(t, `"\x4Z"`, "invalid_ascii",
+		"the trailing Z must not be swallowed as part of the escape")
+	assertLexCode(t, `"\u414Z"`, "invalid_unicode",
+		"the trailing Z must not be swallowed as part of the escape")
 
-	// Class 2: a truncated escape carrying at least one hex digit.
-	// TypeScript reports unterminated_string for all of these.
+	// Nor is a truncated one, with or without a closing quote.
 	for _, c := range []struct{ src, code string }{
 		{`"\x4`, "invalid_ascii"},
 		{`"\x4"`, "invalid_ascii"},
@@ -218,12 +208,12 @@ func TestDivergenceEscapeDecodeIsStrict(t *testing.T) {
 		{`"\u414Z`, "invalid_unicode"},
 	} {
 		assertLexCode(t, c.src, c.code,
-			"TypeScript reports unterminated_string here")
+			"a short hex run is not a complete escape")
 	}
 
-	// The control: no valid hex prefix at all, and the ports agree.
-	assertLexCode(t, `"\xZZ"`, "invalid_ascii", "both ports agree here")
-	assertLexCode(t, `"\uZZZZ"`, "invalid_unicode", "both ports agree here")
+	// No valid hex prefix at all — unchanged by the repair.
+	assertLexCode(t, `"\xZZ"`, "invalid_ascii", "no hex prefix")
+	assertLexCode(t, `"\uZZZZ"`, "invalid_unicode", "no hex prefix")
 }
 
 func assertLexCode(t *testing.T, src, want, note string) {
@@ -238,8 +228,8 @@ func assertLexCode(t *testing.T, src, want, note string) {
 			src, lex.Err, note)
 	}
 	if je.Code != want {
-		t.Errorf("%s: code = %q, want %q (%s). If Go has been changed to "+
-			"match TypeScript's current behaviour, that is the wrong "+
-			"direction — see DIVERGENCE.md and P3.", src, je.Code, want, note)
+		t.Errorf("%s: code = %q, want %q (%s). Both ports decode escapes "+
+			"strictly since P3; a plain parseInt-style decode reintroduces "+
+			"the defect. See DIVERGENCE.md.", src, je.Code, want, note)
 	}
 }

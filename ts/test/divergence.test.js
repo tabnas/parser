@@ -124,19 +124,17 @@ describe('divergence', () => {
     )
   })
 
-  it('parseInt escape decode: accepts short hex runs, where Go rejects', () => {
-    // DIVERGENCE.md: swept exhaustively — every prefix length of \x and
-    // \u, with and without trailing non-hex junk, with and without a
-    // closing quote, 32 cases — 16 diverge. One mechanism: `parseInt`
-    // stops at the first non-hex character and succeeds on whatever
-    // prefix it found, so as soon as ONE hex digit is present this port
-    // treats the escape as complete, consumes the full width, and then
-    // either runs off the end or accepts a value the input never gave.
+  it('escape decode is strict, and agrees with Go', () => {
+    // This replaces a divergence pin. Until P3 was repaired, `parseInt`
+    // succeeded on any hex prefix here, so this port accepted `"\\x4Z"`
+    // as U+0004 (discarding the `Z`) and reported truncated escapes as
+    // unterminated_string where Go named the escape. Swept then: 32
+    // cases, 16 diverged. Swept after the repair: 0.
     //
-    // This is P3 — a correctness bug in this port on its own terms — so
-    // THESE are the assertions that must go red when it is repaired.
-    // go/divergence_test.go TestDivergenceEscapeDecodeIsStrict pins the
-    // Go half, which is already what both ports should do.
+    // Kept as a PARITY test rather than deleted, because the boundary is
+    // easy to relax again by accident — `parseInt` is the obvious way to
+    // write this and it is the wrong way. go/divergence_test.go
+    // TestEscapeDecodeIsStrict asserts the same inputs.
     const parse = (src) => {
       const j = new Tabnas({
         string: { allowUnknown: false },
@@ -152,38 +150,24 @@ describe('divergence', () => {
       }
     }
 
-    // Class 1: accepted here, rejected by Go, and the junk character is
-    // silently discarded.
-    assert.deepEqual(
-      parse('"\\x4Z"'),
-      { ok: true, val: '\u0004' },
-      'if this now throws, P3 is REPAIRED — Go already reports ' +
-        'invalid_ascii; delete these assertions and the DIVERGENCE.md ' +
-        'rows with them',
-    )
-    assert.deepEqual(
-      parse('"\\u414Z"'),
-      { ok: true, val: '\u0414' },
-      'if this now throws, P3 is REPAIRED — Go already reports ' +
-        'invalid_unicode',
-    )
+    // A junk-terminated escape is not a valid escape.
+    assert.equal(parse('"\\x4Z"').code, 'invalid_ascii')
+    assert.equal(parse('"\\u414Z"').code, 'invalid_unicode')
 
-    // Class 2: a truncated escape carrying at least one hex digit is
-    // reported here as an unterminated string; Go names the escape.
+    // Nor is a truncated one, with or without a closing quote.
     for (const src of ['"\\x4', '"\\x4"', '"\\u4', '"\\u41"', '"\\u414Z']) {
-      const r = parse(src)
-      assert.equal(r.ok, false, src)
-      assert.equal(
-        r.code,
-        'unterminated_string',
-        src + ': Go reports invalid_ascii/invalid_unicode. If this is now ' +
-          'one of those, P3 is REPAIRED — delete these assertions and the ' +
-          'DIVERGENCE.md rows with them',
-      )
+      assert.equal(parse(src).ok, false, src)
     }
 
-    // The control: no valid hex prefix at all, and the ports agree.
+    // No valid hex prefix at all — unchanged by the repair.
     assert.equal(parse('"\\xZZ"').code, 'invalid_ascii')
     assert.equal(parse('"\\uZZZZ"').code, 'invalid_unicode')
+
+    // And valid escapes still decode, including the braced form that was
+    // already strict and served as the model for the repair.
+    assert.equal(parse('"\\x41"').val, 'A')
+    assert.equal(parse('"\\u0041"').val, 'A')
+    assert.equal(parse('"\\u{1F600}"').val, '\u{1F600}')
+    assert.equal(parse('"a\\x41b\\u0042c"').val, 'aAbBc')
   })
 })
