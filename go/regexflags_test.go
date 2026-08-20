@@ -163,3 +163,42 @@ func TestSerializedRegexTokensParse(t *testing.T) {
 		t.Errorf("got %#v, want %q", out, "emoji:😀😀")
 	}
 }
+
+// A serialized `value.def` entry can only carry a LITERAL `val` — JSON
+// has no functions, and `@REF` reaches only names the host registered.
+//
+// This port has always taken one: `ValueDef.Val` sits alongside
+// `ValFunc`. TypeScript called `val` unconditionally, so a string threw
+// a TypeError that its matcher loop turned into a #BD bad token — a
+// legal shared grammar reporting `unexpected` on VALID input, naming the
+// character rather than the option. Repaired there under ADR-13;
+// ts/test/regex-flags.test.js asserts the same two shapes. Audit item
+// P10.
+//
+// Pinned here so the shape this port accepts cannot quietly narrow to
+// match the defect.
+func TestSerializedValueDefTakesALiteralVal(t *testing.T) {
+	const spec = `{"options":{"value":{"def":{"kay":{"match":"@/^k$/i","val":"KAY"}}}}}`
+
+	tn := Make(Options{Rule: &RuleOptions{Start: "top", Exclude: "tabnas,imp"}})
+	gs, err := GrammarSpecFromJSON([]byte(spec))
+	if err != nil {
+		t.Fatalf("spec: %v", err)
+	}
+	if err := tn.Grammar(gs, nil); err != nil {
+		t.Fatalf("grammar: %v", err)
+	}
+	tn.Rule("top", func(rs *RuleSpec, p *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinVL}},
+			A: func(r *Rule, ctx *Context) { r.Node = r.O0.Val }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+
+	v, perr := tn.Parse("k")
+	if perr != nil {
+		t.Fatalf("literal val rejected: %v", perr)
+	}
+	if v != "KAY" {
+		t.Errorf("got %#v, want %q", v, "KAY")
+	}
+}
