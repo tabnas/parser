@@ -149,16 +149,26 @@ type FixedOptions struct {
 
 // SpaceOptions controls space lexing.
 type SpaceOptions struct {
-	Lex   *bool    // Enable space lexing. Default: true.
-	Chars string   // Space characters. Default: " \t".
+	Lex *bool // Enable space lexing. Default: true.
+	// Chars: space characters. Default: " \t". EMPTY MEANS UNSET, not
+	// "no space characters" — see StringOptions.Chars for why, and set
+	// Lex to false to turn space lexing off.
+	Chars string
 	Check LexCheck // Hook invoked before the space matcher runs (TS options.space.check).
 }
 
 // LineOptions controls line-ending lexing.
 type LineOptions struct {
-	Lex      *bool    // Enable line lexing. Default: true.
-	Chars    string   // Line characters. Default: "\r\n".
-	RowChars string   // Row-counting characters. Default: "\n".
+	Lex *bool // Enable line lexing. Default: true.
+	// Chars: line characters. Default: "\r\n". EMPTY MEANS UNSET, not
+	// "no line characters" — see StringOptions.Chars for why, and set
+	// Lex to false to turn line lexing off.
+	Chars string
+	// RowChars: row-counting characters. Default: "\n". EMPTY MEANS
+	// UNSET here too — options.go restores "\n" — so a grammar cannot
+	// stop rows being counted, and TypeScript honours `rowChars: ''`.
+	// Same defect, same repair, and it changes reported POSITIONS.
+	RowChars string
 	Single   *bool    // Generate separate tokens per newline. Default: false.
 	Check    LexCheck // Hook invoked before the line matcher runs (TS options.line.check).
 }
@@ -213,10 +223,43 @@ type CommentOptions struct {
 
 // StringOptions controls quoted string lexing.
 type StringOptions struct {
-	Lex          *bool             // Enable string matching. Default: true.
-	Chars        string            // Quote characters. Default: `'"` + "`".
-	MultiChars   string            // Multiline quote characters. Default: "`".
-	EscapeChar   string            // Escape character. Default: "\\".
+	Lex *bool // Enable string matching. Default: true.
+
+	// Chars lists the quote characters. Default: `'"` + "`".
+	//
+	// AN EMPTY STRING MEANS "UNSET", NOT "NONE". This is a plain string,
+	// so "" is its zero value and `&StringOptions{Chars: ""}` cannot be
+	// told apart from `&StringOptions{}`. The default quote characters
+	// stay in force. To turn string lexing OFF, set Lex to false.
+	//
+	// TypeScript can say it, and does: `{ string: { chars: '' } }`
+	// distinguishes '' from undefined and disables string matching. So a
+	// plugin ported field-for-field diverges silently. @tabnas/css did:
+	// both ports declared `string: { chars: '' }`, and on the input a"b
+	// TypeScript raised jsonic/unexpected while Go raised
+	// jsonic/unterminated_string, having kept the default quotes. Fixed
+	// there by also saying Lex:false — see tabnas/css#24.
+	//
+	// The repair here is Chars *string, matching Lex, AllowUnknown and
+	// EscapeStrict above and below, which are pointers for exactly this
+	// reason. It is a breaking change across sixteen call sites in a
+	// published module, so it is not made here; this comment exists so
+	// the next plugin author does not have to rediscover it by measuring
+	// two ports against each other.
+	Chars string
+
+	// MultiChars lists the multiline quote characters. Default: "`".
+	// Empty means unset, as for Chars above; a character must also be in
+	// Chars to be a string delimiter at all, which is why @tabnas/json
+	// and @tabnas/chess setting MultiChars:"" alongside Chars:`"` is
+	// harmless — measured, both reject a backtick string correctly.
+	MultiChars string
+
+	// EscapeChar: the escape character. Default: "\\". EMPTY MEANS
+	// UNSET — options.go restores "\\" — so a grammar cannot turn
+	// escaping off, and TypeScript honours `escapeChar: ''`. Same
+	// defect, same repair, and it changes string-token CONTENT.
+	EscapeChar   string
 	Escape       map[string]string // Escape mappings, e.g. {"n": "\n"}. An entry mapped to "" removes a built-in escape (e.g. {"v": ""} rejects \v).
 	AllowUnknown *bool             // Allow unknown escapes. Default: true.
 

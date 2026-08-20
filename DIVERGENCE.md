@@ -191,6 +191,72 @@ Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
 expressible here and not in Go') alongside the aligned cases, so the two
 are read together.
 
+### An explicitly empty option cannot be expressed in Go
+
+**Deferred, not deliberate** — this is a defect awaiting a breaking
+change, recorded here so consumers are not told it does not exist.
+
+`String.Chars`, `String.MultiChars`, `String.EscapeChar`, `Space.Chars`,
+`Line.Chars` and `Line.RowChars` are plain `string` in the Go options, so
+`""` is their zero value and an explicitly empty value is
+indistinguishable from an unset one. Each config branch tests `!= ""` and
+restores the default when empty.
+
+TypeScript distinguishes `''` from `undefined` and honours it; Go cannot,
+so the defaults stay in force.
+
+Six fields, not four: `Line.RowChars` and `String.EscapeChar` were missed
+on the first pass, and they are not cosmetic — `rowChars: ''` changes
+reported POSITIONS and `escapeChar: ''` changes string-token CONTENT.
+
+The consequence is a **different result for the same input** whenever a
+plugin configures its lexer that way. `@tabnas/css` declared
+`string: { chars: '' }` in both ports:
+
+| input | TypeScript | Go |
+| --- | --- | --- |
+| `a"b` | `jsonic/unexpected` | `jsonic/unterminated_string` |
+
+The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
+`EscapeStrict`, which are pointers for exactly this reason. It is a
+breaking change across a published module, so it is outstanding rather
+than done — and the blocking constraint is specific enough to write down.
+
+The adoption cost, counted across the fleet excluding tests:
+
+| repo | affected call sites |
+| --- | --- |
+| `parser` | its own config branches |
+| `jsonic` | 3 |
+| `ini` | 3 |
+| `json`, `chess`, `zon` | 2 each |
+| `css`, `csv`, `yaml` | 1 each |
+
+**Consumers are not broken by the merge.** They pin the engine — `ini`,
+`zon`, `csv` and `yaml` all require `parser/go v0.8.10` — so a type change
+on `main` reaches them only when someone bumps that pin. The fifteen call
+sites are an ADOPTION cost paid at upgrade, not a coordination cost paid
+at merge.
+
+That makes this a **release-policy decision** rather than a scheduling
+puzzle: whether to spend a breaking bump on it, and when. Not a call to
+make as a side effect of a parity sweep, which is why it is recorded here
+instead of done.
+
+A non-breaking half-measure exists and is deliberately not taken: an
+additive `CharsSet *string` preferred when non-nil would give Go a way to
+SAY "no quote characters" without changing any existing caller. It closes
+the capability gap and leaves the divergence — `Chars: ""` would still
+mean two different things in the two ports — so it trades a recorded
+defect for an unrecorded one plus a second way to spell the same option. `TestEmptyCharsMeansUnset` pins the current
+behaviour and **fails when the repair lands** — the signal to delete this
+entry along with it.
+
+Sibling ports are not all exposed: of the four call sites in the fleet
+that set an empty value, only css's was live. `csv` sets `Lex: false`
+alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
+never a quote character to begin with.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
