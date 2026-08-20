@@ -17,6 +17,7 @@ package tabnas
 //     the base, not be "merged" field-by-field into a corrupt zero value.
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -41,8 +42,87 @@ func lexOne(src string, cfg *LexConfig) string {
 		return "ERROR:" + lex.Err.Error()
 	}
 
-	val, _ := tkn.Val.(string)
-	return tkn.Name + ":" + val
+	// Not a string assertion: the number matcher's Val is numeric, and a
+	// blank there would have made every #NR row in a fixture compare equal
+	// to every other. TS builds the same cell by string-concatenating
+	// tkn.val, which is what %v reproduces.
+	if str, ok := tkn.Val.(string); ok {
+		return tkn.Name + ":" + str
+	}
+	if nil == tkn.Val {
+		return tkn.Name + ":"
+	}
+	return tkn.Name + ":" + fmt.Sprintf("%v", tkn.Val)
+}
+
+// TestSpecLexTextLineTerminator runs the shared
+// lex-text-line-terminator.tsv fixture (the TS counterpart is
+// 'text-line-terminator-spec' in ts/test/lex.test.js). Columns:
+// lineLex | fixedSep | input | expected, same ERROR:<code> / <name>:<value>
+// contract as lex-string-control. `fixedSep` registers U+2028 as a fixed
+// token, the case where the separator DOES get an ender alternative and the
+// run ends there.
+//
+// What ends a text run is `LineChars`, plus space chars, ender chars, fixed
+// tokens and comment starters — and nothing else. This port has always
+// answered that way. TypeScript had a SECOND, unconfigurable answer: its
+// ender regex was built as `cfg.line.lex ? 'y' : 'ys'`, so with line lexing
+// on `.` could not cross a JS line terminator, and U+2028/U+2029 ended a run
+// no option had named. Since they are not enders either, the match then
+// FAILED and no text token came out at all — `#BD`, reported as
+// `unexpected`. Repaired there (audit item P4); every row below is what BOTH
+// ports now answer.
+//
+// The NUMBER matcher is in the fixture because it is the trap for this port:
+// one predicate (textStopBase, via isFollowingText) answers both "can text
+// continue?" and "can a number end here?". A repair applied HERE instead —
+// teaching that predicate about U+2028 — would make `1<U+2028>b` come out
+// `#NR:1`, because a number would gain an ending the text run does not.
+// TypeScript cannot produce that: its number ender has its own alternatives
+// and contains no separator either, so the number match simply fails and the
+// text matcher takes the whole run. `1\nb` -> `#NR:1` is the control that
+// keeps the rule from being read as "no number ever ends".
+//
+// The U+2028/U+2029 cells hold the RAW code point — the shared escape codec
+// is deliberately minimal (\n \r \t \\ only) and has no \u form. The guard
+// below is why that is safe to rely on: a tool that normalised them away
+// would otherwise leave these rows passing while testing nothing.
+func TestSpecLexTextLineTerminator(t *testing.T) {
+	rows := loadSpecTSV(t, "lex-text-line-terminator")
+
+	all := ""
+	for _, row := range rows {
+		for _, c := range row.cols {
+			all += c
+		}
+	}
+	if !strings.ContainsRune(all, 0x2028) || !strings.ContainsRune(all, 0x2029) {
+		t.Fatal("lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — " +
+			"the raw code points were normalised away and these rows now test nothing")
+	}
+
+	for _, row := range rows {
+		lineLex := tsvCol(row.cols, 0) == "true"
+		fixedSep := tsvCol(row.cols, 1) == "true"
+		src := preprocessEscapes(tsvCol(row.cols, 2))
+		want := preprocessEscapes(tsvCol(row.cols, 3))
+
+		cfg := buildConfig(&Options{Line: &LineOptions{Lex: &lineLex}})
+		if fixedSep {
+			// U+2028 as a fixed token: TS's rePart.ender gains an
+			// alternative that matches it, so the run ENDS there instead of
+			// failing, and the text before it is emitted.
+			sep := string(rune(0x2028))
+			cfg.FixedTokens = map[string]Tin{sep: Tin(500)}
+			cfg.TinNames = map[Tin]string{Tin(500): "#SEP"}
+			cfg.SortFixedTokens()
+		}
+
+		if got := lexOne(src, cfg); got != want {
+			t.Errorf("lex-text-line-terminator line %d: lineLex=%v fixedSep=%v input=%q: got %q, want %q",
+				row.lineNo, lineLex, fixedSep, src, got, want)
+		}
+	}
 }
 
 // TestSpecLexStringControl runs the shared lex-string-control.tsv fixture.

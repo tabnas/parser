@@ -566,6 +566,83 @@ describe('lex', function () {
     }
   })
 
+  // Shared cross-runtime fixture for what terminates an unquoted text run
+  // at a line terminator (the Go counterpart is
+  // TestSpecLexTextLineTerminator in go/lexer_optionplumbing_test.go).
+  // Columns: lineLex | fixedSep | input | expected, same ERROR:<code> /
+  // <name>:<value> contract as lex-string-control above. `fixedSep`
+  // registers U+2028 as a fixed token, the case where the separator DOES get
+  // an ender alternative and the run ends there.
+  //
+  // What ends a text run is `cfg.line.chars`, plus space chars, ender chars,
+  // fixed tokens and comment starters — and nothing else. This port had a
+  // SECOND, unconfigurable answer: the ender regex was built as
+  // `cfg.line.lex ? 'y' : 'ys'`, so with line lexing on `.` could not cross
+  // a JS line terminator, and U+2028/U+2029 ended a run no option had named.
+  // Since they are not enders either, the match then FAILED and no text
+  // token came out at all — `#BD`, reported as `unexpected`. Repaired
+  // (audit item P4); every row below is what BOTH ports now answer, and Go
+  // answered them this way before the repair without being touched.
+  //
+  // The NUMBER matcher is in the fixture because it is the trap for the
+  // OTHER port: there, one predicate answers both "can text continue?" and
+  // "can a number end here?", so a repair applied on that side would make
+  // `1<U+2028>b` come out `#NR:1`. This port cannot produce that — the
+  // number ender has its own alternatives and contains no separator either,
+  // so the number match fails and the text matcher takes the whole run.
+  // `1\nb` -> `#NR:1` is the control that keeps the rule from being read as
+  // "no number ever ends".
+  //
+  // The U+2028/U+2029 cells hold the RAW code point: the shared escape codec
+  // is deliberately minimal (\n \r \t \\ only, see support/ts/src/escape.ts)
+  // and has no \u form. The guard below is why that is safe to rely on — an
+  // editor or tool that normalised them away would otherwise leave these
+  // rows passing while testing nothing.
+  it('text-line-terminator-spec', () => {
+    const rows = [...loadTSV('lex-text-line-terminator')]
+
+    // The fixture must still contain the characters it is about.
+    const raw = rows.map(({ cols }) => cols.join('')).join('')
+    assert.ok(
+      raw.includes('\u2028') && raw.includes('\u2029'),
+      'lex-text-line-terminator.tsv no longer contains U+2028/U+2029 — the ' +
+      'raw code points were normalised away and these rows now test nothing',
+    )
+
+    for (const { cols, row } of rows) {
+      const [lineLex, fixedSep, src, expected] = cols
+      try {
+        const opts = { line: { lex: 'true' === lineLex } }
+        if ('true' === fixedSep) {
+          opts.fixed = { token: { '#SEP': '\u2028' } }
+        }
+        const inst = new Tabnas(opts).make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-text-line-terminator row ${row}: lineLex=${lineLex}` +
+          ` fixedSep=${fixedSep} input=${JSON.stringify(src)}` +
+          ` expected=${JSON.stringify(expected)}\n` +
+          err.message
+        throw err
+      }
+    }
+  })
+
+
   // options.string.check and options.comment.check were declared and
   // consulted by the lexer but never copied into the config, so the
   // hooks were dead. text.check (which always worked) is the control.
