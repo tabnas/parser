@@ -27,6 +27,20 @@ mirror it. Accepted differences are documented in
   `feature_info_test.go`.
 - Introspection API (`RSM()`, `Plugins()`, `Decorate()`, ...).
 
+## Rule state: `N`, `U`, `K`
+
+**`N` and `K` propagate to child rules; `U` does not.** `K` is named for
+"keep" — its content is kept as the parse descends. `go/rule.go:1224-1236`
+(push) and `:1249-1261` (replace) copy `r.N` and `r.K` into the new rule;
+`EnsureU()` is called only by the merge (`:1161`), never by the
+propagation. `K` is also rule-scoped rather than alternate-scoped: the
+merge at `:1166-1170` runs before the alt action, so it accumulates across
+alternates and then descends. Put per-rule scratch in `U`, and anything
+that must reach child rules in `K`. See the root
+[`AGENTS.md`](../AGENTS.md) section "Rule state" for the full statement —
+it is contract, not implementation detail, and TypeScript behaves
+identically.
+
 ## Layout
 
 - `tabnas.go` — `TabnasError`, error/hint templates (mirrors TS

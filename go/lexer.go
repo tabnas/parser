@@ -56,6 +56,14 @@ type Lex struct {
 	// Relex, and cleared before it returns.
 	want []Tin
 
+	// Which slot of the current alternate is being filled. TS passes this
+	// to the matcher as `tI` and gates on `spec.def.tcol[oc][tI]`; Go has
+	// no tcol table, so ParseAlts records the position here and the gate
+	// below reads the alternates' own slot at that index. Zero outside a
+	// multi-token fetch, which is the same answer as the old hard-coded
+	// slot 0 for every single-token alternate.
+	tI int
+
 	// Where the scan stood immediately before the last recut Relex
 	// COMMITTED. One reusable record: the parser copies out of it at the
 	// moment of the commit (see ParseAlts), because a later recut
@@ -1263,14 +1271,45 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// override just added to #VAL / #KEY, and the parser
 					// would then reject the text the override was meant to
 					// admit. Falls back to alt.S outside a parse.
+					// The SLOT being filled, not slot 0. Gating every fetch
+					// on slot 0 asks "could this token START an alternate
+					// here", which is a different question from "is it
+					// acceptable at the position we are actually at" — and
+					// answers yes for tokens the position cannot take. In
+					// `chess`, `[a b]` fetches slot 1 of `#TGN #ST`: slot 0
+					// admits #TGN, so `b` lexed as a tag name and the error
+					// landed on `a` (1:2) instead of on `b` (1:4) as in TS.
+					// An alternate shorter than tI has nothing to say about
+					// this slot and must not vote.
+					slot := l.tI
 					positionExpected := false
 					for _, alt := range alts {
 						altS := alt.S
 						if l.Ctx != nil {
 							altS = l.Ctx.altS(alt)
 						}
-						if len(altS) > 0 && tinMatch(tin, altS[0]) {
-							positionExpected = true
+						if len(altS) <= slot {
+							continue
+						}
+						// EXACT membership, not tinMatch. TS gates on
+						// `tcol[oc][tI].includes(tin$)`, a plain list
+						// test, and leaves #AA to the parser. tinMatch
+						// treats #AA as matching everything, so a
+						// wildcard slot would vote for every registered
+						// match token and the lexer would emit tokens TS
+						// never produces. Measured on an alternate
+						// `{{#A}, {#AA}}` with a regex-backed `#X`: with
+						// tinMatch, Go parsed `ax`; TS rejects it, and so
+						// does Go with this test. A wildcard says the
+						// PARSER will take any tin, not that the LEXER
+						// should invent one.
+						for _, want := range altS[slot] {
+							if want == tin {
+								positionExpected = true
+								break
+							}
+						}
+						if positionExpected {
 							break
 						}
 					}
@@ -1282,6 +1321,21 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					} else if positionExpected || !mt.Eager {
 						// Pass 1: eager-only fallbacks (position-expected
 						// ones were already tried in pass 0).
+						//
+						// NOTE this is NOT what TS does, and the difference
+						// is a live divergence — see the eager case in
+						// #136. TS makes ONE tin-ordered pass in which
+						// eagerness only bypasses the gate, so an eager
+						// matcher earlier in that order wins over a
+						// position-expected one later. Collapsing these two
+						// passes is the honest repair and is NOT done here:
+						// Go's tins come from map iteration order
+						// (MapToOptions over a Go map), so a single
+						// tin-ordered pass makes the winner a coin flip
+						// where TS's object-key order is deterministic.
+						// Measured: collapsing them broke
+						// TestSerializedRegexTokensParse, which TS passes.
+						// The ordering has to be made deterministic first.
 						continue
 					}
 				}
@@ -1764,7 +1818,16 @@ func (l *Lex) matchString() *Token {
 				if l.Config.StringAbandon {
 					return nil
 				}
-				return l.bad("unexpected", l.pnt.SI, sI+1)
+				// Same positioning as the default unknown-escape branch
+				// below — control never reaches that one from here, so
+				// without this the strict-\x and escape-removed paths
+				// still reported column 1. Span the whole RUNE: a
+				// non-ASCII escape char is more than one byte, and half
+				// of one is not valid UTF-8 in the diagnostic.
+				_, escSize := utf8.DecodeRuneInString(src[sI:])
+				l.pnt.SI = sI
+				l.pnt.CI = cI - 1
+				return l.bad("unexpected", sI, sI+escSize)
 			}
 
 			switch esc {
@@ -1803,13 +1866,26 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_ascii", l.pnt.SI, sI+2)
+						// TS positions the escape errors at the BACKSLASH
+						// (`sI -= 2` from just past the escape letter) and
+						// spans the escape's nominal width. Go left the point
+						// at the opening quote. `cI - 2` because this matcher's
+						// counter runs one ahead of the TS one (see the
+						// unprintable site) and TS itself steps back one here.
+						l.pnt.SI = sI - 2
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_ascii", sI-2, sI+2)
 					}
 				} else {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("invalid_ascii", l.pnt.SI, sI)
+					// To srclen, not sI: sI is the START of the partial
+					// digits, so ending there drops them from the token.
+					// TS reports `\x4` for `"\x4`; this reported `\x`.
+					l.pnt.SI = sI - 2
+					l.pnt.CI = cI - 2
+					return l.bad("invalid_ascii", sI-2, srclen)
 				}
 			case 'u':
 				// Unicode escape \u**** or \u{*****}. Strict mode disables
@@ -1833,17 +1909,28 @@ func (l *Lex) matchString() *Token {
 							if l.Config.StringAbandon {
 								return nil
 							}
-							return l.bad("invalid_unicode", l.pnt.SI, sI+endI+1)
+							// SI steps back 3 (digit, `{`, `u`) to the
+							// backslash, but CI only 2: this matcher does
+							// not advance cI over the `{`, so a third step
+							// would land the column on the opening quote.
+							// Measured — it did, at 1:1 against TS's 1:2.
+							l.pnt.SI = sI - 3
+							l.pnt.CI = cI - 2
+							return l.bad("invalid_unicode", sI-3, sI+endI+1)
 						}
 					} else {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						end := sI
+						// No closing brace: the token runs to the end of
+						// source, not to the first digit.
+						end := srclen
 						if endI >= 0 {
 							end = sI + endI + 1
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, end)
+						l.pnt.SI = sI - 3
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_unicode", sI-3, end)
 					}
 				} else if sI+4 <= srclen {
 					cc := parseHexInt(src[sI : sI+4])
@@ -1860,13 +1947,18 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, sI+4)
+						l.pnt.SI = sI - 2
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_unicode", sI-2, sI+4)
 					}
 				} else {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("invalid_unicode", l.pnt.SI, sI)
+					// To srclen — same reason as the \x EOF branch above.
+					l.pnt.SI = sI - 2
+					l.pnt.CI = cI - 2
+					return l.bad("invalid_unicode", sI-2, srclen)
 				}
 			default:
 				if l.Config.AllowUnknownEscape {
@@ -1875,7 +1967,14 @@ func (l *Lex) matchString() *Token {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("unexpected", l.pnt.SI, sI+1)
+					// TS positions this ON the escape character, with no
+					// step back to the backslash. Span the whole RUNE —
+					// `sI+1` takes one byte of a multi-byte character and
+					// leaves invalid UTF-8 in the diagnostic.
+					_, escSize := utf8.DecodeRuneInString(src[sI:])
+					l.pnt.SI = sI
+					l.pnt.CI = cI - 1
+					return l.bad("unexpected", sI, sI+escSize)
 				}
 			}
 			sI++
@@ -1894,7 +1993,18 @@ func (l *Lex) matchString() *Token {
 			if l.Config.StringAbandon {
 				return nil
 			}
-			return l.bad("unprintable", l.pnt.SI, sI+1)
+			// Position the token ON the offending character, as TS does
+			// (`pnt.sI = sI; pnt.cI = cI` before its bad() call). Go left
+			// the point at the opening quote, so every string error in
+			// this matcher reported 1:1.
+			//
+			// `cI - 1`, not `cI`: this matcher seeds `cI := l.pnt.CI + 1`
+			// to step over the opening quote, so it runs one ahead of the
+			// TS counter at the same character. Measured across four
+			// offsets of the same input — Go was +1 at every one.
+			l.pnt.SI = sI
+			l.pnt.CI = cI - 1
+			return l.bad("unprintable", sI, sI+1)
 		}
 
 		// Replace chars stop the body run; emit the replacement.
