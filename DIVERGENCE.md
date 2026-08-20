@@ -81,21 +81,40 @@ assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 
 The two lexers cut a DIFFERENT bad token for the same invalid escape:
 TypeScript's string matcher reports the offending escape sequence itself,
-Go's reports the string from its opening quote up to the escape. Same
-error `code` — the contract holds — but the token source, and therefore
-the diagnostic's `len`/`pos`/`col`, diverge even for pure-ASCII input:
+Go's reports the string from its opening quote up to the escape. The token
+source, and therefore the diagnostic's `len`/`pos`/`col`, diverge even for
+pure-ASCII input:
 
 | input | TypeScript | Go |
 |---|---|---|
 | `"\uZZZZ"` | code `invalid_unicode`, token src `\uZZZZ`, pos 1, col 2, len 6 | code `invalid_unicode`, token src `"\uZZZZ`, pos 0, col 1, len 7 |
 
-This is span metadata on an already-agreed failure, not a disagreement
-about the input's value: both ports reject the document with the same
-code, and no parsed value exists to differ. Aligning the spans would mean
-rewriting one lexer's error recovery to match the other's internal
-matcher structure, for display-only gain. Consumers should treat
-`len`/`pos`/`col` on bad-token errors as advisory and anchor on `code`
-(and `row`, which agrees).
+The mechanism is one the ports state differently rather than compute
+differently. TypeScript moves the lex point onto the offending construct
+before raising (`pnt.sI = sI; pnt.cI = cI` at each raise site in its
+string matcher); Go leaves the point at the opening quote and spans from
+`l.pnt.SI`. Five raise sites, one behaviour.
+
+**And the code does NOT always agree.** An earlier version of this entry
+said "same error `code` — the contract holds" and told consumers to
+anchor on it. That is false for a truncated escape at end of input, where
+the two ports disagree about which failure they are even looking at:
+
+| input | TypeScript | Go |
+|---|---|---|
+| `"\x4` | **`unterminated_string`** | **`invalid_ascii`** |
+| `"\u4` | **`unterminated_string`** | **`invalid_unicode`** |
+
+TypeScript sees a string that ran out before its closing quote; Go sees an
+escape that ran out of hex digits. Both are defensible readings and only
+one can be the contract. Measured across the whole family — `"\x`,
+`"\u`, `"\u{42`, `"\xZZ"`, `"\uZZZZ"` all agree on the code; only the
+two shapes above, where SOME hex digits are present but not enough,
+disagree.
+
+So: `row` agrees everywhere. `len`/`pos`/`col` are advisory on this path.
+`code` is reliable EXCEPT for a truncated escape at end of input, which is
+the one case a consumer branching on `code` must not assume.
 
 Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**

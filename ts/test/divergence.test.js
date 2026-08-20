@@ -108,7 +108,12 @@ describe('divergence', () => {
     })
     const t = lex.next()
     assert.equal(t.name, '#BD')
-    assert.equal(t.why, 'invalid_unicode', 'the code is shared — only the span diverges')
+    assert.equal(
+      t.why,
+      'invalid_unicode',
+      'the code agrees for THIS input — see the truncated-escape test ' +
+        'below for the shapes where it does not',
+    )
     assert.equal(t.src, '\\uZZZZ', 'escape only — Go includes the opening quote')
     assert.equal(t.sI, 1, 'pos: escape start — Go reports 0 (the quote)')
     assert.equal(t.cI, 2, 'col: escape start — Go reports 1 (the quote)')
@@ -117,5 +122,41 @@ describe('divergence', () => {
       6,
       'diagnostic len (code points of token src) — Go reports 7',
     )
+  })
+
+  it('truncated escape at end of input: code diverges, not just the span', () => {
+    // DIVERGENCE.md used to say "same error code — the contract holds"
+    // and told consumers to anchor on it. False for exactly these two
+    // shapes: this port sees a string that ran out before its closing
+    // quote; Go sees an escape that ran out of hex digits.
+    //
+    //   `"\x4`  TS unterminated_string   Go invalid_ascii
+    //   `"\u4`  TS unterminated_string   Go invalid_unicode
+    //
+    // Measured across the family: `"\x`, `"\u`, `"\u{42`, `"\xZZ"`
+    // and `"\uZZZZ"` all agree. Only these two — SOME hex digits
+    // present, but not enough, and no closing quote — disagree.
+    //
+    // go/divergence_test.go TestDivergenceTruncatedEscapeCodeDiverges
+    // pins the Go half. Both assert what their port DOES, so a repair
+    // turns them red rather than leaving the record standing.
+    for (const src of ['"\\x4', '"\\u4']) {
+      const j = new Tabnas()
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const t = lex.next()
+      assert.equal(t.name, '#BD', src)
+      assert.equal(
+        t.why,
+        'unterminated_string',
+        src + ': if this is now invalid_ascii/invalid_unicode the ' +
+          'divergence is REPAIRED — delete this test and the ' +
+          'DIVERGENCE.md rows with it',
+      )
+    }
   })
 })

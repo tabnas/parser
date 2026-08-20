@@ -159,8 +159,9 @@ func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
 		t.Fatalf("expected a *TabnasError lex error, got %v", lex.Err)
 	}
 	if je.Code != "invalid_unicode" {
-		t.Errorf("code: got %q, want invalid_unicode (the code is shared — "+
-			"only the span diverges)", je.Code)
+		t.Errorf("code: got %q, want invalid_unicode (the code agrees for "+
+			"THIS input — see TestDivergenceTruncatedEscapeCodeDiverges "+
+			"for the shapes where it does not)", je.Code)
 	}
 	if je.Src != `"\uZZZZ` {
 		t.Errorf("token src: got %q, want quote-to-escape — TS reports the "+
@@ -175,5 +176,45 @@ func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
 	if n := utf8.RuneCountInString(je.Src); n != 7 {
 		t.Errorf("diagnostic len (code points of token src): got %d, want 7 "+
 			"— TS reports 6", n)
+	}
+}
+
+// The bad-token CODE diverges for a truncated escape at end of input.
+//
+// DIVERGENCE.md used to say "same error `code` — the contract holds" and
+// told consumers to anchor on it. That is false for exactly these two
+// shapes: TypeScript sees a string that ran out before its closing quote,
+// Go sees an escape that ran out of hex digits.
+//
+//	`"\x4`  TS unterminated_string   Go invalid_ascii
+//	`"\u4`  TS unterminated_string   Go invalid_unicode
+//
+// Measured across the family: `"\x`, `"\u`, `"\u{42`, `"\xZZ"` and
+// `"\uZZZZ"` all agree on the code. Only these two — SOME hex digits
+// present, but not enough, and no closing quote — disagree.
+//
+// This pins what Go DOES, so it goes red when the divergence is repaired
+// and cannot outlive the entry it belongs to (admin ADR-14).
+// ts/test/divergence.test.js asserts the TypeScript half.
+func TestDivergenceTruncatedEscapeCodeDiverges(t *testing.T) {
+	for _, c := range []struct{ src, code string }{
+		{`"\x4`, "invalid_ascii"},
+		{`"\u4`, "invalid_unicode"},
+	} {
+		j := Make(Options{})
+		lex := NewLex(c.src, j.Config())
+		lex.Next()
+
+		je, ok := lex.Err.(*TabnasError)
+		if !ok || je == nil {
+			t.Fatalf("%s: expected a *TabnasError lex error, got %v",
+				c.src, lex.Err)
+		}
+		if je.Code != c.code {
+			t.Errorf("%s: code = %q, want %q. If this is now "+
+				"\"unterminated_string\" the divergence is REPAIRED — "+
+				"delete this test and the DIVERGENCE.md rows with it.",
+				c.src, je.Code, c.code)
+		}
 	}
 }
