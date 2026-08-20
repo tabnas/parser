@@ -67,27 +67,41 @@ describe('divergence', () => {
     )
   })
 
-  it('lex.relex exists here and does not in Go', () => {
-    // DIVERGENCE.md: "Negotiated lexing (lex.relex) — TypeScript only".
-    //
-    // Asserted as a real behaviour, not just a config key, so this cannot
-    // pass on a stub: with relex on, the engine re-cuts a buffered token's
-    // source span rather than failing the alternate outright.
+  // NOT a divergence. Negotiated lexing is PORTED, and this pair of tests
+  // used to say otherwise on both sides while agreeing with neither.
+  //
+  // This test was titled 'lex.relex exists here and does not in Go' and
+  // cited DIVERGENCE.md: "Negotiated lexing (lex.relex) — TypeScript
+  // only". That entry does not exist — `grep -in relex DIVERGENCE.md`
+  // returns nothing — and Go's LexConfig has carried Relex for some time.
+  // Its Go mirror had already been rewritten to assert the field IS
+  // present; only its header comment still described the old absence
+  // assertion. So the two halves asserted opposite things, and this half
+  // asserted nothing about Go at all, which is why it kept passing: it is
+  // exactly the failure both files' headers warn about — a divergence
+  // pinned on one side is half an assertion.
+  //
+  // Kept rather than deleted, because the two ports agreeing is worth an
+  // assertion of its own: relex is settable in both and OFF by default in
+  // both, which is why every grammar in the fleet behaves identically
+  // despite the feature existing. Measured 2026-08-19, both ports.
+  //
+  // Go mirror: go/divergence_test.go TestRelexIsPortedAndDefaultsOff.
+  it('lex.relex is ported, and defaults off, in both ports', () => {
     const j = new Tabnas({ lex: { relex: true } })
     assert.equal(
       j.options.lex.relex,
       true,
-      'relex must be settable here; Go has no such option at all',
+      'relex must be settable here, as it is in Go (Options.Lex.Relex)',
     )
 
-    // And it is OFF by default — which is why every grammar in the fleet
-    // behaves identically in both ports despite this entry.
     const d = new Tabnas()
-    assert.notEqual(
+    assert.equal(
       d.options.lex.relex,
-      true,
-      'relex must default off, or the two ports would diverge for real ' +
-      'grammars rather than only for scannerless front-ends',
+      false,
+      'relex must default OFF, as it does in Go. If either port changes ' +
+      'this default, the two diverge for every grammar in the fleet ' +
+      'rather than only for scannerless front-ends',
     )
   })
 

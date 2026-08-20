@@ -72,15 +72,23 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 	}
 }
 
-// TestDivergenceRelexOptionExists pins the CLOSURE of "Negotiated lexing
-// (lex.relex) — TypeScript only". Go has the feature; the DIVERGENCE.md
-// entry is gone, and this fails if the field goes with it.
+// TestRelexIsPortedAndDefaultsOff pins that negotiated lexing is NOT a
+// divergence: this port has it, TypeScript has it, and both default it off.
 //
-// The comment that stood here described the opposite test. It said the
-// assertion was "that nothing in the Go config surface accepts it", and
-// it opened with a function name this file no longer defines — both true
-// of this test's predecessor, neither true since the divergence was
-// closed and the test inverted to pin the closure.
+// The header this replaces still described the test's predecessor — an
+// ABSENCE assertion pinning `"Negotiated lexing (lex.relex) — TypeScript
+// only"`. The body below had already been rewritten to assert the field IS
+// present; the comment above it had not, so the two contradicted each
+// other. Meanwhile the TypeScript half was still titled "lex.relex exists
+// here and does not in Go" and still cited that DIVERGENCE.md entry, which
+// no longer exists (`grep -in relex DIVERGENCE.md` returns nothing) — and
+// asserted nothing about Go, so it could not fail however far the two
+// ports drifted. That is the shape this file's own header warns about: a
+// divergence pinned on one side is half an assertion.
+//
+// Asserted structurally rather than behaviourally on purpose: the
+// behaviour is covered by relex_test.go, and what this pin is for is the
+// CONFIG SURFACE agreeing across the two ports.
 //
 // The dead name is not repeated here on purpose. tasks/ax-phantom-gates
 // flags any Test-shaped name a comment mentions but nothing defines, and
@@ -88,16 +96,9 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 // name even to disown it would leave the gate red forever, and a gate
 // that is permanently red is one people learn to skip.
 //
-// That is worse than an out-of-date comment. A reader grepping either the
-// old name or the phrase "TypeScript only" found this block and came away
-// with the exact opposite of what the code below checks, in the one file
-// whose job is to say which way each divergence runs.
-//
-// Asserted structurally rather than behaviourally, as its predecessor was
-// and for the same reason: the impact is confined to scannerless
-// front-ends, so for every grammar in this fleet the two ports behave
-// identically. A behavioural test would pass in both and pin nothing.
-func TestDivergenceRelexOptionExists(t *testing.T) {
+// TypeScript mirror: ts/test/divergence.test.js
+// 'lex.relex is ported, and defaults off, in both ports'.
+func TestRelexIsPortedAndDefaultsOff(t *testing.T) {
 	j := Make(Options{})
 	cfg := j.Config()
 
@@ -124,6 +125,24 @@ func TestDivergenceRelexOptionExists(t *testing.T) {
 	if !hasField(cfg, "Relex") {
 		t.Error("LexConfig lost its Relex field: negotiated lexing is a " +
 			"ported feature, not a divergence")
+	}
+
+	// And it is OFF by default, as in TypeScript. Without this the pair
+	// pins only that both ports HAVE the option, and one of them could
+	// start applying it to every grammar in the fleet with both suites
+	// still green.
+	if j.Config().Relex {
+		t.Error("Relex must default off, as it does in TypeScript. If " +
+			"either port changes this default, the two diverge for every " +
+			"grammar rather than only for scannerless front-ends")
+	}
+
+	// Settable, so the default above is a CHOICE this test observed and
+	// not merely a field nothing ever writes.
+	on := true
+	if !Make(Options{Lex: &LexOptions{Relex: &on}}).Config().Relex {
+		t.Error("Relex must be settable, as it is in TypeScript " +
+			"(new Tabnas({lex:{relex:true}}))")
 	}
 }
 
