@@ -548,6 +548,22 @@ func buildLexTables(cfg *LexConfig) *lexTables {
 	stops(cfg.LineLex, cfg.LineChars)
 	stops(true, cfg.EnderChars)
 
+	// JS's `.` will not cross a LINE TERMINATOR, and JS has four of them:
+	// \n, \r, U+2028 and U+2029. The TS text-ender regex omits the `s`
+	// flag exactly when line lexing is on (`cfg.line.lex ? 'y' : 'ys'`), so
+	// that exclusion is part of the text contract rather than an accident of
+	// the pattern. \n and \r are LineChars and already stop here; U+2028 and
+	// U+2029 are not, and RE2's `.` excludes only \n — so `a<U+2028>b` was
+	// ONE text token in Go and an `unexpected` error in TS. The rule JS gets
+	// free from its regex dialect has to be written out.
+	//
+	// Both encode as e2 80 a8 / e2 80 a9, so routing the single lead byte
+	// 0xE2 to textVerify is enough. Setting `wide` instead would put ALL
+	// non-ASCII text on the slow path for the sake of two code points.
+	if cfg.LineLex && l.text[0xE2] == textContinue {
+		l.text[0xE2] = textVerify
+	}
+
 	if len(cfg.FixedSorted) > 0 {
 		var multi [256]bool
 		for _, fs := range cfg.FixedSorted {
@@ -2334,13 +2350,33 @@ func (l *Lex) matchText() *Token {
 			// Definite terminator (enabled space/line char, ender char, or
 			// single-byte fixed token). NOT a string char — see matchText.
 		default: // textVerify
-			if !l.textStopBase(sI) && !l.textStopComment(sI) {
+			// textCannotCross is checked HERE rather than in textStopBase
+			// because that predicate also answers "can a NUMBER end here?"
+			// through isFollowingText. The TS number ender regex has its own
+			// alternatives and they do not include these separators, so
+			// `1<U+2028>b` is `unexpected` in TS — not `#NR:1`. Teaching the
+			// shared predicate about them would have made Go emit the number.
+			if !l.textCannotCross(sI) &&
+				!l.textStopBase(sI) && !l.textStopComment(sI) {
 				_, chSize := utf8.DecodeRuneInString(src[sI:])
 				sI += chSize
 				continue
 			}
 		}
 		break
+	}
+
+	// The TS ender regex is `(.*?)` followed by ENDER alternatives, so a text
+	// run must be followed by an ender (or end of source) for the match to
+	// succeed at all. A character `.` merely cannot cross, and which is not
+	// an ender, makes the WHOLE match fail — TS emits no text token and the
+	// lexer reports a bad token. U+2028/U+2029 are the only such characters.
+	//
+	// This is the difference between "stop" and "fail", and it is why the
+	// textStopBase entry alone was not the whole repair: stopping here would
+	// emit `a` for `a<U+2028>b`, which TS never produces.
+	if l.textFailsAt(sI) {
+		return nil
 	}
 
 	if sI == start {
@@ -2603,6 +2639,52 @@ func (l *Lex) textStopBase(pos int) bool {
 		}
 	}
 	return false
+}
+
+// textCannotCross reports whether the character at pos is one JS's `.` will
+// not cross: a JS LINE TERMINATOR that RE2's `.` would happily consume. \n and
+// \r are the other two, and they already stop as LineChars, so only U+2028 and
+// U+2029 need saying. Applies on the same condition as the TS ender's missing
+// `s` flag (`cfg.line.lex ? 'y' : 'ys'`).
+//
+// This governs the TEXT scan only. See the call site in matchText.
+func (l *Lex) textCannotCross(pos int) bool {
+	if !l.Config.LineLex || pos >= len(l.Src) {
+		return false
+	}
+	ch, _ := utf8.DecodeRuneInString(l.Src[pos:])
+	return 0x2028 == ch || 0x2029 == ch
+}
+
+// textFailsAt reports whether the text run must FAIL at pos rather than end
+// there: the character is one `.` cannot cross AND it is not an ender, so the
+// TS regex — `(.*?)` followed by ender alternatives — matches nothing at all.
+//
+// The exemptions are everything `cfg.rePart.ender` is built from. A config
+// that makes U+2028 an ender char, a space/line/string char, a FIXED TOKEN or
+// a COMMENT STARTER gets an ender alternative that matches it, so TS ends the
+// run normally and emits the text before it; this returns false there and the
+// ordinary stop applies. Missing the fixed-token and comment cases would have
+// turned a grammar that deliberately uses U+2028 as a separator into a parse
+// error.
+func (l *Lex) textFailsAt(pos int) bool {
+	if !l.textCannotCross(pos) {
+		return false
+	}
+	ch, _ := utf8.DecodeRuneInString(l.Src[pos:])
+	if l.Config.EnderChars[ch] ||
+		(l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
+		l.Config.LineChars[ch] ||
+		(l.Config.StringLex && l.Config.StringChars[ch]) {
+		return false
+	}
+	rest := l.Src[pos:]
+	for _, fs := range l.Config.FixedSorted {
+		if strings.HasPrefix(rest, fs) {
+			return false
+		}
+	}
+	return !l.textStopComment(pos)
 }
 
 // textStopComment reports whether a comment starts at pos (only when

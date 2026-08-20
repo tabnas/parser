@@ -72,18 +72,31 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 	}
 }
 
-// TestDivergenceNoRelexOption pins: "Negotiated lexing (lex.relex) —
-// TypeScript only".
+// TestDivergenceRelexOptionExists pins the CLOSURE of "Negotiated lexing
+// (lex.relex) — TypeScript only". Go has the feature; the DIVERGENCE.md
+// entry is gone, and this fails if the field goes with it.
 //
-// The divergence is a feature's ABSENCE, so the assertion is that nothing
-// in the Go config surface accepts it. If Go ever gains relex, this fails
-// and the DIVERGENCE.md entry must go — which is the intended signal, not
-// a nuisance.
+// The comment that stood here described the opposite test. It said the
+// assertion was "that nothing in the Go config surface accepts it", and
+// it opened with a function name this file no longer defines — both true
+// of this test's predecessor, neither true since the divergence was
+// closed and the test inverted to pin the closure.
 //
-// Asserted structurally rather than behaviourally on purpose: the entry
-// says the practical impact is confined to scannerless front-ends, so for
-// every grammar in this fleet the two ports already behave identically.
-// A behavioural test would therefore pass in both ports and pin nothing.
+// The dead name is not repeated here on purpose. tasks/ax-phantom-gates
+// flags any Test-shaped name a comment mentions but nothing defines, and
+// it cannot tell "this test exists" from "this test used to"; writing the
+// name even to disown it would leave the gate red forever, and a gate
+// that is permanently red is one people learn to skip.
+//
+// That is worse than an out-of-date comment. A reader grepping either the
+// old name or the phrase "TypeScript only" found this block and came away
+// with the exact opposite of what the code below checks, in the one file
+// whose job is to say which way each divergence runs.
+//
+// Asserted structurally rather than behaviourally, as its predecessor was
+// and for the same reason: the impact is confined to scannerless
+// front-ends, so for every grammar in this fleet the two ports behave
+// identically. A behavioural test would pass in both and pin nothing.
 func TestDivergenceRelexOptionExists(t *testing.T) {
 	j := Make(Options{})
 	cfg := j.Config()

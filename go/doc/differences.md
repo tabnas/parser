@@ -547,9 +547,27 @@ characters (TS counts 2, Go counts 1).
 TypeScript throws `TabnasError`; Go returns errors — and the Go API
 guarantees it **never panics**:
 
-- Parsing wraps a recover guard that converts any panic (including
-  panics thrown by plugin callbacks or custom matchers) into an
-  `"internal"`-code `*TabnasError`.
+- Parsing wraps a recover guard that converts a panic (including one
+  from a plugin callback or a custom matcher) into an `"internal"`-code
+  `*TabnasError` — with **one deliberate exception**. A non-nil
+  `*TabnasError` keeps its own code, because an action raising one is
+  reporting a defect in the INPUT, not an engine bug, and relabelling it
+  would leave a grammar unable to diagnose what it parses. That mirrors
+  TypeScript, whose catch is
+  `if (e instanceof TabnasError) err = e; else throw e`.
+
+  The preserved error is rebuilt through the normal error funnel, so it
+  arrives with the source excerpt, tag, hint and rule context every other
+  error carries — a plugin can populate only the exported fields.
+
+  A typed **nil** (`var te *TabnasError; panic(te)`) is not a usable
+  error and still becomes `"internal"`.
+
+  Where the ports still differ: with `Options.Parse.Recover` enabled,
+  TypeScript turns a terminal `TabnasError` into a `{value, errors}`
+  recovery result, while Go returns it as fatal. That is true of every
+  panic in this port, not only a preserved one, and predates the
+  exception above.
 - `Grammar` has the same guard for malformed specs.
 - APIs that previously panicked now return errors: `Derive` returns
   `(*Tabnas, error)` (a failing plugin during child derivation mirrors
