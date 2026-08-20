@@ -485,7 +485,12 @@ Both predate the flag question and are independent of `u`:
 - **`(?i)`** case-folds by Unicode rules in RE2, which matches JS `iu`
   rather than JS `i` alone.
 
-A shared grammar that depends on either will differ between the runtimes.
+A shared grammar that depends on either will differ between the runtimes,
+which makes these DIVERGENCES rather than porting notes — this file is a
+porting guide, and a different parse result for the same input belongs in
+the parity record. They are now recorded in
+[`DIVERGENCE.md`](../../DIVERGENCE.md) under "Regex dialect in serialized
+terminals", with a parse-level reproduction pinned in both runtimes.
 Prefer an explicit class over `\s` in a serialized terminal.
 
 ## Unicode / UTF-8

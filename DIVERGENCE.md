@@ -191,6 +191,82 @@ Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
 expressible here and not in Go') alongside the aligned cases, so the two
 are read together.
 
+### Regex dialect in serialized terminals
+
+A grammar spec can carry a match token as a serialized regex
+(`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
+`RegExp` in TypeScript, RE2 in Go — and the two dialects disagree on two
+constructs. **It diverges in both directions.**
+
+| pattern | input | TypeScript | Go |
+|---|---|---|---|
+| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** |
+| `@/^\s+/` | U+2028, U+2000, U+3000, U+FEFF | accepted | **rejected** |
+| `@/^\s+/` | U+0020, U+0009 | accepted | accepted |
+| `@/^k/i` | `k`, `K` | accepted | accepted |
+| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted |
+
+JS `\s` is Unicode-aware; RE2's is the Perl class `[\t\n\f\r ]`. JS `/i`
+without `u` does not fold U+212A to `k`; RE2 case-folds by Unicode rules
+and does.
+
+**And two constructs that do not diverge in the result but in whether the
+grammar loads at all**, which for a grammar author is worse:
+
+| pattern | TypeScript | Go |
+|---|---|---|
+| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** |
+| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** |
+
+RE2 implements neither, by design — both need backtracking. `go/utility.go`
+refuses them at compile time and `Grammar()` reports it, which is the right
+failure mode, but it means a spec written and tested against TypeScript can
+be unloadable in Go. The `v` flag is the same story. Treat "compiles in JS"
+as no evidence that a serialized terminal is portable.
+
+**This is recorded rather than fixed, and the reason is worth stating
+plainly, because the two halves are not equally hard.**
+
+`\s` is mechanically repairable: a compile-time rewrite could expand it to
+the explicit JS class before handing the pattern to RE2. That is not free —
+it means this engine ships a regex-dialect translation layer, which has to
+parse enough of the pattern to know a `\s` inside a character class from a
+`\\s` that is a literal backslash, and it then owns that translation for
+every downstream grammar in both runtimes. `(?i)` is not repairable the same
+way: RE2 has no ASCII-only case-folding flag, so matching JS would mean
+rewriting the pattern into explicit alternations.
+
+Adding the layer for one of the two is a decision for the maintainer, not a
+mechanical fix, so it is written down here with the cost attached instead of
+being taken unilaterally.
+
+**The workaround, measured rather than assumed — and spelled the JS way.**
+An explicit class in the serialized terminal makes the two agree exactly:
+
+```
+@/^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/
+```
+
+**The `\uXXXX` spelling is load-bearing.** A serialized pattern is JS source:
+TypeScript hands it to `new RegExp`, and Go lowers it to RE2. Writing the
+class the RE2 way (`\x{00a0}`) makes it a *SyntaxError in TypeScript* — a
+"portable" workaround that only works in one runtime, which is the very
+defect this entry records. The first draft of this entry had it that way
+round; it was caught in review, which is why the workaround is now pinned in
+both runtimes rather than only written down.
+
+With the pattern above both runtimes accept U+0020, U+0009, U+00A0, U+2028,
+U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
+`\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
+compile.
+
+Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect` and the
+matching case in `ts/test/divergence.test.js`, which assert **opposite**
+results on purpose. Both drive a real `GrammarSpec` through
+`grammar()` / `Grammar()` and parse: the gap was previously known only at
+the regex-engine layer, so "a shared grammar that depends on either will
+differ" was a prediction until this was wired.
+
 ### An explicitly empty option cannot be expressed in Go
 
 **Deferred, not deliberate** — this is a defect awaiting a breaking
