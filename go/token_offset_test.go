@@ -43,21 +43,33 @@ func TestTokenOffsetIsAByteOffset(t *testing.T) {
 		t.Fatal("no token offsets observed, so this test proves nothing")
 	}
 
-	// `["😀",1]` — TypeScript sees the `1` at index 6 (the astral
-	// character is 2 UTF-16 units); Go sees it at 8 (4 UTF-8 bytes).
-	// Both measured, not reasoned: an earlier draft of this comment
-	// carried the figures for a different input and was wrong by one.
-	max := seen[0]
-	for _, v := range seen {
-		if v > max {
-			max = v
-		}
+	// `["😀",1]` — the astral character is 4 UTF-8 bytes here and 2
+	// UTF-16 code units in TypeScript, so the `1` sits at 8 here and 6
+	// there. Both measured, not reasoned: an earlier draft of this
+	// comment carried the figures for a different input and was wrong by
+	// one.
+	//
+	// The EXACT sequence, not a bound. A `max >= 7` bound would still
+	// pass if this port moved to code-point offsets (the `1` would land
+	// at 5... which is below 7, so that one failed open the other way) —
+	// and, more to the point, the TypeScript twin's `max < 7` passed for
+	// UTF-16 offsets AND for code-point offsets alike, so it did not pin
+	// the unit it names. Review caught that; a bound is not a pin when
+	// two candidate units fall on the same side of it.
+	want := []int{0, 1, 8}
+	if len(seen) != len(want) {
+		t.Fatalf("observed %d token offsets %v, want %d — the sequence "+
+			"changed shape, so the comparison below would not mean what "+
+			"it says", len(seen), seen, len(want))
 	}
-	if max < 7 {
-		t.Errorf("highest observed Token.SI is %d, below the byte index — "+
-			"so Token.SI is no longer a byte offset. If the scan unit has "+
-			"been repaired, delete this test, its TypeScript twin in "+
-			"ts/test/token-offset.test.js, and the DIVERGENCE.md entry "+
-			"together", max)
+	for i, w := range want {
+		if seen[i] != w {
+			t.Errorf("Token.SI sequence is %v, want %v (UTF-8 byte "+
+				"offsets). If the scan unit has been repaired, delete "+
+				"this test, its TypeScript twin in "+
+				"ts/test/token-offset.test.js, and the DIVERGENCE.md "+
+				"entry together", seen, want)
+			break
+		}
 	}
 }

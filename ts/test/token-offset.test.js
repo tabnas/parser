@@ -40,15 +40,24 @@ describe('token offset', () => {
     assert.notEqual(seen.length, 0,
       'no token offsets observed, so this test proves nothing')
 
-    // `["😀",1]` — this port sees the `1` at index 6 (the astral
-    // character is 2 UTF-16 units); Go sees it at 8 (4 UTF-8 bytes).
-    // Both measured, not reasoned: an earlier draft of this comment
-    // carried the figures for a different input and was wrong by one.
-    const max = Math.max(...seen)
-    assert.ok(max < 7,
-      'highest observed sI is ' + max + ', at or above the byte index — ' +
-      'so this port is no longer counting UTF-16 units. If the scan unit ' +
-      'has been repaired, delete this test, its Go twin in ' +
+    // `["😀",1]` — the astral character is 2 UTF-16 units here and 4
+    // UTF-8 bytes in Go, so the `1` sits at 6 here and 8 there. Both
+    // measured, not reasoned: an earlier draft carried the figures for a
+    // different input and was wrong by one.
+    //
+    // The EXACT sequence, not a bound. `max < 7` passed for UTF-16
+    // offsets AND for code-point offsets (which would put the `1` at 5),
+    // so it did not pin the unit it names — review caught that. A bound
+    // is not a pin when two candidate units fall on the same side of it.
+    // The three candidates are now distinguishable: UTF-16 [0,1,6], code
+    // points [0,1,5], UTF-8 bytes [0,1,8].
+    // `want` is named once and used by both the assertion and its
+    // message, so the two cannot drift apart.
+    const want = [0, 1, 6]
+    assert.deepEqual(seen, want,
+      'sI sequence is ' + JSON.stringify(seen) + ', want ' +
+      JSON.stringify(want) + ' (UTF-16 code-unit offsets). If the scan ' +
+      'unit has been repaired, delete this test, its Go twin in ' +
       'go/token_offset_test.go, and the DIVERGENCE.md entry together')
   })
 })
