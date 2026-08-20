@@ -366,8 +366,32 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// nopanic_test.go pins. So the two ports agree on the case
 			// that carries meaning and differ only where Go has a
 			// stronger guarantee to keep.
-			if te, ok := r.(*TabnasError); ok {
-				err = pctx.recordErr(te)
+			// `ok && te != nil` — a typed NIL is not a usable error.
+			// `var te *TabnasError; panic(te)` satisfies the assertion
+			// with a nil pointer, and recording it puts a non-nil error
+			// INTERFACE holding a nil pointer into the named result:
+			// Parser.Start then returns something that is != nil and
+			// panics on .Error(). Measured, and entrypoint-dependent —
+			// Tabnas.Parse only degraded to "internal" because a later
+			// nil dereference tripped another recover.
+			if te, ok := r.(*TabnasError); ok && te != nil {
+				// Rebuilt through the normal funnel so a preserved error
+				// arrives with the context every other error carries:
+				// the full source (for the excerpt), the instance tag,
+				// the hint, and the rule/token names finishErr adds.
+				// A plugin can only populate the EXPORTED fields, so
+				// without this the code survived and the diagnostic did
+				// not — an error that renders no source excerpt and
+				// serialises empty rule context.
+				re := p.makeError(te.Code, te.Src, src, te.Pos, te.Row, te.Col)
+				if te.Detail != "" {
+					re.Detail = te.Detail
+				}
+				if te.Hint != "" {
+					re.Hint = te.Hint
+				}
+				err = pctx.recordErr(
+					p.finishErr(re, pctx, meta, nil).(*TabnasError))
 			} else {
 				err = pctx.recordErr(
 					p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1))

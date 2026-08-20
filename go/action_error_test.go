@@ -2,7 +2,10 @@
 
 package tabnas
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestActionErrorKeepsItsCode pins that a *TabnasError raised from a
 // grammar action reaches the caller with its own code.
@@ -27,7 +30,7 @@ func TestActionErrorKeepsItsCode(t *testing.T) {
 			// the fix is worth nothing if it does not carry this.
 			panic(&TabnasError{
 				Code:   "demo_key_conflict",
-				Detail: "demo",
+				Detail: "demo detail",
 				Row:    1,
 				Col:    1,
 			})
@@ -47,6 +50,52 @@ func TestActionErrorKeepsItsCode(t *testing.T) {
 			"from an action is being relabelled, so a plugin cannot "+
 			"diagnose its own input", te.Code)
 	}
+
+	// The code surviving is not enough. A plugin can populate only the
+	// EXPORTED fields, so an error preserved without enrichment renders
+	// no source excerpt and serialises empty rule context — the code
+	// arrives and the diagnostic does not.
+	msg := te.Error()
+	if !strings.Contains(msg, "demo detail") {
+		t.Errorf("the plugin's own message was lost: %q", msg)
+	}
+	if !strings.Contains(msg, `{"a":1}`) {
+		t.Errorf("no source excerpt, so the error was preserved without "+
+			"the context every other error carries: %q", msg)
+	}
+}
+
+// TestTypedNilPanicStaysInternal — `var te *TabnasError; panic(te)`
+// satisfies a type assertion with a NIL pointer. Recording it would put
+// a non-nil error INTERFACE holding a nil pointer into the result, so
+// Parser.Start returned something that is != nil and panics on .Error().
+//
+// Entrypoint-dependent, which is what made it worth pinning: Tabnas.Parse
+// degraded to "internal" only because a later nil dereference tripped
+// another recover, so the two exported paths disagreed.
+func TestTypedNilPanicStaysInternal(t *testing.T) {
+	j := makeJSON()
+	j.Rule("val", func(rs *RuleSpec, p *Parser) {
+		rs.AddAO(func(r *Rule, ctx *Context) {
+			var te *TabnasError
+			panic(te)
+		})
+	})
+
+	_, err := j.parser.Start(`{"a":1}`)
+	if err == nil {
+		t.Fatal("a panic must still surface as an error")
+	}
+	te, ok := err.(*TabnasError)
+	if !ok || te == nil {
+		t.Fatalf("want a non-nil *TabnasError, got %T (nil-pointer? %v)",
+			err, ok && te == nil)
+	}
+	if "internal" != te.Code {
+		t.Errorf("code = %q, want internal", te.Code)
+	}
+	// The point of the guard: this must not panic.
+	_ = te.Error()
 }
 
 // TestNonErrorPanicStaysInternal is the other half, and it is not
