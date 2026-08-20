@@ -154,9 +154,18 @@ describe('divergence', () => {
     assert.equal(parse('"\\x4Z"').code, 'invalid_ascii')
     assert.equal(parse('"\\u414Z"').code, 'invalid_unicode')
 
-    // Nor is a truncated one, with or without a closing quote.
-    for (const src of ['"\\x4', '"\\x4"', '"\\u4', '"\\u41"', '"\\u414Z']) {
-      assert.equal(parse(src).ok, false, src)
+    // Nor is a truncated one, with or without a closing quote. Assert the
+    // CODE, not merely that it threw: `unterminated_string` is exactly
+    // what the repair removed here, and a check for "it failed" would
+    // pass if it came back.
+    for (const [src, code] of [
+      ['"\\x4', 'invalid_ascii'],
+      ['"\\x4"', 'invalid_ascii'],
+      ['"\\u4', 'invalid_unicode'],
+      ['"\\u41"', 'invalid_unicode'],
+      ['"\\u414Z', 'invalid_unicode'],
+    ]) {
+      assert.equal(parse(src).code, code, src)
     }
 
     // No valid hex prefix at all — unchanged by the repair.
