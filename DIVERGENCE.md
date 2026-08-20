@@ -101,6 +101,59 @@ Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
 spans on purpose, so changing either side fails loudly.
 
+### `\s` and `(?i)` in a shared serialized regex terminal
+
+A serialized grammar carries a regex terminal as `@/pattern/flags`, a
+string SHARED between the runtimes. The flags are translated (see
+"Serialized Regex Flags" in [`go/doc/differences.md`](go/doc/differences.md)),
+but two constructs mean different things in the two regex dialects and no
+translation fixes them. A terminal using either matches a different
+LANGUAGE in each runtime.
+
+| terminal | input | TypeScript | Go |
+|---|---|---|---|
+| `@/^\s+$/` | U+00A0 NBSP | **accept** | reject |
+| `@/^\s+$/` | U+2000 EN QUAD | **accept** | reject |
+| `@/^\s+$/` | U+3000 IDEOGRAPHIC SPACE | **accept** | reject |
+| `@/^\s+$/` | U+FEFF | **accept** | reject |
+| `@/^k$/i` | U+212A KELVIN SIGN | reject | **accept** |
+
+- **`\s`** is Unicode-aware in JavaScript (NBSP, U+2028/9, U+3000, U+2000,
+  U+FEFF …) and ASCII-only in RE2 (`[\t\n\f\r ]`), with or without `u`.
+- **`(?i)`** case-folds by Unicode rules in RE2, which is JavaScript's
+  `iu` rather than `i` alone. So `/^k$/i` misses U+212A where RE2's
+  `(?i)^k$` matches it.
+
+It diverges in **both directions**, which is why "prefer the stricter
+port" is not available as a rule of thumb here. Prefer an explicit
+character class over `\s` in a shared terminal, and prefer a class over
+`i` where the input may carry a Unicode case fold.
+
+Not repairable without giving one runtime the other's regex engine. `\s`
+could be rewritten to an explicit class at translation time, but `(?i)`
+cannot: case folding is applied by the engine, not spelled in the
+pattern.
+
+Pinned by `go/regexflags_test.go`
+(`TestSerializedRegexDialectDivergesAtParseLevel`) and
+`ts/test/regex-flags.test.js` ('regex-terminal-dialect'), which assert
+**opposite** accept/reject answers over the same table, at the PARSE
+level through the serialized door — not at the regex-engine layer, where
+the difference was already known and where no one had shown that it
+reaches a grammar. Each table carries controls in both directions so
+"this port accepts everything" and "this port rejects everything" both
+fail.
+
+*Not* in either table: U+2028. It is a line terminator in the JavaScript
+regex dialect AND, separately, in the TypeScript text matcher, so its row
+moves for a reason that has nothing to do with this entry.
+
+This was recorded in `go/doc/differences.md` as a porting note, under a
+heading reading *"Behavioral Differences — These affect parse output for
+the same input"*. Its own text said *"A shared grammar that depends on
+either will differ between the runtimes"* — a divergence, described
+exactly, in the wrong file and with no test. Audit item P8.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

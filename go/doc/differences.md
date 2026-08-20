@@ -438,17 +438,30 @@ either: an unbuildable serialized regex leaves the original `@/…/` string
 in place, which `MapToOptions` turns into an install error naming the
 token.
 
-### Two related non-equivalences this does NOT fix
+### Two related non-equivalences this does NOT fix — recorded in `DIVERGENCE.md`
 
 Both predate the flag question and are independent of `u`:
 
 - **`\s`** is ASCII-only in RE2 (`[\t\n\f\r ]`) and Unicode-aware in
-  JavaScript (it includes NBSP, U+2028, …), with or without `u`.
+  JavaScript (it includes NBSP, U+3000, U+2000, U+FEFF, U+2028/9 …), with
+  or without `u`.
 - **`(?i)`** case-folds by Unicode rules in RE2, which matches JS `iu`
-  rather than JS `i` alone.
+  rather than JS `i` alone, so `/^k$/i` misses U+212A where `(?i)^k$`
+  matches it.
 
 A shared grammar that depends on either will differ between the runtimes.
-Prefer an explicit class over `\s` in a serialized terminal.
+Prefer an explicit class over `\s` in a serialized terminal, and prefer a
+class over `i` where the input may carry a Unicode case fold.
+
+**These belong in [`DIVERGENCE.md`](../../DIVERGENCE.md), and now live
+there.** The sentence above — same shared grammar, different result —
+*is* that file's definition of a divergence, and this section sits under
+a heading reading "Behavioral Differences: These affect parse output for
+the same input". Filed here it went unpinned for as long as it existed,
+because this file is prose. It is now pinned in both ports at the PARSE
+level, through the serialized door, with tables that diverge in BOTH
+directions: `\s` makes TypeScript the permissive port, `(?i)` makes this
+one. Audit item P8.
 
 ## Unicode / UTF-8
 

@@ -163,3 +163,107 @@ func TestSerializedRegexTokensParse(t *testing.T) {
 		t.Errorf("got %#v, want %q", out, "emoji:😀😀")
 	}
 }
+
+// --- The two non-equivalences the flag translation does NOT fix -------
+//
+// `\s` and `(?i)` mean different things in RE2 and in JavaScript, with or
+// without `u`, so a shared `@/…/` terminal that uses either matches a
+// different language in each runtime. That was recorded in
+// go/doc/differences.md as a porting note; it is a DIVERGENCE — same
+// input, different parse result — and it now lives in DIVERGENCE.md with
+// this pin and its TypeScript twin. Audit item P8.
+//
+// Verified at the PARSE level, through the shared serialized door, not at
+// the regex-engine layer. The engine-layer difference was already known;
+// what was never wired was a demonstration that it reaches a grammar. It
+// does, and it goes BOTH ways: `\s` makes TypeScript the permissive port
+// and `(?i)` makes this one.
+//
+// ts/test/regex-flags.test.js asserts the OPPOSITE answers over the same
+// table. That pairing is the test: either half alone cannot tell "the
+// other port still differs" from "the other port was quietly changed".
+//
+// NOT in this table: U+2028. It is a line terminator in the JavaScript
+// regex dialect AND, separately, in the TypeScript text matcher, so its
+// row would move when the unrelated text-ender repair lands. `\s`
+// disagreement is shown by four other characters that carry no such
+// second meaning.
+
+func p8Grammar(t *testing.T, spec string) *Tabnas {
+	t.Helper()
+	tn := Make(Options{Rule: &RuleOptions{Start: "top", Exclude: "tabnas,imp"}})
+	gs, err := GrammarSpecFromJSON([]byte(spec))
+	if err != nil {
+		t.Fatalf("spec: %v", err)
+	}
+	if err := tn.Grammar(gs, nil); err != nil {
+		t.Fatalf("grammar: %v", err)
+	}
+	// Accepts exactly one #VL. A source the terminal does not claim
+	// arrives as #TX and is rejected, so accept/reject IS the answer.
+	tn.Rule("top", func(rs *RuleSpec, p *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinVL}},
+			A: func(r *Rule, ctx *Context) { r.Node = r.O0.Val }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	return tn
+}
+
+const (
+	p8SpaceSpec = `{"options":{"value":{"def":{"spacey":{"match":"@/^\\s+$/"}}}}}`
+	p8KaySpec   = `{"options":{"value":{"def":{"kay":{"match":"@/^k$/i"}}}}}`
+)
+
+func TestSerializedRegexDialectDivergesAtParseLevel(t *testing.T) {
+	for _, c := range []struct {
+		label  string
+		spec   string
+		src    string
+		accept bool
+	}{
+		// `\s` is ASCII-only here ([\t\n\f\r ]) and Unicode-aware in
+		// JavaScript. Every row below is accepted there.
+		{"NBSP U+00A0", p8SpaceSpec, "\u00a0", false},
+		{"U+2000 EN QUAD", p8SpaceSpec, "\u2000", false},
+		{"U+3000 IDEOGRAPHIC SPACE", p8SpaceSpec, "\u3000", false},
+		{"U+FEFF BOM", p8SpaceSpec, "\ufeff", false},
+
+		// Control: a character neither dialect calls whitespace. Without
+		// it, "this port rejects everything" would pass.
+		{"plain text", p8SpaceSpec, "abc", false},
+
+		// `(?i)` case-folds by Unicode rules here, which is JS `iu` and
+		// not JS `i`. This is the direction where THIS port is the
+		// permissive one.
+		{"U+212A KELVIN SIGN", p8KaySpec, "\u212a", true},
+
+		// Controls: the rows both dialects agree on.
+		{"k", p8KaySpec, "k", true},
+		{"K", p8KaySpec, "K", true},
+	} {
+		tn := p8Grammar(t, c.spec)
+		_, err := tn.Parse(c.src)
+		if got := err == nil; got != c.accept {
+			t.Errorf("%s: accept = %v, want %v", c.label, got, c.accept)
+		}
+	}
+}
+
+// A serialized `value.def` entry can only carry a LITERAL `val` — JSON
+// has no functions. This port has always taken one (`ValueDef.Val`,
+// alongside `ValFunc`); TypeScript called `val` unconditionally, so a
+// string threw a TypeError that its matcher loop turned into a #BD bad
+// token, reporting `unexpected` on valid input and naming the character
+// rather than the option. Repaired there; pinned here so the shape this
+// port accepts does not quietly narrow. Audit item P10.
+func TestSerializedValueDefTakesALiteralVal(t *testing.T) {
+	const spec = `{"options":{"value":{"def":{"kay":{"match":"@/^k$/i","val":"KAY"}}}}}`
+	tn := p8Grammar(t, spec)
+	v, err := tn.Parse("k")
+	if err != nil {
+		t.Fatalf("literal val rejected: %v", err)
+	}
+	if v != "KAY" {
+		t.Errorf("got %#v, want %q", v, "KAY")
+	}
+}
