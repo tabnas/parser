@@ -1411,6 +1411,9 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			// Lazy fetch: only pull a new token from the lexer if this
 			// slot has not been populated by a previous alt / fetch.
 			if ctx.T[i].IsNoToken() {
+				// Tell the lexer which slot it is filling, so its matcher
+				// gate can ask about this position rather than slot 0.
+				lex.tI = i
 				tkn := lex.Next(rule)
 				// Lexer soft mode: with recovery on and relex off, an
 				// unlexable span is absorbed HERE rather than handed to
@@ -1423,6 +1426,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 						tkn = lex.Next(rule)
 					}
 				}
+				lex.tI = 0
 				ctx.T[i] = tkn
 				// Keep the legacy T0 / T1 aliases in sync so existing
 				// grammar / plugin code that reads them observes the
