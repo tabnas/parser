@@ -62,8 +62,7 @@ forms. Three of those were broken in Go until 0.8.4 and are now pinned.
 
 Error columns count UTF-16 units in TypeScript (an astral character is 2)
 and runes in Go (any character is 1). Forced by the scan unit — TS scans
-UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
-positions, never in parsed values. The `pos` field of the structured
+UTF-16 code units, Go scans UTF-8 bytes. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
 a 0-based offset in UTF-16 units (TS) versus runes (Go). The diagnostic's
 `len` deliberately counts Unicode code points OF THE TOKEN SOURCE, so the
@@ -76,6 +75,40 @@ with `len` 1, but its `src` is one UTF-16 unit in TS (a lone high
 surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
+
+### Token offsets reach parsed values, not only diagnostics
+
+**This entry exists because the one above used to end "and visible only
+in error positions, never in parsed values". That was false.** `Token.SI`
+is part of the plugin API, and a plugin that records it lands the scan
+unit directly in its output.
+
+Measured through `@tabnas/c`, whose CST carries a `span` built from
+`tkn.SI`, on the input `["\u{1F600}" 1]`:
+
+| token | TypeScript | Go |
+| --- | --- | --- |
+| `PUNC_LBRACKET` | 0→1 | 0→1 |
+| `LIT_STRING` | 1→**5** | 1→**7** |
+| `LIT_INT` | **6**→7 | **8**→9 |
+| `PUNC_RBRACKET` | 7→8 | 9→10 |
+
+TypeScript counts the astral character as 2 UTF-16 units; Go counts its 4
+UTF-8 bytes. **Go's `Token.SI` is a byte offset — not a rune offset**,
+which is what the column entry above describes for error positions after
+conversion. Every token after a non-ASCII one is displaced.
+
+Found by `tasks/ax-parity-probe` in tabnas/admin, once `@tabnas/c` gained
+the `pluginKind: "grammar"` descriptor field that had been keeping it out
+of the probe: 5 disagreements of 23 inputs, every one an input containing
+a non-ASCII character, and `@tabnas/expr` is exposed the same way.
+
+Not repairable in a plugin: converting offsets there would need the
+source and would still leave `tkn.SI` itself divergent for anything else
+reading it. The repair is the engine's scan unit, which is the same
+change the column entry above defers. Recorded rather than fixed, and the
+scope sentence corrected so the next reader is not told this cannot reach
+a parsed value.
 
 ### Bad-token spans for invalid string escapes
 
