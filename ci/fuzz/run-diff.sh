@@ -60,6 +60,15 @@ const canon = (f) => {
 process.exit(canon(process.argv[1]) === canon(process.argv[2]) ? 0 : 1)
 '
 
+# The error code out of a CLI's stderr. Both print `[<tag>/<code>]:` as the
+# first thing on the line, so one pattern reads either. A rejection whose
+# code cannot be read is reported as `?`, which compares unequal to a real
+# code rather than silently matching everything.
+errcode() {
+  sed -n 's/.*\[[a-z0-9_-]*\/\([a-z0-9_]*\)\].*/\1/p' "$1" | head -n 1 |
+    grep . || echo '?'
+}
+
 pass=0
 fail=0
 for input in "$WORK"/corpus/*.in; do
@@ -71,8 +80,12 @@ for input in "$WORK"/corpus/*.in; do
   # file descriptor are synchronous and complete.
   doc="$(cat "$input")"
   set +e
-  node "$TSCLI" "$doc" > "$WORK/ts.out" 2>/dev/null; ts_code=$?
-  "$WORK/tabnas-json" "$doc" > "$WORK/go.out" 2>/dev/null; go_code=$?
+  # stderr is KEPT, not discarded: when both runtimes reject, the only
+  # thing left to compare is the diagnostic, and a corpus of deliberately
+  # malformed input is mostly that case. Discarding it made every
+  # both-reject row agree by default, however far the two codes differed.
+  node "$TSCLI" "$doc" > "$WORK/ts.out" 2> "$WORK/ts.err"; ts_code=$?
+  "$WORK/tabnas-json" "$doc" > "$WORK/go.out" 2> "$WORK/go.err"; go_code=$?
   set -e
 
   ok=1
@@ -83,6 +96,16 @@ for input in "$WORK"/corpus/*.in; do
     if ! node -e "$CMP_JS" "$WORK/ts.out" "$WORK/go.out"; then
       ok=0
       why="values differ"
+    fi
+  else
+    # BOTH rejected. Agreeing that an input is invalid is not agreeing:
+    # two runtimes that reject it for different reasons have not made the
+    # same decision, and AGENTS.md makes the code part of the contract.
+    ts_err="$(errcode "$WORK/ts.err")"
+    go_err="$(errcode "$WORK/go.err")"
+    if [ "$ts_err" != "$go_err" ]; then
+      ok=0
+      why="both reject, codes differ: ts=$ts_err go=$go_err"
     fi
   fi
 

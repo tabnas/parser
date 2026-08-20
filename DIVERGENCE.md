@@ -74,8 +74,7 @@ forms. Three of those were broken in Go until 0.8.4 and are now pinned.
 
 Error columns count UTF-16 units in TypeScript (an astral character is 2)
 and runes in Go (any character is 1). Forced by the scan unit — TS scans
-UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
-positions, never in parsed values. The `pos` field of the structured
+UTF-16 code units, Go scans UTF-8 bytes. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
 a 0-based offset in UTF-16 units (TS) versus runes (Go).
 
@@ -96,6 +95,40 @@ with `len` 1, but its `src` is one UTF-16 unit in TS (a lone high
 surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
+
+### Token offsets reach parsed values, not only diagnostics
+
+**This entry exists because the one above used to end "and visible only
+in error positions, never in parsed values". That was false.** `Token.SI`
+is part of the plugin API, and a plugin that records it lands the scan
+unit directly in its output.
+
+Measured through `@tabnas/c`, whose CST carries a `span` built from
+`tkn.SI`, on the input `["\u{1F600}" 1]`:
+
+| token | TypeScript | Go |
+| --- | --- | --- |
+| `PUNC_LBRACKET` | 0→1 | 0→1 |
+| `LIT_STRING` | 1→**5** | 1→**7** |
+| `LIT_INT` | **6**→7 | **8**→9 |
+| `PUNC_RBRACKET` | 7→8 | 9→10 |
+
+TypeScript counts the astral character as 2 UTF-16 units; Go counts its 4
+UTF-8 bytes. **Go's `Token.SI` is a byte offset — not a rune offset**,
+which is what the column entry above describes for error positions after
+conversion. Every token after a non-ASCII one is displaced.
+
+Found by `tasks/ax-parity-probe` in tabnas/admin, once `@tabnas/c` gained
+the `pluginKind: "grammar"` descriptor field that had been keeping it out
+of the probe: 5 disagreements of 23 inputs, every one an input containing
+a non-ASCII character, and `@tabnas/expr` is exposed the same way.
+
+Not repairable in a plugin: converting offsets there would need the
+source and would still leave `tkn.SI` itself divergent for anything else
+reading it. The repair is the engine's scan unit, which is the same
+change the column entry above defers. Recorded rather than fixed, and the
+scope sentence corrected so the next reader is not told this cannot reach
+a parsed value.
 
 ## Repaired, and what replaced them
 
@@ -233,6 +266,72 @@ results on purpose. Both drive a real `GrammarSpec` through
 `grammar()` / `Grammar()` and parse: the gap was previously known only at
 the regex-engine layer, so "a shared grammar that depends on either will
 differ" was a prediction until this was wired.
+
+### An explicitly empty option cannot be expressed in Go
+
+**Deferred, not deliberate** — this is a defect awaiting a breaking
+change, recorded here so consumers are not told it does not exist.
+
+`String.Chars`, `String.MultiChars`, `String.EscapeChar`, `Space.Chars`,
+`Line.Chars` and `Line.RowChars` are plain `string` in the Go options, so
+`""` is their zero value and an explicitly empty value is
+indistinguishable from an unset one. Each config branch tests `!= ""` and
+restores the default when empty.
+
+TypeScript distinguishes `''` from `undefined` and honours it; Go cannot,
+so the defaults stay in force.
+
+Six fields, not four: `Line.RowChars` and `String.EscapeChar` were missed
+on the first pass, and they are not cosmetic — `rowChars: ''` changes
+reported POSITIONS and `escapeChar: ''` changes string-token CONTENT.
+
+The consequence is a **different result for the same input** whenever a
+plugin configures its lexer that way. `@tabnas/css` declared
+`string: { chars: '' }` in both ports:
+
+| input | TypeScript | Go |
+| --- | --- | --- |
+| `a"b` | `jsonic/unexpected` | `jsonic/unterminated_string` |
+
+The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
+`EscapeStrict`, which are pointers for exactly this reason. It is a
+breaking change across a published module, so it is outstanding rather
+than done — and the blocking constraint is specific enough to write down.
+
+The adoption cost, counted across the fleet excluding tests:
+
+| repo | affected call sites |
+| --- | --- |
+| `parser` | its own config branches |
+| `jsonic` | 3 |
+| `ini` | 3 |
+| `json`, `chess`, `zon` | 2 each |
+| `css`, `csv`, `yaml` | 1 each |
+
+**Consumers are not broken by the merge.** They pin the engine — `ini`,
+`zon`, `csv` and `yaml` all require `parser/go v0.8.10` — so a type change
+on `main` reaches them only when someone bumps that pin. The fifteen call
+sites are an ADOPTION cost paid at upgrade, not a coordination cost paid
+at merge.
+
+That makes this a **release-policy decision** rather than a scheduling
+puzzle: whether to spend a breaking bump on it, and when. Not a call to
+make as a side effect of a parity sweep, which is why it is recorded here
+instead of done.
+
+A non-breaking half-measure exists and is deliberately not taken: an
+additive `CharsSet *string` preferred when non-nil would give Go a way to
+SAY "no quote characters" without changing any existing caller. It closes
+the capability gap and leaves the divergence — `Chars: ""` would still
+mean two different things in the two ports — so it trades a recorded
+defect for an unrecorded one plus a second way to spell the same option. `TestEmptyCharsMeansUnset` pins the current
+behaviour and **fails when the repair lands** — the signal to delete this
+entry along with it.
+
+Sibling ports are not all exposed: of the four call sites in the fleet
+that set an empty value, only css's was live. `csv` sets `Lex: false`
+alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
+never a quote character to begin with.
 
 ## Not divergences
 
