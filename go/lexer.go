@@ -1803,13 +1803,23 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_ascii", l.pnt.SI, sI+2)
+						// TS positions the escape errors at the BACKSLASH
+						// (`sI -= 2` from just past the escape letter) and
+						// spans the escape's nominal width. Go left the point
+						// at the opening quote. `cI - 2` because this matcher's
+						// counter runs one ahead of the TS one (see the
+						// unprintable site) and TS itself steps back one here.
+						l.pnt.SI = sI - 2
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_ascii", sI-2, sI+2)
 					}
 				} else {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("invalid_ascii", l.pnt.SI, sI)
+					l.pnt.SI = sI - 2
+					l.pnt.CI = cI - 2
+					return l.bad("invalid_ascii", sI-2, sI)
 				}
 			case 'u':
 				// Unicode escape \u**** or \u{*****}. Strict mode disables
@@ -1833,7 +1843,14 @@ func (l *Lex) matchString() *Token {
 							if l.Config.StringAbandon {
 								return nil
 							}
-							return l.bad("invalid_unicode", l.pnt.SI, sI+endI+1)
+							// SI steps back 3 (digit, `{`, `u`) to the
+							// backslash, but CI only 2: this matcher does
+							// not advance cI over the `{`, so a third step
+							// would land the column on the opening quote.
+							// Measured — it did, at 1:1 against TS's 1:2.
+							l.pnt.SI = sI - 3
+							l.pnt.CI = cI - 2
+							return l.bad("invalid_unicode", sI-3, sI+endI+1)
 						}
 					} else {
 						if l.Config.StringAbandon {
@@ -1843,7 +1860,9 @@ func (l *Lex) matchString() *Token {
 						if endI >= 0 {
 							end = sI + endI + 1
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, end)
+						l.pnt.SI = sI - 3
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_unicode", sI-3, end)
 					}
 				} else if sI+4 <= srclen {
 					cc := parseHexInt(src[sI : sI+4])
@@ -1860,13 +1879,17 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						return l.bad("invalid_unicode", l.pnt.SI, sI+4)
+						l.pnt.SI = sI - 2
+						l.pnt.CI = cI - 2
+						return l.bad("invalid_unicode", sI-2, sI+4)
 					}
 				} else {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("invalid_unicode", l.pnt.SI, sI)
+					l.pnt.SI = sI - 2
+					l.pnt.CI = cI - 2
+					return l.bad("invalid_unicode", sI-2, sI)
 				}
 			default:
 				if l.Config.AllowUnknownEscape {
@@ -1875,7 +1898,11 @@ func (l *Lex) matchString() *Token {
 					if l.Config.StringAbandon {
 						return nil
 					}
-					return l.bad("unexpected", l.pnt.SI, sI+1)
+					// TS positions this ON the escape character, with no
+					// step back to the backslash.
+					l.pnt.SI = sI
+					l.pnt.CI = cI - 1
+					return l.bad("unexpected", sI, sI+1)
 				}
 			}
 			sI++
@@ -1894,7 +1921,18 @@ func (l *Lex) matchString() *Token {
 			if l.Config.StringAbandon {
 				return nil
 			}
-			return l.bad("unprintable", l.pnt.SI, sI+1)
+			// Position the token ON the offending character, as TS does
+			// (`pnt.sI = sI; pnt.cI = cI` before its bad() call). Go left
+			// the point at the opening quote, so every string error in
+			// this matcher reported 1:1.
+			//
+			// `cI - 1`, not `cI`: this matcher seeds `cI := l.pnt.CI + 1`
+			// to step over the opening quote, so it runs one ahead of the
+			// TS counter at the same character. Measured across four
+			// offsets of the same input — Go was +1 at every one.
+			l.pnt.SI = sI
+			l.pnt.CI = cI - 1
+			return l.bad("unprintable", sI, sI+1)
 		}
 
 		// Replace chars stop the body run; emit the replacement.

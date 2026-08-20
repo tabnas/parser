@@ -91,37 +91,43 @@ describe('divergence', () => {
     )
   })
 
-  it('bad-escape token spans the ESCAPE here, quote-to-escape in Go', () => {
-    // DIVERGENCE.md: "Bad-token spans for invalid string escapes". This
-    // port's string matcher reports the offending escape sequence itself;
-    // Go reports the string from its opening quote up to the escape. Same
-    // code (the contract), different span — so the structured diagnostic's
-    // len/pos/col diverge on this path even for pure-ASCII input.
-    // go/divergence_test.go TestDivergenceBadEscapeSpanIncludesQuote
-    // asserts the OPPOSITE values on purpose.
-    const j = new Tabnas()
-    const lex = makeLex({
-      src: () => '"\\uZZZZ"',
-      cfg: j.internal().config,
-      opts: j.options,
-      sub: {},
-    })
-    const t = lex.next()
-    assert.equal(t.name, '#BD')
-    assert.equal(
-      t.why,
-      'invalid_unicode',
-      'the code agrees for THIS input — see the truncated-escape test ' +
-        'below for the shapes where it does not',
-    )
-    assert.equal(t.src, '\\uZZZZ', 'escape only — Go includes the opening quote')
-    assert.equal(t.sI, 1, 'pos: escape start — Go reports 0 (the quote)')
-    assert.equal(t.cI, 2, 'col: escape start — Go reports 1 (the quote)')
-    assert.equal(
-      Array.from(t.src).length,
-      6,
-      'diagnostic len (code points of token src) — Go reports 7',
-    )
+  it('string errors point at the construct, and agree with Go', () => {
+    // This replaces a divergence pin. Go used to leave the lex point at
+    // the opening quote and span from it, so every error from its string
+    // matcher reported 1:1 and carried the whole string-so-far as its
+    // token src. Repaired by mirroring what this port does — move the
+    // point onto the construct before raising. Swept 19 inputs across
+    // the family: 0 diverge.
+    //
+    // Kept as a PARITY test rather than deleted: the point-moving is easy
+    // to drop when editing either matcher, and dropping it is silent —
+    // the codes stay right and only the positions move.
+    // go/divergence_test.go TestStringErrorsPointAtTheConstruct asserts
+    // the same inputs.
+    const LF = String.fromCharCode(10)
+    for (const [src, why, cI, tsrc] of [
+      // Escape errors sit on the BACKSLASH and span the escape.
+      ['"\\uZZZZ"', 'invalid_unicode', 2, '\\uZZZZ'],
+      ['"\\xZZ"', 'invalid_ascii', 2, '\\xZZ'],
+      ['"\\u{GG}"', 'invalid_unicode', 2, '\\u{GG}'],
+      // An unknown escape sits on the escape CHARACTER.
+      ['"\\q"', 'unexpected', 3, 'q'],
+      // A control char sits on the character itself.
+      ['"a' + LF + 'b"', 'unprintable', 3, LF],
+    ]) {
+      const j = new Tabnas({ string: { allowUnknown: false } })
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const t = lex.next()
+      assert.equal(t.name, '#BD', src)
+      assert.equal(t.why, why, src)
+      assert.equal(t.cI, cI, src + ': the point must sit on the construct')
+      assert.equal(t.src, tsrc, src + ': the span must cover the construct')
+    }
   })
 
   it('escape decode is strict, and agrees with Go', () => {

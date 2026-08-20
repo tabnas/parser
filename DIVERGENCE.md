@@ -77,42 +77,6 @@ surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
 
-### Bad-token spans for invalid string escapes
-
-The two lexers cut a DIFFERENT bad token for the same invalid escape:
-TypeScript's string matcher reports the offending escape sequence itself,
-Go's reports the string from its opening quote up to the escape. The token
-source, and therefore the diagnostic's `len`/`pos`/`col`, diverge even for
-pure-ASCII input:
-
-| input | TypeScript | Go |
-|---|---|---|
-| `"\uZZZZ"` | code `invalid_unicode`, token src `\uZZZZ`, pos 1, col 2, len 6 | code `invalid_unicode`, token src `"\uZZZZ`, pos 0, col 1, len 7 |
-
-The mechanism is one the ports state differently rather than compute
-differently. TypeScript moves the lex point onto the offending construct
-before raising (`pnt.sI = sI; pnt.cI = cI` at each raise site in its
-string matcher); Go leaves the point at the opening quote and spans from
-`l.pnt.SI`. Five raise sites, one behaviour.
-
-The `code` agrees on this path, and now genuinely does. An earlier
-version of this entry claimed that without checking; a first correction
-found two disagreeing shapes; a proper sweep found sixteen. All sixteen
-came from one defect — TypeScript's `parseInt` escape decode succeeding
-on any hex prefix — and that defect is repaired (P3). Swept again after
-the repair: 32 cases, **0 diverge**. `go/divergence_test.go`
-`TestEscapeDecodeIsStrict` and its TypeScript twin keep both ports
-strict; they are parity tests now, not divergence pins.
-
-What remains divergent here is only the SPAN: `len`, `pos` and `col` on
-the bad token, per the table above. `row` agrees. Consumers can anchor on
-`code` on this path — the claim the entry originally made, now earned
-rather than assumed.
-
-Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
-(`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
-spans on purpose, so changing either side fails loudly.
-
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

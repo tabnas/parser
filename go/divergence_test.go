@@ -29,7 +29,6 @@ package tabnas
 import (
 	"reflect"
 	"testing"
-	"unicode/utf8"
 )
 
 // TestDivergenceAstralColumnIsOneRune pins: "Error columns count UTF-16
@@ -142,40 +141,57 @@ func hasField(v any, name string) bool {
 	return false
 }
 
-// TestDivergenceBadEscapeSpanIncludesQuote pins: "Bad-token spans for
-// invalid string escapes". This port's string matcher reports the string
-// from its opening quote up to the bad escape; TypeScript reports the
-// offending escape sequence itself. Same code (the contract), different
-// span — so the structured diagnostic's len/pos/col diverge on this path
-// even for pure-ASCII input. ts/test/divergence.test.js asserts the
-// OPPOSITE values on purpose.
-func TestDivergenceBadEscapeSpanIncludesQuote(t *testing.T) {
-	j := Make(Options{})
-	lex := NewLex(`"\uZZZZ"`, j.Config())
-	lex.Next()
-
-	je, ok := lex.Err.(*TabnasError)
-	if !ok || je == nil {
-		t.Fatalf("expected a *TabnasError lex error, got %v", lex.Err)
-	}
-	if je.Code != "invalid_unicode" {
-		t.Errorf("code: got %q, want invalid_unicode (the code agrees for "+
-			"THIS input — see TestDivergenceTruncatedEscapeCodeDiverges "+
-			"for the shapes where it does not)", je.Code)
-	}
-	if je.Src != `"\uZZZZ` {
-		t.Errorf("token src: got %q, want quote-to-escape — TS reports the "+
-			"escape alone", je.Src)
-	}
-	if je.Pos != 0 {
-		t.Errorf("pos: got %d, want 0 (the quote) — TS reports 1", je.Pos)
-	}
-	if je.Col != 1 {
-		t.Errorf("col: got %d, want 1 (the quote) — TS reports 2", je.Col)
-	}
-	if n := utf8.RuneCountInString(je.Src); n != 7 {
-		t.Errorf("diagnostic len (code points of token src): got %d, want 7 "+
-			"— TS reports 6", n)
+// String errors are positioned ON the offending construct, in both ports.
+//
+// This was a divergence pin: Go left the lex point at the opening quote
+// and spanned from it, so every error from this matcher reported 1:1 and
+// carried the whole string-so-far as its token src, while TypeScript
+// moved the point onto the escape (or the offending character) and
+// spanned just that. Repaired by mirroring TS's `pnt.sI = sI; pnt.cI =
+// cI` at all five raise sites; swept 19 inputs across the family, 0
+// diverge.
+//
+// Kept as a PARITY test rather than deleted: the point-moving is easy to
+// drop when editing this matcher, and dropping it is silent — the codes
+// stay right and only the positions move. ts/test/divergence.test.js
+// asserts the same inputs.
+func TestStringErrorsPointAtTheConstruct(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		code string
+		col  int
+		tsrc string
+	}{
+		// Escape errors sit on the BACKSLASH and span the escape.
+		{`"\uZZZZ"`, "invalid_unicode", 2, `\uZZZZ`},
+		{`"\xZZ"`, "invalid_ascii", 2, `\xZZ`},
+		{`"\u{GG}"`, "invalid_unicode", 2, `\u{GG}`},
+		// An unknown escape sits on the escape CHARACTER, as TS does.
+		{`"\q"`, "unexpected", 3, `q`},
+		// A control char sits on the character itself.
+		{"\"a\nb\"", "unprintable", 3, "\n"},
+	} {
+		// allowUnknown off, or `\q` is simply accepted and there is no
+		// error to position. The TypeScript twin sets the same option.
+		no := false
+		j := Make(Options{String: &StringOptions{AllowUnknown: &no}})
+		lex := NewLex(c.src, j.Config())
+		lex.Next()
+		je, ok := lex.Err.(*TabnasError)
+		if !ok || je == nil {
+			t.Fatalf("%s: expected a *TabnasError, got %v", c.src, lex.Err)
+		}
+		if je.Code != c.code {
+			t.Errorf("%s: code = %q, want %q", c.src, je.Code, c.code)
+		}
+		if je.Col != c.col {
+			t.Errorf("%s: col = %d, want %d — the point must sit on the "+
+				"construct, not the opening quote", c.src, je.Col, c.col)
+		}
+		if je.Src != c.tsrc {
+			t.Errorf("%s: token src = %q, want %q — the span must cover the "+
+				"construct, not the string so far", c.src, je.Src, c.tsrc)
+		}
 	}
 }
 
