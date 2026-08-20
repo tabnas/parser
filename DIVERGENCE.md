@@ -11,6 +11,18 @@ plugin surface are covered in
 not a parity record. A reader asking "will these two engines agree on my
 input?" should be able to answer it from this page alone.
 
+**That last sentence has been false at least twice, in the same way.**
+`go/doc/differences.md` has a section headed *"Behavioral Differences —
+These affect parse output for the same input"*, which is this file's own
+definition of a divergence, and things that belonged here were filed
+there instead: the rule-iteration budget (repaired, P7) and the `\s` /
+`(?i)` regex non-equivalences (permanent, P8, and now recorded below).
+Both were accurately DESCRIBED — and neither was pinned, because that
+file is prose and this one is backed by tests in both ports. When adding
+to either, the test is not "is this about the Go port?" but "can the two
+engines produce a different result for the same input?" If yes, it
+belongs here, whatever else is true about it.
+
 ## Why this matters more here than elsewhere
 
 This engine is the root of a dependency graph. A divergence here reaches
@@ -100,6 +112,32 @@ matcher structure, for display-only gain. Consumers should treat
 Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
 (`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
 spans on purpose, so changing either side fails loudly.
+
+### Rule-iteration budget: a fractional `rule.maxmul`
+
+The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
+Go, so a value between 0 and 1 shrinks the budget in one port and cannot
+be written in the other.
+
+| options | TypeScript | Go |
+|---|---|---|
+| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; a shared options blob reaches `*int` as `0`, which coerces to the default `3`, and parses |
+
+Everything else about this guard is aligned, and was not: both ports used
+to reject valid input at one end of `maxmul` — TypeScript by honouring a
+zero or negative multiplier literally, Go by wrapping the product and
+meeting its own floor of 100. Repaired; see "Rule-Iteration Budget" in
+[`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
+
+Not repaired here, because the fix is to the option's TYPE. Narrowing
+TypeScript's `maxmul` to an integer would break callers for a setting
+nobody tunes fractionally, and widening Go's would put a float in a
+loop counter. The floor of 100 bounds the damage: a fractional multiplier
+cannot make a SHORT parse fail in either port.
+
+Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
+expressible here and not in Go') alongside the aligned cases, so the two
+are read together.
 
 ## Not divergences
 

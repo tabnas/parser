@@ -190,13 +190,29 @@ empty value is not `undefined` must declare it via `lex.emptyResult` rather
 than expect its start rule to run. Whitespace/comment-only input takes the
 normal parse flow in both implementations and resolves by grammar behavior.
 
-### Rule-Iteration Budget
+### Rule-Iteration Budget: Aligned
 
-The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul` in both.
-Go additionally coerces a non-positive `MaxMul` to the default `3` and floors
-the product at `100`; TS honors `rule.maxmul: 0` literally, which yields a zero
-budget and an `unexpected` error. Only reachable by setting `rule.maxmul` to
-zero or a negative number.
+The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul`, floored
+at `100`, with a non-positive multiplier coerced to the default `3`, in
+**both** ports.
+
+This subsection previously recorded a difference — Go coerced and floored,
+TypeScript honoured `rule.maxmul: 0` literally and rejected valid input
+with `unexpected`. It was a divergence by this document's own heading
+("These affect parse output for the same input"), filed here rather than
+in `DIVERGENCE.md`, and so never pinned. Repaired at both ends: TypeScript
+now coerces, and Go's product is computed with a saturating multiply,
+because a wrapped negative product met that same `100` floor and made a
+LARGER multiplier a STRICTER guard. Audit item P7.
+
+Pinned in `go/rule_budget_test.go` and `ts/test/rule-budget.test.js`,
+which assert the same table at both ends and, separately, that the guard
+still stops a runaway grammar.
+
+One thing about `maxmul` is still not aligned, and it is the option's
+TYPE rather than the guard: `number` in TypeScript, `*int` in Go, so a
+fractional multiplier is expressible only in TypeScript. Recorded in
+[`DIVERGENCE.md`](../../DIVERGENCE.md).
 
 ### Token Consumption
 
