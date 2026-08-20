@@ -277,3 +277,91 @@ func TestMaxMulSurvivesTheOptionsMap(t *testing.T) {
 			*opts.Rule.MaxMul)
 	}
 }
+
+// The multiplier must reach the guard through EVERY path that sets it, not
+// only through Make.
+//
+// `MaxMul` lives on the Parser, and `SetOptions` rebuilds the Config, so
+// `SetOptions(Options{Rule: &RuleOptions{MaxMul: ...}})` left the budget at
+// whatever construction had computed. TypeScript reads
+// `ctx.cfg.rule.maxmul` at parse time off a config that IS rebuilt, so the
+// same call took effect there. `MapToOptions` had the same shape of gap and
+// is pinned separately above.
+//
+// Asserted on the BUDGET, not on a parse result. Under the repaired
+// semantics every valid document parses at every integer multiplier — the
+// guard has an order of magnitude of headroom and the floor covers the rest
+// — so "did it parse?" cannot tell whether the option arrived. What the
+// value is FOR is the size of the budget, so the boundary N is what the
+// test reads: doubling the multiplier must double the reachable depth.
+//
+// This is why no shared .tsv fixture covers this option: the fixture format
+// is input -> parse result, and the parse result does not move.
+func TestMaxMulTakesEffectThroughSetOptions(t *testing.T) {
+	src := strings.Repeat("a", 60)
+
+	// Boundary N at the default 3, measured by the same push-chain grammar
+	// as TestRuleBudgetMeasuresSourceInUTF16Units.
+	base := 1439
+	if !deepPushParses(base, src) || deepPushParses(base+1, src) {
+		t.Fatalf("default boundary is not %d — the other tests in this file "+
+			"pin it, so fix those first", base)
+	}
+
+	for _, c := range []struct {
+		label  string
+		maxmul int
+		want   int
+	}{
+		{"6 doubles it", 6, 2879},
+		{"1 divides it by three", 1, 479},
+
+		// Coerced to the default, so the boundary must not move.
+		{"0 is the default", 0, base},
+		{"-1 is the default", -1, base},
+	} {
+		if got := setOptionsBoundary(t, c.maxmul, src); got != c.want {
+			t.Errorf("%s: boundary via SetOptions = %d, want %d "+
+				"(default is %d — an unchanged boundary means the option "+
+				"never reached the parser)", c.label, got, c.want, base)
+		}
+	}
+}
+
+// setOptionsBoundary returns the largest push depth that still parses, with
+// maxmul applied through SetOptions after the instance exists.
+func setOptionsBoundary(t *testing.T, maxmul int, src string) int {
+	t.Helper()
+	parses := func(n int) bool {
+		j := Make(Options{Rule: &RuleOptions{Start: "top", Exclude: "tabnas,imp"}})
+		j.Rule("top", func(rs *RuleSpec, p *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{}, P: "deep"})
+			rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}},
+				A: func(r *Rule, ctx *Context) { r.Node = r.Child.Node }})
+		})
+		j.Rule("deep", func(rs *RuleSpec, p *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{}, P: "deep",
+				C: func(r *Rule, ctx *Context) bool { return r.D < n }})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{TinTX}},
+				A: func(r *Rule, ctx *Context) { r.Node = r.O0.Val }})
+			rs.AddClose(&AltSpec{A: func(r *Rule, ctx *Context) {
+				if r.Node == nil && r.Child != nil {
+					r.Node = r.Child.Node
+				}
+			}})
+		})
+		j.SetOptions(Options{Rule: &RuleOptions{MaxMul: &maxmul}})
+		_, err := j.Parse(src)
+		return err == nil
+	}
+	lo, hi := 1, 6000
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if parses(mid) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}

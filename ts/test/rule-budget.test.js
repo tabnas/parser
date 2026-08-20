@@ -158,6 +158,71 @@ describe('rule-budget', () => {
     }
   })
 
+  it('takes effect through the in-place setter too', () => {
+    // The multiplier must reach the guard through EVERY path that sets it,
+    // not only through the constructor. Go's `SetOptions` rebuilt the
+    // Config while `MaxMul` lived on the Parser, so it silently ignored
+    // this option; its `MapToOptions` dropped the field entirely. This port
+    // reads `ctx.cfg.rule.maxmul` at parse time off a config that IS
+    // rebuilt, so both paths already worked here — pinned so they keep
+    // working, and so the two ports' setter paths are asserted the same way.
+    // go/rule_budget_test.go TestMaxMulTakesEffectThroughSetOptions is the
+    // twin, over the same four multipliers and the same numbers.
+    //
+    // Asserted on the BUDGET, not on a parse result. Under the repaired
+    // semantics every valid document parses at every integer multiplier —
+    // the guard has an order of magnitude of headroom and the floor covers
+    // the rest — so "did it parse?" cannot tell whether the option arrived.
+    // That is also why no shared .tsv fixture covers this option: the
+    // fixture format is input -> parse result, and the parse result does
+    // not move.
+    const SRC = 'a'.repeat(60)
+    const parses = (n, apply) => {
+      const j = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+      j.rule('top', (rs) => rs
+        .open([{ s: [], p: 'deep' }])
+        .close([{ s: ['#ZZ'], a: (r) => { r.node = r.child.node } }]))
+      j.rule('deep', (rs) => rs
+        .open([
+          { s: [], p: 'deep', c: (r) => r.d < n },
+          { s: ['#TX'], a: (r) => { r.node = r.o0.val } },
+        ])
+        .close([{ a: (r) => { if (undefined === r.node) r.node = r.child.node } }]))
+      apply(j)
+      try {
+        j.parse(SRC)
+        return true
+      } catch (e) {
+        return false
+      }
+    }
+    const boundary = (apply) => {
+      let lo = 1
+      let hi = 6000
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1
+        if (parses(mid, apply)) lo = mid
+        else hi = mid - 1
+      }
+      return lo
+    }
+
+    const base = boundary(() => {})
+    assert.equal(base, 1439, 'default boundary')
+
+    for (const [maxmul, want] of [
+      [6, 2879],   // doubles it
+      [1, 479],    // a third of it
+      [0, base],   // coerced to the default: must not move
+      [-1, base],
+    ]) {
+      assert.equal(
+        boundary((j) => j.options({ rule: { maxmul } })), want,
+        'maxmul ' + maxmul + ' via options()',
+      )
+    }
+  })
+
   it('a fractional maxmul is expressible here and not in Go', () => {
     // `rule.maxmul` is a `number` in TypeScript and a `*int` in Go, so a
     // multiplier between 0 and 1 shrinks the budget here and cannot be
