@@ -112,12 +112,12 @@ change, recorded here so consumers are not told it does not exist.
 indistinguishable from an unset one. Each config branch tests `!= ""` and
 restores the default when empty.
 
-Six fields, not four: `Line.RowChars` and `String.EscapeChar` were
-missed on the first pass, and they are not cosmetic — `rowChars: ''`
-changes reported POSITIONS and `escapeChar: ''` changes string-token
-CONTENT. `options.go` skips it
-(`o.String.Chars != ""`) and the defaults stay in force. TypeScript
-distinguishes `''` from `undefined` and honours it.
+TypeScript distinguishes `''` from `undefined` and honours it; Go cannot,
+so the defaults stay in force.
+
+Six fields, not four: `Line.RowChars` and `String.EscapeChar` were missed
+on the first pass, and they are not cosmetic — `rowChars: ''` changes
+reported POSITIONS and `escapeChar: ''` changes string-token CONTENT.
 
 The consequence is a **different result for the same input** whenever a
 plugin configures its lexer that way. `@tabnas/css` declared
