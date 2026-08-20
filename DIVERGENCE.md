@@ -132,25 +132,26 @@ The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
 breaking change across a published module, so it is outstanding rather
 than done — and the blocking constraint is specific enough to write down.
 
-**The consumers must move in the same change, and seven of the call sites
-are in repos a session cannot write.** Counted across the fleet, excluding
-tests:
+The adoption cost, counted across the fleet excluding tests:
 
-| repo | affected call sites | |
-| --- | --- | --- |
-| `parser` | its own config branches | |
-| `jsonic` | 3 | writable |
-| `json` | 2 | writable |
-| `css`, `csv`, `yaml` | 1 each | writable |
-| **`ini`** | **3** | **read-only** |
-| **`chess`** | **2** | **read-only** |
-| **`zon`** | **2** | **read-only** |
+| repo | affected call sites |
+| --- | --- |
+| `parser` | its own config branches |
+| `jsonic` | 3 |
+| `ini` | 3 |
+| `json`, `chess`, `zon` | 2 each |
+| `css`, `csv`, `yaml` | 1 each |
 
-Changing the field type without updating `ini`, `chess` and `zon` leaves
-those three unable to compile against the engine. So this is not
-"deferred because it is breaking" — it is **gated on landing the engine
-change and three specific consumer updates together**, which needs write
-access to all of them at once.
+**Consumers are not broken by the merge.** They pin the engine — `ini`,
+`zon`, `csv` and `yaml` all require `parser/go v0.8.10` — so a type change
+on `main` reaches them only when someone bumps that pin. The fifteen call
+sites are an ADOPTION cost paid at upgrade, not a coordination cost paid
+at merge.
+
+That makes this a **release-policy decision** rather than a scheduling
+puzzle: whether to spend a breaking bump on it, and when. Not a call to
+make as a side effect of a parity sweep, which is why it is recorded here
+instead of done.
 
 A non-breaking half-measure exists and is deliberately not taken: an
 additive `CharsSet *string` preferred when non-nil would give Go a way to
