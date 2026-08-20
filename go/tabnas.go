@@ -485,6 +485,25 @@ func (e TabnasError) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	// `pos` is emitted in RUNES, not bytes.
+	//
+	// e.Pos is a byte offset because the lexer needs one — every
+	// `src[sI:]` in the matchers depends on it. But the diagnostic
+	// contract is a character position, and TypeScript reports UTF-16
+	// units. Bytes agree with neither: measured with a non-ASCII
+	// character before the failure point, TS reported pos 4 for both
+	// `"é" 1` and `"€" 1` where Go reported 5 and 6.
+	//
+	// Converting here puts `pos` in the same class as `col` — agreeing
+	// throughout the BMP, diverging only above it, which is the
+	// astral-character divergence DIVERGENCE.md already records. `len`
+	// on the next few lines has always converted at exactly this
+	// boundary for exactly this reason.
+	posRunes := e.Pos
+	if 0 <= e.Pos && e.Pos <= len(e.fullSource) {
+		posRunes = utf8.RuneCountInString(e.fullSource[:e.Pos])
+	}
+
 	type tokenJSON struct {
 		Name string `json:"name"`
 		Src  string `json:"src"`
@@ -512,7 +531,7 @@ func (e TabnasError) MarshalJSON() ([]byte, error) {
 		Hint:      e.Hint,
 		Row:       e.Row,
 		Col:       e.Col,
-		Pos:       e.Pos,
+		Pos:       posRunes,
 		Len:       utf8.RuneCountInString(e.Src),
 		Rule:      e.diagRule,
 		RuleStack: ruleStack,

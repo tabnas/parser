@@ -28,3 +28,16 @@ input	diagnostic
 # Unclaimed character (no matcher can produce it under strict JSON): the
 # error token is #BD in both runtimes, spanning the full character.
 x	{"code":"unexpected","row":1,"col":1,"pos":0,"len":1,"rule":"val","ruleStack":["val"],"expected":["#NR","#OB","#OS","#ST","#TX","#VL"],"token":{"name":"#BD","src":"x"}}
+# pos is a RUNE offset, and until now Go emitted its raw byte index here —
+# so `pos` disagreed with its own neighbour `col` (runes) inside one
+# diagnostic, and with schema/diagnostic.schema.json, for every non-ASCII
+# character. These BMP rows pin the agreement: the failure sits at rune 5
+# whether the preceding character is 1, 2 or 3 UTF-8 bytes.
+["é" 1]	{"code":"unexpected","row":1,"col":6,"pos":5,"len":1}
+["€" 1]	{"code":"unexpected","row":1,"col":6,"pos":5,"len":1}
+["éé" 1]	{"code":"unexpected","row":1,"col":7,"pos":6,"len":1}
+# No astral row here on purpose. This fixture requires both runtimes to emit
+# the SAME subset, and an astral character is where col/pos legitimately
+# diverge — 2 UTF-16 units in TS against 1 rune in Go. That is the recorded
+# divergence in DIVERGENCE.md and belongs in a register both suites run,
+# not here, where it could only be pinned by weakening the assertion.

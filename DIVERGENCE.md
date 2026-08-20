@@ -77,10 +77,18 @@ and runes in Go (any character is 1). Forced by the scan unit — TS scans
 UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
 positions, never in parsed values. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
-a 0-based offset in UTF-16 units (TS) versus runes (Go). The diagnostic's
-`len` deliberately counts Unicode code points OF THE TOKEN SOURCE, so the
-string-unit arithmetic never diverges; `len` can still differ where the
-two lexers cut different token SPANS (next entry).
+a 0-based offset in UTF-16 units (TS) versus runes (Go).
+
+That sentence was aspirational until recently: Go emitted a BYTE offset,
+so `pos` diverged for every character above U+007F rather than only above
+the BMP. Both this file and the schema described runes, which told a
+BMP-only consumer that `pos` was as safe as `col`. Repaired at the
+marshal boundary — where `len` had always converted for the same reason —
+so the description above is now what the code does. Audit item P5.
+
+The diagnostic's `len` deliberately counts Unicode code points OF THE
+TOKEN SOURCE, so the string-unit arithmetic never diverges; `len` can
+still differ where the two lexers cut different token SPANS (next entry).
 
 The same scan unit shows in the error token synthesized for an UNCLAIMED
 astral character (one no matcher can produce): both ports name it `#BD`
@@ -89,29 +97,27 @@ surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
 
-### Bad-token spans for invalid string escapes
+## Repaired, and what replaced them
 
-The two lexers cut a DIFFERENT bad token for the same invalid escape:
-TypeScript's string matcher reports the offending escape sequence itself,
-Go's reports the string from its opening quote up to the escape. Same
-error `code` — the contract holds — but the token source, and therefore
-the diagnostic's `len`/`pos`/`col`, diverge even for pure-ASCII input:
+An entry that leaves this file should leave a forwarding address: a
+reader who remembers one and cannot find it needs to know whether it was
+fixed or quietly dropped.
 
-| input | TypeScript | Go |
-|---|---|---|
-| `"\uZZZZ"` | code `invalid_unicode`, token src `\uZZZZ`, pos 1, col 2, len 6 | code `invalid_unicode`, token src `"\uZZZZ`, pos 0, col 1, len 7 |
+- **Bad-token spans and codes for invalid string escapes.** Carried a
+  table of `len`/`pos`/`col` differences and, at one point, the claim
+  that the error `code` always agreed. Both halves are repaired: the
+  TypeScript escape decode now requires the full fixed-width hex run
+  (it accepted any prefix, so `"\x4Z"` parsed as U+0004 with the `Z`
+  discarded), and the Go string matcher now positions its errors on the
+  offending construct rather than the opening quote. Swept 32 inputs for
+  the first and 19 for the second: 0 diverge.
 
-This is span metadata on an already-agreed failure, not a disagreement
-about the input's value: both ports reject the document with the same
-code, and no parsed value exists to differ. Aligning the spans would mean
-rewriting one lexer's error recovery to match the other's internal
-matcher structure, for display-only gain. Consumers should treat
-`len`/`pos`/`col` on bad-token errors as advisory and anchor on `code`
-(and `row`, which agrees).
-
-Pinned by `ts/test/divergence.test.js` and `go/divergence_test.go`
-(`TestDivergenceBadEscapeSpanIncludesQuote`), which assert **opposite**
-spans on purpose, so changing either side fails loudly.
+  Kept as PARITY tests rather than deleted —
+  `TestEscapeDecodeIsStrict` and `TestStringErrorsPointAtTheConstruct`
+  in both ports. Both defects are easy to reintroduce and silent when
+  they are: a plain `parseInt` is the obvious way to write the decode,
+  and dropping the point-move leaves the codes right and only the
+  positions wrong.
 
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
