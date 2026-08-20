@@ -65,10 +65,18 @@ and runes in Go (any character is 1). Forced by the scan unit — TS scans
 UTF-16 code units, Go scans UTF-8 bytes — and visible only in error
 positions, never in parsed values. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
-a 0-based offset in UTF-16 units (TS) versus runes (Go). The diagnostic's
-`len` deliberately counts Unicode code points OF THE TOKEN SOURCE, so the
-string-unit arithmetic never diverges; `len` can still differ where the
-two lexers cut different token SPANS (next entry).
+a 0-based offset in UTF-16 units (TS) versus runes (Go).
+
+That sentence was aspirational until recently: Go emitted a BYTE offset,
+so `pos` diverged for every character above U+007F rather than only above
+the BMP. Both this file and the schema described runes, which told a
+BMP-only consumer that `pos` was as safe as `col`. Repaired at the
+marshal boundary — where `len` had always converted for the same reason —
+so the description above is now what the code does. Audit item P5.
+
+The diagnostic's `len` deliberately counts Unicode code points OF THE
+TOKEN SOURCE, so the string-unit arithmetic never diverges; `len` can
+still differ where the two lexers cut different token SPANS (next entry).
 
 The same scan unit shows in the error token synthesized for an UNCLAIMED
 astral character (one no matcher can produce): both ports name it `#BD`

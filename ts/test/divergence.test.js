@@ -217,4 +217,54 @@ describe('divergence', () => {
     assert.equal(parse('"\\u{1F600}"').val, '\u{1F600}')
     assert.equal(parse('"a\\x41b\\u0042c"').val, 'aAbBc')
   })
+
+  it('reports `pos` in UTF-16 units, as Go reports it in runes', () => {
+    // DIVERGENCE.md "Column positions for astral characters": `pos`
+    // carries that divergence and nothing else, so it agrees with Go
+    // throughout the BMP and differs only above it — exactly like `col`.
+    //
+    // This is the TypeScript half of go/divergence_test.go
+    // TestDiagnosticPosCountsRunes, over the same four inputs. The pairing
+    // is the test: Go emitted a BYTE offset until audit item P5, which
+    // diverged for every character above U+007F while both this file's
+    // subject and the schema described runes. A one-sided pin could not
+    // tell "Go still counts runes" from "Go went back to bytes".
+    //
+    // `col` is asserted alongside `pos` because the claim is that the two
+    // are now the same class; a repair that fixed one and not the other
+    // would leave this green if only `pos` were checked.
+    const diag = (src) => {
+      const j = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+      j.rule('top', (rs) => {
+        rs.open({ s: [j.token('#ST')], a: (r) => { r.node = r.o0.val } })
+        rs.close({ s: [j.token('#ZZ')] })
+      })
+      try {
+        j.parse(src)
+      } catch (e) {
+        return JSON.parse(JSON.stringify(e))
+      }
+      assert.fail('no error for ' + JSON.stringify(src))
+    }
+
+    // src, pos, col — and the Go numbers for the same input in the
+    // comment. Only the astral row differs.
+    const cases = [
+      ['"ab" 1', 5, 6], // pure ASCII      Go pos 5 col 6 — same
+      ['"\u00e9" 1', 4, 5], // U+00E9: 2 bytes  Go pos 4 col 5 — same
+      ['"\u20ac" 1', 4, 5], // U+20AC: 3 bytes  Go pos 4 col 5 — same
+      ['"\u{1F600}" 1', 5, 6], // astral      Go pos 4 col 5 — DIVERGES
+    ]
+    for (const [src, pos, col] of cases) {
+      const o = diag(src)
+      assert.equal(o.pos, pos, 'pos ' + JSON.stringify(src))
+      assert.equal(o.col, col, 'col ' + JSON.stringify(src))
+    }
+
+    // The divergence stated as a difference rather than as two numbers:
+    // one astral character costs this port ONE more unit of pos than the
+    // same character costs Go, for the same reason it costs one more
+    // column. Go's half asserts 4 and 5 for these two rows.
+    assert.equal(diag('"\u{1F600}" 1').pos - diag('"\u20ac" 1').pos, 1)
+  })
 })

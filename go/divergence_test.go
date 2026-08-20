@@ -27,6 +27,7 @@ package tabnas
 // with.
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -294,6 +295,53 @@ func TestStringErrorsPointAtTheConstructUnderOptions(t *testing.T) {
 		}
 		if je.Src != c.tsrc {
 			t.Errorf("%s: token src = %q, want %q", c.label, je.Src, c.tsrc)
+		}
+	}
+}
+
+// `pos` is emitted in RUNES, so it agrees with TypeScript throughout the
+// BMP and carries only the astral divergence — the same class as `col`.
+//
+// It used to be a BYTE offset, which diverged for every character above
+// U+007F while both DIVERGENCE.md and schema/diagnostic.schema.json
+// described runes. Audit item P5.
+//
+// ts/test/divergence.test.js asserts the TypeScript numbers for the same
+// four inputs; the astral row is the only one where they differ.
+func TestDiagnosticPosCountsRunes(t *testing.T) {
+	for _, c := range []struct {
+		src string
+		pos int
+		ts  int
+	}{
+		{`"ab" 1`, 5, 5}, // pure ASCII
+		{`"é" 1`, 4, 4},  // 2 bytes, 1 rune, 1 UTF-16 unit
+		{`"€" 1`, 4, 4},  // 3 bytes, 1 rune, 1 UTF-16 unit
+		{`"😀" 1`, 4, 5},  // 4 bytes, 1 rune, TWO UTF-16 units
+	} {
+		j := Make(Options{Rule: &RuleOptions{Start: "top", Exclude: "tabnas,imp"}})
+		j.Rule("top", func(rs *RuleSpec, p *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{{TinST}},
+				A: func(r *Rule, ctx *Context) { r.Node = r.O0.Val }})
+			rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+		})
+		_, err := j.Parse(c.src)
+		if err == nil {
+			t.Fatalf("%s: expected a parse error", c.src)
+		}
+		b, mErr := json.Marshal(err)
+		if mErr != nil {
+			t.Fatalf("%s: marshal: %v", c.src, mErr)
+		}
+		var o struct {
+			Pos int `json:"pos"`
+		}
+		if uErr := json.Unmarshal(b, &o); uErr != nil {
+			t.Fatalf("%s: unmarshal: %v", c.src, uErr)
+		}
+		if o.Pos != c.pos {
+			t.Errorf("%s: pos = %d, want %d (runes). A byte offset would "+
+				"report the character's UTF-8 width instead.", c.src, o.Pos, c.pos)
 		}
 	}
 }
