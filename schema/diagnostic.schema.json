@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tabnas.dev/schema/diagnostic.schema.json",
   "title": "Tabnas structured diagnostic",
-  "description": "The JSON shape emitted when a TabnasError is serialized: TS JSON.stringify(err) (via toJSON) and Go json.Marshal(err) (via MarshalJSON). Only `code` is contractual across runtimes; message, hint and src are informative text and not in parity (see DIVERGENCE.md 'Not divergences'). `expected` is an over-approximation of what could have matched. `len` counts Unicode code points OF THE TOKEN SOURCE, so its string-unit arithmetic never diverges between runtimes; the two lexers may still cut different token SPANS for bad tokens (DIVERGENCE.md 'Bad-token spans for invalid string escapes'), so len/pos/col can differ on those paths even for pure-ASCII input. `pos` and `col` additionally carry the recorded astral-character divergence: TypeScript counts UTF-16 units, Go counts runes (DIVERGENCE.md 'Column positions for astral characters').",
+  "description": "The JSON shape emitted when a TabnasError is serialized: TS JSON.stringify(err) (via toJSON) and Go json.Marshal(err) (via MarshalJSON). Only `code` is contractual across runtimes; message, hint and src are informative text and not in parity (see DIVERGENCE.md 'Not divergences'). `expected` is an over-approximation of what could have matched. `len` counts Unicode code points OF THE TOKEN SOURCE, so its string-unit arithmetic never diverges between runtimes; the two lexers once cut different token SPANS for bad tokens, which made len/pos/col differ on those paths even for pure-ASCII input — repaired, and both ports now position a string error on the offending construct. `pos` and `col` carry the recorded astral-character divergence and nothing else: TypeScript counts UTF-16 units, Go counts runes (DIVERGENCE.md 'Column positions for astral characters'). `pos` was a byte offset in Go before this release — see its own description.",
   "type": "object",
   "properties": {
     "status": {
@@ -32,11 +32,11 @@
     },
     "pos": {
       "type": "integer",
-      "description": "0-based source position of the failing token. TypeScript counts UTF-16 units, Go counts runes — the same divergence class as col."
+      "description": "0-based source position of the failing token, counted in the same unit as col: UTF-16 units in TypeScript, runes in Go. It therefore carries the astral-character divergence and nothing else — agreeing throughout the BMP (DIVERGENCE.md 'Column positions for astral characters'). NOTE for consumers of releases before this one: Go emitted a BYTE offset here, which diverged for every character above U+007F, while this schema already described runes. Measured before the repair — for the two-byte U+00E9, TS reported pos 4 and Go 5; for the three-byte U+20AC, TS 4 and Go 6."
     },
     "len": {
       "type": "integer",
-      "description": "Length of the failing token's source text in Unicode code points (deliberately NOT UTF-16 units), so the counting unit never diverges between runtimes. The token SPAN itself can differ where the lexers cut bad tokens differently (DIVERGENCE.md 'Bad-token spans for invalid string escapes'). 0 when there is no token source."
+      "description": "Length of the failing token's source text in Unicode code points (deliberately NOT UTF-16 units), so the counting unit never diverges between runtimes. The token SPAN itself once differed where the lexers cut bad tokens differently; that is repaired, and both ports now span the offending construct. 0 when there is no token source."
     },
     "rule": {
       "type": "string",
@@ -44,7 +44,9 @@
     },
     "ruleStack": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Rule names root-first, including the failing rule as the last entry; sentinel (no-rule) entries are skipped. Empty when the failure happened outside any rule."
     },
     "token": {
@@ -59,13 +61,18 @@
           "description": "Failing token's raw source text."
         }
       },
-      "required": ["name", "src"],
+      "required": [
+        "name",
+        "src"
+      ],
       "additionalProperties": false,
       "description": "The token the parse failed on."
     },
     "expected": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Tokens some alternate of the failing rule names at this position (lookahead position 0 for the rule's current state), deduplicated and sorted ascending. An over-approximation — conditions/counters may still reject them; empty means no token constraint was recorded, not that nothing can match."
     },
     "src": {
@@ -74,7 +81,9 @@
     },
     "plugins": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Names of all registered plugins in registration order. Deliberately a list, not a single 'plugin' field: the engine cannot honestly attribute an error code to one package."
     },
     "version": {

@@ -208,7 +208,23 @@ class Parser {
     // lots of backtracking), and apply a multipler option as a get-out-of-jail.
     let rsmCount = 0
     for (let _rn in this.rsm) rsmCount++
-    let maxr = 2 * rsmCount * lex.src.length * 2 * ctx.cfg.rule.maxmul
+
+    // A non-positive (or NaN) multiplier is a nonsense SETTING, not a
+    // nonsense document, so it falls back to the default rather than
+    // producing a zero or negative budget. Honoured literally, it made
+    // this guard reject valid input with `unexpected` — a syntax code
+    // for a configuration value. Measured at 0, -1 and NaN, each of
+    // which rejected `[1,2,3]`. Audit item P7.
+    let maxmul = ctx.cfg.rule.maxmul
+    if (!(0 < maxmul)) maxmul = 3
+
+    // Floored, as go/parser.go floors it, so a budget can never be too
+    // small to complete a short parse. The two computations are now the
+    // same expression in both ports; they diverged because they were
+    // not. Go needs a saturating multiply here and this does not:
+    // float64 saturates at Infinity instead of wrapping negative.
+    let maxr = 2 * rsmCount * lex.src.length * 2 * maxmul
+    if (maxr < 100) maxr = 100
 
     // Process rules on tokens
     let kI = 0

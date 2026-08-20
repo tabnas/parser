@@ -140,10 +140,10 @@ type AltSpec struct {
 	B  int                                // Move token pointer backward (backtrack)
 	C  AltCond                            // Custom condition (function)
 	CD map[string]any                     // Declarative condition (converted to C by NormAlt)
-	N  map[string]int                     // Counter increments
+	N  map[string]int                     // Counter increments. PROPAGATES to child rules.
 	A  AltAction                          // Match action
-	U  map[string]any                     // Custom props added to Rule.U
-	K  map[string]any                     // Custom props added to Rule.K (propagated)
+	U  map[string]any                     // Custom props -> Rule.U. Per-rule scratch: does NOT propagate.
+	K  map[string]any                     // Custom "keep" props -> Rule.K. PROPAGATES via push/replace.
 	G  string                             // Named group tags (comma-separated)
 	H  AltModifier                        // Alt modifier (called after match to potentially modify the alt)
 	E  AltError                           // Error generation
@@ -965,9 +965,9 @@ type Rule struct {
 	// EnsureN/EnsureU/EnsureK (or nil-guard themselves) — before v0.3
 	// these maps were always allocated, costing three heap allocations
 	// per rule instance whether or not the grammar used them.
-	N   map[string]int // Named counters tracked across the rule.
-	U   map[string]any // Custom user props (not propagated to children).
-	K   map[string]any // Custom keep props (propagated via push/replace).
+	N   map[string]int // Named counters. PROPAGATES to child rules (push and replace).
+	U   map[string]any // Custom user props. Per-rule scratch: does NOT propagate.
+	K   map[string]any // Custom "keep" props — kept as the parse descends. PROPAGATES via push/replace.
 	Why string         // Internal tracing field; set when a rule fails.
 }
 
@@ -1411,6 +1411,9 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 			// Lazy fetch: only pull a new token from the lexer if this
 			// slot has not been populated by a previous alt / fetch.
 			if ctx.T[i].IsNoToken() {
+				// Tell the lexer which slot it is filling, so its matcher
+				// gate can ask about this position rather than slot 0.
+				lex.tI = i
 				tkn := lex.Next(rule)
 				// Lexer soft mode: with recovery on and relex off, an
 				// unlexable span is absorbed HERE rather than handed to
@@ -1423,6 +1426,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 						tkn = lex.Next(rule)
 					}
 				}
+				lex.tI = 0
 				ctx.T[i] = tkn
 				// Keep the legacy T0 / T1 aliases in sync so existing
 				// grammar / plugin code that reads them observes the

@@ -811,6 +811,25 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// Rebuild config from merged options.
 	cfg := buildConfig(j.options)
 
+	// rule.maxmul lives on the Parser, not the Config, so the rebuild above
+	// does not carry it and SetOptions silently ignored the option entirely:
+	// `SetOptions(Options{Rule: &RuleOptions{MaxMul: &zero}})` left the
+	// runaway budget at whatever Make had computed. TypeScript reads
+	// `ctx.cfg.rule.maxmul` at parse time off a config that IS rebuilt, so
+	// the same call took effect there. Read from the MERGED options so a
+	// value set by an earlier call survives a later unrelated one.
+	//
+	// The setting path is where an option divergence hides: a fixture that
+	// only ever CONSTRUCTS passes on a port that honours the option in one
+	// of its two entry points. `MapToOptions` had the same shape of gap —
+	// it named four `rule` fields and dropped `maxmul` — so a shared options
+	// blob configured the guard in TypeScript and left this port on its
+	// default. Both are pinned by test/spec/rule-maxmul.tsv, which runs
+	// every row twice.
+	if nil != j.options.Rule && nil != j.options.Rule.MaxMul {
+		j.parser.MaxMul = *j.options.Rule.MaxMul
+	}
+
 	// Preserve per-instance state.
 	cfg.FixedTokens = j.parser.Config.FixedTokens
 	cfg.FixedSorted = j.parser.Config.FixedSorted
