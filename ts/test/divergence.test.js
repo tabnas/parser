@@ -114,6 +114,10 @@ describe('divergence', () => {
       ['"\\q"', 'unexpected', 3, 'q'],
       // A control char sits on the character itself.
       ['"a' + LF + 'b"', 'unprintable', 3, LF],
+      // A truncated escape at EOF spans the partial digits too.
+      ['"\\x4', 'invalid_ascii', 2, '\\x4'],
+      ['"\\u41', 'invalid_unicode', 2, '\\u41'],
+      ['"\\u{42', 'invalid_unicode', 2, '\\u{42'],
     ]) {
       const j = new Tabnas({ string: { allowUnknown: false } })
       const lex = makeLex({
@@ -127,6 +131,34 @@ describe('divergence', () => {
       assert.equal(t.why, why, src)
       assert.equal(t.cI, cI, src + ': the point must sit on the construct')
       assert.equal(t.src, tsrc, src + ': the span must cover the construct')
+    }
+  })
+
+  it('string errors under options that change the escape set', () => {
+    // The escape-removed and strict-\x branches raise from a different
+    // place than the default unknown-escape branch. Reachable only under
+    // these options, so a sweep over defaults cannot see them.
+    // go/divergence_test.go asserts the same three.
+    for (const [label, src, opts, cI, tsrc] of [
+      ['strict disables \\x', '"\\x41"',
+        { string: { escapeStrict: true, allowUnknown: false } }, 3, 'x'],
+      ['escape map removes \\v', '"\\v"',
+        { string: { escape: { v: '' }, allowUnknown: false } }, 3, 'v'],
+      ['non-ASCII escape char', '"\\\u00e9"',
+        { string: { allowUnknown: false } }, 3, '\u00e9'],
+    ]) {
+      const j = new Tabnas(opts)
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const t = lex.next()
+      assert.equal(t.name, '#BD', label)
+      assert.equal(t.why, 'unexpected', label)
+      assert.equal(t.cI, cI, label)
+      assert.equal(t.src, tsrc, label)
     }
   })
 

@@ -1764,7 +1764,16 @@ func (l *Lex) matchString() *Token {
 				if l.Config.StringAbandon {
 					return nil
 				}
-				return l.bad("unexpected", l.pnt.SI, sI+1)
+				// Same positioning as the default unknown-escape branch
+				// below — control never reaches that one from here, so
+				// without this the strict-\x and escape-removed paths
+				// still reported column 1. Span the whole RUNE: a
+				// non-ASCII escape char is more than one byte, and half
+				// of one is not valid UTF-8 in the diagnostic.
+				_, escSize := utf8.DecodeRuneInString(src[sI:])
+				l.pnt.SI = sI
+				l.pnt.CI = cI - 1
+				return l.bad("unexpected", sI, sI+escSize)
 			}
 
 			switch esc {
@@ -1817,9 +1826,12 @@ func (l *Lex) matchString() *Token {
 					if l.Config.StringAbandon {
 						return nil
 					}
+					// To srclen, not sI: sI is the START of the partial
+					// digits, so ending there drops them from the token.
+					// TS reports `\x4` for `"\x4`; this reported `\x`.
 					l.pnt.SI = sI - 2
 					l.pnt.CI = cI - 2
-					return l.bad("invalid_ascii", sI-2, sI)
+					return l.bad("invalid_ascii", sI-2, srclen)
 				}
 			case 'u':
 				// Unicode escape \u**** or \u{*****}. Strict mode disables
@@ -1856,7 +1868,9 @@ func (l *Lex) matchString() *Token {
 						if l.Config.StringAbandon {
 							return nil
 						}
-						end := sI
+						// No closing brace: the token runs to the end of
+						// source, not to the first digit.
+						end := srclen
 						if endI >= 0 {
 							end = sI + endI + 1
 						}
@@ -1887,9 +1901,10 @@ func (l *Lex) matchString() *Token {
 					if l.Config.StringAbandon {
 						return nil
 					}
+					// To srclen — same reason as the \x EOF branch above.
 					l.pnt.SI = sI - 2
 					l.pnt.CI = cI - 2
-					return l.bad("invalid_unicode", sI-2, sI)
+					return l.bad("invalid_unicode", sI-2, srclen)
 				}
 			default:
 				if l.Config.AllowUnknownEscape {
@@ -1899,10 +1914,13 @@ func (l *Lex) matchString() *Token {
 						return nil
 					}
 					// TS positions this ON the escape character, with no
-					// step back to the backslash.
+					// step back to the backslash. Span the whole RUNE —
+					// `sI+1` takes one byte of a multi-byte character and
+					// leaves invalid UTF-8 in the diagnostic.
+					_, escSize := utf8.DecodeRuneInString(src[sI:])
 					l.pnt.SI = sI
 					l.pnt.CI = cI - 1
-					return l.bad("unexpected", sI, sI+1)
+					return l.bad("unexpected", sI, sI+escSize)
 				}
 			}
 			sI++

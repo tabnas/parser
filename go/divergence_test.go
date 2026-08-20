@@ -170,6 +170,11 @@ func TestStringErrorsPointAtTheConstruct(t *testing.T) {
 		{`"\q"`, "unexpected", 3, `q`},
 		// A control char sits on the character itself.
 		{"\"a\nb\"", "unprintable", 3, "\n"},
+		// A truncated escape at EOF spans the partial digits too — `sI`
+		// is where they START, so ending the span there drops them.
+		{`"\x4`, "invalid_ascii", 2, `\x4`},
+		{`"\u41`, "invalid_unicode", 2, `\u41`},
+		{`"\u{42`, "invalid_unicode", 2, `\u{42`},
 	} {
 		// allowUnknown off, or `\q` is simply accepted and there is no
 		// error to position. The TypeScript twin sets the same option.
@@ -247,5 +252,48 @@ func assertLexCode(t *testing.T, src, want, note string) {
 		t.Errorf("%s: code = %q, want %q (%s). Both ports decode escapes "+
 			"strictly since P3; a plain parseInt-style decode reintroduces "+
 			"the defect. See DIVERGENCE.md.", src, je.Code, want, note)
+	}
+}
+
+// The escape-removed and strict-\x branches raise from a DIFFERENT place
+// than the default unknown-escape branch, and need the same positioning.
+// They are reachable only under those options, so the sweep over default
+// options could not see them.
+//
+// The span is the whole RUNE: an escaped non-ASCII character is more than
+// one byte, and half of one leaves invalid UTF-8 in the diagnostic.
+// ts/test/divergence.test.js asserts the same three.
+func TestStringErrorsPointAtTheConstructUnderOptions(t *testing.T) {
+	no, yes := false, true
+	for _, c := range []struct {
+		label string
+		src   string
+		opts  Options
+		col   int
+		tsrc  string
+	}{
+		{"strict disables \\x", `"\x41"`,
+			Options{String: &StringOptions{EscapeStrict: &yes, AllowUnknown: &no}}, 3, "x"},
+		{"escape map removes \\v", `"\v"`,
+			Options{String: &StringOptions{Escape: map[string]string{"v": ""}, AllowUnknown: &no}}, 3, "v"},
+		{"non-ASCII escape char", "\"\\é\"",
+			Options{String: &StringOptions{AllowUnknown: &no}}, 3, "é"},
+	} {
+		j := Make(c.opts)
+		lex := NewLex(c.src, j.Config())
+		lex.Next()
+		je, ok := lex.Err.(*TabnasError)
+		if !ok || je == nil {
+			t.Fatalf("%s: expected a *TabnasError, got %v", c.label, lex.Err)
+		}
+		if je.Code != "unexpected" {
+			t.Errorf("%s: code = %q, want unexpected", c.label, je.Code)
+		}
+		if je.Col != c.col {
+			t.Errorf("%s: col = %d, want %d", c.label, je.Col, c.col)
+		}
+		if je.Src != c.tsrc {
+			t.Errorf("%s: token src = %q, want %q", c.label, je.Src, c.tsrc)
+		}
 	}
 }
