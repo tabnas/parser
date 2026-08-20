@@ -264,7 +264,11 @@ func runErrorTSV(t *testing.T, file string, j *Tabnas) {
 		t.Fatalf("failed to load %s: %v", file, err)
 	}
 	for _, row := range rows {
-		if len(row.cols) < 2 {
+		// Comment rows are skipped explicitly rather than falling through the
+		// len<2 guard by accident: the TypeScript half had no such guard, so a
+		// `#` line in a shared fixture was invisible here and a TypeError
+		// there. Mirrors diagnostic_spec_test.go.
+		if len(row.cols) < 2 || strings.HasPrefix(row.cols[0], "#") {
 			continue
 		}
 		input := preprocessEscapes(row.cols[0])

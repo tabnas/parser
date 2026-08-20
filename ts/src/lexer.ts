@@ -1146,6 +1146,11 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   })
 }
 
+// Fixed-width hex runs for `\xHH` and `\uHHHH`. Anchored and exact:
+// a short or junk-terminated run is not a valid escape.
+const HEX2 = /^[0-9a-fA-F]{2}$/
+const HEX4 = /^[0-9a-fA-F]{4}$/
+
 let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   // TODO: does `clean` make sense here?
 
@@ -1307,7 +1312,16 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI++
         } else if ('x' === ec && !escapeStrict) {
           sI++ // past 'x'
-          const xx = parseInt(src.substring(sI, sI + 2), 16)
+          // Exactly two hex digits. `parseInt` stops at the first
+          // non-hex character and succeeds on whatever prefix it found,
+          // so `\x4Z` decoded as U+0004 and consumed the `Z` — emitting
+          // a character the input never specified and silently deleting
+          // one it did. At end of input the same leniency read `\x4` as
+          // a complete escape, overshot, and reported the string as
+          // unterminated. The braced form below already validates this
+          // way; this makes the three escape forms agree.
+          const xs = src.substring(sI, sI + 2)
+          const xx = HEX2.test(xs) ? parseInt(xs, 16) : NaN
           if (isNaN(xx)) {
             if (mcfg.abandon) return undefined
             sI -= 2
@@ -1340,7 +1354,10 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             cI += endI + 1 - sI + 1
             sI = endI + 1
           } else {
-            const uu = parseInt(src.substring(sI, sI + 4), 16)
+            // Exactly four hex digits — same reason as `\x` above.
+            // `\u414Z` decoded as U+0414 and swallowed the `Z`.
+            const us = src.substring(sI, sI + 4)
+            const uu = HEX4.test(us) ? parseInt(us, 16) : NaN
             if (isNaN(uu)) {
               if (mcfg.abandon) return undefined
               sI = sI - 2
