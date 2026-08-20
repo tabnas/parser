@@ -1,0 +1,15 @@
+# Target: tabnas/parser -> .github/workflows/notify-status.yml
+#
+# Real-time dashboard refresh: on PR/issue count changes, ping tabnas/status.
+name: notify-status
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, ready_for_review]
+  issues:
+    types: [opened, closed, reopened]
+
+jobs:
+  notify:
+    uses: tabnas/.github/.github/workflows/notify-status.yml@main
+    secrets: inherit
