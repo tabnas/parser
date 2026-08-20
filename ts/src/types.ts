@@ -577,15 +577,15 @@ export interface AltSpec {
   // NOTE: Token sequence (s) must also match.
   c?: AltCond | null
 
-  n?: Counters                    // Increment counters by specified amounts.
+  n?: Counters                    // Increment counters by amounts. PROPAGATES to child rules.
   // Action(s) on match. An array runs each in order (the matched alt's
   // own action first, then composed user actions); each element is a
   // function or a FuncRef string. The array is collapsed to a single
   // function at normalization time, so the normalized form stays scalar.
   a?: AltAction | FuncRef | (AltAction | FuncRef)[] | null
   h?: AltModifier | null          // Modify current Alt to customize parser.
-  u?: Record<string, any>         // Key-value custom data.
-  k?: Record<string, any>         // Key-value custom data (propagated).
+  u?: Record<string, any>         // Custom data. Per-rule scratch: does NOT propagate.
+  k?: Record<string, any>         // Custom "keep" data. PROPAGATES via push/replace.
 
   g?:
   | string                        // Named group tags for the alternate (allows filtering).
@@ -863,8 +863,8 @@ export type GrammarAltSpec = {
   e?: FuncRef,                              // Error token generator.
   h?: FuncRef,                              // Alternate modifier.
   c?: FuncRef | Record<string, any>,        // Match condition.
-  n?: Record<string, number>,               // Counter increments.
-  u?: Record<string, any>                   // Custom data.
-  k?: Record<string, any>                   // Custom data (propagated).
+  n?: Record<string, number>,               // Counter increments. PROPAGATES to children.
+  u?: Record<string, any>                   // Custom data. Does NOT propagate.
+  k?: Record<string, any>                   // Custom "keep" data. PROPAGATES.
   g?: string | string[],                    // Group tags.
 }

@@ -13,8 +13,39 @@ them by name:
 
 A grammar whose rules thread a node from parent to child (the engine seeds
 a pushed child's node from the parent) can assemble plain objects/arrays
-with the native-value builders as **alt actions** (`a:`). Config rides in
-`alt.k.<name>` (TS, 3rd action arg) / `r.K` (Go, merged before the action).
+with the native-value builders as **alt actions** (`a:`).
+
+## Where builtin config lives — and what it inherits
+
+Config for these builtins rides in the rule's **`k`** bag, keyed by builtin
+name (`k.node$`, `k.object$`, …). An alternate's `k` is merged into
+`rule.k` *before* the action runs — `rule.k = Object.assign(rule.k, alt.k)`
+(`ts/src/rules.ts:605`) and its Go twin (`go/rule.go:1166-1170`).
+
+**`k` is named for "keep": its content is kept as the parse descends.**
+That makes the propagation rule load-bearing for anyone writing a grammar
+against these builtins:
+
+| bag | holds | inherited by a child rule? |
+|---|---|---|
+| `n` / `N` | named counters | **YES** — push and replace |
+| `u` / `U` | user props, per-rule scratch | **NO** |
+| `k` / `K` | **keep** props, incl. all builtin config | **YES** — push and replace |
+
+So a `k` set on a rule is visible to every rule pushed or replaced beneath
+it, in both runtimes (`ts/src/rules.ts:662-671`, `:686-695`;
+`go/rule.go:1224-1236`, `:1249-1261`). It is rule-scoped, not
+alternate-scoped: it accumulates across every alternate that fires. If you
+need a value to stay local to one rule, put it in `u` — which is exactly
+what `@key$` does (`r.u[cfg.slot || 'key']`), so a captured key cannot
+leak into child rules.
+
+> **Note.** The two runtimes currently differ in which bag the *value*
+> builtins read their config from — TypeScript reads the alternate's copy,
+> Go reads the rule's — which is tracked as
+> [#120](https://github.com/tabnas/parser/issues/120) and has been ruled
+> rule-scoped (`rule.k`) for both. The propagation rule tabled above is
+> already identical in both runtimes and is unaffected by that fix.
 
 | Builtin | Effect |
 |---|---|

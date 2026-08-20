@@ -37,6 +37,24 @@ func diagJSON(t *testing.T, j *Tabnas, src string) map[string]any {
 	return got
 }
 
+// TestDiagnosticExternalPosPreserved pins the case an in-package test cannot
+// reach by accident: fullSource is unexported, so an error built by a caller
+// outside this package has nothing to convert Pos against. Serialising it must
+// hand back the position that was set, not clamp it to 0.
+func TestDiagnosticExternalPosPreserved(t *testing.T) {
+	data, err := json.Marshal(&TabnasError{Code: "unexpected", Pos: 7, Row: 1, Col: 8})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if 7.0 != got["pos"] {
+		t.Errorf("pos with no source: got %v, want 7", got["pos"])
+	}
+}
+
 func TestDiagnosticDegenerate(t *testing.T) {
 	// A zero-value error (no code, no context, no source) must still
 	// marshal to the documented shape.

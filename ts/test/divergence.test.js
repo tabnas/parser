@@ -91,32 +91,181 @@ describe('divergence', () => {
     )
   })
 
-  it('bad-escape token spans the ESCAPE here, quote-to-escape in Go', () => {
-    // DIVERGENCE.md: "Bad-token spans for invalid string escapes". This
-    // port's string matcher reports the offending escape sequence itself;
-    // Go reports the string from its opening quote up to the escape. Same
-    // code (the contract), different span — so the structured diagnostic's
-    // len/pos/col diverge on this path even for pure-ASCII input.
-    // go/divergence_test.go TestDivergenceBadEscapeSpanIncludesQuote
-    // asserts the OPPOSITE values on purpose.
-    const j = new Tabnas()
-    const lex = makeLex({
-      src: () => '"\\uZZZZ"',
-      cfg: j.internal().config,
-      opts: j.options,
-      sub: {},
-    })
-    const t = lex.next()
-    assert.equal(t.name, '#BD')
-    assert.equal(t.why, 'invalid_unicode', 'the code is shared — only the span diverges')
-    assert.equal(t.src, '\\uZZZZ', 'escape only — Go includes the opening quote')
-    assert.equal(t.sI, 1, 'pos: escape start — Go reports 0 (the quote)')
-    assert.equal(t.cI, 2, 'col: escape start — Go reports 1 (the quote)')
-    assert.equal(
-      Array.from(t.src).length,
-      6,
-      'diagnostic len (code points of token src) — Go reports 7',
-    )
+  it('string errors point at the construct, and agree with Go', () => {
+    // This replaces a divergence pin. Go used to leave the lex point at
+    // the opening quote and span from it, so every error from its string
+    // matcher reported 1:1 and carried the whole string-so-far as its
+    // token src. Repaired by mirroring what this port does — move the
+    // point onto the construct before raising. Swept 19 inputs across
+    // the family: 0 diverge.
+    //
+    // Kept as a PARITY test rather than deleted: the point-moving is easy
+    // to drop when editing either matcher, and dropping it is silent —
+    // the codes stay right and only the positions move.
+    // go/divergence_test.go TestStringErrorsPointAtTheConstruct asserts
+    // the same inputs.
+    const LF = String.fromCharCode(10)
+    for (const [src, why, cI, tsrc] of [
+      // Escape errors sit on the BACKSLASH and span the escape.
+      ['"\\uZZZZ"', 'invalid_unicode', 2, '\\uZZZZ'],
+      ['"\\xZZ"', 'invalid_ascii', 2, '\\xZZ'],
+      ['"\\u{GG}"', 'invalid_unicode', 2, '\\u{GG}'],
+      // An unknown escape sits on the escape CHARACTER.
+      ['"\\q"', 'unexpected', 3, 'q'],
+      // A control char sits on the character itself.
+      ['"a' + LF + 'b"', 'unprintable', 3, LF],
+      // A truncated escape at EOF spans the partial digits too.
+      ['"\\x4', 'invalid_ascii', 2, '\\x4'],
+      ['"\\u41', 'invalid_unicode', 2, '\\u41'],
+      ['"\\u{42', 'invalid_unicode', 2, '\\u{42'],
+    ]) {
+      const j = new Tabnas({ string: { allowUnknown: false } })
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const t = lex.next()
+      assert.equal(t.name, '#BD', src)
+      assert.equal(t.why, why, src)
+      assert.equal(t.cI, cI, src + ': the point must sit on the construct')
+      assert.equal(t.src, tsrc, src + ': the span must cover the construct')
+    }
+  })
+
+  it('string errors under options that change the escape set', () => {
+    // The escape-removed and strict-\x branches raise from a different
+    // place than the default unknown-escape branch. Reachable only under
+    // these options, so a sweep over defaults cannot see them.
+    // go/divergence_test.go asserts the same three.
+    for (const [label, src, opts, cI, tsrc] of [
+      ['strict disables \\x', '"\\x41"',
+        { string: { escapeStrict: true, allowUnknown: false } }, 3, 'x'],
+      ['escape map removes \\v', '"\\v"',
+        { string: { escape: { v: '' }, allowUnknown: false } }, 3, 'v'],
+      ['non-ASCII escape char', '"\\\u00e9"',
+        { string: { allowUnknown: false } }, 3, '\u00e9'],
+    ]) {
+      const j = new Tabnas(opts)
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const t = lex.next()
+      assert.equal(t.name, '#BD', label)
+      assert.equal(t.why, 'unexpected', label)
+      assert.equal(t.cI, cI, label)
+      assert.equal(t.src, tsrc, label)
+    }
+  })
+
+  it('escape decode is strict, and agrees with Go', () => {
+    // This replaces a divergence pin. Until P3 was repaired, `parseInt`
+    // succeeded on any hex prefix here, so this port accepted `"\\x4Z"`
+    // as U+0004 (discarding the `Z`) and reported truncated escapes as
+    // unterminated_string where Go named the escape. Swept then: 32
+    // cases, 16 diverged. Swept after the repair: 0.
+    //
+    // Kept as a PARITY test rather than deleted, because the boundary is
+    // easy to relax again by accident — `parseInt` is the obvious way to
+    // write this and it is the wrong way. go/divergence_test.go
+    // TestEscapeDecodeIsStrict asserts the same inputs.
+    const parse = (src) => {
+      const j = new Tabnas({
+        string: { allowUnknown: false },
+        rule: { start: 'val', exclude: 'tabnas,imp' },
+      })
+      j.rule('val', (rs) => {
+        rs.open({ s: [j.token('#ST')], a: (r) => { r.node = r.o0.val } })
+      })
+      try {
+        return { ok: true, val: j.parse(src) }
+      } catch (e) {
+        return { ok: false, code: e.code }
+      }
+    }
+
+    // A junk-terminated escape is not a valid escape.
+    assert.equal(parse('"\\x4Z"').code, 'invalid_ascii')
+    assert.equal(parse('"\\u414Z"').code, 'invalid_unicode')
+
+    // Nor is a truncated one, with or without a closing quote. Assert the
+    // CODE, not merely that it threw: `unterminated_string` is exactly
+    // what the repair removed here, and a check for "it failed" would
+    // pass if it came back.
+    for (const [src, code] of [
+      ['"\\x4', 'invalid_ascii'],
+      ['"\\x4"', 'invalid_ascii'],
+      ['"\\u4', 'invalid_unicode'],
+      ['"\\u41"', 'invalid_unicode'],
+      ['"\\u414Z', 'invalid_unicode'],
+    ]) {
+      assert.equal(parse(src).code, code, src)
+    }
+
+    // No valid hex prefix at all — unchanged by the repair.
+    assert.equal(parse('"\\xZZ"').code, 'invalid_ascii')
+    assert.equal(parse('"\\uZZZZ"').code, 'invalid_unicode')
+
+    // And valid escapes still decode, including the braced form that was
+    // already strict and served as the model for the repair.
+    assert.equal(parse('"\\x41"').val, 'A')
+    assert.equal(parse('"\\u0041"').val, 'A')
+    assert.equal(parse('"\\u{1F600}"').val, '\u{1F600}')
+    assert.equal(parse('"a\\x41b\\u0042c"').val, 'aAbBc')
+  })
+
+  it('reports `pos` in UTF-16 units, as Go reports it in runes', () => {
+    // DIVERGENCE.md "Column positions for astral characters": `pos`
+    // carries that divergence and nothing else, so it agrees with Go
+    // throughout the BMP and differs only above it — exactly like `col`.
+    //
+    // This is the TypeScript half of go/divergence_test.go
+    // TestDiagnosticPosCountsRunes, over the same four inputs. The pairing
+    // is the test: Go emitted a BYTE offset until audit item P5, which
+    // diverged for every character above U+007F while both this file's
+    // subject and the schema described runes. A one-sided pin could not
+    // tell "Go still counts runes" from "Go went back to bytes".
+    //
+    // `col` is asserted alongside `pos` because the claim is that the two
+    // are now the same class; a repair that fixed one and not the other
+    // would leave this green if only `pos` were checked.
+    const diag = (src) => {
+      const j = new Tabnas({ rule: { start: 'top', exclude: 'tabnas,imp' } })
+      j.rule('top', (rs) => {
+        rs.open({ s: [j.token('#ST')], a: (r) => { r.node = r.o0.val } })
+        rs.close({ s: [j.token('#ZZ')] })
+      })
+      try {
+        j.parse(src)
+      } catch (e) {
+        return JSON.parse(JSON.stringify(e))
+      }
+      assert.fail('no error for ' + JSON.stringify(src))
+    }
+
+    // src, pos, col — and the Go numbers for the same input in the
+    // comment. Only the astral row differs.
+    const cases = [
+      ['"ab" 1', 5, 6], // pure ASCII      Go pos 5 col 6 — same
+      ['"\u00e9" 1', 4, 5], // U+00E9: 2 bytes  Go pos 4 col 5 — same
+      ['"\u20ac" 1', 4, 5], // U+20AC: 3 bytes  Go pos 4 col 5 — same
+      ['"\u{1F600}" 1', 5, 6], // astral      Go pos 4 col 5 — DIVERGES
+    ]
+    for (const [src, pos, col] of cases) {
+      const o = diag(src)
+      assert.equal(o.pos, pos, 'pos ' + JSON.stringify(src))
+      assert.equal(o.col, col, 'col ' + JSON.stringify(src))
+    }
+
+    // The divergence stated as a difference rather than as two numbers:
+    // one astral character costs this port ONE more unit of pos than the
+    // same character costs Go, for the same reason it costs one more
+    // column. Go's half asserts 4 and 5 for these two rows.
+    assert.equal(diag('"\u{1F600}" 1').pos - diag('"\u20ac" 1').pos, 1)
   })
 
   // Pins the serialized-regex dialect gap, asserting the OPPOSITE of

@@ -208,11 +208,17 @@ the append behavior unchanged.
 | `b` | Backtrack: number of tokens to put back. |
 | `g` | Group tag(s). Used by `rule.include` / `rule.exclude` filtering. |
 | `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters — see [Counter conditions](#counter-conditions). |
-| `n` | Increment named counters by these amounts (setting `0` **resets**). |
-| `u` | Custom data attached to the rule's `u` bag. |
-| `k` | Custom data attached to `k` (propagates via push / replace). |
+| `n` | Increment named counters by these amounts (setting `0` **resets**). Counters **propagate** to child rules (push and replace). |
+| `u` | Custom data attached to the rule's `u` bag. **Does NOT propagate** — `u` is per-rule scratch. |
+| `k` | Custom data attached to the rule's `k` ("**keep**") bag. **Propagates** to child rules via push and replace. Rule-scoped, not alternate-scoped: it merges into `rule.k` before the action and accumulates across alternates. |
 | `h` | Modifier: `(rule, ctx, alt, next) => alt`. |
 | `e` | Error: `(rule, ctx, alt) => Token | undefined`. |
+
+> **Which bags propagate.** `n` and `k` are inherited by child rules on
+> both push and replace; `u` is not. `k` is named for "keep" — its content
+> is kept as the parse descends. Put per-rule scratch in `u` and anything
+> that must reach child rules in `k`. Picking the wrong bag fails silently.
+> See the root [`AGENTS.md`](../../AGENTS.md) section "Rule state".
 
 ### Counter conditions
 
