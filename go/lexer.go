@@ -56,6 +56,14 @@ type Lex struct {
 	// Relex, and cleared before it returns.
 	want []Tin
 
+	// Which slot of the current alternate is being filled. TS passes this
+	// to the matcher as `tI` and gates on `spec.def.tcol[oc][tI]`; Go has
+	// no tcol table, so ParseAlts records the position here and the gate
+	// below reads the alternates' own slot at that index. Zero outside a
+	// multi-token fetch, which is the same answer as the old hard-coded
+	// slot 0 for every single-token alternate.
+	tI int
+
 	// Where the scan stood immediately before the last recut Relex
 	// COMMITTED. One reusable record: the parser copies out of it at the
 	// moment of the commit (see ParseAlts), because a later recut
@@ -1263,13 +1271,24 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// override just added to #VAL / #KEY, and the parser
 					// would then reject the text the override was meant to
 					// admit. Falls back to alt.S outside a parse.
+					// The SLOT being filled, not slot 0. Gating every fetch
+					// on slot 0 asks "could this token START an alternate
+					// here", which is a different question from "is it
+					// acceptable at the position we are actually at" — and
+					// answers yes for tokens the position cannot take. In
+					// `chess`, `[a b]` fetches slot 1 of `#TGN #ST`: slot 0
+					// admits #TGN, so `b` lexed as a tag name and the error
+					// landed on `a` (1:2) instead of on `b` (1:4) as in TS.
+					// An alternate shorter than tI has nothing to say about
+					// this slot and must not vote.
+					slot := l.tI
 					positionExpected := false
 					for _, alt := range alts {
 						altS := alt.S
 						if l.Ctx != nil {
 							altS = l.Ctx.altS(alt)
 						}
-						if len(altS) > 0 && tinMatch(tin, altS[0]) {
+						if len(altS) > slot && tinMatch(tin, altS[slot]) {
 							positionExpected = true
 							break
 						}
