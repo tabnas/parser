@@ -4,3 +4,16 @@ input	expected
 "\uZZZZ"	ERROR:invalid_unicode
 "\u{GGGG}"	ERROR:invalid_unicode
 "\u{1234567}"	ERROR:invalid_unicode
+# Escapes that fail PARTIALLY, not completely. Every row above fails on its
+# first digit, which parseInt reports as NaN, so they passed even while the
+# lexer was decoding a prefix and walking past the rest. parseInt stops at the
+# first non-digit and returns what it had, so `\u00st` decoded to U+0000 and
+# then consumed the `s` and the `t` — data loss, and invisible to a corpus
+# that only ever asked about escapes with no valid prefix at all. It also
+# skips leading whitespace and honours a leading sign.
+"p\u00st"	ERROR:invalid_unicode
+"\u12zz"	ERROR:invalid_unicode
+"\u1"	ERROR:invalid_unicode
+"\u 123"	ERROR:invalid_unicode
+"\u+123"	ERROR:invalid_unicode
+"\u-123"	ERROR:invalid_unicode

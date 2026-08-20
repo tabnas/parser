@@ -56,6 +56,18 @@ claim against `src/` and `package.json` before writing.
 
 ## Rules of the road
 
+**`n` and `k` propagate to child rules; `u` does not.** `k` is named for
+"keep" — its content is kept as the parse descends. `ts/src/rules.ts:662-671`
+(push) and `:686-695` (replace) copy `rawn()` and `rawk()` into the new
+rule; `rawu()` (`:94`) is never copied. `k` is also rule-scoped rather
+than alternate-scoped: `rule.k = Object.assign(rule.k, alt.k)` at `:605`
+runs before the alt action, so it accumulates across alternates and then
+descends. Put per-rule scratch in `u` (as `@key$` does,
+`ts/src/builtins.ts:264`), and anything that must reach child rules in
+`k`. See the root [`AGENTS.md`](../AGENTS.md) section "Rule state" for the
+full statement — it is contract, not implementation detail.
+
+
 - Behavior changes here are changes to the spec: the Go port
   (`../go/`) must follow. Either port in the same change or record the
   gap in `../go/doc/differences.md`.
