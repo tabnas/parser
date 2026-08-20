@@ -348,8 +348,30 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	defer func() {
 		if r := recover(); r != nil {
 			result = nil
-			err = pctx.recordErr(
-				p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1))
+			// A *TabnasError keeps its own code. A grammar action that
+			// raises one is REPORTING A DEFECT IN THE INPUT — a TOML key
+			// conflict, say — and relabelling it "internal" turns a
+			// diagnosis the plugin author wrote into an engine bug.
+			//
+			// TypeScript already does this: tabnas.ts's catch is
+			// `if (e instanceof TabnasError) err = e; else throw e`, so a
+			// thrown TabnasError reaches the caller with its code intact.
+			// Go flattened every panic alike, which is why @tabnas/toml's
+			// key-conflict check exists in the TypeScript port and not in
+			// the Go one — there was no way to say it.
+			//
+			// Everything else still becomes "internal". Go cannot take
+			// TypeScript's other branch and re-panic: this package
+			// promises never to panic on a caller, which is what
+			// nopanic_test.go pins. So the two ports agree on the case
+			// that carries meaning and differ only where Go has a
+			// stronger guarantee to keep.
+			if te, ok := r.(*TabnasError); ok {
+				err = pctx.recordErr(te)
+			} else {
+				err = pctx.recordErr(
+					p.makeError("internal", fmt.Sprint(r), src, 0, 1, 1))
+			}
 		}
 	}()
 
