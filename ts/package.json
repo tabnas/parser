@@ -20,7 +20,9 @@
     "directory": "ts"
   },
   "scripts": {
+    "pretest": "npm run build",
     "test": "node --enable-source-maps --test test/**/*.test.js",
+    "pretest-some": "npm run build",
     "test-some": "node --enable-source-maps --test-name-pattern=\"$TEST_PATTERN\" --test \"test/**/*.test.js\"",
     "test-watch": "node --test --watch test/**/*.test.js",
     "test-view": "open coverage/lcov-report/index.html",
