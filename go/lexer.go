@@ -1288,8 +1288,28 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 						if l.Ctx != nil {
 							altS = l.Ctx.altS(alt)
 						}
-						if len(altS) > slot && tinMatch(tin, altS[slot]) {
-							positionExpected = true
+						if len(altS) <= slot {
+							continue
+						}
+						// EXACT membership, not tinMatch. TS gates on
+						// `tcol[oc][tI].includes(tin$)`, a plain list
+						// test, and leaves #AA to the parser. tinMatch
+						// treats #AA as matching everything, so a
+						// wildcard slot would vote for every registered
+						// match token and the lexer would emit tokens TS
+						// never produces. Measured on an alternate
+						// `{{#A}, {#AA}}` with a regex-backed `#X`: with
+						// tinMatch, Go parsed `ax`; TS rejects it, and so
+						// does Go with this test. A wildcard says the
+						// PARSER will take any tin, not that the LEXER
+						// should invent one.
+						for _, want := range altS[slot] {
+							if want == tin {
+								positionExpected = true
+								break
+							}
+						}
+						if positionExpected {
 							break
 						}
 					}
@@ -1301,6 +1321,21 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					} else if positionExpected || !mt.Eager {
 						// Pass 1: eager-only fallbacks (position-expected
 						// ones were already tried in pass 0).
+						//
+						// NOTE this is NOT what TS does, and the difference
+						// is a live divergence — see the eager case in
+						// #136. TS makes ONE tin-ordered pass in which
+						// eagerness only bypasses the gate, so an eager
+						// matcher earlier in that order wins over a
+						// position-expected one later. Collapsing these two
+						// passes is the honest repair and is NOT done here:
+						// Go's tins come from map iteration order
+						// (MapToOptions over a Go map), so a single
+						// tin-ordered pass makes the winner a coin flip
+						// where TS's object-key order is deterministic.
+						// Measured: collapsing them broke
+						// TestSerializedRegexTokensParse, which TS passes.
+						// The ordering has to be made deterministic first.
 						continue
 					}
 				}
