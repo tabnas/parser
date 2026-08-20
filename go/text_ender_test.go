@@ -36,6 +36,7 @@ package tabnas
 
 import (
 	"reflect"
+	"regexp"
 	"testing"
 )
 
@@ -110,6 +111,84 @@ func TestTextEnderUsesTheConfigAndNothingElse(t *testing.T) {
 	} {
 		if got := textSpans(c.opts, c.src); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %q -> %q, want %q", c.label, c.src, got, c.want)
+		}
+	}
+}
+
+// The Go half of audit item P9.
+//
+// A CONSUMING value regexp matches against the forward source rather
+// than against `msrc`, so it may take a shorter prefix than the text run
+// the ender found. This port returns straight after such a match and
+// re-enters the matcher, so the fixed token that follows is found at the
+// point that actually exists.
+//
+// TypeScript did not: `subMatchFixed` built its token at the POINT while
+// `tsrc` came from the end of `msrc`, two different offsets whenever a
+// consuming regexp stopped short. It fabricated a delimiter where the
+// source had something else, swallowed that something, and emitted the
+// real delimiter again. Found by review on the P4 change and reproduced
+// on `main`, so it predates P4 — but P4 lets `msrc` span a line
+// terminator, which widens what could be swallowed, so both land here.
+//
+// Every row below is this port's stream, measured, and
+// ts/test/text-ender.test.js asserts the same table.
+func TestConsumingValueDoesNotQueueADistantFixedToken(t *testing.T) {
+	const LS = "\u2028"
+
+	spans := func(src, lineChars string) []string {
+		o := Options{Value: &ValueOptions{Def: map[string]*ValueDef{
+			"at": {
+				Match:   regexp.MustCompile(`^@\w+`),
+				Consume: true,
+				ValFunc: func(m []string) any { return map[string]any{"at": m[0]} },
+			},
+		}}}
+		if lineChars != "" {
+			o.Line = &LineOptions{Chars: lineChars}
+		}
+		j := Make(o)
+		lex := MakeLex(src, j.Config())
+		out := []string{}
+		for i := 0; i < 14; i++ {
+			tk := lex.Next()
+			if tk == nil {
+				break
+			}
+			// #SP is skipped: TypeScript emits a space token here and
+			// this port does not, a separate shape difference.
+			if tk.Name != "#SP" {
+				out = append(out, tk.Name+":"+tk.Src)
+			}
+			if tk.Name == "#ZZ" || tk.Name == "#BD" {
+				break
+			}
+		}
+		return out
+	}
+
+	for _, c := range []struct {
+		src, lineChars string
+		want           []string
+	}{
+		// The regexp takes `@abc`; the ender is the comma, further on.
+		// The characters in between must survive as text.
+		{"@abc-rest,", "", []string{"#VL:@abc", "#TX:-rest", "#CA:,", "#ZZ:"}},
+		{"@abc-r,x", "", []string{"#VL:@abc", "#TX:-r", "#CA:,", "#TX:x", "#ZZ:"}},
+		{"@abc--,", "", []string{"#VL:@abc", "#TX:--", "#CA:,", "#ZZ:"}},
+
+		// What P4 widens on the TypeScript side: the swallowed gap could
+		// be a line terminator.
+		{"@abc\nrest,", ";", []string{"#VL:@abc", "#TX:\nrest", "#CA:,", "#ZZ:"}},
+		{"@abc" + LS + "rest,", "", []string{"#VL:@abc", "#TX:" + LS + "rest", "#CA:,", "#ZZ:"}},
+
+		// Controls: when the run IS fully consumed, the fixed token
+		// still follows.
+		{"@abc,rest", "", []string{"#VL:@abc", "#CA:,", "#TX:rest", "#ZZ:"}},
+		{"@abc rest,", "", []string{"#VL:@abc", "#TX:rest", "#CA:,", "#ZZ:"}},
+	} {
+		if got := spans(c.src, c.lineChars); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%q -> %q, want %q", c.src, got, c.want)
 		}
 	}
 }

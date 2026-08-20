@@ -931,6 +931,11 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     let def = cfg.value.def
     let defre = cfg.value.defre
 
+    // Where this match starts. `tsrc` below was found at the END of
+    // `msrc`, so it is only the token that follows the point if the
+    // point actually got there — see the guard on subMatchFixed.
+    let msI = pnt.sI
+
     ender.lastIndex = pnt.sI
     let m = ender.exec(lex.src)
 
@@ -994,8 +999,25 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       }
 
       // A following fixed token can only match if there was already a
-      // valid text or value match.
-      if (out) {
+      // valid text or value match — AND if the point reached the place
+      // `tsrc` was found.
+      //
+      // A CONSUMING value regexp matches against the forward source
+      // rather than against `msrc`, so it may take a shorter prefix and
+      // leave the point mid-run. `subMatchFixed` builds its token at the
+      // point, not at the offset `tsrc` came from, then advances by that
+      // token's length. With the point short of the ender, that
+      // fabricated a delimiter at the wrong offset, swallowed whatever
+      // stood there, and left the real delimiter to be emitted again:
+      //
+      //   value.def {at: {match: /^@\w+/, consume: true}}, src `@abc-rest,`
+      //     was:  #VL"@abc"  #CA","@4  #TX"rest"  #CA","@9   (`-` gone)
+      //     now:  #VL"@abc"  #TX"-rest"  #CA","@9
+      //
+      // go/lexer.go returns straight after a consuming value match and
+      // re-enters the matcher, which is why it never had this; the token
+      // stream above is Go's, measured.
+      if (out && pnt.sI === msI + (null == msrc ? 0 : msrc.length)) {
         out = subMatchFixed(lex, out, tsrc)
       }
 

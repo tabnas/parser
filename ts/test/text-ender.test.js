@@ -95,4 +95,72 @@ describe('text-ender', () => {
       assert.deepEqual(textSpans(opts, src), want, label)
     }
   })
+
+  it('does not queue a fixed token the point never reached', () => {
+    // A CONSUMING value regexp matches against the forward source, not
+    // against `msrc`, so it may take a shorter prefix and leave the lex
+    // point mid-run. `subMatchFixed` builds its token at the POINT while
+    // `tsrc` was found at the end of `msrc` — two different offsets. So
+    // it fabricated a delimiter where the source had something else,
+    // swallowed that something, and left the real delimiter to be
+    // emitted a second time.
+    //
+    // Found by review on the P4 change and reproduced on `main`: it
+    // predates P4 and is not caused by it. P4 widens the reach, since
+    // `msrc` can now span a line terminator, which is why the fix lands
+    // in the same change. Audit item P9.
+    //
+    // go/lexer.go returns straight after a consuming value match and
+    // re-enters the matcher, so it never had this. Every "want" below is
+    // Go's stream, measured, and go/text_ender_test.go asserts the same
+    // table.
+    const spans = (src, opts) => {
+      const j = new Tabnas(Object.assign({
+        value: {
+          def: {
+            at: { match: /^@\w+/, consume: true, val: (res) => ({ at: res[0] }) },
+          },
+        },
+      }, opts))
+      const lex = makeLex({
+        src: () => src,
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const out = []
+      for (let i = 0; i < 14; i++) {
+        const t = lex.next()
+        if (!t) break
+        // #SP is skipped: Go emits no space token here, a separate and
+        // long-standing shape difference.
+        if ('#SP' !== t.name) out.push(t.name + ':' + t.src)
+        if ('#ZZ' === t.name || '#BD' === t.name) break
+      }
+      return out
+    }
+
+    // The regexp takes `@abc`; the ender is the comma, further on. The
+    // characters in between must survive as text.
+    assert.deepEqual(spans('@abc-rest,'),
+      ['#VL:@abc', '#TX:-rest', '#CA:,', '#ZZ:'])
+    assert.deepEqual(spans('@abc-r,x'),
+      ['#VL:@abc', '#TX:-r', '#CA:,', '#TX:x', '#ZZ:'])
+    assert.deepEqual(spans('@abc--,'),
+      ['#VL:@abc', '#TX:--', '#CA:,', '#ZZ:'])
+
+    // The P4 widening: with `s` on, `msrc` can span a line terminator,
+    // so the gap the old code swallowed could be a newline.
+    assert.deepEqual(spans('@abc\nrest,', { line: { chars: ';' } }),
+      ['#VL:@abc', '#TX:\nrest', '#CA:,', '#ZZ:'])
+    assert.deepEqual(spans('@abc' + LS + 'rest,'),
+      ['#VL:@abc', '#TX:' + LS + 'rest', '#CA:,', '#ZZ:'])
+
+    // Controls. When the point DOES reach the ender, the fixed token is
+    // still queued in the same call — the guard must not disable it.
+    assert.deepEqual(spans('@abc,rest'),
+      ['#VL:@abc', '#CA:,', '#TX:rest', '#ZZ:'])
+    assert.deepEqual(spans('@abc rest,'),
+      ['#VL:@abc', '#TX:rest', '#CA:,', '#ZZ:'])
+  })
 })

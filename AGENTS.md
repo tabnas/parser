@@ -26,6 +26,26 @@ lexer. Grammar is contributed by plugins.
 1. **TypeScript is canonical.** When TS and Go disagree on engine
    behavior, TS wins; change Go (and add/extend a shared fixture when
    the behavior is expressible as input → output).
+
+   **Canonical names the language, not the winner.** TypeScript defines
+   what the language *is*; being canonical does not make a bug correct.
+   Where the two ports disagree and the TypeScript behaviour violates
+   that definition — or is an artefact of a JavaScript primitive rather
+   than a decision — TypeScript is the port that changes, and the change
+   says so and shows the measurement. Copying a defect into Go is not a
+   repair. Measured examples, each repaired in TypeScript: `"pre\u00post"`
+   accepted with two characters silently deleted (`parseInt` stops at
+   the first non-hex digit); `a<U+2028>b` unlexable under default
+   options (a regex without the `s` flag makes the JS dialect's line
+   terminators a second, unconfigurable text ender); `rule.maxmul: 0`
+   rejecting a valid document with a syntax code.
+
+   The default is unchanged and remains the common case: an
+   engine-level disagreement is Go's to fix unless the TypeScript side
+   is shown to be defective. State the repair direction as a property
+   of the item, with the reproduction, rather than inferring it from
+   which file the code lives in.
+
 2. **Go-only features are intentional** and must be kept and tested:
    `Info.Map` (`MapRef`), `Info.List` (`ListRef`), `Info.Text`
    (`Text`), and the introspection API. They exist for typed Go client
