@@ -77,6 +77,28 @@ surrogate) and one rune in Go (the whole character). Pinned with opposite
 assertions by `ts/test/diagnostic.test.js` ('unclaimed-char-token') and
 `go/diagnostic_test.go` (`TestDiagnosticUnclaimedCharToken`).
 
+## Repaired, and what replaced them
+
+An entry that leaves this file should leave a forwarding address: a
+reader who remembers one and cannot find it needs to know whether it was
+fixed or quietly dropped.
+
+- **Bad-token spans and codes for invalid string escapes.** Carried a
+  table of `len`/`pos`/`col` differences and, at one point, the claim
+  that the error `code` always agreed. Both halves are repaired: the
+  TypeScript escape decode now requires the full fixed-width hex run
+  (it accepted any prefix, so `"\x4Z"` parsed as U+0004 with the `Z`
+  discarded), and the Go string matcher now positions its errors on the
+  offending construct rather than the opening quote. Swept 32 inputs for
+  the first and 19 for the second: 0 diverge.
+
+  Kept as PARITY tests rather than deleted —
+  `TestEscapeDecodeIsStrict` and `TestStringErrorsPointAtTheConstruct`
+  in both ports. Both defects are easy to reintroduce and silent when
+  they are: a plain `parseInt` is the obvious way to write the decode,
+  and dropping the point-move leaves the codes right and only the
+  positions wrong.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
