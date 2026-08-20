@@ -90,6 +90,12 @@ func TestDivergenceAstralColumnIsOneRune(t *testing.T) {
 // behaviour is covered by relex_test.go, and what this pin is for is the
 // CONFIG SURFACE agreeing across the two ports.
 //
+// The dead name is not repeated here on purpose. tasks/ax-phantom-gates
+// flags any Test-shaped name a comment mentions but nothing defines, and
+// it cannot tell "this test exists" from "this test used to"; writing the
+// name even to disown it would leave the gate red forever, and a gate
+// that is permanently red is one people learn to skip.
+//
 // TypeScript mirror: ts/test/divergence.test.js
 // 'lex.relex is ported, and defaults off, in both ports'.
 func TestRelexIsPortedAndDefaultsOff(t *testing.T) {
