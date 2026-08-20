@@ -902,7 +902,19 @@ function commentSuffixFnMatch(lex: Lex, aI: number, fn?: LexMatcher): number {
 let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   // Sticky ('y') so the regex runs against the full source at an offset
   // (ender.lastIndex = pnt.sI) instead of an allocated remainder slice.
-  let ender = regexp(cfg.line.lex ? 'y' : 'ys', '(.*?)', ...cfg.rePart.ender)
+  //
+  // Also DOTALL ('s'), unconditionally. Which characters end a text run is
+  // `cfg.line.chars`, and `cfg.rePart.ender` already carries them in its
+  // character class. Leaving `s` off when line lexing is on made the JS
+  // regex dialect's own line-terminator set a SECOND, unconfigurable
+  // ender: `.` refuses to cross U+000A, U+000D, U+2028 and U+2029
+  // whatever the grammar says. The two sets are not the same, and the
+  // difference was reachable in both directions — U+2028 ended text that
+  // no option named, and a newline ended text after `line.chars` had been
+  // set to something without one. Go has no such second set; see
+  // `go/lexer.go` textStopBase, which consults the config and nothing
+  // else. Audit item P4.
+  let ender = regexp('ys', '(.*?)', ...cfg.rePart.ender)
 
   return function textMatcher(lex: Lex) {
     if (cfg.text.check) {
