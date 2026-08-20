@@ -664,8 +664,14 @@ add a `pos` note to `go/doc/differences.md`, and add one fixture row with
 a BMP non-ASCII character *before* the failing token (`["é" 2]`, where
 `col` agrees at 6 and `pos` differs 5-vs-6) with opposite assertions in
 `ts/test/divergence.test.js` and `go/divergence_test.go`, mirroring the
-pattern already used for `TestDivergenceBadEscapeSpanIncludesQuote`. That
-is roughly 30 lines now.
+opposite-assertion pattern those files already use for the surrogate and
+unclaimed-astral-character rows. That is roughly 30 lines now.
+
+(This paragraph used to name a specific test as the pattern to copy. That
+test was deleted in #139 along with the divergence entry it belonged to,
+and the name is not repeated here even to disown it: `ax-phantom-gates`
+flags any `Test`-shaped name a doc mentions and nothing defines, and it
+cannot tell "this exists" from "this used to".)
 
 ### 4.2 Bad-token spans — the one genuinely free choice
 
@@ -1063,8 +1069,13 @@ replaced a section of `go/doc/differences.md` titled "Known gap: per-run
 vs per-recovery diagnostics" with "Aligned", and `git log -S "lexer soft
 mode" -- ts/src/rules.ts` shows the TS side arrived in `2b21c8d` (#96). So
 #106, #108 and #109 are three commits and 1,477 lines closing **one** TS
-feature, with a named gap test (`TestRecoverCascadeParityGap`) sitting in
-the tree meanwhile. The genuinely Go-only work is `94c2cf1` (the C ABI +
+feature, with a named gap test sitting in the tree meanwhile.
+
+(The name that stood here was never defined in this repo — `grep` finds it
+in this document and nowhere else — so the claim it supported was
+unverifiable as written. It is dropped rather than corrected, because the
+point survives without it and `ax-phantom-gates` reports a doc that names
+a test nothing defines.) The genuinely Go-only work is `94c2cf1` (the C ABI +
 Python binding), `83e8e23` (perf) and one Go-specific data race.
 
 ### 6.3 Who pays it
