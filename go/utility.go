@@ -746,6 +746,25 @@ func LookupRef(ref map[FuncRef]any, name string) any {
 
 // MapToOptions builds an Options struct from a map[string]any (FuncRefs already resolved), covering common grammar option fields.
 // MapToOptions(map[string]any{"tag":"x"}) // => Options{Tag:"x"}
+// mapInt reads a numeric option out of an untyped options map. JSON
+// decoding produces float64; a map built in Go may hold any integer
+// kind. Truncates toward zero.
+func mapInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case int32:
+		return int(n), true
+	}
+	return 0, false
+}
+
 func MapToOptions(m map[string]any) Options {
 	var opts Options
 
@@ -1043,6 +1062,15 @@ func MapToOptions(m map[string]any) Options {
 		}
 		if exclude, ok := rm["exclude"].(string); ok {
 			opts.Rule.Exclude = exclude
+		}
+		// A JSON number arrives as float64; a hand-built map may carry a
+		// real int. Truncated toward zero, so a fractional multiplier —
+		// which TypeScript accepts and this port's `*int` cannot hold —
+		// becomes 0 and is then coerced to the default at parse time,
+		// rather than being dropped without trace. See DIVERGENCE.md,
+		// "Rule-iteration budget: a fractional `rule.maxmul`".
+		if maxmul, ok := mapInt(rm["maxmul"]); ok {
+			opts.Rule.MaxMul = &maxmul
 		}
 	}
 

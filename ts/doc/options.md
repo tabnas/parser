@@ -252,6 +252,36 @@ Additional text-ending characters. String or string array. Default
 | `include` | string | `""` | Include only alternates with these group tags (comma-separated) |
 | `exclude` | string | `""` | Exclude alternates with these group tags (comma-separated) |
 
+### `rule.maxmul` — the runaway guard
+
+`maxmul` scales the rule-iteration budget, the guard that stops a grammar
+that never terminates. The budget is
+
+    2 * ruleCount * srcLen * 2 * maxmul
+
+floored at **100**, where `srcLen` is the source length in **UTF-16 code
+units**. Three things about it are observable and are not obvious from
+the multiplier alone:
+
+- **A non-positive or `NaN` multiplier selects the default `3`.** It is a
+  nonsense setting, not a nonsense document, so it falls back rather than
+  producing a zero or negative budget. Honoured literally it made the
+  guard reject valid input with `unexpected` — a syntax code for a
+  configuration value.
+- **The floor of 100 is absolute.** A small positive multiplier cannot
+  take a short parse below 100 iterations. `maxmul` is a `number` here,
+  so a fractional value is accepted and does shrink the budget for a long
+  source; it cannot make a short one fail.
+- **A large multiplier means a large budget, and therefore a long wait**
+  on a grammar that really is running away. That is what asking for it
+  means; the guard is a ceiling you set, not a promise the engine will
+  stop quickly.
+
+The Go port computes the same expression, including the floor and the
+coercion, and counts the same units. `rule.maxmul` is a `*int` there, so
+a fractional value is the one thing that does not survive the crossing —
+see [`DIVERGENCE.md`](../../DIVERGENCE.md).
+
 ## `lex`
 
 | Field | Type | Default | Description |
