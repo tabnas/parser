@@ -410,3 +410,37 @@ func TestRecoverForcedCloseEventsAreEmitted(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoverTrailingContent(t *testing.T) {
+	// The completeness checks run AFTER the rule loop: a document
+	// whose value parses cleanly but is followed by junk must still
+	// produce a diagnostic in recovery mode, with the value kept —
+	// mirroring TS, where the trailing-content raise is recorded by
+	// the TabnasError constructor and converted to { value, errors }.
+	// This port once skipped those checks entirely under recovery and
+	// silently ACCEPTED `"x" q`. Mirrors the TS case
+	// "reports trailing content after a complete value".
+	j := mkRec(t)
+	for _, c := range []struct {
+		src   string
+		value string
+	}{
+		{`"x" q`, `"x"`},
+		{`1 q`, `1`},
+		{`"a" "b"`, `"a"`},
+	} {
+		v, errs, err := j.ParseRecover(c.src)
+		if err != nil {
+			t.Fatalf("%s: unexpected terminal error: %v", c.src, err)
+		}
+		if 1 != len(errs) {
+			t.Fatalf("%s: errs = %s, want one `unexpected`", c.src, enc(errs))
+		}
+		if "unexpected" != errs[0].Code {
+			t.Fatalf("%s: code = %s", c.src, errs[0].Code)
+		}
+		if c.value != enc(v) {
+			t.Fatalf("%s: value = %s, want %s", c.src, enc(v), c.value)
+		}
+	}
+}

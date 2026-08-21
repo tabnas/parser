@@ -650,32 +650,71 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 	// Check for unconsumed tokens (syntax error) - explicit trailing content check.
 	// First check tokens already in the lookahead buffer.
-	if !soft && ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ {
+	//
+	// In soft mode the trailing-content error is RECORDED, not
+	// returned: TS raises the same TabnasError — whose constructor
+	// records it on ctx.errs — and its recovery catch converts the
+	// throw into the { value, errors } result, keeping the partial
+	// value. Skipping the check entirely (as this path once did) made
+	// the Go port silently ACCEPT `"x" q` under recovery while TS
+	// reported `unexpected` — an accept/reject divergence, not a span
+	// one. One recorded error, then straight to the result, mirroring
+	// the single throw: the second lookahead below is fail-fast-only.
+	trailing := ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ
+	if trailing && !soft {
 		// Prefer lex errors over generic unexpected for unconsumed tokens too.
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
 		}
 		return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI), ctx, meta, ctx.T0)
 	}
-	// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
-	// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
-	// rule argument to ctx.Rule — which would clobber the last REAL rule
-	// before finishErr reads it for the diagnostic (TS lex.next performs
-	// no such assignment, so its ctx.rule keeps the last processed rule).
-	// Save/restore rather than passing ctx.Rule so the lex call itself
-	// still sees NoRule, exactly as before.
-	curRule := ctx.Rule
-	endTkn := lex.Next(rule)
-	ctx.Rule = curRule
-	if endTkn.Tin != TinZZ && !soft {
-		if lex.Err != nil {
-			return nil, p.finishErr(lex.Err, ctx, meta, nil)
+	if trailing && soft {
+		je := p.makeError("unexpected", ctx.T0.Src, src, ctx.T0.SI, ctx.T0.RI, ctx.T0.CI)
+		if !ctx.alreadyRecorded(je) {
+			ctx.recordErr(je)
+			_ = p.finishErr(je, ctx, meta, ctx.T0)
 		}
-		return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
 	}
-	// Check lexer errors from that final Next() call.
-	if lex.Err != nil && !soft {
-		return nil, p.finishErr(lex.Err, ctx, meta, nil)
+	if !trailing {
+		// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
+		// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
+		// rule argument to ctx.Rule — which would clobber the last REAL rule
+		// before finishErr reads it for the diagnostic (TS lex.next performs
+		// no such assignment, so its ctx.rule keeps the last processed rule).
+		// Save/restore rather than passing ctx.Rule so the lex call itself
+		// still sees NoRule, exactly as before.
+		curRule := ctx.Rule
+		endTkn := lex.Next(rule)
+		ctx.Rule = curRule
+		if endTkn.Tin != TinZZ {
+			if !soft {
+				if lex.Err != nil {
+					return nil, p.finishErr(lex.Err, ctx, meta, nil)
+				}
+				return nil, p.finishErr(p.makeErrorIn(ctx, "unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI), ctx, meta, endTkn)
+			}
+			var je *TabnasError
+			if e, ok := lex.Err.(*TabnasError); ok && e != nil {
+				je = e
+			} else {
+				je = p.makeError("unexpected", endTkn.Src, src, endTkn.SI, endTkn.RI, endTkn.CI)
+			}
+			if !ctx.alreadyRecorded(je) {
+				ctx.recordErr(je)
+				_ = p.finishErr(je, ctx, meta, endTkn)
+			}
+			lex.Err = nil
+		}
+		// Check lexer errors from that final Next() call.
+		if lex.Err != nil {
+			if !soft {
+				return nil, p.finishErr(lex.Err, ctx, meta, nil)
+			}
+			if je, ok := lex.Err.(*TabnasError); ok && !ctx.alreadyRecorded(je) {
+				ctx.recordErr(je)
+			}
+			lex.Err = nil
+		}
 	}
 
 	// Follow replacement chain: when val is replaced by list (implicit list),

@@ -181,4 +181,20 @@ describe('recover', () => {
     assert.deepStrictEqual(good.errors, [])
     assert.equal(good.value.a, 1)
   })
+
+  it('reports trailing content after a complete value', () => {
+    // The completeness checks run AFTER the rule loop: a document
+    // whose value parses cleanly but is followed by junk must still
+    // produce a diagnostic in recovery mode, with the value kept.
+    // Pinned in both runtimes (go TestRecoverTrailingContent): the Go
+    // port once skipped these checks entirely under recovery and
+    // silently ACCEPTED `"x" q` — an accept/reject divergence.
+    const tn = mk()
+    for (const [src, value] of [['"x" q', 'x'], ['1 q', 1], ['"a" "b"', 'a']]) {
+      const out = tn.parse(src)
+      assert.equal(out.errors.length, 1, src + ' -> ' + JSON.stringify(out.errors))
+      assert.equal(out.errors[0].code, 'unexpected', src)
+      assert.equal(out.value, value, src)
+    }
+  })
 })
