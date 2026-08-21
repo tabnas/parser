@@ -23,9 +23,14 @@ lexer. Grammar is contributed by plugins.
 
 ## Authority and alignment rules
 
-1. **TypeScript is canonical.** When TS and Go disagree on engine
-   behavior, TS wins; change Go (and add/extend a shared fixture when
-   the behavior is expressible as input → output).
+1. **TypeScript is canonical — it defines the language.** When TS and
+   Go disagree on engine behavior, the *default* is that TS wins and Go
+   changes (add/extend a shared fixture when the behavior is expressible
+   as input → output). Per ADR-13 (admin `DECISIONS.md`, 2026-08-19) the
+   repair direction is decided per defect, not per port: whichever port
+   violates the language TypeScript defines is the one that changes, and
+   where the TypeScript implementation is itself defective, TypeScript
+   moves. Every recorded divergence states its repair direction.
 2. **Go-only features are intentional** and must be kept and tested:
    `Info.Map` (`MapRef`), `Info.List` (`ListRef`), `Info.Text`
    (`Text`), and the introspection API. They exist for typed Go client
@@ -327,19 +332,23 @@ file to one job:
 - **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
   `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports and the
-  language-neutral
-  [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md) with its
-  companion
-  [`doc/rust-callback-porting-strategy.md`](doc/rust-callback-porting-strategy.md))
-  covers design and rationale.
+  language-neutral five-document Rust-port series —
+  [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md),
+  [`doc/rust-callback-porting-strategy.md`](doc/rust-callback-porting-strategy.md),
+  [`doc/rust-port-risks.md`](doc/rust-port-risks.md),
+  [`doc/engine-changes-for-portability.md`](doc/engine-changes-for-portability.md)
+  and [`doc/rust-port-implementation-plan.md`](doc/rust-port-implementation-plan.md),
+  the last of which reviews the other four and carries the consolidated
+  plan) covers design and rationale.
 
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
 `ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only what is
 language-neutral — `syntax.md` (syntax spec), `architecture.md`,
-`value-builtins.md`, and the two Rust reports
-(`rust-port-feasibility.md` and `rust-callback-porting-strategy.md`),
-which concern a prospective third runtime and so belong to neither
-existing one.
+`value-builtins.md`, and the five Rust-port documents
+(`rust-port-feasibility.md`, `rust-callback-porting-strategy.md`,
+`rust-port-risks.md`, `engine-changes-for-portability.md`,
+`rust-port-implementation-plan.md`), which concern a prospective third
+runtime and so belong to neither existing one.
 
 READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the
