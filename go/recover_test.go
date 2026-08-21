@@ -444,3 +444,60 @@ func TestRecoverTrailingContent(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoverGiveUpAddsNoTrailingError(t *testing.T) {
+	// When recovery gives up, the terminal fault is already recorded
+	// and TS's catch converts without ever reaching the post-loop
+	// completeness checks — so those checks must not run here either:
+	// they would fetch a LATER token and report a second error from
+	// text recovery deliberately stopped processing. Mirrors the TS
+	// case "give-up leaves only the recorded errors: no post-loop
+	// extras".
+	j := mkRec(t, func(r *RecoverOptions) { r.MaxSkip = intp(0) })
+	_, errs, err := j.ParseRecover(`[1 : abc def ghi]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unexpected" != errs[0].Code {
+		t.Fatalf("want the one recorded `unexpected`, got %s", enc(errs))
+	}
+}
+
+func TestRecoverTrailingBadTokenKeepsCode(t *testing.T) {
+	// A bad token in trailing content carries its own code — TS raises
+	// `why || unexpected` with the token's use details in both the
+	// buffered and the final-lookahead checks. Both routes are pinned:
+	// the prefetched-lookahead one (json grammar) and the no-lookahead
+	// one (a rule closing on an empty alternate, where the final
+	// Lex.Next returns a deferred #BD with lex.Err nil). Mirrors the
+	// TS case "trailing bad tokens keep their own error code".
+	j := mkRec(t)
+	v, errs, err := j.ParseRecover(`1 "abc`)
+	if err != nil {
+		t.Fatalf("lookahead route: unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unterminated_string" != errs[0].Code {
+		t.Fatalf("lookahead route: want one unterminated_string, got %s", enc(errs))
+	}
+	if `1` != enc(v) {
+		t.Fatalf("lookahead route: value = %s, want 1", enc(v))
+	}
+
+	n := Make(Options{Parse: &ParseOptions{Recover: &RecoverOptions{Enabled: true}}})
+	gs, gerr := GrammarSpecFromJSON([]byte(
+		`{"options":{"rule":{"start":"top"}},` +
+			`"rule":{"top":{"open":[{"s":"#TX"}],"close":[{}]}}}`))
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if gerr = n.Grammar(gs); gerr != nil {
+		t.Fatal(gerr)
+	}
+	_, errs, err = n.ParseRecover(`x "`)
+	if err != nil {
+		t.Fatalf("no-lookahead route: unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unterminated_string" != errs[0].Code {
+		t.Fatalf("no-lookahead route: want one unterminated_string, got %s", enc(errs))
+	}
+}
