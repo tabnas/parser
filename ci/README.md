@@ -19,11 +19,33 @@ built for, with the richest corpus) is not even cloned.
   ~1,500 unit tests, including the error-code parity contract). TS deps
   are wired via `node_modules/@tabnas` symlinks; Go via a throwaway
   `go.work` (GOWORK env) — no repo files are modified.
-- `fixture-sync.sh` — verifies the shared TSV corpus has not drifted
-  between `parser/test/spec` and `jsonic/ts/test/spec` (name map:
-  `tabnas-*` ⇄ `jsonic-*`). Known divergences live in
-  `fixture-sync-allow.txt` (currently: three UTF-8 fixtures that exist
-  only in the parser repo — with a TODO to decide their fate).
+- `fixture-sync.sh` — verifies the fixtures the two repos SHARE have not
+  drifted, between `parser/test/spec` and `jsonic/test/spec` (name map:
+  `tabnas-*` ⇄ `jsonic-*`; older jsonic checkouts under `ts/test/spec`
+  are still found). The corpora are no longer mirrors — this repo owns
+  the engine's own surface, jsonic owns the relaxed-grammar corpus — so a
+  file on one side only is INFO, not a failure, and only files present on
+  both are compared byte-for-byte.
+
+  `fixture-sync-allow.txt` carries two kinds of line, and they are not
+  interchangeable:
+
+  - A **plain filename** only keeps a parser-owned file from being
+    reported as INFO. It does NOT permit drift.
+  - A **`not-shared: <name>`** line declares that a filename exists on
+    both sides and names two DIFFERENT fixtures, so comparing them is a
+    category error; the comparison is then skipped. Today that is
+    `divergent.tsv`, the ADR-14 divergence register, which both repos
+    keep at the same name deliberately and in two different shapes.
+    A `not-shared:` entry naming a file no longer present on both sides
+    FAILS — an exemption that outlives its purpose is one that will
+    eventually hide a real drift.
+
+  Nothing in that file can silence drift in a genuinely shared fixture.
+  That is the one thing this gate exists to catch: the shared
+  `include-json.tsv` drifted by five rows while an earlier version of the
+  script was pointing at a path that no longer existed and exiting 1 on
+  every run.
 
 ## bench/ — dual-runtime benchmark harness
 

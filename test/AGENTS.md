@@ -26,9 +26,14 @@ Those fixtures now live in `tabnas/jsonic` only.
 
 ## Format
 
-Tab-separated, one case per line, with a header row (`input` `expected`
-or, for list-child fixtures, a third column). The `expected` column is
-either:
+`divergent.tsv` is the exception to everything in this section: it is the
+ADR-14 divergence register, not a conformance fixture, and it has its own
+seven-column shape with a `probe` column. Its own header documents it.
+See "The divergence register" below.
+
+Every other file here is tab-separated, one case per line, with a header
+row (`input` `expected` or, for list-child fixtures, a third column). The
+`expected` column is either:
 
 - a JSON value (the parse result), or
 - `ERROR:<code>` for inputs that must fail with that error code.
@@ -59,6 +64,7 @@ Every fixture here, and the runner that executes it:
 | `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` |
 | `lex-string-control.tsv` | `ts/test/lex.test.js` | `go/lexer_optionplumbing_test.go` |
 | `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — |
+| `divergent.tsv` | `ts/test/divergent.test.js` (the `ts` column) | `go/divergent_test.go` (the `go` column) |
 
 Both strict-JSON runners go through the strict-JSON grammar that lives as
 a test fixture in each runtime (`ts/test/json-plugin.ts`,
@@ -74,7 +80,15 @@ sharing it at all.
 - **Every file here must have a runner.** Adding a `.tsv` is half the
   change; the runners take explicit filenames, not a directory glob, so
   an unregistered fixture is silently dead. Check it runs by breaking a
-  row on purpose and confirming the suite goes red.
+  row on purpose and confirming the suite goes red — **with
+  `go test -count=1`**. Plain `go test` will lie to you here: the test
+  cache keys a fixture read on the file's `stat`, not its contents, so a
+  row edited within the filesystem's mtime granularity is served from
+  cache and reports green having measured the OLD file. Measured in this
+  repo: a same-size edit to `test/spec/divergent.tsv` with the mtime
+  pinned stays `(cached)` even when the size changes too. The trap is
+  precisely this verification step, which is why it is called out here
+  and not left to be rediscovered.
 - Prefer adding a fixture here over a one-off in-language assertion when
   a case is expressible as input → output **and** the engine alone can
   check it. If it needs a grammar, it belongs in that grammar's repo.
@@ -82,3 +96,37 @@ sharing it at all.
   and `npm test` (from `ts/`) before considering it done.
 - Keep `expected` JSON canonical (sorted-key-independent comparison is
   the loaders' job, but write it readably).
+
+## The divergence register
+
+`divergent.tsv` is not a conformance fixture. It records where the two
+ports **disagree**, one column per runtime, and both suites assert their
+own column — so a divergence that gets REPAIRED fails it as loudly as one
+that regresses, and the row must then be deleted. That is the property
+prose cannot have: `go/doc/differences.md` claimed things about `2.e3`
+and `1e999` that had stopped being true, which is what ADR-14 is a
+reaction to.
+
+Three things about it differ from every other file here:
+
+- **It has a `probe` column.** This engine ships no grammar, so there is
+  nothing to parse an input against by default, and its divergences show
+  up at several layers — token columns, token spans, decoded values,
+  whether a grammar loads at all. The probe names which observation the
+  row makes. The set is closed and shared: adding a probe means adding it
+  to both runners, or the row cannot be asserted on both sides.
+- **Rows render through a shared canonical form, never a runtime's own.**
+  Go's `%q` and JavaScript's `JSON.stringify` escape different
+  characters, and the two runtimes sort strings by different units. Both
+  traps were paid for once already in this repo (#156). Values render
+  verbatim and map keys sort by UTF-16 code unit in both ports, so the
+  renderer cannot manufacture a difference of its own.
+- **Every group carries a control row** — an adjacent case where the
+  ports AGREE. Without one, a repair to the divergent row and unrelated
+  breakage look identical.
+
+`go/divergent_test.go` also gates coverage: every `### ` heading in
+`DIVERGENCE.md` must be either an `# @divergence:` group in the register
+or an entry in that file's `notRegistered` map, with a reason and where
+the entry IS pinned instead. An exemption is a declared gap, not an
+excuse — the probe set is meant to grow until the map is empty.

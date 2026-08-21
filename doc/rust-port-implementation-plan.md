@@ -323,14 +323,47 @@ parentheses; fleet blast radius is as measured in the series unless
 marked re-verify.
 
 **2a — The config route (after D1).**
-0. Create this repo's ADR-14 executable register first — it does not
-   exist here yet: the parser tree has no `divergent.tsv`, and its
-   divergences live as prose plus separate per-runtime tests. The
-   precedent is `jsonic`'s `test/spec/divergent.tsv` — a column per
-   runtime, run by **both** suites (which the `nonParity` honesty gate
-   requires of any new fixture anyway), where a row failing means the
-   divergence it records was repaired or drifted. 2a and 2i stage their
-   red rows there; without this step they have nowhere to stage.
+0. **Done** — this repo's ADR-14 executable register now exists:
+   `test/spec/divergent.tsv` plus `ts/test/divergent.test.js` and
+   `go/divergent_test.go`, fifteen rows over the five `DIVERGENCE.md`
+   entries that a probe can reach. It departs from the `jsonic`
+   precedent in one way that mattered more than expected: jsonic's
+   `input → parse result` shape assumes a grammar, and this engine ships
+   none, so rows carry a **probe** column naming which observation they
+   make — `lex` (one selected token's fields) or `spec` (install a
+   serialized `GrammarSpec`, then parse). The `spec` probe is what lets
+   step 1 below stage a builtin-config row at all; a lex-only register
+   would have served 2i and not 2a.
+
+   Three properties were worth the extra work. Rows render through a
+   **shared canonical form** — verbatim values, keys sorted by UTF-16
+   code unit — because a renderer built on `%q` or `JSON.stringify`
+   manufactures differences of its own, which is what #156 cost a review
+   round over. Every group carries a **control row** where the ports
+   agree, so a repair cannot be confused with unrelated breakage. And a
+   **coverage gate** requires every `### ` heading in `DIVERGENCE.md` to
+   be either a register group or a declared `notRegistered` exemption
+   (one today: the fractional `rule.maxmul`, which needs a full value
+   grammar no probe builds), failing in both directions so neither file
+   can drift from the other.
+
+   Validated by breaking it thirteen ways — a stale `ts` column, a stale
+   `go` column, a *repaired* divergence, an unregistered entry, a new
+   prose heading, a renamed heading, a missing justification, a
+   duplicate name, an unknown probe, a short row, an undefined `@spec`
+   reference and an unknown `show` field — each confirmed red on the
+   runner it should be red on and green on the other.
+
+   **A repo-wide trap fell out of that validation, and it defeats
+   `test/AGENTS.md`'s own instruction to "check it runs by breaking a
+   row on purpose".** `go test` caches a fixture read against the file's
+   `stat`, not its contents: with the mtime pinned, a corrupted
+   `divergent.tsv` stays `(cached)` and green even when the file's size
+   changes. Every shared-fixture Go runner in this repo has the same
+   exposure, and every `go test` invocation in the tree is cache-enabled.
+   CI is unaffected — a fresh runner has an empty cache — so this bites
+   exactly the person editing a fixture and re-running immediately.
+   `test/AGENTS.md` now says `-count=1` at that step.
 1. Land the shared builtin-config fixture first, red on the divergent
    shape: run-then-push and set-then-push rows
    (`§3.A2 changes`; the ADR-14 register carries the divergent row until

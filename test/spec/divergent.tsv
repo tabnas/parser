@@ -1,0 +1,114 @@
+name	probe	arg	input	go	ts	justification
+# The executable cross-port divergence register (ADR-14).
+#
+# DIVERGENCE.md is the prose record and stays authoritative on WHY each
+# split exists and what it costs. This file is what RUNS: every row is
+# asserted by BOTH suites -- go/divergent_test.go reproduces the `go`
+# column, ts/test/divergent.test.js the `ts` column -- so a divergence
+# that gets FIXED fails here exactly as loudly as one that regresses, and
+# the row must then be deleted. Prose cannot do that. The sibling repo
+# has the scars: jsonic's differences doc claimed 2.e3 and 1e999 still
+# diverged long after they were aligned.
+#
+# SEVEN tab-separated columns:
+#
+#   name           unique, kebab-case; the failure message names it
+#   probe          `lex` or `spec` -- the closed observation set below
+#   arg            a JSON object of probe arguments, or `-`
+#   input          the source text
+#   go             what the Go port produces TODAY
+#   ts             what the TypeScript port produces TODAY
+#   justification  why this is recorded rather than repaired
+#
+# A row here is an admission of parity debt, not a way to silence a
+# failure. Repair the divergence if you can; register it only if you
+# cannot, with a justification the next reader can act on. Every group
+# carries a CONTROL row -- an adjacent case where the ports AGREE -- so a
+# repair to the divergent row cannot be confused with unrelated breakage.
+#
+# WHY A PROBE COLUMN AND NOT jsonic's `input -> parse result`. This engine
+# ships no grammar, so there is nothing to parse an input against by
+# default, and its divergences are observed at several layers (token
+# columns, token spans, decoded values, grammar install). The probe names
+# which observation a row makes.
+#
+#   lex    Lex `input` under arg.opts. Select ONE token: arg.find (first
+#          token whose src equals it) or arg.at (0-based index); default
+#          index 0. Render the arg.show fields joined by `:`, from the
+#          closed set name|src|si|ri|ci|valhex. If the lex FAILS first,
+#          render ERROR:<code>:<col>:<src> instead.
+#
+#   spec   Install arg.spec -- a serialized GrammarSpec, either inline or
+#          the name of an `# @spec` definition below -- under arg.opts,
+#          then parse `input`. Without arg.show: OK:<value> or
+#          ERROR:<code>. With arg.show (fields from code|pos|col|row): a
+#          bare OK, or ERROR: plus those fields joined by `:`. A grammar
+#          that will not load at all renders INSTALL_ERROR.
+#
+# SELECT ONE TOKEN, do not render the stream. The two ports emit
+# different token SEQUENCES for the same source -- Go emits no #SP where
+# TypeScript does -- so "the third token" is not the same token in each,
+# and a whole-stream render would go red for a reason no row is about.
+# arg.find is sequence-proof; prefer it.
+#
+# TWO RENDERING TRAPS, both already paid for once in this repo (#156):
+#
+#   Never use a runtime's own quoting. Go's %q and JavaScript's
+#   JSON.stringify escape different characters, so a `src` rendered
+#   through either diverges for reasons that are not a divergence. `src`
+#   and string values render VERBATIM -- which means a row must not put a
+#   tab, newline or carriage return in a column it renders.
+#
+#   Never use a runtime's own key order. The `spec` probe renders map
+#   keys sorted by UTF-16 code unit in both ports (ADR-15 puts key order
+#   out of contract, and UTF-16 vs UTF-8 order is itself a live split:
+#   "10000" sorts before "e000" in one and after it in the other).
+#
+# ESCAPES: this repo decodes \n, \r, \r\n and \t in EVERY column, in both
+# loaders (test/AGENTS.md). So a control character inside a JSON `arg`
+# cell must be spelled \uXXXX -- a raw \n would be decoded to a real
+# newline before JSON.parse ever sees it, and invalid JSON is the best
+# case. A lone backslash is untouched, which is what lets a serialized
+# regex be written here at all.
+#
+# COVERAGE: go/divergent_test.go asserts that every `### ` heading in
+# DIVERGENCE.md is either an `# @divergence:` group below or an entry in
+# that file's `notRegistered` map with a reason. An entry cannot be
+# quietly dropped from the register, and an exemption cannot outlive the
+# heading it exempts.
+#
+# Named spec definitions, referenced by `{"spec":"<name>"}`:
+# @spec ws {"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^\\s+/"}}},"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}
+#   a serialized `\s` terminal
+# @spec ci {"options":{"rule":{"start":"top"},"match":{"token":{"#K":"@/^k/i"}}},"rule":{"top":{"open":[{"s":["#K"],"a":"@value$"}],"close":[{}]}}}
+#   a serialized case-insensitive terminal
+# @spec lookahead {"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^(?=x)x/"}}},"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}
+#   a serialized lookahead terminal
+# @spec backref {"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^(a)\\1/"}}},"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}
+#   a serialized backreference terminal
+#
+#
+# @divergence: Column positions for astral characters
+astral-col-ascii-control	lex	{"find":"y","show":["ci"]}	x y	3	3	Control row, not a divergence: throughout the BMP the two ports report the same column. Kept adjacent so a repair to the row below cannot be mistaken for unrelated breakage.
+astral-col-astral	lex	{"find":"y","show":["ci"]}	😀 y	3	4	Forced by the scan unit: TypeScript scans UTF-16 code units, so U+1F600 advances the column by TWO; Go scans runes and advances by one. Neither port can adopt the other's without changing what its lexer scans. The input is U+1F600, a space, and `y`.
+#
+# @divergence: Token offsets reach parsed values, not only diagnostics
+token-si-ascii-control	lex	{"find":"y","show":["si"]}	x y	2	2	Control row, not a divergence: for ASCII input the two ports agree on Token.SI.
+token-si-astral	lex	{"find":"y","show":["si"]}	😀 y	5	3	Go's Token.SI is a BYTE offset (4 bytes for U+1F600, plus the space); TypeScript's counts UTF-16 units (2, plus the space). Worse than the column split above because Token.SI is plugin API: a plugin that records it lands the scan unit in its OUTPUT, which is how @tabnas/c came to carry it in a CST span. Not repairable in a plugin.
+#
+# @divergence: Lone surrogates in quoted strings
+surrogate-pair-control	lex	{"show":["valhex"]}	"\ud83d\ude00"	d83d.de00	d83d.de00	Control row, not a divergence: a well-formed surrogate PAIR agrees in every spelling. Three of those spellings were broken in Go until 0.8.4, so this is worth an assertion of its own.
+lone-surrogate	lex	{"show":["valhex"]}	"\ud800"	fffd	d800	TypeScript preserves the unpaired code unit because JS strings are UTF-16 and permit it; Go folds it to U+FFFD, matching encoding/json. Each port does the right thing for its own string model. The cost is real -- Go conflates values TS keeps distinct, reported downstream as a lattice-law breach (aontu#24) -- so read DIVERGENCE.md before touching this.
+#
+# @divergence: An explicitly empty option cannot be expressed in Go
+empty-chars-control	lex	{"show":["name","src"]}	"ab"	#ST:"ab"	#ST:"ab"	Control row, not a divergence: with the default quote characters both ports lex a quoted string as #ST.
+empty-chars	lex	{"opts":{"string":{"chars":""}},"show":["name","src"]}	"ab"	#ST:"ab"	#TX:"ab"	String.Chars is a plain string in the Go options, so "" is its zero value and an explicitly empty value cannot be told from an unset one -- the default quotes stay in force and the input is still a string. TypeScript distinguishes '' from undefined and honours it, so the same text is ordinary text there. @tabnas/css shipped this in both ports. The repair is Chars *string, a breaking change across a published module, so it is a release-policy call rather than a parity fix -- see DIVERGENCE.md for the adoption count.
+#
+# @divergence: Regex dialect in serialized terminals
+regex-ws-ascii-control	spec	{"spec":"ws","show":["code"]}	 	OK	OK	Control row, not a divergence: the input is one U+0020, which JS \s and RE2 \s both match. A change here means something other than the dialect gap broke.
+regex-ws-nbsp	spec	{"spec":"ws","show":["code"]}	 	ERROR:unexpected	OK	The input is one U+00A0 NO-BREAK SPACE. JS \s is Unicode-aware; RE2's is the Perl class [\t\n\f\r ], so Go rejects it. Mechanically repairable by a compile-time rewrite, at the price of this engine owning a regex-dialect translation layer for every downstream grammar in both runtimes -- a maintainer decision, not a mechanical fix.
+regex-ws-ideographic	spec	{"spec":"ws","show":["code"]}	　	ERROR:unexpected	OK	The input is one U+3000 IDEOGRAPHIC SPACE. A second point of the same class gap, kept because a partial repair that widened RE2's class by a few code points would otherwise look like a full one.
+regex-ci-ascii-control	spec	{"spec":"ci","show":["code"]}	k	OK	OK	Control row, not a divergence: ASCII case folding agrees.
+regex-ci-kelvin	spec	{"spec":"ci","show":["code"]}	K	OK	ERROR:unexpected	The input is one U+212A KELVIN SIGN. The gap runs the OTHER WAY here: RE2 case-folds by Unicode rules and matches it, while JS /i without /u does not fold it to `k`. Not repairable the way \s is -- RE2 has no ASCII-only folding flag, so matching JS would mean rewriting the pattern into explicit alternations.
+regex-lookahead	spec	{"spec":"lookahead","show":["code"]}	x	INSTALL_ERROR	OK	A harsher kind of divergence: not a different result but a grammar that will not LOAD. RE2 implements no lookahead, by design, and go/utility.go refuses the pattern at compile time. That is the right failure mode, and it still means a spec written and tested against TypeScript can be unloadable in Go.
+regex-backreference	spec	{"spec":"backref","show":["code"]}	aa	INSTALL_ERROR	OK	The same install-time refusal for a backreference, which RE2 also omits by design. Kept separate from lookahead because the two are refused by different branches.

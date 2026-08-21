@@ -23,6 +23,21 @@ to either, the test is not "is this about the Go port?" but "can the two
 engines produce a different result for the same input?" If yes, it
 belongs here, whatever else is true about it.
 
+**This file is prose, and prose rots.** Every entry below that carries
+its own `###` heading is therefore also REGISTERED, per ADR-14, in
+[`test/spec/divergent.tsv`](test/spec/divergent.tsv): a row per case, a
+column per runtime, asserted by BOTH suites. A divergence that gets
+repaired fails that register as loudly as one that regresses, so the row
+— and the entry here — must then be deleted. Where an entry cannot be
+registered yet it is declared, with a reason, in the `notRegistered` map
+in `go/divergent_test.go`; today that is one entry, the fractional
+`rule.maxmul` below, which needs a full value grammar no probe builds
+yet. A gate in the same file fails if an entry here gains no row and no
+exemption, or if an exemption outlives the entry it exempts.
+
+When this file and the register disagree, **the register is what runs**.
+Fix this file to match it, never the other way round.
+
 ## Why this matters more here than elsewhere
 
 This engine is the root of a dependency graph. A divergence here reaches

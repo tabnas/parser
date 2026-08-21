@@ -179,7 +179,14 @@ What "correct" means here, in order of authority:
    - [`DIVERGENCE.md`](DIVERGENCE.md) is the **parity record**: the two ports
      produce a *different result for the same input*. The bar is high — a
      divergence is a bug until someone argues otherwise and is agreed with,
-     and the default response is to fix the engine.
+     and the default response is to fix the engine. Its entries are also
+     REGISTERED, per ADR-14, in `test/spec/divergent.tsv` — a column per
+     runtime, asserted by both suites, so a divergence that gets repaired
+     fails as loudly as one that regresses and the row must then be
+     deleted. Prose alone rots silently, and has here. A gate in
+     `go/divergent_test.go` requires every `### ` heading in
+     `DIVERGENCE.md` to be either a register group or a declared
+     `notRegistered` exemption, so the two cannot drift apart unnoticed.
    - `go/doc/differences.md` is the **porting guide**: packaging, API shape,
      Go-only helpers and the plugin surface. Differing there is expected and
      is not a parity claim.

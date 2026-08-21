@@ -46,6 +46,18 @@ allowed() {
   grep -qxF "$1" <(grep -v '^#' "$ALLOW" 2>/dev/null || true)
 }
 
+# A `not-shared: <name>` line declares that a filename exists on BOTH
+# sides and names two DIFFERENT fixtures, so comparing them is a category
+# error rather than drift. Deliberately a distinct syntax from a plain
+# allowlist line: a plain line only silences INFO for a parser-owned
+# file, and nothing in this gate may be read as "this shared fixture is
+# allowed to drift". That is the one thing the gate exists to catch — the
+# shared include-json.tsv drifted by five rows while this script was
+# silently broken, which is the whole reason it was repaired.
+not_shared() {
+  grep -qxF "not-shared: $1" <(grep -v '^#' "$ALLOW" 2>/dev/null || true)
+}
+
 # Map a parser-side fixture name to its jsonic-side name.
 map_name() {
   case "$1" in
@@ -57,6 +69,7 @@ map_name() {
 fail=0
 checked=0
 only_here=0
+not_shared_n=0
 
 for f in "$A"/*.tsv; do
   base="$(basename "$f")"
@@ -70,6 +83,11 @@ for f in "$A"/*.tsv; do
     fi
     continue
   fi
+  if not_shared "$base"; then
+    not_shared_n=$((not_shared_n + 1))
+    echo "DECLARED NOT SHARED (same name, different fixture): $base"
+    continue
+  fi
   if ! cmp -s "$f" "$B/$mapped"; then
     fail=1
     echo "FAIL (content drift): $base != jsonic:$mapped"
@@ -79,9 +97,23 @@ for f in "$A"/*.tsv; do
   fi
 done
 
+# A declaration that is no longer needed is a declaration that will one
+# day hide a real drift. Every `not-shared:` entry must still name a file
+# present on BOTH sides; the same honesty rule `nonParity` follows in
+# go/spec_registration_test.go.
+while read -r name; do
+  [ -n "$name" ] || continue
+  if [ ! -f "$A/$name" ] || [ ! -f "$B/$(map_name "$name")" ]; then
+    fail=1
+    echo "FAIL (stale declaration): not-shared: $name — that name is no" \
+         "longer present on both sides, so the declaration has outlived" \
+         "its purpose and must be removed"
+  fi
+done < <(grep -v '^#' "$ALLOW" 2>/dev/null | sed -n 's/^not-shared: *//p')
+
 # The reverse direction is deliberately NOT checked: jsonic owns the
 # relaxed-grammar corpus, and requiring this repo to carry a copy of it
 # is what produced two sets of the same files, one of them dead.
 
-echo "fixture-sync: $checked shared and identical, $only_here parser-owned, fail=$fail"
+echo "fixture-sync: $checked shared and identical, $only_here parser-owned, $not_shared_n declared not-shared, fail=$fail"
 exit $fail
