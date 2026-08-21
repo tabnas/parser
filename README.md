@@ -15,6 +15,8 @@ of its own — you bring the grammar as a plugin. tabnas grew out of the
 humans (unquoted keys, implicit objects, comments, trailing commas, path
 diving), which is now just one grammar built on this engine.
 
+Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
+
 ```
 a:1, b:2          →  {"a": 1, "b": 2}
 [x y z]           →  ["x", "y", "z"]
