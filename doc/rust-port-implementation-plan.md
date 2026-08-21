@@ -250,6 +250,17 @@ than defaulting to a port.
 | D4 | **#130: the serialized-options leaf set S**, folding #142 (`rewind.history <= 0`: TS retain-nothing vs Go unbounded — on the DoS bound itself), #143 (ill-typed leaves: TS crashes, Go drops silently), #144 (`history: null` → `Infinity`). One ruling naming S, an exhaustiveness test over `Options` in both runtimes failing on any leaf not in S and not handled, and `Option<usize>`/`None`-is-unbounded as the Rust shape. | `§2.2 risks`; issues #130/#142/#143/#144 | Rule now; 1–2 days to land; genuinely blocks M2a. |
 | D5 | **Resourcing.** A named second maintainer with Rust ownership, or a written support tier ("the crate may lag arbitrarily; it reports the engine version it implements"). | `§8.4 feasibility`; `§1.1 risks` item 2 | Must be answered in the D2 ADR — it is the only register item engineering cannot retire. |
 
+*Status, 2026-08-21.* D1 **decided** (A1; amendment on #120). D2
+**drafted** as ADR-17, proposed on admin#71 — merging that entry
+constitutes acceptance, per the ADR-12 convention; it also carries D5 as
+the written support tier, upgraded when a second maintainer is named.
+D3's five rule-now items are **filed with proposed rulings**: the
+overlay classes (#151), `Lex.next`/IGNORE (#152), the `RuleDone` payload
+(#153), the `e`/`h` order (#154), continuations (#155); items (4) and
+(8) stay deferred as the table says. D4's leaf-set ruling is **proposed
+on #130**, folding #142/#143/#144. Each proposal awaits the maintainer's
+confirmation on its own thread; nothing is implemented until confirmed.
+
 ### Phase 1 — Fix the measuring apparatus (≤1 day, before any perf-justified change)
 
 Verbatim from `§6.1 changes`, which is definitive: (1) `rm -rf` before
