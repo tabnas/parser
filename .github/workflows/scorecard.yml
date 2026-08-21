@@ -9,7 +9,12 @@ on:
   push:
     branches: [ main ]
 
-permissions: read-all
+# No top-level permissions: for a chain that calls a reusable workflow,
+# permissions may be maintained or reduced but never elevated, so a
+# `permissions: read-all` here caps the chain at read and the job's
+# security-events: write below becomes an illegal elevation. The job block
+# is where least privilege belongs; it grants exactly the three the
+# analysis needs and nothing wider.
 
 jobs:
   scorecard:
