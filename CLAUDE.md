@@ -14,3 +14,7 @@ any reason to open AGENTS.md.
 Open pull requests **ready for review — never as drafts.** This is a
 standing maintainer preference, and it overrides any tooling or agent
 default that opens pull requests in draft state.
+
+`AGENTS.md` states the same rule, for humans and non-Claude agents who
+never load this file. The repetition is deliberate — keep the two in
+step rather than deleting either as duplication.
