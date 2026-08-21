@@ -348,6 +348,63 @@ that set an empty value, only css's was live. `csv` sets `Lex: false`
 alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
 never a quote character to begin with.
 
+### Builtin config reaches a child rule in Go and not in TypeScript
+
+**Deferred, not deliberate** — a defect with a ruling already made
+(#120) and an implementation slot already scheduled (Phase 2a of
+[`doc/rust-port-implementation-plan.md`](doc/rust-port-implementation-plan.md)).
+It is recorded here because it was found to be undocumented in both
+files, unpinned by any fixture, and *contradicted* by a comment in the
+Go source.
+
+Where a builtin reads its configuration from differs. TypeScript's
+builtins take the matched alternate as a third argument and read
+`alt.k`, so config is scoped to the alternate that declares it. Go's
+`AltAction` has no such argument: the engine merges `alt.K` into `r.K`
+before running the action, so config lands in the RULE's keep bag — and
+`k` propagates to children on push.
+
+| grammar shape | TypeScript | Go |
+|---|---|---|
+| parent sets `k: {value$: {from: 1}}`, **runs** `@value$`, pushes a child running `@value$` bare | `3` | `3` |
+| parent sets the same `k`, does **not** run it, pushes the same child | `3` | **`4`** |
+
+Measured on a two-rule function-free serialized spec over the input
+`1 2 3 4`: `3` means the config did not reach the child, `4` means it
+did. Both rows are registered in
+[`test/spec/divergent.tsv`](test/spec/divergent.tsv) — the second as the
+divergence, the first as its control.
+
+The two rows agree for a reason that makes this worse rather than
+better. Go's five *value* builders (`@object$`, `@array$` in its
+`ListRef` branch, `@key$`, `@setval$`, `@value$`) `delete` their config
+key immediately after reading it, so running the builtin consumes the
+config and the child sees none. The three *tree* builders
+(`@node$`, `@capture$`, `@fold$`) do not delete, so their config
+descends unconditionally. So "rule-scoped" is not one regime but two,
+and `@array$` picks between them on the unrelated `ListRef` option —
+four regimes across the two ports for the same serialized grammar.
+
+**`go/builtins.go` asserted the opposite** — "Equivalent behaviour; the
+config keys … propagate to children, which is harmless for the bounded
+set the compiler emits". The second clause is a claim about
+`@tabnas/bnf`'s output, not about the contract, and the first is simply
+false. That comment now points here instead.
+
+Nothing in the fleet exercises the divergent shape: the #120 downstream
+scan found all four declaration sites pair a config with its action on
+the same alternate, and the shape `jsonic` and `json` rely on is
+run-then-push, which agrees. That is why this survived undetected, and
+it is also why the repair is cheap.
+
+**The repair is A1**: bind builtin config at grammar-load time, so it
+never enters `rule.k` at all and there is exactly one regime — the
+alternate's own declaration, which is what TypeScript does today and
+what `AGENTS.md` requires. Go's five deletes then become unnecessary
+rather than load-bearing, and the `@array$`/`ListRef` regime disappears
+with them. When it lands, the register row goes red and both it and this
+entry should be deleted.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

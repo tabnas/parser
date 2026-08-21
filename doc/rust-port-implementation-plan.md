@@ -364,10 +364,44 @@ marked re-verify.
    CI is unaffected — a fresh runner has an empty cache — so this bites
    exactly the person editing a fixture and re-running immediately.
    `test/AGENTS.md` now says `-count=1` at that step.
-1. Land the shared builtin-config fixture first, red on the divergent
-   shape: run-then-push and set-then-push rows
-   (`§3.A2 changes`; the ADR-14 register carries the divergent row until
-   the repair lands, then the row moves into the permanent fixture).
+1. **Done** — both shapes are now staged in the register, and the
+   divergence is **reproduced rather than predicted**. A two-rule
+   function-free serialized spec (`top` matches `#NR #NR`, carries
+   `k: {value$: {from: 1}}` and pushes `leaf`, which runs `@value$`
+   bare) over the input `1 2 3 4` answers exactly what `§3.A2 changes`
+   said it would:
+
+   | grammar shape | TypeScript | Go |
+   |---|---|---|
+   | parent sets `k`, **runs** the builtin, pushes | `3` | `3` |
+   | parent sets `k`, does **not** run it, pushes | `3` | **`4`** |
+
+   The second row is the divergence, the first its control — and the
+   control agrees for a reason that makes the split worse rather than
+   better, so the row carries that in its justification: Go's five value
+   builders delete their config key right after reading it, so *running*
+   the builtin consumes the config. Remove the delete and the control
+   row moves too.
+
+   Three things this turned up. The divergence had **no
+   `DIVERGENCE.md` entry** (`§3.A2 changes` said so; confirmed against
+   the file), so one is written — as a defect with a ruling and a slot,
+   not a deliberate split, since the coverage gate from step 0 requires
+   every register group to name a real entry. `go/builtins.go:19-25`
+   **asserted the opposite** — "Equivalent behaviour" — and now points
+   at the entry instead; the plan had that rewrite in step 3, but
+   leaving a knowingly false parity claim in the source while writing a
+   divergence entry about it was not defensible, and it is comment-only.
+   And the value renders identically through the register's canonical
+   form despite Go producing a `float64` and TypeScript a `number`,
+   which is what that renderer is for.
+
+   Verified live in both directions: with the row edited to say Go
+   answers `3` (what A1 will make true) the Go runner goes red and tells
+   the reader to delete the row and the entry; with it edited to say TS
+   answers `4` the TypeScript runner goes red. So when A1 lands in step
+   3 the register forces its own cleanup rather than needing to be
+   remembered.
 2. A1 in TypeScript: hoist at `normalt` keyed on the **closed builtin
    name set** (never a `$`-suffix test — the probed
    `k: {myTotal$: 1}` trap), probe family excluded; builders become

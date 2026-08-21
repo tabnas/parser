@@ -20,9 +20,22 @@ package tabnas
 // tree builtins read per-alt config from `alt.k` (avoiding `r.k`
 // pollution). Go's AltAction is `func(*Rule, *Context)`, and the engine
 // merges `alt.K` into `r.K` *before* running the action (rule.go), so
-// the Go builtins read their config from `r.K`. Equivalent behaviour;
-// the config keys (node$/capture$) ride in `r.K` and propagate to
-// children, which is harmless for the bounded set the compiler emits.
+// the Go builtins read their config from `r.K`.
+//
+// This is NOT equivalent behaviour, and this comment said it was. Config
+// in `r.K` propagates to children on push, so a parent that DECLARES a
+// builtin config without running the builtin passes it to a child that
+// runs one bare: the same function-free serialized grammar answers 4
+// here and 3 in TypeScript. The old wording's escape clause — "harmless
+// for the bounded set the compiler emits" — is a claim about
+// @tabnas/bnf's output, not about the contract this package offers every
+// other grammar.
+//
+// See DIVERGENCE.md, "Builtin config reaches a child rule in Go and not
+// in TypeScript", where it is registered with both shapes in
+// test/spec/divergent.tsv. The repair is #120's A1 — bind config at
+// grammar load, so it never enters `r.K` — after which the
+// delete-after-read below becomes unnecessary rather than load-bearing.
 
 import "reflect"
 

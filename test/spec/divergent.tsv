@@ -86,6 +86,10 @@ name	probe	arg	input	go	ts	justification
 #   a serialized lookahead terminal
 # @spec backref {"options":{"rule":{"start":"top"},"match":{"token":{"#WS":"@/^(a)\\1/"}}},"rule":{"top":{"open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]}}}
 #   a serialized backreference terminal
+# @spec a2-run-then-push {"options":{"rule":{"start":"top"}},"rule":{"top":{"open":[{"s":["#NR","#NR"],"k":{"value$":{"from":1}},"p":"leaf","a":"@value$"}],"close":[{"a":"@value$"}]},"leaf":{"open":[{"s":["#NR","#NR"],"a":"@value$"}],"close":[{}]}}}
+#   parent sets builtin config, RUNS the builtin, then pushes
+# @spec a2-set-then-push {"options":{"rule":{"start":"top"}},"rule":{"top":{"open":[{"s":["#NR","#NR"],"k":{"value$":{"from":1}},"p":"leaf"}],"close":[{"a":"@value$"}]},"leaf":{"open":[{"s":["#NR","#NR"],"a":"@value$"}],"close":[{}]}}}
+#   parent sets builtin config and pushes WITHOUT running the builtin
 #
 #
 # @divergence: Column positions for astral characters
@@ -112,3 +116,7 @@ regex-ci-ascii-control	spec	{"spec":"ci","show":["code"]}	k	OK	OK	Control row, n
 regex-ci-kelvin	spec	{"spec":"ci","show":["code"]}	K	OK	ERROR:unexpected	The input is one U+212A KELVIN SIGN. The gap runs the OTHER WAY here: RE2 case-folds by Unicode rules and matches it, while JS /i without /u does not fold it to `k`. Not repairable the way \s is -- RE2 has no ASCII-only folding flag, so matching JS would mean rewriting the pattern into explicit alternations.
 regex-lookahead	spec	{"spec":"lookahead","show":["code"]}	x	INSTALL_ERROR	OK	A harsher kind of divergence: not a different result but a grammar that will not LOAD. RE2 implements no lookahead, by design, and go/utility.go refuses the pattern at compile time. That is the right failure mode, and it still means a spec written and tested against TypeScript can be unloadable in Go.
 regex-backreference	spec	{"spec":"backref","show":["code"]}	aa	INSTALL_ERROR	OK	The same install-time refusal for a backreference, which RE2 also omits by design. Kept separate from lookahead because the two are refused by different branches.
+#
+# @divergence: Builtin config reaches a child rule in Go and not in TypeScript
+a2-config-run-then-push	spec	{"spec":"a2-run-then-push"}	1 2 3 4	OK:3	OK:3	Control row, not a divergence: when the parent RUNS the builtin before pushing, the two ports agree. They agree for a reason that makes the split below worse rather than better -- Go's five value builders delete their config key right after reading it, so running the builtin consumes the config and the child sees none. Remove that delete and this row moves too. It is also the only shape the fleet uses, which is why the divergence survived.
+a2-config-set-then-push	spec	{"spec":"a2-set-then-push"}	1 2 3 4	OK:4	OK:3	TypeScript builtins take the matched alternate and read alt.k, so config is scoped to the alternate that declares it. Go's AltAction has no alternate argument: the engine merges alt.K into r.K before the action, so config lands in the RULE keep bag, and k propagates to children on push -- the child's bare @value$ picks token 1 (4) instead of token 0 (3). A defect with a ruling (#120) and a slot (plan Phase 2a), not a deliberate split: the repair is A1, binding config at grammar-load so it never enters rule.k. When A1 lands Go answers 3 and this row must be deleted along with its DIVERGENCE.md entry.
