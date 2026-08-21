@@ -257,6 +257,23 @@ describe('recover', () => {
     assert.equal(JSON.stringify(out.value), '[1]')
   })
 
+  it('a replaced start rule still yields the active container', () => {
+    // The canonical half of go TestRecoverGiveUpWithReplacedStartRule.
+    // A review round argued TS returns the ORIGINAL root's stale node
+    // ('old') here while Go returns the active container. Measured:
+    // both return [1]. Pinned so the claim does not have to be
+    // re-measured, and so neither port can drift onto the other answer.
+    const tn = mk({ maxSkip: 0 })
+    tn.grammar({
+      ref: { '@top-bo': (r) => { r.node = 'old' } },
+      rule: { top: { open: [{ s: '', r: 'val' }] } },
+    })
+
+    const out = tn.parse('[1 : abc def]')
+    assert.ok(0 < out.errors.length)
+    assert.equal(JSON.stringify(out.value), '[1]')
+  })
+
   it('reports trailing content after a complete value', () => {
     // The completeness checks run AFTER the rule loop: a document
     // whose value parses cleanly but is followed by junk must still

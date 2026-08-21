@@ -333,9 +333,40 @@ that set an empty value, only css's was live. `csv` sets `Lex: false`
 alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
 never a quote character to begin with.
 
+## Reported and unresolved
+
+- **Actions that run after an alternate's error function.** Reported
+  against the recovery give-up fallback (2026-08): Go records `ParseErr`
+  from an alternate's `E` and then still runs that alternate's `A`,
+  where TS calls `bad()` immediately and never executes the action. If
+  so, a node mutated after the error becomes visible once the give-up
+  fallback returns a partial value — the report's example is a root that
+  ends up `"after-error"` in Go and absent in TS.
+
+  Not reproduced here: the probe used to trigger it parsed normally
+  instead, so the shape needed is narrower than the description and the
+  divergence is unconfirmed. Recorded rather than fixed because the
+  remedy is in the ALTERNATE machinery — stop processing an alternate
+  once `E` has raised, or snapshot the node at that point — which
+  changes behaviour for every grammar with an `E`+`A` pair, far outside
+  the fallback that surfaced it. Needs a targeted fixture in both
+  runtimes before anything moves.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
+
+- **A replaced start rule during recovery give-up.** Reported as TS
+  returning the original root's stale node while Go returns the active
+  container. Measured in both runtimes on the reported input
+  (`[1 : abc def]`, `maxSkip: 0`, a `top` rule stamped `"old"` and
+  replaced by `val`): both return `[1]`. Preferring the root over the
+  rule stack was tried in Go and is a no-op on that input, because the
+  replaced rule's node is no longer the pre-replacement value by the
+  time the fallback runs. TS's `ctx.root()` and Go's replacement-chain
+  walk are one idea in two rule representations. Pinned by
+  `TestRecoverGiveUpWithReplacedStartRule` and the TS case "a replaced
+  start rule still yields the active container".
 
 - **Invalid UTF-8 input bytes.** Go passes them through byte-for-byte and
   never panics; the question does not arise in TS, whose strings are

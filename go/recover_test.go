@@ -581,3 +581,45 @@ func TestRecoverGiveUpTreatsNilRootAsMissing(t *testing.T) {
 		t.Errorf("value = %s, want [1] (nil root treated as a real value)", enc(v))
 	}
 }
+
+func TestRecoverGiveUpWithReplacedStartRule(t *testing.T) {
+	// A review round argued that a replaced start rule diverges here:
+	// that TS returns the ORIGINAL root's stale node while Go returns
+	// the active container. It does not. Both ports return the active
+	// container, and this pins that agreement so the claim does not
+	// have to be re-measured.
+	//
+	// The mechanism: by the time the give-up fallback runs, the
+	// replaced rule's node is no longer the pre-replacement value, so
+	// preferring root over the rule stack changes nothing — it was
+	// verified to be a no-op on this very input. TS's ctx.root() and
+	// Go's replacement-chain walk are the same idea expressed against
+	// two different rule representations, not a divergence.
+	//
+	// Mirrors the TS case "a replaced start rule still yields the
+	// active container".
+	j := makeJSON(Options{Parse: &ParseOptions{
+		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
+	}})
+	if err := j.Grammar(&GrammarSpec{
+		Ref: map[FuncRef]any{
+			"@top-bo": StateAction(func(r *Rule, ctx *Context) { r.Node = "old" }),
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {Open: []*GrammarAltSpec{{S: "", R: "val"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`[1 : abc def]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 0 == len(errs) {
+		t.Fatal("expected a recorded error")
+	}
+	if `[1]` != enc(v) {
+		t.Errorf("value = %s, want [1] (TS returns [1] for this input)", enc(v))
+	}
+}
