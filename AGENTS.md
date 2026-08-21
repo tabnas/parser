@@ -23,9 +23,14 @@ lexer. Grammar is contributed by plugins.
 
 ## Authority and alignment rules
 
-1. **TypeScript is canonical.** When TS and Go disagree on engine
-   behavior, TS wins; change Go (and add/extend a shared fixture when
-   the behavior is expressible as input → output).
+1. **TypeScript is canonical — it defines the language.** When TS and
+   Go disagree on engine behavior, the *default* is that TS wins and Go
+   changes (add/extend a shared fixture when the behavior is expressible
+   as input → output). Per ADR-13 (admin `DECISIONS.md`, 2026-08-19) the
+   repair direction is decided per defect, not per port: whichever port
+   violates the language TypeScript defines is the one that changes, and
+   where the TypeScript implementation is itself defective, TypeScript
+   moves. Every recorded divergence states its repair direction.
 2. **Go-only features are intentional** and must be kept and tested:
    `Info.Map` (`MapRef`), `Info.List` (`ListRef`), `Info.Text`
    (`Text`), and the introspection API. They exist for typed Go client

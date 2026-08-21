@@ -96,9 +96,11 @@ unadjudicated; #130/#142/#143/#144 open; `nonParity` still
 `map[string]string` and the registry still carries a binary `goOnly`
 key; the registry version still coupled to the engine version; no
 propagation fixture and no options-pipeline fixture; #113, #116, #117,
-#119, #121 open; `AGENTS.md` still documents a deleted
-`.github/workflows/build.yml` and lists only two of the four (now five)
-Rust documents in its `doc/` index.
+#119, #121 open; and `AGENTS.md` still documents a deleted
+`.github/workflows/build.yml`. (Two `AGENTS.md` items are brought
+current by this change itself, so they are done rather than
+outstanding: the `doc/` index now names the full series, and authority
+rule 1 carries the ADR-13 amendment.)
 
 ### 1.4 The three conflicts, resolved
 
@@ -158,13 +160,19 @@ Go, not TypeScript** (`§2.1 risks`): Go's rune-`size` advance and
 copy" claim is kept for the table shapes only. And the **regex lowering**
 question (§4.3) is now bounded by the #118 adjudication: the recorded
 contract is that `\s`/`.`/`(?i)` are dialect-divergent, deliberately,
-with the portable spelling being explicit classes — so the Rust port
-lowers serialized terminals natively (its `regex` crate sides with TS on
-`\s`, with both on explicit classes), refuses unknown flags exactly as
-Go does, and adds a Rust column note to the existing `DIVERGENCE.md`
-entry rather than forcing a three-way re-adjudication. ASCII-only
-patterns — everything the fleet's fixtures actually use — agree in all
-three engines.
+with the portable spelling being explicit classes. One correction to the
+series while re-verifying: Rust's native `\s` (`\p{White_Space}`) is a
+genuine **third set**, not TS's side — the feasibility report's own §4.3
+table already shows it rejecting U+FEFF where JS accepts it, and the
+Unicode `White_Space` property admits U+0085 where JS's class does not.
+So the port either lowers `\s` (and the other dialect-divergent
+constructs the entry records) to the JS class at grammar load — the
+~15-line lowering §4.3 describes, now mandatory rather than optional —
+or refuses it in serialized terminals; explicit classes compile
+identically in all three engines and stay the recommended portable form.
+The port refuses unknown flags exactly as Go does, and the
+`DIVERGENCE.md` entry gains a Rust column recording the third set rather
+than forcing a three-way re-adjudication.
 
 ### 1.5 Review findings the series does not carry
 
@@ -264,10 +272,16 @@ confirmation on its own thread; nothing is implemented until confirmed.
 
 ### Phase 1 — Fix the measuring apparatus (≤1 day, before any perf-justified change)
 
-Verbatim from `§6.1 changes`, which is definitive: (1) `rm -rf` before
-`ln -s` in `ci/gate/run-gate.sh:29-31`, verify by `md5sum`, wire from
-`ci/bench/run-bench.sh`, drop the `npm i` from the proposed bench
-workflow; (2) add a non-ASCII fixture to `ci/bench/genfixture.js` and
+From `§6.1 changes`, with one correction to it: (1) `rm -rf` before
+`ln -s` in `ci/gate/run-gate.sh:29-31`, verify by `md5sum`, and wire the
+same working-tree linking from `ci/bench/run-bench.sh`. The proposed
+bench workflow **keeps its `npm i`** — a clean Actions checkout has no
+`node_modules` and no built `dist`, so dropping the install (as §6.1
+suggests) yields a workflow that fails before measuring anything — and
+then overwrites the installed `@tabnas/parser` with the built
+working-tree engine via that fixed linking, `md5sum`-verified;
+installing and then silently measuring the *published* engine was the
+defect, not installing. (2) Add a non-ASCII fixture to `ci/bench/genfixture.js` and
 delete the two orphan scratch fixtures; (3) adopt the paired ABBA rig
 with the **sign-flip protocol** and an adjacent same-fixture null as the
 only decision-grade measurement; (4) re-run the decision set on
@@ -282,6 +296,14 @@ parentheses; fleet blast radius is as measured in the series unless
 marked re-verify.
 
 **2a — The config route (after D1).**
+0. Create this repo's ADR-14 executable register first — it does not
+   exist here yet: the parser tree has no `divergent.tsv`, and its
+   divergences live as prose plus separate per-runtime tests. The
+   precedent is `jsonic`'s `test/spec/divergent.tsv` — a column per
+   runtime, run by **both** suites (which the `nonParity` honesty gate
+   requires of any new fixture anyway), where a row failing means the
+   divergence it records was repaired or drifted. 2a and 2i stage their
+   red rows there; without this step they have nowhere to stage.
 1. Land the shared builtin-config fixture first, red on the divergent
    shape: run-then-push and set-then-push rows
    (`§3.A2 changes`; the ADR-14 register carries the divergent row until
@@ -364,8 +386,12 @@ registry file); decouple the registry's embedded version from the engine
 version (the largest single item; sequence last and alone,
 `§5.1 strategy` item 4); extract the one TSV loader spec and fix the Go
 runners to match (`§5.1 feasibility`); add `assert ran == N` row-count
-checks to every runner in both runtimes (the 265-row census in
-`§4.1 risks` is the table to pin).
+checks to every runner in both runtimes — with N taken from a **fresh
+census at implementation time**, never from `§4.1 risks`' 265-row
+table, which is already stale: the corpus stands at 297 data rows today
+(diagnostic grew to 13, the UTF-8 error set to 11, and the two
+`lex-text-*` fixtures added 23), and the assert values move with every
+fixture change by design.
 
 **2h — Docs and registers.** The four stale porting-guide claims
 (`§2.4 risks`: `Forced`, budget-under-recovery, tokdump's Sub rationale,
@@ -379,8 +405,11 @@ sentence); the match-token gating DIVERGENCE entry + two-row fixture;
 `Lex.next`/IGNORE per D3.3; declare the ten `_*` per-parse properties as
 real fields on `Context`/`Rule` (`§2.4 risks` — half a day, converts the
 Go-source archaeology into a struct read); a citation-refresh pass over
-the five Rust documents (§1.5 F5 here); and the `AGENTS.md` doc-index
-update naming the full series.
+the five Rust documents (§1.5 F5 here); align `DIVERGENCE.md`'s preamble
+with ADR-13 (its opening still states the pre-ADR-13 law form that the
+ADR amends); and scope `schema/diagnostic.schema.json`'s `version`
+parenthetical ("equals the package version of the runtime") to the
+lockstep runtimes — see Phase 6's versioning note.
 
 **2i — Options rulings landed (after D3/D4).** The B/C/D merge-class
 fixtures driven through the **options pipeline** (never bare
@@ -504,9 +533,23 @@ the two stale harness paths fixed first (`§3.5 risks`). Registry and
 honesty-gate entries flow from Phase 2g's generalisation. Release: the
 crate lane per D2 (independent version, engine-version report,
 `repo-tests` feature or `OUT_DIR` copy so the packaged crate's tests
-survive unpacking — decided before the first `cargo package`). The
-bench arm ships **only after** its ADR (`§5.5 feasibility`'s
-canonicality-inversion hazard).
+survive unpacking — decided before the first `cargo package`). One
+distinction D2's independence needs stated, because
+`schema/diagnostic.schema.json` defines the diagnostic `version` as "the
+engine version (equals the package version of the runtime that produced
+the diagnostic)" — an equality that holds only while every runtime
+versions in lockstep: the Rust engine emits the **engine-contract
+version it implements** in diagnostics (keeping cross-runtime
+diagnostics comparable and the registry gate meaningful), its package
+version stays independent, and the schema's parenthetical is scoped to
+the lockstep runtimes in the 2h doc pass. The crate's engine-contract
+constant is a compatibility declaration that lags deliberately — the
+crate's registry/version tests compare *it* against
+`schema/error-codes.json`, not the package version — and it is not a
+fifth member of the synchronized version set, which is exactly the
+difference between declaring compatibility and joining the bump
+machinery. The bench arm ships **only after** its ADR
+(`§5.5 feasibility`'s canonicality-inversion hazard).
 
 ### Out of scope, restated
 
