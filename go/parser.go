@@ -750,6 +750,30 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	if IsUndefined(resRule.Node) {
+		// In recovery mode, an undefined result means the root rule never
+		// CLOSED — recovery gave up inside a structure — not that the
+		// document was empty. TS returns the most complete partial
+		// container it can find in exactly this case
+		// (ts/src/parser.ts, the recovering branch of the catch: root node,
+		// else the outermost active rule's node, else ctx.rule's), and a
+		// language server shows that partial value for a broken document.
+		// Go returned nil, so the same input yielded [1] in TS and null
+		// here — a value divergence, which DIVERGENCE.md treats as an
+		// engine bug with TS canonical.
+		//
+		// Gated on soft: with recovery off, `nil, nil` stays the answer
+		// for a legitimately empty parse, which is long-standing
+		// fail-fast behaviour and is what the spec fixtures pin.
+		if soft {
+			for d := 0; d < ctx.RSI && d < len(ctx.RS); d++ {
+				if r := ctx.RS[d]; r != nil && r != NoRule && !IsUndefined(r.Node) {
+					return r.Node, nil
+				}
+			}
+			if ctx.Rule != nil && ctx.Rule != NoRule && !IsUndefined(ctx.Rule.Node) {
+				return ctx.Rule.Node, nil
+			}
+		}
 		return nil, nil
 	}
 

@@ -214,6 +214,24 @@ describe('recover', () => {
     assert.deepStrictEqual(out.errors.map((e) => e.code), ['unterminated_string'])
   })
 
+  it('give-up still returns the partial value when the root never closed', () => {
+    // Pins the canonical behaviour the Go port diverged from: giving up
+    // inside a structure leaves the root rule open, and the most
+    // complete partial container is still returned — which is what a
+    // language server shows for a broken document. Mirrors go
+    // TestRecoverGiveUpKeepsPartialValue.
+    const tn = mk({ maxSkip: 0 })
+    for (const [src, want] of [
+      ['[1 : abc def ghi]', '[1]'],
+      ['{"a":1,"b":2 : xxx}', '{"a":1,"b":2}'],
+      ['{"a":1} : zzz', '{"a":1}'],
+    ]) {
+      const out = tn.parse(src)
+      assert.ok(0 < out.errors.length, src)
+      assert.equal(JSON.stringify(out.value), want, src)
+    }
+  })
+
   it('reports trailing content after a complete value', () => {
     // The completeness checks run AFTER the rule loop: a document
     // whose value parses cleanly but is followed by junk must still

@@ -501,3 +501,39 @@ func TestRecoverTrailingBadTokenKeepsCode(t *testing.T) {
 		t.Fatalf("no-lookahead route: want one unterminated_string, got %s", enc(errs))
 	}
 }
+
+func TestRecoverGiveUpKeepsPartialValue(t *testing.T) {
+	// When recovery gives up INSIDE a structure the root rule never
+	// closes, so the result node is undefined. That does not mean the
+	// document was empty: TS returns the most complete partial
+	// container it can find, and a language server shows exactly that
+	// for a broken document. Go returned nil, so the same input gave
+	// [1] in TS and null here — a value divergence, TS canonical.
+	// Mirrors the TS case "give-up still returns the partial value
+	// when the root never closed".
+	for _, c := range []struct {
+		src  string
+		want string
+	}{
+		{`[1 : abc def ghi]`, `[1]`},
+		{`{"a":1,"b":2 : xxx}`, `{"a":1,"b":2}`},
+		{`{"a":1} : zzz`, `{"a":1}`}, // root DID close; agreed already
+	} {
+		j := mkRec(t, func(r *RecoverOptions) { r.MaxSkip = intp(0) })
+		v, errs, err := j.ParseRecover(c.src)
+		if err != nil {
+			t.Fatalf("%s: unexpected terminal error: %v", c.src, err)
+		}
+		if 0 == len(errs) {
+			t.Fatalf("%s: expected a recorded error", c.src)
+		}
+		if c.want != enc(v) {
+			t.Errorf("%s: value = %s, want %s", c.src, enc(v), c.want)
+		}
+	}
+
+	// Recovery OFF must be untouched: an empty source is still nil.
+	if v, err := makeJSON().Parse(""); err == nil || v != nil {
+		t.Fatalf("fail-fast empty source changed: value=%v err=%v", v, err)
+	}
+}
