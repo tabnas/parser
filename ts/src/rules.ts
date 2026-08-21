@@ -2012,7 +2012,10 @@ function unknownRuleRef(ref: any, defined: Set<string>): string | undefined {
  * being flagged. Omit it to check a spec as a self-contained document.
  *
  * Problems are labelled as `validateAlts` labels them (`val.open alt[0]: …`)
- * and sorted, so the two runtimes report the same list in the same order. */
+ * and sorted, so the two runtimes report the same list in the same order.
+ * The order is JavaScript's — by UTF-16 code unit — which the Go port
+ * reproduces deliberately; byte-wise ordering disagrees as soon as a rule
+ * name outside the BMP meets one above U+E000. */
 export function validateGrammar(
   spec: any,
   known?: string[] | Set<string>
@@ -2024,10 +2027,15 @@ export function validateGrammar(
     return out
   }
 
-  const defined: Set<string> = new Set(known || [])
+  // `clear` wipes every rule on the instance before the spec is applied, so
+  // nothing the caller knew about survives to be referenced.
+  const defined: Set<string> = new Set(spec.clear ? [] : (known || []))
   for (const rulename of Object.keys(spec.rule)) {
-    // A null entry REMOVES that rule, so it defines nothing.
-    if (null != spec.rule[rulename]) {
+    if (null == spec.rule[rulename]) {
+      // A null entry REMOVES that rule — including one the instance had.
+      defined.delete(rulename)
+    }
+    else {
       defined.add(rulename)
     }
   }

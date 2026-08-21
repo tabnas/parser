@@ -128,6 +128,57 @@ func TestValidateGrammarMalformedInputYieldsNoProblems(t *testing.T) {
 	}, nil), nil)
 }
 
+func TestValidateGrammarNilEntryRemovesAKnownRule(t *testing.T) {
+	// The spec deletes "gone", so pushing to it dangles even though the
+	// caller listed it as known.
+	gs := &GrammarSpec{Rule: map[string]*GrammarRuleSpec{
+		"gone": nil,
+		"a":    {Open: []*GrammarAltSpec{{P: "gone"}}},
+	}}
+	eqProblems(t, ValidateGrammar(gs, []string{"gone"}), []string{
+		`a.open alt[0]: unknown rule in p: "gone"`,
+	})
+}
+
+func TestValidateGrammarClearWipesKnownRules(t *testing.T) {
+	rules := map[string]*GrammarRuleSpec{
+		"a": {Open: []*GrammarAltSpec{{P: "base"}}},
+	}
+	eqProblems(t, ValidateGrammar(&GrammarSpec{Clear: true, Rule: rules},
+		[]string{"base"}), []string{
+		`a.open alt[0]: unknown rule in p: "base"`,
+	})
+	// Without Clear, the same known rule is legitimately referenced.
+	eqProblems(t, ValidateGrammar(&GrammarSpec{Rule: rules},
+		[]string{"base"}), nil)
+}
+
+func TestValidateGrammarQuotesRuleNameVerbatim(t *testing.T) {
+	// %q would render this `\"`; TypeScript is canonical and inserts the
+	// name as-is. ts/test/validate-grammar.test.js asserts the same string.
+	gs := &GrammarSpec{Rule: map[string]*GrammarRuleSpec{
+		"a": {Open: []*GrammarAltSpec{{P: `bad"name`}}},
+	}}
+	eqProblems(t, ValidateGrammar(gs, nil), []string{
+		`a.open alt[0]: unknown rule in p: "bad"name"`,
+	})
+}
+
+func TestValidateGrammarSortsByUTF16CodeUnit(t *testing.T) {
+	// The ordering contract. U+10000 is a surrogate pair whose lead unit is
+	// 0xD800, so UTF-16 puts it BEFORE U+E000 — while sort.Strings, ordering
+	// by UTF-8 bytes, would put it after. TypeScript's order is canonical.
+	const astral, priv = "\U00010000", "\uE000"
+	gs := &GrammarSpec{Rule: map[string]*GrammarRuleSpec{
+		priv:   {Open: []*GrammarAltSpec{{P: "nope"}}},
+		astral: {Open: []*GrammarAltSpec{{P: "nope"}}},
+	}}
+	eqProblems(t, ValidateGrammar(gs, nil), []string{
+		astral + `.open alt[0]: unknown rule in p: "nope"`,
+		priv + `.open alt[0]: unknown rule in p: "nope"`,
+	})
+}
+
 func TestValidateGrammarReportsRuleReferencesOnly(t *testing.T) {
 	// The two runtimes word their group-tag message differently; keeping
 	// this surface to rule references is what makes it identical in both.

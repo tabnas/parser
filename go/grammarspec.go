@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf16"
 )
 
 // GrammarSpecFromJSON builds a GrammarSpec from a serialized spec —
@@ -202,6 +203,22 @@ func unknownRuleRef(ref string, defined map[string]bool) string {
 	return ref
 }
 
+// utf16Less reports whether a sorts before b as sequences of UTF-16 code
+// units — JavaScript's default string ordering, and therefore the canonical
+// one. Go's byte-wise ordering disagrees whenever a non-BMP name (encoded as
+// a surrogate pair, lead unit 0xD800-0xDBFF) is compared against a BMP name
+// at or above U+E000: bytes put the BMP name first, UTF-16 units the astral.
+func utf16Less(a, b string) bool {
+	au := utf16.Encode([]rune(a))
+	bu := utf16.Encode([]rune(b))
+	for i := 0; i < len(au) && i < len(bu); i++ {
+		if au[i] != bu[i] {
+			return au[i] < bu[i]
+		}
+	}
+	return len(au) < len(bu)
+}
+
 // ValidateGrammar reports every dangling rule reference in a grammar spec:
 // an alternate whose P or R names a rule nothing defines. This is the one
 // check that needs the whole rule map in scope, which is why ValidateAlt
@@ -221,6 +238,8 @@ func unknownRuleRef(ref string, defined map[string]bool) string {
 //
 // Problems are labelled as ValidateAlts labels them ("val.open alt[0]: …")
 // and sorted, so the two runtimes report the same list in the same order.
+// The order is JavaScript's — by UTF-16 code unit — reproduced here
+// deliberately; see utf16Less.
 func ValidateGrammar(gs *GrammarSpec, known []string) []string {
 	var out []string
 
@@ -229,12 +248,18 @@ func ValidateGrammar(gs *GrammarSpec, known []string) []string {
 	}
 
 	defined := map[string]bool{}
-	for _, name := range known {
-		defined[name] = true
+	// Clear wipes every rule on the instance before the spec is applied, so
+	// nothing the caller knew about survives to be referenced.
+	if !gs.Clear {
+		for _, name := range known {
+			defined[name] = true
+		}
 	}
 	for name, rulespec := range gs.Rule {
-		// A nil entry REMOVES that rule, so it defines nothing.
-		if rulespec != nil {
+		if rulespec == nil {
+			// A nil entry REMOVES that rule — including one the instance had.
+			delete(defined, name)
+		} else {
 			defined[name] = true
 		}
 	}
@@ -258,8 +283,11 @@ func ValidateGrammar(gs *GrammarSpec, known []string) []string {
 					{"p", alt.P}, {"r", alt.R},
 				} {
 					if bad := unknownRuleRef(slot.ref, defined); bad != "" {
+						// %q would escape quotes, backslashes and control
+						// characters; TypeScript inserts the name verbatim, and
+						// it is canonical.
 						out = append(out, fmt.Sprintf(
-							"%s alt[%d]: unknown rule in %s: %q",
+							"%s alt[%d]: unknown rule in %s: \"%s\"",
 							label, index, slot.name, bad))
 					}
 				}
@@ -267,7 +295,10 @@ func ValidateGrammar(gs *GrammarSpec, known []string) []string {
 		}
 	}
 
-	sort.Strings(out) // map iteration is random; keep reports stable
+	// Map iteration is random, so this both stabilises the report and pins
+	// its order to TypeScript's. sort.Strings would order by UTF-8 bytes and
+	// disagree with JavaScript's UTF-16 ordering for non-BMP rule names.
+	sort.SliceStable(out, func(i, j int) bool { return utf16Less(out[i], out[j]) })
 	return out
 }
 

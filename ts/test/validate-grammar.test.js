@@ -109,6 +109,50 @@ describe('validate-grammar', () => {
     }
   })
 
+  it('a null entry REMOVES a rule the instance already had', () => {
+    // The spec deletes `gone`, so pushing to it dangles even though the
+    // caller listed it as known.
+    const spec = { rule: { gone: null, a: { open: [{ p: 'gone' }] } } }
+    assert.deepEqual(validateGrammar(spec, ['gone']), [
+      'a.open alt[0]: unknown rule in p: "gone"',
+    ])
+  })
+
+  it('clear wipes every known rule before the spec is applied', () => {
+    const spec = { clear: true, rule: { a: { open: [{ p: 'base' }] } } }
+    assert.deepEqual(validateGrammar(spec, ['base']), [
+      'a.open alt[0]: unknown rule in p: "base"',
+    ])
+    // Without clear, the same known rule is legitimately referenced.
+    assert.deepEqual(validateGrammar({ rule: spec.rule }, ['base']), [])
+  })
+
+  it('a rule name is quoted verbatim, not escaped', () => {
+    // Go's %q would render this `\"`; TypeScript is canonical and inserts
+    // the name as-is. go/validate_grammar_test.go asserts the same string.
+    const spec = { rule: { a: { open: [{ p: 'bad"name' }] } } }
+    assert.deepEqual(validateGrammar(spec), [
+      'a.open alt[0]: unknown rule in p: "bad"name"',
+    ])
+  })
+
+  it('sorts by UTF-16 code unit, so a non-BMP rule name sorts first', () => {
+    // The ordering contract. U+10000 is a surrogate pair whose lead unit is
+    // 0xD800, so UTF-16 puts it BEFORE U+E000 — while UTF-8 bytes put it
+    // after. Go reproduces this ordering deliberately (utf16Less).
+    const astral = '\u{10000}', priv = '\u{E000}'
+    const spec = {
+      rule: {
+        [priv]: { open: [{ p: 'nope' }] },
+        [astral]: { open: [{ p: 'nope' }] },
+      },
+    }
+    assert.deepEqual(validateGrammar(spec), [
+      astral + '.open alt[0]: unknown rule in p: "nope"',
+      priv + '.open alt[0]: unknown rule in p: "nope"',
+    ])
+  })
+
   it('reports rule references only — per-alt checks stay in validateAlts', () => {
     // The two runtimes word their group-tag message differently; keeping
     // this surface to rule references is what makes it identical in both.
