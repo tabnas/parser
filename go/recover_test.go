@@ -583,24 +583,32 @@ func TestRecoverGiveUpTreatsNilRootAsMissing(t *testing.T) {
 }
 
 func TestRecoverGiveUpWithReplacedStartRule(t *testing.T) {
-	// A review round argued that a replaced start rule diverges here:
-	// that TS returns the ORIGINAL root's stale node while Go returns
-	// the active container. It does not. Both ports return the active
-	// container, and this pins that agreement so the claim does not
-	// have to be re-measured.
+	// A start rule whose node was set BEFORE it was replaced is the
+	// value TS keeps: its recovery catch reads ctx.root()?.node first
+	// and only scans ctx.rs when that is nullish, and ctx.root() is the
+	// rule the parse STARTED with, never followed through the
+	// replacement chain.
 	//
-	// The mechanism: by the time the give-up fallback runs, the
-	// replaced rule's node is no longer the pre-replacement value, so
-	// preferring root over the rule stack changes nothing — it was
-	// verified to be a no-op on this very input. TS's ctx.root() and
-	// Go's replacement-chain walk are the same idea expressed against
-	// two different rule representations, not a divergence.
+	//   rule.start "top", node "old", replaced by val
+	//   '[1 : abc def]'  maxSkip 0   TS "old"   GO [1]  (before this fix)
 	//
-	// Mirrors the TS case "a replaced start rule still yields the
-	// active container".
-	j := makeJSON(Options{Parse: &ParseOptions{
-		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
-	}})
+	// Go had only resRule — correct for a parse that COMPLETED, since
+	// root.Node goes stale when val is replaced by list, but not the
+	// same thing as ctx.root() — so the original root was skipped
+	// entirely. Same input, different value: an engine bug with TS
+	// canonical, per DIVERGENCE.md.
+	//
+	// rule.start is load-bearing in this fixture. Without it the start
+	// rule is still "val", "top" is never entered, @top-bo never runs,
+	// and the case degenerates into an ordinary JSON parse that proves
+	// nothing — which is exactly how this was first mis-measured.
+	//
+	// Mirrors the TS case "a replaced start rule keeps the original
+	// root's value".
+	j := makeJSON(Options{
+		Rule:  &RuleOptions{Start: "top"},
+		Parse: &ParseOptions{Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)}},
+	})
 	if err := j.Grammar(&GrammarSpec{
 		Ref: map[FuncRef]any{
 			"@top-bo": StateAction(func(r *Rule, ctx *Context) { r.Node = "old" }),
@@ -619,7 +627,7 @@ func TestRecoverGiveUpWithReplacedStartRule(t *testing.T) {
 	if 0 == len(errs) {
 		t.Fatal("expected a recorded error")
 	}
-	if `[1]` != enc(v) {
-		t.Errorf("value = %s, want [1] (TS returns [1] for this input)", enc(v))
+	if `"old"` != enc(v) {
+		t.Errorf("value = %s, want \"old\" (TS returns the original root)", enc(v))
 	}
 }

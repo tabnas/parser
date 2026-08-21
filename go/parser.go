@@ -777,6 +777,23 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// for a legitimately empty parse, which is long-standing
 		// fail-fast behaviour and is what the spec fixtures pin.
 		if soft {
+			// The ORIGINAL root first, before any active rule. TS reads
+			// ctx.root()?.node and only scans ctx.rs when that is
+			// nullish, and ctx.root() is the rule the parse STARTED
+			// with — set once, never followed through the replacement
+			// chain. Go's resRule walk is the right answer for a parse
+			// that completed, but it is not ctx.root(), and using it as
+			// the only source here skipped a start rule whose node was
+			// set before it was replaced:
+			//
+			//   rule.start "top", node "old", replaced by val
+			//   '[1 : abc def]'  maxSkip 0   TS "old"   GO [1]
+			//
+			// Same input, different value, so by DIVERGENCE.md an
+			// engine bug with TypeScript canonical.
+			if root != nil && root != NoRule && !missingNode(root.Node) {
+				return root.Node, nil
+			}
 			for d := 0; d < ctx.RSI && d < len(ctx.RS); d++ {
 				if r := ctx.RS[d]; r != nil && r != NoRule && !missingNode(r.Node) {
 					return r.Node, nil

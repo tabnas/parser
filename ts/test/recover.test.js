@@ -257,13 +257,24 @@ describe('recover', () => {
     assert.equal(JSON.stringify(out.value), '[1]')
   })
 
-  it('a replaced start rule still yields the active container', () => {
+  it('a replaced start rule keeps the original root\'s value', () => {
     // The canonical half of go TestRecoverGiveUpWithReplacedStartRule.
-    // A review round argued TS returns the ORIGINAL root's stale node
-    // ('old') here while Go returns the active container. Measured:
-    // both return [1]. Pinned so the claim does not have to be
-    // re-measured, and so neither port can drift onto the other answer.
-    const tn = mk({ maxSkip: 0 })
+    // TS's recovery catch reads ctx.root()?.node FIRST and only scans
+    // ctx.rs when that is nullish, and ctx.root() is the rule the parse
+    // started with — set once, never followed through the replacement
+    // chain. So a start rule whose node was set before it was replaced
+    // keeps that value. Go had only its resRule walk, which is the
+    // right answer for a completed parse but is not ctx.root(), and
+    // returned [1] here.
+    //
+    // rule.start is load-bearing: without it the start rule is still
+    // 'val', 'top' is never entered, @top-bo never runs, and the case
+    // degenerates into an ordinary JSON parse that proves nothing.
+    const tn = new Tabnas({
+      plugins: [json],
+      rule: { start: 'top' },
+      parse: { recover: { enabled: true, maxSkip: 0 } },
+    })
     tn.grammar({
       ref: { '@top-bo': (r) => { r.node = 'old' } },
       rule: { top: { open: [{ s: '', r: 'val' }] } },
@@ -271,7 +282,7 @@ describe('recover', () => {
 
     const out = tn.parse('[1 : abc def]')
     assert.ok(0 < out.errors.length)
-    assert.equal(JSON.stringify(out.value), '[1]')
+    assert.equal(JSON.stringify(out.value), '"old"')
   })
 
   it('reports trailing content after a complete value', () => {

@@ -136,6 +136,32 @@ An entry that leaves this file should leave a forwarding address: a
 reader who remembers one and cannot find it needs to know whether it was
 fixed or quietly dropped.
 
+- **The value kept when recovery gives up.** Two defects, same fallback,
+  both Go-only and both repaired. (1) A give-up inside a structure
+  leaves the root open, and Go returned `nil` where TS returns the most
+  complete partial container — `[1 : abc def ghi]` gave `[1]` in TS and
+  `null` in Go. (2) The fallback then consulted only Go's
+  replacement-chain `resRule`, which is the right answer for a parse
+  that COMPLETED but is not TS's `ctx.root()`: the latter is the rule
+  the parse started with, set once and never followed through
+  replacement. A start rule whose node was set before it was replaced
+  therefore survived in TS and was skipped in Go —
+  `rule.start "top"`, node `"old"`, replaced by `val`, on the same
+  input: TS `"old"`, Go `[1]`. Go now prefers the original root, then
+  the outermost active rule, then `ctx.rule`, matching TS's order, and
+  tests both missing-node cases with a nullish predicate rather than
+  `IsUndefined`, since TS's `null ==` covers null and undefined alike.
+
+  Pinned in both ports (`TestRecoverGiveUpKeepsPartialValue`,
+  `TestRecoverGiveUpWithReplacedStartRule`,
+  `TestRecoverGiveUpTreatsNilRootAsMissing` and their TS mirrors).
+  A note for whoever writes the next fixture here: `rule.start` is
+  load-bearing in the replacement cases. Leave it at the default and
+  the custom start rule is never entered, its before-open action never
+  runs, and the case silently degenerates into an ordinary parse that
+  agrees in both ports — which is how the second defect was first
+  measured as a non-divergence and nearly dismissed.
+
 - **Bad-token spans and codes for invalid string escapes.** Carried a
   table of `len`/`pos`/`col` differences and, at one point, the claim
   that the error `code` always agreed. Both halves are repaired: the
@@ -355,18 +381,6 @@ never a quote character to begin with.
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
-
-- **A replaced start rule during recovery give-up.** Reported as TS
-  returning the original root's stale node while Go returns the active
-  container. Measured in both runtimes on the reported input
-  (`[1 : abc def]`, `maxSkip: 0`, a `top` rule stamped `"old"` and
-  replaced by `val`): both return `[1]`. Preferring the root over the
-  rule stack was tried in Go and is a no-op on that input, because the
-  replaced rule's node is no longer the pre-replacement value by the
-  time the fallback runs. TS's `ctx.root()` and Go's replacement-chain
-  walk are one idea in two rule representations. Pinned by
-  `TestRecoverGiveUpWithReplacedStartRule` and the TS case "a replaced
-  start rule still yields the active container".
 
 - **Invalid UTF-8 input bytes.** Go passes them through byte-for-byte and
   never panics; the question does not arise in TS, whose strings are
