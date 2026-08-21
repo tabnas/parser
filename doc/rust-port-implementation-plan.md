@@ -128,9 +128,8 @@ dissolves the four-regime table of `§3.A2 changes` into one regime
 instead of standardising two. The probe family (`pd_*` state) is
 excluded from the hoist by design and keeps propagating, so the BNF/ABNF/
 GBNF closure is untouched — the same carve-out-free property the final
-#120 comment valued. Decision D1 below puts this to the maintainer as
-the first gate; if it goes the other way, S0 is the fallback and the
-plan's Phase 2a swaps accordingly (and the −12% is spent knowingly).
+#120 comment valued. **Decided 2026-08-21: A1.** The amendment is
+recorded on issue #120; Phase 2a implements it.
 
 **(2) The action signature.** §3.6's "the callback must carry the
 `AltMatch`" is superseded by `§5.5 strategy` (two arguments, Go's
@@ -245,7 +244,7 @@ than defaulting to a port.
 
 | # | Decision | Evidence | Recommendation |
 |---|---|---|---|
-| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **A1.** TypeScript hoists at `normalt`; Go follows at spec load; Go's five deletes are then deleted as unnecessary. |
+| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **DECIDED 2026-08-21: A1**, amendment recorded on #120. TypeScript hoists at `normalt`; Go follows at spec load; Go's five deletes are then deleted as unnecessary. |
 | D2 | **Write the port ADR; assign the crate namespace.** Supersede ADR-12 clause 1 for the *engine* (bindings strategy unchanged); record v0.1's scope line (`§5.1 risks`) and stop conditions as the ADR's reconsideration triggers; claim `tabnas`, `tabnas-spec` on crates.io (`tabnas-clib` per its staged plan); crate versions **independent from 0.1.0, reporting the engine version they implement** (`§3.5 risks`, `py/` precedent) — the four-location version machinery gains no fifth member. | §1.5 F1/F2 here; `§5.3 risks` | Do it in one `admin` PR. |
 | D3 | **The engine-changes §5 set**, each direction stated per ADR-13: (1) = D1; (2) option-merge classes B/C/D (class A is recorded with its `*string` repair — schedule the breaking bump per the DIVERGENCE.md note); (3) `Lex.next` IGNORE filtering — direction: Go moves, **with the `@tabnas/c` three-line filter landing in the same commit** (`§5.3 changes`); (4) C1 loud-or-silent; (5) `RuleDone` payload resolved-vs-static (zero subscribers exist; pick TS's resolved and pin); (6) `e`/`h` order (adopt Go's straight-line order, one TS assertion moves, shared fixture + DIVERGENCE row); (7) **continuations divergence — now LSP-blocking** (§1.5 F3 here); (8) matcher state slot (defer unless concurrent `parse(&self)` is a stated requirement — `yaml`'s 13 closure variables are the cost). | `§5 changes` | Rule (2)(3)(5)(6)(7) now — five of the six are free today and stop being free the moment a consumer exists. |
 | D4 | **#130: the serialized-options leaf set S**, folding #142 (`rewind.history <= 0`: TS retain-nothing vs Go unbounded — on the DoS bound itself), #143 (ill-typed leaves: TS crashes, Go drops silently), #144 (`history: null` → `Infinity`). One ruling naming S, an exhaustiveness test over `Options` in both runtimes failing on any leaf not in S and not handled, and `Option<usize>`/`None`-is-unbounded as the Rust shape. | `§2.2 risks`; issues #130/#142/#143/#144 | Rule now; 1–2 days to land; genuinely blocks M2a. |
