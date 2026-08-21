@@ -537,3 +537,47 @@ func TestRecoverGiveUpKeepsPartialValue(t *testing.T) {
 		t.Fatalf("fail-fast empty source changed: value=%v err=%v", v, err)
 	}
 }
+
+func TestRecoverGiveUpTreatsNilRootAsMissing(t *testing.T) {
+	// The give-up fallback asked IsUndefined, which matches only the
+	// Undefined sentinel. A grammar that leaves the root at Go's zero
+	// value instead — where TS would see `undefined` — sailed straight
+	// past the check, and nil was returned as if it were a parsed value
+	// while an active rule held the real partial container.
+	//
+	// TS tests the same thing with `null ==`, which is nullish and so
+	// covers null and undefined alike; missingNode is the Go equivalent.
+	// Replacing @val-bo so the root opens as nil reproduces exactly that
+	// shape without touching the shared fixture.
+	j := makeJSON(Options{Parse: &ParseOptions{
+		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
+	}})
+	if err := j.Grammar(&GrammarSpec{
+		Ref: map[FuncRef]any{
+			"@val-bo/replace": StateAction(func(r *Rule, ctx *Context) {
+				// Only the OUTERMOST val: nil'ing every val would make
+				// the element parse as nil too, and the root would then
+				// close to [null] without ever reaching the fallback.
+				if 0 == ctx.RSI {
+					r.Node = nil
+					return
+				}
+				r.Node = Undefined
+			}),
+		},
+		Rule: map[string]*GrammarRuleSpec{"val": {}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`[1 : abc def]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 0 == len(errs) {
+		t.Fatal("expected a recorded error")
+	}
+	if `[1]` != enc(v) {
+		t.Errorf("value = %s, want [1] (nil root treated as a real value)", enc(v))
+	}
+}

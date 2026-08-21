@@ -749,7 +749,19 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		resRule = resRule.Next
 	}
 
-	if IsUndefined(resRule.Node) {
+	// A give-up can also leave the node at Go's zero value rather than
+	// Undefined — a plugin that never assigns one, where TS would see
+	// `undefined`. TS tests both with `null ==`, which is nullish and so
+	// covers null and undefined alike; Go's IsUndefined matches only the
+	// sentinel, so a nil root sailed past this check and was returned as
+	// if it were a parsed value.
+	//
+	// The nil half is gated on gaveUp, and that gate is load-bearing:
+	// unlike TS — where this logic lives in a catch and therefore only
+	// runs on error — this block is on the normal path too, so treating
+	// nil as missing unconditionally would send a SUCCESSFUL parse of
+	// `null` hunting through the rule stack for a value it does not want.
+	if IsUndefined(resRule.Node) || (gaveUp && nil == resRule.Node) {
 		// In recovery mode, an undefined result means the root rule never
 		// CLOSED — recovery gave up inside a structure — not that the
 		// document was empty. TS returns the most complete partial
@@ -766,11 +778,11 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// fail-fast behaviour and is what the spec fixtures pin.
 		if soft {
 			for d := 0; d < ctx.RSI && d < len(ctx.RS); d++ {
-				if r := ctx.RS[d]; r != nil && r != NoRule && !IsUndefined(r.Node) {
+				if r := ctx.RS[d]; r != nil && r != NoRule && !missingNode(r.Node) {
 					return r.Node, nil
 				}
 			}
-			if ctx.Rule != nil && ctx.Rule != NoRule && !IsUndefined(ctx.Rule.Node) {
+			if ctx.Rule != nil && ctx.Rule != NoRule && !missingNode(ctx.Rule.Node) {
 				return ctx.Rule.Node, nil
 			}
 		}

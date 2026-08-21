@@ -232,6 +232,31 @@ describe('recover', () => {
     }
   })
 
+  it('a null root node is treated as missing, not as a value', () => {
+    // Pins the canonical nullish test the Go port diverged from. TS
+    // asks `null ==` throughout the recovery catch, so a root left at
+    // null is "no value yet" and the search continues into the rule
+    // stack. Go asked IsUndefined, which matches only the sentinel, so
+    // a nil root was returned as if it were a parsed value. Mirrors go
+    // TestRecoverGiveUpTreatsNilRootAsMissing.
+    const tn = mk({ maxSkip: 0 })
+    tn.grammar({
+      ref: {
+        // Only the OUTERMOST val: nulling every val would make the
+        // element parse as null too, and the root would then close to
+        // [null] without ever reaching the fallback.
+        '@val-bo/replace': (r, ctx) => {
+          r.node = 0 === ctx.rsI ? null : undefined
+        },
+      },
+      rule: { val: {} },
+    })
+
+    const out = tn.parse('[1 : abc def]')
+    assert.ok(0 < out.errors.length)
+    assert.equal(JSON.stringify(out.value), '[1]')
+  })
+
   it('reports trailing content after a complete value', () => {
     // The completeness checks run AFTER the rule loop: a document
     // whose value parses cleanly but is followed by junk must still

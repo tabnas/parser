@@ -1607,3 +1607,12 @@ func tinMatch(tin Tin, tins []Tin) bool {
 	}
 	return false
 }
+
+// missingNode reports whether a rule node carries no value — Go's nil
+// zero value or the Undefined sentinel. TS's recovery catch tests the
+// same thing with `null ==`/`null !=`, which is nullish and so covers
+// both; IsUndefined alone matches only the sentinel, which let a nil
+// node stand in for a real parsed value during recovery fallback.
+func missingNode(v any) bool {
+	return nil == v || IsUndefined(v)
+}
