@@ -369,3 +369,14 @@ READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the
 matching reference doc; when you add a capability, consider whether it
 needs a how-to.
+
+## Pull requests
+
+Open pull requests **ready for review — never as drafts.** This is a
+standing maintainer preference, and it overrides any tooling or agent
+default that opens pull requests in draft state.
+
+The same rule is stated in `CLAUDE.md`, deliberately and not by
+accident: that file is what an agent session loads automatically, this
+one is what a human or a non-Claude agent reads. Keep the two in step
+rather than deleting either as duplication.

@@ -501,3 +501,178 @@ func TestRecoverTrailingBadTokenKeepsCode(t *testing.T) {
 		t.Fatalf("no-lookahead route: want one unterminated_string, got %s", enc(errs))
 	}
 }
+
+func TestRecoverGiveUpKeepsPartialValue(t *testing.T) {
+	// When recovery gives up INSIDE a structure the root rule never
+	// closes, so the result node is undefined. That does not mean the
+	// document was empty: TS returns the most complete partial
+	// container it can find, and a language server shows exactly that
+	// for a broken document. Go returned nil, so the same input gave
+	// [1] in TS and null here — a value divergence, TS canonical.
+	// Mirrors the TS case "give-up still returns the partial value
+	// when the root never closed".
+	for _, c := range []struct {
+		src  string
+		want string
+	}{
+		{`[1 : abc def ghi]`, `[1]`},
+		{`{"a":1,"b":2 : xxx}`, `{"a":1,"b":2}`},
+		{`{"a":1} : zzz`, `{"a":1}`}, // root DID close; agreed already
+	} {
+		j := mkRec(t, func(r *RecoverOptions) { r.MaxSkip = intp(0) })
+		v, errs, err := j.ParseRecover(c.src)
+		if err != nil {
+			t.Fatalf("%s: unexpected terminal error: %v", c.src, err)
+		}
+		if 0 == len(errs) {
+			t.Fatalf("%s: expected a recorded error", c.src)
+		}
+		if c.want != enc(v) {
+			t.Errorf("%s: value = %s, want %s", c.src, enc(v), c.want)
+		}
+	}
+
+	// Recovery OFF must be untouched: an empty source is still nil.
+	if v, err := makeJSON().Parse(""); err == nil || v != nil {
+		t.Fatalf("fail-fast empty source changed: value=%v err=%v", v, err)
+	}
+}
+
+func TestRecoverGiveUpTreatsNilRootAsMissing(t *testing.T) {
+	// The give-up fallback asked IsUndefined, which matches only the
+	// Undefined sentinel. A grammar that leaves the root at Go's zero
+	// value instead — where TS would see `undefined` — sailed straight
+	// past the check, and nil was returned as if it were a parsed value
+	// while an active rule held the real partial container.
+	//
+	// TS tests the same thing with `null ==`, which is nullish and so
+	// covers null and undefined alike; missingNode is the Go equivalent.
+	// Replacing @val-bo so the root opens as nil reproduces exactly that
+	// shape without touching the shared fixture.
+	j := makeJSON(Options{Parse: &ParseOptions{
+		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
+	}})
+	if err := j.Grammar(&GrammarSpec{
+		Ref: map[FuncRef]any{
+			"@val-bo/replace": StateAction(func(r *Rule, ctx *Context) {
+				// Only the OUTERMOST val: nil'ing every val would make
+				// the element parse as nil too, and the root would then
+				// close to [null] without ever reaching the fallback.
+				if 0 == ctx.RSI {
+					r.Node = nil
+					return
+				}
+				r.Node = Undefined
+			}),
+		},
+		Rule: map[string]*GrammarRuleSpec{"val": {}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`[1 : abc def]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 0 == len(errs) {
+		t.Fatal("expected a recorded error")
+	}
+	if `[1]` != enc(v) {
+		t.Errorf("value = %s, want [1] (nil root treated as a real value)", enc(v))
+	}
+}
+
+func TestRecoverGiveUpWithReplacedStartRule(t *testing.T) {
+	// A start rule whose node was set BEFORE it was replaced is the
+	// value TS keeps: its recovery catch reads ctx.root()?.node first
+	// and only scans ctx.rs when that is nullish, and ctx.root() is the
+	// rule the parse STARTED with, never followed through the
+	// replacement chain.
+	//
+	//   rule.start "top", node "old", replaced by val
+	//   '[1 : abc def]'  maxSkip 0   TS "old"   GO [1]  (before this fix)
+	//
+	// Go had only resRule — correct for a parse that COMPLETED, since
+	// root.Node goes stale when val is replaced by list, but not the
+	// same thing as ctx.root() — so the original root was skipped
+	// entirely. Same input, different value: an engine bug with TS
+	// canonical, per DIVERGENCE.md.
+	//
+	// rule.start is load-bearing in this fixture. Without it the start
+	// rule is still "val", "top" is never entered, @top-bo never runs,
+	// and the case degenerates into an ordinary JSON parse that proves
+	// nothing — which is exactly how this was first mis-measured.
+	//
+	// Mirrors the TS case "a replaced start rule keeps the original
+	// root's value".
+	j := makeJSON(Options{
+		Rule:  &RuleOptions{Start: "top"},
+		Parse: &ParseOptions{Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)}},
+	})
+	if err := j.Grammar(&GrammarSpec{
+		Ref: map[FuncRef]any{
+			"@top-bo": StateAction(func(r *Rule, ctx *Context) { r.Node = "old" }),
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {Open: []*GrammarAltSpec{{S: "", R: "val"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`[1 : abc def]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 0 == len(errs) {
+		t.Fatal("expected a recorded error")
+	}
+	if `"old"` != enc(v) {
+		t.Errorf("value = %s, want \"old\" (TS returns the original root)", enc(v))
+	}
+}
+
+func TestAltActionSkippedAfterItsOwnError(t *testing.T) {
+	// TS throws at the raise site, so an alt whose E returns a token
+	// never runs that alt's A. Go's Process keeps going past the raise
+	// (by design — see the alt.E comment in rule.go), and the action's
+	// mutations used to stick. Invisible while a raised error always
+	// discarded the value; visible once recovery began returning a
+	// partial one:
+	//
+	//   '42'  maxSkip 0   TS undefined   GO "after-error"
+	//
+	// Mirrors the TS case "an alt action does not run after its own
+	// error".
+	j := Make(Options{Parse: &ParseOptions{
+		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
+	}})
+	if err := j.Grammar(&GrammarSpec{
+		Clear:   true,
+		Options: &Options{Rule: &RuleOptions{Start: "top"}},
+		Ref: map[FuncRef]any{
+			"@boom": AltError(func(r *Rule, ctx *Context) *Token {
+				return ctx.T0.Bad("boom_code", map[string]any{})
+			}),
+			"@mutate": AltAction(func(r *Rule, ctx *Context) {
+				r.Node = "after-error"
+			}),
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {Open: []*GrammarAltSpec{{S: "#NR", E: "@boom", A: "@mutate"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`42`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "boom_code" != errs[0].Code {
+		t.Fatalf("errors = %v, want one boom_code", errs)
+	}
+	if nil != v {
+		t.Errorf("value = %s, want no value (the action ran after its own error)", enc(v))
+	}
+}

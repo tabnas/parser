@@ -1133,11 +1133,13 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// engine throws immediately at the raise site — reading RS/RSI and
 	// the rule state after Process returns reports the post-mutation
 	// world and diverges from TS.
+	raisedHere := false
 	if alt != nil && alt.E != nil {
 		errTkn := alt.E(r, ctx)
 		if errTkn != nil {
 			ctx.ParseErr = errTkn
 			ctx.parseErrDiag = captureDiag(ctx)
+			raisedHere = true
 		}
 	}
 
@@ -1192,8 +1194,21 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		ctx.recordConsumed(consumed)
 	}
 
-	// Action callback
-	if alt != nil && alt.A != nil {
+	// Action callback — skipped when THIS alt's E just raised. TS throws
+	// at the raise site, so its action never runs; Go's Process keeps
+	// going (see the alt.E comment above), and the action's mutations
+	// used to stick. That was invisible while a raised error always
+	// discarded the value, and became visible once recovery started
+	// returning a partial one:
+	//
+	//   top: {s:'#NR', e:@boom, a:@mutate}, node set to "after-error"
+	//   '42'  maxSkip 0   TS undefined   GO "after-error"
+	//
+	// Only this alt's own raise suppresses it. An error already standing
+	// from somewhere else does not, because TS would have thrown before
+	// reaching this alt at all — so there is no TS behaviour to match,
+	// and skipping on it would silence actions that legitimately run.
+	if alt != nil && alt.A != nil && !raisedHere {
 		alt.A(r, ctx)
 	}
 
@@ -1606,4 +1621,13 @@ func tinMatch(tin Tin, tins []Tin) bool {
 		}
 	}
 	return false
+}
+
+// missingNode reports whether a rule node carries no value — Go's nil
+// zero value or the Undefined sentinel. TS's recovery catch tests the
+// same thing with `null ==`/`null !=`, which is nullish and so covers
+// both; IsUndefined alone matches only the sentinel, which let a nil
+// node stand in for a real parsed value during recovery fallback.
+func missingNode(v any) bool {
+	return nil == v || IsUndefined(v)
 }

@@ -749,7 +749,60 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		resRule = resRule.Next
 	}
 
-	if IsUndefined(resRule.Node) {
+	// A give-up can also leave the node at Go's zero value rather than
+	// Undefined — a plugin that never assigns one, where TS would see
+	// `undefined`. TS tests both with `null ==`, which is nullish and so
+	// covers null and undefined alike; Go's IsUndefined matches only the
+	// sentinel, so a nil root sailed past this check and was returned as
+	// if it were a parsed value.
+	//
+	// The nil half is gated on gaveUp, and that gate is load-bearing:
+	// unlike TS — where this logic lives in a catch and therefore only
+	// runs on error — this block is on the normal path too, so treating
+	// nil as missing unconditionally would send a SUCCESSFUL parse of
+	// `null` hunting through the rule stack for a value it does not want.
+	if IsUndefined(resRule.Node) || (gaveUp && nil == resRule.Node) {
+		// In recovery mode, an undefined result means the root rule never
+		// CLOSED — recovery gave up inside a structure — not that the
+		// document was empty. TS returns the most complete partial
+		// container it can find in exactly this case
+		// (ts/src/parser.ts, the recovering branch of the catch: root node,
+		// else the outermost active rule's node, else ctx.rule's), and a
+		// language server shows that partial value for a broken document.
+		// Go returned nil, so the same input yielded [1] in TS and null
+		// here — a value divergence, which DIVERGENCE.md treats as an
+		// engine bug with TS canonical.
+		//
+		// Gated on soft: with recovery off, `nil, nil` stays the answer
+		// for a legitimately empty parse, which is long-standing
+		// fail-fast behaviour and is what the spec fixtures pin.
+		if soft {
+			// The ORIGINAL root first, before any active rule. TS reads
+			// ctx.root()?.node and only scans ctx.rs when that is
+			// nullish, and ctx.root() is the rule the parse STARTED
+			// with — set once, never followed through the replacement
+			// chain. Go's resRule walk is the right answer for a parse
+			// that completed, but it is not ctx.root(), and using it as
+			// the only source here skipped a start rule whose node was
+			// set before it was replaced:
+			//
+			//   rule.start "top", node "old", replaced by val
+			//   '[1 : abc def]'  maxSkip 0   TS "old"   GO [1]
+			//
+			// Same input, different value, so by DIVERGENCE.md an
+			// engine bug with TypeScript canonical.
+			if root != nil && root != NoRule && !missingNode(root.Node) {
+				return root.Node, nil
+			}
+			for d := 0; d < ctx.RSI && d < len(ctx.RS); d++ {
+				if r := ctx.RS[d]; r != nil && r != NoRule && !missingNode(r.Node) {
+					return r.Node, nil
+				}
+			}
+			if ctx.Rule != nil && ctx.Rule != NoRule && !missingNode(ctx.Rule.Node) {
+				return ctx.Rule.Node, nil
+			}
+		}
 		return nil, nil
 	}
 

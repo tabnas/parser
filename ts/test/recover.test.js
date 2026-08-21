@@ -214,6 +214,100 @@ describe('recover', () => {
     assert.deepStrictEqual(out.errors.map((e) => e.code), ['unterminated_string'])
   })
 
+  it('give-up still returns the partial value when the root never closed', () => {
+    // Pins the canonical behaviour the Go port diverged from: giving up
+    // inside a structure leaves the root rule open, and the most
+    // complete partial container is still returned — which is what a
+    // language server shows for a broken document. Mirrors go
+    // TestRecoverGiveUpKeepsPartialValue.
+    const tn = mk({ maxSkip: 0 })
+    for (const [src, want] of [
+      ['[1 : abc def ghi]', '[1]'],
+      ['{"a":1,"b":2 : xxx}', '{"a":1,"b":2}'],
+      ['{"a":1} : zzz', '{"a":1}'],
+    ]) {
+      const out = tn.parse(src)
+      assert.ok(0 < out.errors.length, src)
+      assert.equal(JSON.stringify(out.value), want, src)
+    }
+  })
+
+  it('a null root node is treated as missing, not as a value', () => {
+    // Pins the canonical nullish test the Go port diverged from. TS
+    // asks `null ==` throughout the recovery catch, so a root left at
+    // null is "no value yet" and the search continues into the rule
+    // stack. Go asked IsUndefined, which matches only the sentinel, so
+    // a nil root was returned as if it were a parsed value. Mirrors go
+    // TestRecoverGiveUpTreatsNilRootAsMissing.
+    const tn = mk({ maxSkip: 0 })
+    tn.grammar({
+      ref: {
+        // Only the OUTERMOST val: nulling every val would make the
+        // element parse as null too, and the root would then close to
+        // [null] without ever reaching the fallback.
+        '@val-bo/replace': (r, ctx) => {
+          r.node = 0 === ctx.rsI ? null : undefined
+        },
+      },
+      rule: { val: {} },
+    })
+
+    const out = tn.parse('[1 : abc def]')
+    assert.ok(0 < out.errors.length)
+    assert.equal(JSON.stringify(out.value), '[1]')
+  })
+
+  it('a replaced start rule keeps the original root\'s value', () => {
+    // The canonical half of go TestRecoverGiveUpWithReplacedStartRule.
+    // TS's recovery catch reads ctx.root()?.node FIRST and only scans
+    // ctx.rs when that is nullish, and ctx.root() is the rule the parse
+    // started with — set once, never followed through the replacement
+    // chain. So a start rule whose node was set before it was replaced
+    // keeps that value. Go had only its resRule walk, which is the
+    // right answer for a completed parse but is not ctx.root(), and
+    // returned [1] here.
+    //
+    // rule.start is load-bearing: without it the start rule is still
+    // 'val', 'top' is never entered, @top-bo never runs, and the case
+    // degenerates into an ordinary JSON parse that proves nothing.
+    const tn = new Tabnas({
+      plugins: [json],
+      rule: { start: 'top' },
+      parse: { recover: { enabled: true, maxSkip: 0 } },
+    })
+    tn.grammar({
+      ref: { '@top-bo': (r) => { r.node = 'old' } },
+      rule: { top: { open: [{ s: '', r: 'val' }] } },
+    })
+
+    const out = tn.parse('[1 : abc def]')
+    assert.ok(0 < out.errors.length)
+    assert.equal(JSON.stringify(out.value), '"old"')
+  })
+
+  it('an alt action does not run after its own error', () => {
+    // The canonical half of go TestAltActionSkippedAfterItsOwnError.
+    // TS throws at the raise site, so an alt whose `e` returns a bad
+    // token never reaches its `a`. Go's Process deliberately keeps
+    // running past the raise, and the action's mutation used to stick —
+    // harmless while a raised error always discarded the value, visible
+    // once recovery started returning a partial one.
+    const tn = new Tabnas({ parse: { recover: { enabled: true, maxSkip: 0 } } })
+    tn.grammar({
+      clear: true,
+      options: { rule: { start: 'top' } },
+      ref: {
+        '@boom': (rule, ctx) => ctx.t0.bad('boom_code', {}),
+        '@mutate': (rule) => { rule.node = 'after-error' },
+      },
+      rule: { top: { open: [{ s: '#NR', e: '@boom', a: '@mutate' }] } },
+    })
+
+    const out = tn.parse('42')
+    assert.deepEqual(out.errors.map((e) => e.code), ['boom_code'])
+    assert.equal(out.value, undefined)
+  })
+
   it('reports trailing content after a complete value', () => {
     // The completeness checks run AFTER the rule loop: a document
     // whose value parses cleanly but is followed by junk must still
