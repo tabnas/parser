@@ -29,18 +29,54 @@ built for, with the richest corpus) is not even cloned.
 
 - `genfixture.js` — deterministic fixture matrix (pinned seed, NOT
   checked in): key-repetitive records (16KB/1MB), escape-dense strings,
-  number-heavy, deep nesting, whitespace-padded tiny, and a relaxed
-  unquoted-text jsonic shape.
+  number-heavy, deep nesting, whitespace-padded tiny, a CJK
+  (literal non-ASCII) records shape, and a relaxed unquoted-text jsonic
+  shape. The CJK arm exists because everything else here is ASCII — the
+  escape-dense fixture included, since escape SEQUENCES are ASCII bytes —
+  which left the per-character non-ASCII scan path unmeasured.
 - `bench.js` — one parser × one fixture per process (fresh V8 state);
   median/p5/p95 and MB/s. Parsers: `json`, `jsonic`, `native`
   (JSON.parse baseline).
 - `gobench/` — `go test -bench` module (tabnas json + jsonic vs
   encoding/json, with -benchmem).
-- `run-bench.sh [quick]` — generates fixtures and runs everything.
+- `run-bench.sh [quick]` — wires the downstream checkouts at this
+  working tree (`ci/lib/wire.sh`), generates fixtures, runs everything.
+- `abba.js` / `ab-compare.sh` — the DECISION instrument for an engine
+  performance claim; see below.
 
 Numbers are advisory: compare back-to-back runs on the same machine
 (the proposed bench.yml never gates; it uploads results as an
 artifact).
+
+### Deciding whether a change is real: `ab-compare.sh`
+
+`run-bench.sh` tracks throughput. It cannot tell an effect from noise,
+and the noise here is bigger than the effects usually being argued
+about: measured on BYTE-IDENTICAL builds, whichever tree sat in the
+second slot won 5-9 rounds of 12, with the "delta" ranging over 3.25
+percentage points. Any single A-then-B run can therefore report a
+couple of percent in either direction from nothing at all.
+
+So a claim needs the paired protocol:
+
+```bash
+(cd ts && npm run build)                 # build the candidate
+ci/bench/ab-compare.sh --base main       # or --base <a-built-ts-dir>
+```
+
+It runs the A/B/B/A rig three times — forward, slots reversed, and a
+null of the baseline against itself on the same fixture in the same
+session — and reports EFFECT ESTABLISHED only when the sign REVERSES
+with the slots and the estimate clears that session's null. Otherwise
+it says UNRESOLVED and tells you not to quote either number. Both
+builds supply their own strict-JSON test grammar, so no downstream
+checkout is involved, and the rig refuses to time two builds that
+disagree on the parse result.
+
+Read `d_min` for compute changes and `d_total` for allocation changes:
+min-of-N excludes GC pauses by construction, which is the one channel
+an allocation change moves, and reporting min alone has inverted a
+verdict before.
 
 ## parity/ — cross-runtime token-stream parity
 
