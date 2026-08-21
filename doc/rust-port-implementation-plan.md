@@ -26,6 +26,13 @@ document, and sections of *this* document are written `§1.2 here`.
 > cites the document that measured it. The plan targets **v0.1 as scoped
 > by `§5.1 risks`** (the serialized-spec engine); the imperative plugin
 > tier stays unscheduled per `§5.6 strategy`.
+>
+> That stamp is deliberately not advanced as work lands: it records when
+> Part 1's *review* claims were checked, not how far the plan has got.
+> **Current execution status lives in two places, and both are kept
+> live:** the `**Done**` / `**Partly**` markers on each numbered step in
+> Part 2, and the Gate G table below. Where the two disagree with this
+> stamp, they are the newer statement.
 
 ---
 
@@ -253,7 +260,7 @@ than defaulting to a port.
 
 | # | Decision | Evidence | Recommendation |
 |---|---|---|---|
-| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **DECIDED 2026-08-21: A1**, amendment recorded on #120. TypeScript hoists at `normalt`; Go follows at spec load; Go's five deletes are then deleted as unnecessary. |
+| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **DECIDED 2026-08-21: A1**, amendment recorded on #120. **LANDED `202664d`** — TypeScript binds at `normalt`, Go at spec load, and all five of Go's `delete(r.K, …)` sites are gone (with `mapConfig`, its last caller removed). #120 closed. The register row staged for it went red on the repair and forced its own deletion; the two shapes now sit in `TestBuiltinConfigIsAlternateScoped` in both ports. One caveat recorded honestly: the −12% this route was argued on is **unmeasured**, not confirmed — the rig's grammar declares no builtin config, so there was nothing there for A1 to remove (Phase 2a step 2). |
 | D2 | **Write the port ADR; assign the crate namespace.** Supersede ADR-12's no-native-ports premise for the *engine* (its numbered clauses, including the uniform-symbol contract, stand); record v0.1's scope line (`§5.1 risks`) and stop conditions as the ADR's reconsideration triggers; claim `tabnas`, `tabnas-spec` on crates.io (`tabnas-clib` per its staged plan), with checklist rows landing per ADR-12 clause 4; crate versions **independent from 0.1.0** — engine-implementing crates report the engine version they implement (`§3.5 risks`, `py/` precedent), the engine-agnostic loader reports its ABI template version — and the four-location version machinery gains no fifth member. | §1.5 F1/F2 here; `§5.3 risks` | Do it in one `admin` PR. |
 | D3 | **The engine-changes §5 set**, each direction stated per ADR-13: (1) = D1; (2) option-merge classes B/C/D (class A is recorded with its `*string` repair — schedule the breaking bump per the DIVERGENCE.md note); (3) `Lex.next` IGNORE filtering — direction: Go moves, **with the `@tabnas/c` three-line filter landing in the same commit** (`§5.3 changes`); (4) C1 loud-or-silent; (5) `RuleDone` payload resolved-vs-static (zero subscribers exist; pick TS's resolved and pin); (6) `e`/`h` order (adopt Go's straight-line order, one TS assertion moves, shared fixture + DIVERGENCE row); (7) **continuations divergence — now LSP-blocking** (§1.5 F3 here); (8) matcher state slot (defer unless concurrent `parse(&self)` is a stated requirement — `yaml`'s 13 closure variables are the cost). | `§5 changes` | Rule (2)(3)(5)(6)(7) now — five of the six are free today and stop being free the moment a consumer exists. |
 | D4 | **#130: the serialized-options leaf set S**, folding #142 (`rewind.history <= 0`: TS retain-nothing vs Go unbounded — on the DoS bound itself), #143 (ill-typed leaves: TS crashes, Go drops silently), #144 (`history: null` → `Infinity`). One ruling naming S, an exhaustiveness test over `Options` in both runtimes failing on any leaf not in S and not handled, and `Option<usize>`/`None`-is-unbounded as the Rust shape. | `§2.2 risks`; issues #130/#142/#143/#144 | Rule now; 1–2 days to land; genuinely blocks M2a. |
@@ -616,14 +623,16 @@ diagnostic — is exactly Gate G's condition 1.
 
 ### Gate G — before any Rust engine code
 
-All five, in writing, per `§5.3 strategy` — current status:
+All five, in writing, per `§5.3 strategy`. **This table is kept live as
+work lands** — last moved at `202664d` (2026-08-21, engine v0.8.11), 21
+commits after `abfed2c`, when A1 closed #120:
 
-| # | Condition | Status at `abfed2c` |
+| # | Condition | Status |
 |---|---|---|
 | 1 | A named consumer `libtabnas` + a serialized spec provably cannot serve (wasm / no-Go-runtime / in-Rust authoring — the third reopens the plugin question and must say so) | **Open** — Phase 3 is the experiment; the LSP design names the C ABI, not Rust, for its engine access |
 | 2 | The differential-tier entry cost paid or waived in writing (`json` leg free via `json-core`; the relaxed `jsonic` leg has no function-free artifact — waive it explicitly or produce one) | **Open** |
 | 3 | The two-runtime machinery generalised (Phase 2g) | **Not started** — `nonParity`/`goOnly` verified still binary |
-| 4 | The unpinned surface **landed**: #120-as-D1, #122, the `p`/`r`-channel fixture, M0.2 orderings, the propagation fixture, #130's exhaustiveness test. (`pos` ✅, regex dialect ✅, key order ✅ via ADR-15 — already done, §1.3 here) | **Partial** |
+| 4 | The unpinned surface **landed**: ~~#120-as-D1~~ ✅ (A1, both runtimes, `202664d` — Phase 2a steps 2–3), #122, the `p`/`r`-channel fixture, M0.2 orderings, the propagation fixture (Phase 2a step 4), #130's exhaustiveness test (blocked on D4). (`pos` ✅, regex dialect ✅, key order ✅ via ADR-15 — already done, §1.3 here) | **Partial** — one of six landed; the verdict does not move until the rest do |
 | 5 | D5 answered in the ADR | **Open** |
 
 ### Phase 4 — M2a: `tabnas-spec` (~1–2k lines, zero parity obligations)
