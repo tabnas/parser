@@ -63,5 +63,12 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "tabnas": {
+    "release": {
+      "generate": [
+        "gen-registry"
+      ]
+    }
   }
 }
