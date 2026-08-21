@@ -175,6 +175,102 @@ type GrammarAltSpec struct {
 	G string         // Group tags (comma-separated).
 }
 
+// specAltList returns the alternates a rule-spec state holds, in either
+// shipped shape: a bare []*GrammarAltSpec, or the *GrammarAltListSpec form
+// that carries injection modifiers. Anything else yields nil — validation
+// reports what it can read and stays silent about what it cannot.
+func specAltList(state any) []*GrammarAltSpec {
+	switch v := state.(type) {
+	case []*GrammarAltSpec:
+		return v
+	case *GrammarAltListSpec:
+		if v != nil {
+			return v.Alts
+		}
+	}
+	return nil
+}
+
+// unknownRuleRef returns the rule name a P/R slot carries when nothing
+// defines it, and "" when there is nothing to check: an absent slot, or a
+// FuncRef — a "@name" resolves to a function that yields its rule name at
+// parse time, so no static check can follow it.
+func unknownRuleRef(ref string, defined map[string]bool) string {
+	if ref == "" || strings.HasPrefix(ref, "@") || defined[ref] {
+		return ""
+	}
+	return ref
+}
+
+// ValidateGrammar reports every dangling rule reference in a grammar spec:
+// an alternate whose P or R names a rule nothing defines. This is the one
+// check that needs the whole rule map in scope, which is why ValidateAlt
+// cannot make it — and the reference is a static typo the engine can
+// otherwise only report at parse time, once an input happens to reach the
+// alternate carrying it.
+//
+// known names rules that already exist on the target instance, so a spec
+// that EXTENDS a grammar can push to a rule it does not itself define
+// without being flagged. Pass nil to check a spec as a self-contained
+// document.
+//
+// Deliberately narrow: this reports rule references and nothing else. Run
+// ValidateAlts per list for the per-alternate checks — the two runtimes word
+// those messages differently today, and composing them here would bake that
+// difference into a new API. These messages are identical in both.
+//
+// Problems are labelled as ValidateAlts labels them ("val.open alt[0]: …")
+// and sorted, so the two runtimes report the same list in the same order.
+func ValidateGrammar(gs *GrammarSpec, known []string) []string {
+	var out []string
+
+	if gs == nil || gs.Rule == nil {
+		return out
+	}
+
+	defined := map[string]bool{}
+	for _, name := range known {
+		defined[name] = true
+	}
+	for name, rulespec := range gs.Rule {
+		// A nil entry REMOVES that rule, so it defines nothing.
+		if rulespec != nil {
+			defined[name] = true
+		}
+	}
+
+	for name, rulespec := range gs.Rule {
+		if rulespec == nil {
+			continue
+		}
+
+		for _, state := range []struct {
+			label string
+			spec  any
+		}{{"open", rulespec.Open}, {"close", rulespec.Close}} {
+			label := name + "." + state.label
+
+			for index, alt := range specAltList(state.spec) {
+				if alt == nil {
+					continue
+				}
+				for _, slot := range []struct{ name, ref string }{
+					{"p", alt.P}, {"r", alt.R},
+				} {
+					if bad := unknownRuleRef(slot.ref, defined); bad != "" {
+						out = append(out, fmt.Sprintf(
+							"%s alt[%d]: unknown rule in %s: %q",
+							label, index, slot.name, bad))
+					}
+				}
+			}
+		}
+	}
+
+	sort.Strings(out) // map iteration is random; keep reports stable
+	return out
+}
+
 // Grammar applies a declarative grammar specification to this Tabnas instance.
 // Options are applied first, then rules are processed.
 // An optional *GrammarSetting may be supplied to append a tag (or tags) to

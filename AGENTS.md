@@ -249,9 +249,13 @@ The engine declares the base error codes every grammar inherits, in
 `ts/src/defaults.ts` (`error`/`hint`) and its Go counterpart:
 
 `unknown`, `unexpected`, `invalid_unicode`, `invalid_ascii`, `unprintable`,
-`unterminated_string`, `unterminated_comment`, `unknown_rule`, `end_of_source`
+`unterminated_string`, `unterminated_comment`, `unknown_rule`, `end_of_source`,
+`cancel`
 
-Those nine are the **cross-runtime** set. Go reserves one more: `internal`,
+Those ten are the **cross-runtime** set — `cancel` included: the budget
+feature raises it in both runtimes (`ts/src/parser.ts`, `go/parser.go`), and
+[`schema/error-codes.json`](schema/error-codes.json), which is generated and
+gated in both test suites, has always carried it. Go reserves one more: `internal`,
 declared with its own message and hint in `go/tabnas.go`, which the engine
 produces when it recovers a panic from a plugin callback or matcher
 (`go/parser.go`, `go/plugin.go`). TypeScript has no equivalent. A Go plugin
@@ -276,6 +280,10 @@ from the TS merged catalogues by `npm run gen-registry` (from `ts/`, script
 by both engines but currently raised by neither — declared-but-dead, recorded
 here rather than silently removed (a grammar may still raise it: the TS
 strict-JSON test fixture does, via `ctx.t0.err`, when `rule.finish` is off).
+One more name is dead in a different way: `invalid_lex_state`, a string
+constant at `ts/src/utility.ts:110` that appears nowhere else in either
+runtime and is in no catalogue. It is not a base code — do not transcribe it
+into a port as an eleventh.
 
 ### Structured diagnostics
 

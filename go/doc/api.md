@@ -493,7 +493,7 @@ if te, ok := err.(*tabnas.TabnasError); ok {
 
 Common error codes: `unexpected`, `unterminated_string`,
 `unterminated_comment`, `invalid_unicode`, `invalid_ascii`,
-`unprintable`, `unknown_rule`, `end_of_source`, `internal`. The
+`unprintable`, `unknown_rule`, `end_of_source`, `cancel`, `internal`. The
 `internal` code marks a bug in tabnas or a plugin (a panic caught by
 the recover guard), not bad input — see
 [concepts](concepts.md#the-no-panic-guarantee).

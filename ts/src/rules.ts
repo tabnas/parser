@@ -1968,6 +1968,104 @@ export function validateAlts(alts: any[], label: string = ''): string[] {
   return out
 }
 
+/** The alternates a rule-spec state holds, in either shipped shape: a bare
+ * array, or the `{ alts, inject }` form that carries injection modifiers.
+ * Anything else yields undefined — validation reports what it can read and
+ * stays silent about what it cannot. */
+function specAltList(state: any): any[] | undefined {
+  if (Array.isArray(state)) {
+    return state
+  }
+  if (null != state && 'object' === typeof state && Array.isArray(state.alts)) {
+    return state.alts
+  }
+  return undefined
+}
+
+/** Whether a `p`/`r` slot names a rule nothing defines. Returns undefined
+ * when there is nothing to check: absent, `false` (disabled), a function, or
+ * a FuncRef — a `@name` resolves to a function that yields its rule name at
+ * parse time, so no static check can follow it. */
+function unknownRuleRef(ref: any, defined: Set<string>): string | undefined {
+  if (null == ref || false === ref || 'string' !== typeof ref || '' === ref) {
+    return undefined
+  }
+  if (ref.startsWith('@')) {
+    return undefined
+  }
+  return defined.has(ref) ? undefined : ref
+}
+
+/** Every dangling rule reference in a grammar spec: an alternate whose `p`
+ * or `r` names a rule nothing defines. This is the one check that needs the
+ * whole rule map in scope, which is why `validateAlt` cannot make it — and
+ * the reference is a static typo the engine can otherwise only report at
+ * parse time, once an input happens to reach the alternate carrying it.
+ *
+ * Deliberately narrow: this reports rule references and nothing else. Run
+ * `validateAlts` per list for the per-alternate checks — those two runtimes
+ * word their messages differently today, and composing them here would bake
+ * that difference into a new API. These messages are identical in both.
+ *
+ * `known` names rules that already exist on the target instance, so a spec
+ * that EXTENDS a grammar can push to a rule it does not itself define without
+ * being flagged. Omit it to check a spec as a self-contained document.
+ *
+ * Problems are labelled as `validateAlts` labels them (`val.open alt[0]: …`)
+ * and sorted, so the two runtimes report the same list in the same order. */
+export function validateGrammar(
+  spec: any,
+  known?: string[] | Set<string>
+): string[] {
+  const out: string[] = []
+
+  if (null == spec || 'object' !== typeof spec ||
+    null == spec.rule || 'object' !== typeof spec.rule) {
+    return out
+  }
+
+  const defined: Set<string> = new Set(known || [])
+  for (const rulename of Object.keys(spec.rule)) {
+    // A null entry REMOVES that rule, so it defines nothing.
+    if (null != spec.rule[rulename]) {
+      defined.add(rulename)
+    }
+  }
+
+  for (const rulename of Object.keys(spec.rule)) {
+    const rulespec = spec.rule[rulename]
+    if (null == rulespec || 'object' !== typeof rulespec) {
+      continue
+    }
+
+    for (const state of ['open', 'close']) {
+      const alts = specAltList((rulespec as any)[state])
+      if (null == alts) {
+        continue
+      }
+
+      const label = rulename + '.' + state
+
+      for (let index = 0; index < alts.length; index++) {
+        const alt = alts[index]
+        if (null == alt || 'object' !== typeof alt) {
+          continue
+        }
+        for (const slot of ['p', 'r']) {
+          const bad = unknownRuleRef(alt[slot], defined)
+          if (undefined !== bad) {
+            out.push(label + ' alt[' + index + ']: unknown rule in ' +
+              slot + ': "' + bad + '"')
+          }
+        }
+      }
+    }
+  }
+
+  out.sort()
+  return out
+}
+
 /** Problems with one declarative condition entry: `prop` against `pspec`.
  * Pure — returns messages instead of throwing, so a validation pass can
  * collect every problem in a grammar rather than stopping at the first. */
