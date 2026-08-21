@@ -117,14 +117,165 @@ describe('builtins', () => {
     })
   })
 
+  // A1 (ruling #120): a builtin's configuration is bound when the grammar
+  // LOADS, and leaves the alternate's keep bag entirely.
+  //
+  // Two things depend on it. Correctness: `alt.k` merges into `rule.k`,
+  // which PROPAGATES to children on push and replace, so config left in
+  // the bag reaches rules that never declared it — the split this repo
+  // registered against Go, where builtins read `r.K`. Cost: every key in
+  // `rule.k` is copied into the child on both paths, and builtin config
+  // was the commonest occupant of a bag that never needed to travel.
+  // The TypeScript half of go/divergence_test.go
+  // TestBuiltinConfigIsAlternateScoped, over the same two shapes and the
+  // same input — the SAME assertion, not the opposite, because the two
+  // ports now agree.
+  //
+  // This replaces a divergence pin. Until ruling #120's A1, Go's builtins
+  // read config from `r.K`, which propagates to children, so a parent
+  // that merely DECLARED a config handed it to a child running the
+  // builtin bare: 4 there against 3 here. Kept as a parity test because
+  // the regression is silent — every fleet grammar pairs a config with
+  // its action on the same alternate, so only the set-then-push shape
+  // can see it.
+  describe('builtin config is scoped to the declaring alternate', () => {
+    const spec = (parentRuns) => {
+      const openAlt = { s: ['#NR', '#NR'], k: { value$: { from: 1 } }, p: 'leaf' }
+      if (parentRuns) openAlt.a = '@value$'
+      return {
+        options: { rule: { start: 'top' } },
+        rule: {
+          top: { open: [openAlt], close: [{ a: '@value$' }] },
+          leaf: { open: [{ s: ['#NR', '#NR'], a: '@value$' }], close: [{}] },
+        },
+      }
+    }
+
+    // On `1 2 3 4`: 3 means the config did NOT reach the child, 4 means
+    // it did.
+    for (const [label, runs] of [
+      ['set-then-push (parent declares the config, never runs it)', false],
+      ['run-then-push (parent runs the builtin first)', true],
+    ]) {
+      it(label + ' answers 3', () => {
+        const j = new Tabnas({ rule: { start: 'top' } })
+        j.grammar(JSON.parse(JSON.stringify(spec(runs))))
+        assert.equal(
+          j.parse('1 2 3 4'), 3,
+          'builtin config must be scoped to the alternate that DECLARES ' +
+          'it; a 4 means it reached the child, which is the divergence ' +
+          '#120 repaired',
+        )
+      })
+    }
+  })
+
+  describe('builtin config is bound at grammar load (A1, #120)', () => {
+    const altOf = (spec) => {
+      const j = new Tabnas({ rule: { start: 'top' } })
+      j.grammar(JSON.parse(JSON.stringify(spec)))
+      return j.internal().parser.rsm.top.def.open[0]
+    }
+    const withK = (k) => ({
+      options: { rule: { start: 'top' } },
+      rule: {
+        top: {
+          open: [k ? { s: ['#NR'], a: '@value$', k } : { s: ['#NR'], a: '@value$' }],
+          close: [{}],
+        },
+      },
+    })
+
+    it('takes the config key out of the keep bag, and empties it', () => {
+      assert.equal(
+        altOf(withK({ value$: { from: 0 } })).k,
+        undefined,
+        'an alternate whose only `k` entry was builtin config must end with ' +
+        'NO bag: leaving `{}` keeps it merging into rule.k on every match ' +
+        'for nothing, which is most of what A1 exists to remove',
+      )
+    })
+
+    it('leaves a user key alone — even one ending in `$`', () => {
+      // The trap this must not fall into: a `$`-suffix test would strip
+      // `myTotal$` too. The set is keyed by the ref a spec writes.
+      assert.deepEqual(
+        altOf(withK({ value$: { from: 0 }, myTotal$: 1 })).k,
+        { myTotal$: 1 },
+      )
+      assert.deepEqual(altOf(withK({ myTotal$: 1 })).k, { myTotal$: 1 })
+    })
+
+    it('the bound config still takes effect', () => {
+      // Emptying the bag is only correct if the config went somewhere.
+      const run = (k, src) => {
+        const j = new Tabnas({ rule: { start: 'top' } })
+        j.grammar({
+          options: { rule: { start: 'top' } },
+          rule: {
+            top: {
+              open: [k ? { s: ['#NR', '#NR'], a: '@value$', k } : { s: ['#NR', '#NR'], a: '@value$' }],
+              close: [{}],
+            },
+          },
+        })
+        return j.parse(src)
+      }
+      assert.equal(run({ value$: { from: 1 } }, '7 9'), 9, 'bound from:1')
+      assert.equal(run(null, '7 9'), 7, 'default from:0')
+    })
+
+    it('binding is idempotent across a re-normalised rule spec', () => {
+      // The second pass sees a function rather than a ref. If it rebound,
+      // it would bind an EMPTY config over the real one — the config key
+      // is already gone by then — and the builtin would silently revert
+      // to its defaults.
+      const j = new Tabnas({ rule: { start: 'top' } })
+      const spec = {
+        options: { rule: { start: 'top' } },
+        rule: {
+          top: {
+            open: [{ s: ['#NR', '#NR'], a: '@value$', k: { value$: { from: 1 } } }],
+            close: [{}],
+          },
+        },
+      }
+      j.grammar(JSON.parse(JSON.stringify(spec)))
+      j.rule('top', (rs) => rs) // touch the spec again
+      assert.equal(j.parse('7 9'), 9, 'config must survive re-normalisation')
+    })
+
+    it('the probe family keeps its rule state, by construction', () => {
+      // @probeInit$/@probeDecide$ read and write `r.k` (pd_phase,
+      // pd_mark) — rule state that MUST propagate. They are absent from
+      // the bound set rather than carved out of it, so nothing here has
+      // to know about them.
+      const { BUILTIN_CONFIG_FACTORY } = builtinsSubpath
+      for (const ref of ['@probeInit$', '@probeDecide$', '@probePhase0$',
+        '@probePhase1$', '@probePhase2$', '@bubble$', '@reset$', '@push$']) {
+        assert.equal(
+          BUILTIN_CONFIG_FACTORY[ref],
+          undefined,
+          ref + ' takes no per-alternate config and must not be bound',
+        )
+      }
+    })
+  })
+
   describe('tree builtins (direct invocation of merge edge cases)', () => {
+    // Under A1 (#120) a builtin's config is bound when the grammar loads,
+    // not read from `alt.k` when the action runs — so a direct invocation
+    // builds a configured instance from the factory. BUILTIN_REFS holds
+    // the default-config instance, which is what a bare `@node$` gets.
+    const { BUILTIN_CONFIG_FACTORY } = builtinsSubpath
+    const cfgd = (ref, cfg) => BUILTIN_CONFIG_FACTORY[ref](cfg)
     const node$ = BUILTIN_REFS['@node$']
     const capture$ = BUILTIN_REFS['@capture$']
     const bubble$ = BUILTIN_REFS['@bubble$']
 
     it('@node$ inits and accumulates nterms src', () => {
       const r = { node: null, o: [{ src: 'x' }, { src: 'y' }, { src: 'z' }] }
-      node$(r, null, { k: { node$: { init: true, rule: 'r', kind: 'user', nterms: 2 } } })
+      cfgd('@node$', { init: true, rule: 'r', kind: 'user', nterms: 2 })(r)
       assert.deepEqual(r.node, { rule: 'r', src: 'xy', kids: [] })
     })
 
@@ -155,7 +306,7 @@ describe('builtins', () => {
 
     it('@node$ accumulates onto an existing node when init is falsy', () => {
       const r = { node: { rule: 'r', src: 'pre', kids: [] }, o: [{ src: 'A' }, { src: 'B' }] }
-      node$(r, null, { k: { node$: { nterms: 2 } } })
+      cfgd('@node$', { nterms: 2 })(r)
       assert.deepEqual(r.node, { rule: 'r', src: 'preAB', kids: [] })
     })
 
@@ -450,7 +601,7 @@ describe('builtins', () => {
       assert.equal(r.u.key, 'name')
       // custom slot/from.
       const r2 = { u: {}, o: [{ val: 'x' }, { val: 'y' }] }
-      key$(r2, null, { k: { key$: { slot: 'k2', from: 1 } } })
+      builtinsSubpath.BUILTIN_CONFIG_FACTORY['@key$']({ slot: 'k2', from: 1 })(r2)
       assert.equal(r2.u.k2, 'y')
     })
 
@@ -501,7 +652,8 @@ describe('builtins', () => {
       assert.equal(d.enumerable, false, 'marker is hidden')
       assert.deepEqual(r.node['__info__'], { implicit: false, meta: {} })
       // implicit comes from static alt config, not a close hook.
-      const r2 = { node: 'seed' }; object$(r2, onCtx, { k: { object$: { implicit: true } } })
+      const r2 = { node: 'seed' }
+      builtinsSubpath.BUILTIN_CONFIG_FACTORY['@object$']({ implicit: true })(r2, onCtx)
       assert.equal(r2.node['__info__'].implicit, true)
       // marker is non-enumerable, so JSON output is unaffected.
       assert.equal(JSON.stringify(r.node), '{}')

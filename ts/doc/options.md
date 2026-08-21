@@ -404,7 +404,7 @@ new Tabnas({ error: { unexpected: 'bad character: {src}' } })
 
 The built-in codes are `unknown`, `unexpected`, `invalid_unicode`,
 `invalid_ascii`, `unprintable`, `unterminated_string`,
-`unterminated_comment`, `unknown_rule`, `end_of_source`.
+`unterminated_comment`, `unknown_rule`, `end_of_source`, `cancel`.
 
 ## `hint`
 

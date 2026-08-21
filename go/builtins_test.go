@@ -45,25 +45,21 @@ func TestBuiltinRefsLibrary(t *testing.T) {
 // --- tree builtins (direct invocation) ---
 
 func TestBuiltinNode(t *testing.T) {
-	// nterms as float64 to exercise parsed-JSON coercion.
-	r := &Rule{
-		K: map[string]any{"node$": map[string]any{
-			"init": true, "rule": "r", "kind": "user", "nterms": float64(2)}},
-		O: []*Token{{Src: "x"}, {Src: "y"}, {Src: "z"}},
-	}
-	builtinNode(r, nil)
+	// Config is bound at grammar load (A1, #120), so a direct invocation
+	// builds a configured instance. nterms as float64 to exercise
+	// parsed-JSON coercion.
+	r := &Rule{O: []*Token{{Src: "x"}, {Src: "y"}, {Src: "z"}}}
+	makeBuiltinNode(map[string]any{
+		"init": true, "rule": "r", "kind": "user", "nterms": float64(2)})(r, nil)
 	want := map[string]any{"rule": "r", "src": "xy", "kids": []any{}}
 	if !reflect.DeepEqual(r.Node, want) {
 		t.Errorf("node: got %v, want %v", r.Node, want)
 	}
 
 	// accumulate-only (no init) onto an existing node.
-	r2 := &Rule{
-		K: map[string]any{"node$": map[string]any{"nterms": 2}},
-		O: []*Token{{Src: "A"}, {Src: "B"}},
-	}
+	r2 := &Rule{O: []*Token{{Src: "A"}, {Src: "B"}}}
 	r2.Node = map[string]any{"rule": "r", "src": "pre", "kids": []any{}}
-	builtinNode(r2, nil)
+	makeBuiltinNode(map[string]any{"nterms": 2})(r2, nil)
 	if r2.Node.(map[string]any)["src"] != "preAB" {
 		t.Errorf("accumulate: got %v", r2.Node)
 	}
@@ -447,21 +443,31 @@ func TestNativeValueBuilders(t *testing.T) {
 }
 
 func TestNativeValueLeakageFix(t *testing.T) {
-	// The config-reading builders delete their own r.K key after reading,
-	// so a config set on one alt can't propagate to a child and mis-fire.
-	rk := &Rule{K: map[string]any{"key$": map[string]any{"slot": "k"}}, U: map[string]any{},
-		O: []*Token{{Val: "v"}}}
-	builtinKey(rk, nil)
+	// Config is BOUND AT GRAMMAR LOAD (A1, #120), so a direct invocation
+	// builds a configured instance from the factory. This replaces the
+	// delete-after-read assertions: the five value builders used to
+	// remove their own r.K key to stop config leaking into a child, and
+	// that containment measure is unnecessary now the config never
+	// enters r.K at all.
+	rk := &Rule{U: map[string]any{}, O: []*Token{{Val: "v"}}}
+	makeBuiltinKey(map[string]any{"slot": "k"})(rk, nil)
 	if rk.U["k"] != "v" {
 		t.Errorf("@key$ custom slot: got %v", rk.U["k"])
 	}
-	if _, present := rk.K["key$"]; present {
-		t.Error("@key$ must delete its r.K config key after reading (leakage fix)")
+
+	// And a config left in r.K by a PARENT must now be inert: reading it
+	// is what made the same serialized grammar answer 4 here and 3 in
+	// TypeScript. A bare builtin takes its defaults, whatever the bag
+	// holds.
+	rleak := &Rule{K: map[string]any{"key$": map[string]any{"slot": "leaked"}},
+		U: map[string]any{}, O: []*Token{{Val: "v"}}}
+	builtinKey(rleak, nil)
+	if _, leaked := rleak.U["leaked"]; leaked {
+		t.Error("@key$ must IGNORE a config left in r.K — that leak is the " +
+			"divergence A1 repairs, not a feature to preserve")
 	}
-	rv := &Rule{K: map[string]any{"value$": map[string]any{}}, Child: &Rule{Node: "x"}}
-	builtinValue(rv, &Context{})
-	if _, present := rv.K["value$"]; present {
-		t.Error("@value$ must delete its r.K config key after reading")
+	if rleak.U["key"] != "v" {
+		t.Errorf("@key$ bare must use its default slot: got %v", rleak.U)
 	}
 }
 
@@ -481,13 +487,10 @@ func TestNativeValueBuildersInfo(t *testing.T) {
 	if mr.Implicit || mr.Val == nil || mr.Meta == nil {
 		t.Errorf("@object$ info: implicit=%v val=%v meta=%v", mr.Implicit, mr.Val, mr.Meta)
 	}
-	ro2 := &Rule{K: map[string]any{"object$": map[string]any{"implicit": true}}}
-	builtinObject(ro2, mapCtx)
+	ro2 := &Rule{}
+	makeBuiltinObject(map[string]any{"implicit": true})(ro2, mapCtx)
 	if mr2, _ := ro2.Node.(MapRef); !mr2.Implicit {
-		t.Error("@object$ info: implicit config not honoured")
-	}
-	if _, present := ro2.K["object$"]; present {
-		t.Error("@object$ must delete its r.K config key after reading")
+		t.Error("@object$ info: bound implicit config not honoured")
 	}
 
 	// @array$ → ListRef.

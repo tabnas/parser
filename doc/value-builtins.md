@@ -17,35 +17,60 @@ with the native-value builders as **alt actions** (`a:`).
 
 ## Where builtin config lives — and what it inherits
 
-Config for these builtins rides in the rule's **`k`** bag, keyed by builtin
-name (`k.node$`, `k.object$`, …). An alternate's `k` is merged into
-`rule.k` *before* the action runs — `rule.k = Object.assign(rule.k, alt.k)`
-(`ts/src/rules.ts:605`) and its Go twin (`go/rule.go:1166-1170`).
+**A builtin's config is bound when the GRAMMAR LOADS, and does not live in
+any rule state at all.** You still *declare* it in an alternate's `k`,
+keyed by builtin name (`k.node$`, `k.object$`, …), but the engine takes
+the key out of the bag as it binds it into the action:
+`bindBuiltinConfig` in `ts/src/rules.ts` and `go/grammarspec.go`. An
+alternate whose only `k` entry was builtin config ends up with no bag at
+all.
 
-**`k` is named for "keep": its content is kept as the parse descends.**
-That makes the propagation rule load-bearing for anyone writing a grammar
-against these builtins:
+The rule that follows from this is the one to remember:
+
+> **Config belongs to the alternate that declares it.** A child rule does
+> not inherit it, and neither does a later alternate of the same rule. A
+> builtin with no config on its own alternate runs on its defaults,
+> whatever any ancestor declared.
+
+This is ruling [#120](https://github.com/tabnas/parser/issues/120) as
+amended — A1. The ruling as first written standardised on rule-scoped
+(`rule.k`) config for both runtimes; A1 removes the question instead, and
+the amendment is recorded on the issue. Before it, the two ports
+disagreed: TypeScript read the matched alternate's copy while Go read the
+rule's, so a parent that *declared* `k: {value$: {from: 1}}` without
+running the builtin handed it to a child running `@value$` bare — the
+same function-free serialized grammar answered `4` in Go and `3` in
+TypeScript. Pinned now by `TestBuiltinConfigIsAlternateScoped` in both
+ports.
+
+### The `k` bag itself is unchanged, for your own data
+
+`k` is still named for "keep", and still propagates. Only builtin config
+has left it.
 
 | bag | holds | inherited by a child rule? |
 |---|---|---|
 | `n` / `N` | named counters | **YES** — push and replace |
 | `u` / `U` | user props, per-rule scratch | **NO** |
-| `k` / `K` | **keep** props, incl. all builtin config | **YES** — push and replace |
+| `k` / `K` | **keep** props — your own data | **YES** — push and replace |
 
-So a `k` set on a rule is visible to every rule pushed or replaced beneath
-it, in both runtimes (`ts/src/rules.ts:662-671`, `:686-695`;
+So a `k` you set is visible to every rule pushed or replaced beneath it,
+in both runtimes (`ts/src/rules.ts:662-671`, `:686-695`;
 `go/rule.go:1224-1236`, `:1249-1261`). It is rule-scoped, not
 alternate-scoped: it accumulates across every alternate that fires. If you
 need a value to stay local to one rule, put it in `u` — which is exactly
 what `@key$` does (`r.u[cfg.slot || 'key']`), so a captured key cannot
 leak into child rules.
 
-> **Note.** The two runtimes currently differ in which bag the *value*
-> builtins read their config from — TypeScript reads the alternate's copy,
-> Go reads the rule's — which is tracked as
-> [#120](https://github.com/tabnas/parser/issues/120) and has been ruled
-> rule-scoped (`rule.k`) for both. The propagation rule tabled above is
-> already identical in both runtimes and is unaffected by that fix.
+A key of your own that happens to end in `$` — `k: {myTotal$: 1}` — is
+ordinary user data and is left alone. The bound set is keyed by the ref a
+spec writes, never by a `$` suffix.
+
+**Go no longer deletes config keys after reading them.** The five value
+builders used to `delete(r.K, …)` immediately after a read, to stop config
+leaking into a child. That was containment for a design that no longer
+exists, and it was itself a third scoping regime — consumed-once in Go
+against alternate-scoped in TypeScript.
 
 | Builtin | Effect |
 |---|---|

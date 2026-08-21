@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf16"
 )
 
 // GrammarSpecFromJSON builds a GrammarSpec from a serialized spec —
@@ -173,6 +174,132 @@ type GrammarAltSpec struct {
 	U map[string]any // Custom props.
 	K map[string]any // Propagated custom props.
 	G string         // Group tags (comma-separated).
+}
+
+// specAltList returns the alternates a rule-spec state holds, in either
+// shipped shape: a bare []*GrammarAltSpec, or the *GrammarAltListSpec form
+// that carries injection modifiers. Anything else yields nil — validation
+// reports what it can read and stays silent about what it cannot.
+func specAltList(state any) []*GrammarAltSpec {
+	switch v := state.(type) {
+	case []*GrammarAltSpec:
+		return v
+	case *GrammarAltListSpec:
+		if v != nil {
+			return v.Alts
+		}
+	}
+	return nil
+}
+
+// unknownRuleRef returns the rule name a P/R slot carries when nothing
+// defines it, and "" when there is nothing to check: an absent slot, or a
+// FuncRef — a "@name" resolves to a function that yields its rule name at
+// parse time, so no static check can follow it.
+func unknownRuleRef(ref string, defined map[string]bool) string {
+	if ref == "" || strings.HasPrefix(ref, "@") || defined[ref] {
+		return ""
+	}
+	return ref
+}
+
+// utf16Less reports whether a sorts before b as sequences of UTF-16 code
+// units — JavaScript's default string ordering, and therefore the canonical
+// one. Go's byte-wise ordering disagrees whenever a non-BMP name (encoded as
+// a surrogate pair, lead unit 0xD800-0xDBFF) is compared against a BMP name
+// at or above U+E000: bytes put the BMP name first, UTF-16 units the astral.
+func utf16Less(a, b string) bool {
+	au := utf16.Encode([]rune(a))
+	bu := utf16.Encode([]rune(b))
+	for i := 0; i < len(au) && i < len(bu); i++ {
+		if au[i] != bu[i] {
+			return au[i] < bu[i]
+		}
+	}
+	return len(au) < len(bu)
+}
+
+// ValidateGrammar reports every dangling rule reference in a grammar spec:
+// an alternate whose P or R names a rule nothing defines. This is the one
+// check that needs the whole rule map in scope, which is why ValidateAlt
+// cannot make it — and the reference is a static typo the engine can
+// otherwise only report at parse time, once an input happens to reach the
+// alternate carrying it.
+//
+// known names rules that already exist on the target instance, so a spec
+// that EXTENDS a grammar can push to a rule it does not itself define
+// without being flagged. Pass nil to check a spec as a self-contained
+// document.
+//
+// Deliberately narrow: this reports rule references and nothing else. Run
+// ValidateAlts per list for the per-alternate checks — the two runtimes word
+// those messages differently today, and composing them here would bake that
+// difference into a new API. These messages are identical in both.
+//
+// Problems are labelled as ValidateAlts labels them ("val.open alt[0]: …")
+// and sorted, so the two runtimes report the same list in the same order.
+// The order is JavaScript's — by UTF-16 code unit — reproduced here
+// deliberately; see utf16Less.
+func ValidateGrammar(gs *GrammarSpec, known []string) []string {
+	var out []string
+
+	if gs == nil || gs.Rule == nil {
+		return out
+	}
+
+	defined := map[string]bool{}
+	// Clear wipes every rule on the instance before the spec is applied, so
+	// nothing the caller knew about survives to be referenced.
+	if !gs.Clear {
+		for _, name := range known {
+			defined[name] = true
+		}
+	}
+	for name, rulespec := range gs.Rule {
+		if rulespec == nil {
+			// A nil entry REMOVES that rule — including one the instance had.
+			delete(defined, name)
+		} else {
+			defined[name] = true
+		}
+	}
+
+	for name, rulespec := range gs.Rule {
+		if rulespec == nil {
+			continue
+		}
+
+		for _, state := range []struct {
+			label string
+			spec  any
+		}{{"open", rulespec.Open}, {"close", rulespec.Close}} {
+			label := name + "." + state.label
+
+			for index, alt := range specAltList(state.spec) {
+				if alt == nil {
+					continue
+				}
+				for _, slot := range []struct{ name, ref string }{
+					{"p", alt.P}, {"r", alt.R},
+				} {
+					if bad := unknownRuleRef(slot.ref, defined); bad != "" {
+						// %q would escape quotes, backslashes and control
+						// characters; TypeScript inserts the name verbatim, and
+						// it is canonical.
+						out = append(out, fmt.Sprintf(
+							"%s alt[%d]: unknown rule in %s: \"%s\"",
+							label, index, slot.name, bad))
+					}
+				}
+			}
+		}
+	}
+
+	// Map iteration is random, so this both stabilises the report and pins
+	// its order to TypeScript's. sort.Strings would order by UTF-8 bytes and
+	// disagree with JavaScript's UTF-16 ordering for non-BMP rule names.
+	sort.SliceStable(out, func(i, j int) bool { return utf16Less(out[i], out[j]) })
+	return out
 }
 
 // Grammar applies a declarative grammar specification to this Tabnas instance.
@@ -702,6 +829,99 @@ func (j *Tabnas) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) 
 // (or nil for none). An array is collapsed to one ordered call that
 // short-circuits when a prior action sets ctx.ParseErr (the engine's
 // equivalent of the TS error-token short-circuit).
+// bindBuiltinConfig resolves an action field, binding each stock builtin's
+// configuration out of the alternate's keep bag and into the action, at
+// GRAMMAR LOAD (A1, ruling #120). Every key it consumes is recorded in
+// `consumed` so the caller can leave it out of the alternate's K.
+//
+// WHY. Config in alt.K is merged into r.K before the action runs, and
+// r.K PROPAGATES to children on push and replace — so a parent that
+// merely DECLARED `k: {value$: {from: 1}}` handed it to a child running
+// `@value$` bare. Binding at load leaves one regime: the alternate that
+// declares the config is the alternate that gets it, which is what
+// TypeScript has always done and what AGENTS.md requires.
+//
+// TWO GUARDS. The set is keyed by the ref a spec writes, never by a `$`
+// suffix — a grammar's own `k: {myTotal$: 1}` is user data and must
+// survive. And the ref must still resolve to the stock builtin; that is
+// NOT reachable today, because Grammar() reserves the whole `$` ref
+// namespace and returns an error for a user ref key containing `$`, so
+// this is a cheap assertion rather than a live defence.
+func bindBuiltinConfig(
+	a any, ref map[FuncRef]any, k map[string]any, consumed map[string]bool,
+) (AltAction, error) {
+	bind := func(name string) (AltAction, bool) {
+		factory, isBuiltin := BUILTIN_CONFIG_FACTORY[FuncRef(name)]
+		if !isBuiltin {
+			return nil, false
+		}
+		if ref != nil {
+			if _, stock := ref[FuncRef(name)].(AltAction); !stock {
+				return nil, false
+			}
+		}
+		key := strings.TrimPrefix(name, "@")
+		cfg, _ := k[key].(map[string]any)
+		if _, present := k[key]; present {
+			consumed[key] = true
+		}
+		return factory(cfg), true
+	}
+
+	switch av := a.(type) {
+	case string:
+		if fn, ok := bind(av); ok {
+			return fn, nil
+		}
+	case []any:
+		out := make([]any, len(av))
+		for i, el := range av {
+			if name, isStr := el.(string); isStr {
+				if fn, ok := bind(name); ok {
+					out[i] = fn
+					continue
+				}
+			}
+			out[i] = el
+		}
+		return resolveActionField(out, ref)
+	case []string:
+		out := make([]any, len(av))
+		for i, name := range av {
+			if fn, ok := bind(name); ok {
+				out[i] = fn
+				continue
+			}
+			out[i] = name
+		}
+		return resolveActionField(out, ref)
+	}
+	return resolveActionField(a, ref)
+}
+
+// copyAltK copies a GrammarAltSpec's keep bag onto the AltSpec, leaving
+// out the keys bindBuiltinConfig consumed. An alternate whose only entry
+// was builtin config ends with NO bag: leaving an empty map behind would
+// keep it merging into r.K on every match for nothing, which is most of
+// what A1 exists to remove.
+func copyAltK(dst *AltSpec, src map[string]any, consumed map[string]bool) {
+	if src == nil {
+		return
+	}
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		if consumed[k] {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		dst.K = nil
+		return
+	}
+	dst.K = out
+}
+
 func resolveActionField(a any, ref map[FuncRef]any) (AltAction, error) {
 	switch av := a.(type) {
 	case nil:
@@ -857,7 +1077,8 @@ func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*Al
 	// Resolve A (action): a FuncRef string, or an array of refs/AltActions
 	// run in order (matched alt's own action first, then composed user
 	// actions), short-circuiting if a prior action sets ctx.ParseErr.
-	if action, err := resolveActionField(ga.A, ref); err != nil {
+	altConsumed := map[string]bool{}
+	if action, err := bindBuiltinConfig(ga.A, ref, ga.K, altConsumed); err != nil {
 		return nil, err
 	} else if action != nil {
 		alt.A = action
@@ -919,10 +1140,7 @@ func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*Al
 		}
 	}
 	if ga.K != nil {
-		alt.K = make(map[string]any, len(ga.K))
-		for k, v := range ga.K {
-			alt.K[k] = v
-		}
+		copyAltK(alt, ga.K, altConsumed)
 	}
 	alt.G = ga.G
 
@@ -1238,7 +1456,8 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 		}
 	}
 
-	if action, err := resolveActionField(ga.A, ref); err == nil && action != nil {
+	staticConsumed := map[string]bool{}
+	if action, err := bindBuiltinConfig(ga.A, ref, ga.K, staticConsumed); err == nil && action != nil {
 		alt.A = action
 	}
 	if ga.E != "" {
@@ -1268,7 +1487,10 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 		alt.U = ga.U
 	}
 	if ga.K != nil {
-		alt.K = ga.K
+		// Same binding as resolveGrammarAlt. This resolver is exported
+		// and bypasses that path entirely, so skipping it here would
+		// leave a caller silently on the pre-A1 semantics.
+		copyAltK(alt, ga.K, staticConsumed)
 	}
 	alt.G = ga.G
 

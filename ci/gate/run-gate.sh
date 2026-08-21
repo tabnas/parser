@@ -26,10 +26,9 @@ ROOT="${1:-$(cd "$PARSER_ROOT/.." && pwd)}"
 
 step() { printf '\n=== %s ===\n' "$*"; }
 
-link_ts_dep() { # link_ts_dep <repo-ts-dir> <scope-name> <target-dir>
-  mkdir -p "$1/node_modules/@tabnas"
-  ln -snf "$3" "$1/node_modules/@tabnas/$2"
-}
+# link_ts_dep lives in ci/lib/wire.sh, shared with run-bench.sh so the
+# two wirings cannot drift apart.
+. "$DIR/../lib/wire.sh"
 
 # --- TS wiring ---
 link_ts_dep "$ROOT/json/ts" parser "$PARSER_ROOT/ts"

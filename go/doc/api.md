@@ -493,7 +493,7 @@ if te, ok := err.(*tabnas.TabnasError); ok {
 
 Common error codes: `unexpected`, `unterminated_string`,
 `unterminated_comment`, `invalid_unicode`, `invalid_ascii`,
-`unprintable`, `unknown_rule`, `end_of_source`, `internal`. The
+`unprintable`, `unknown_rule`, `end_of_source`, `cancel`, `internal`. The
 `internal` code marks a bug in tabnas or a plugin (a panic caught by
 the recover guard), not bad input — see
 [concepts](concepts.md#the-no-panic-guarantee).
@@ -507,6 +507,56 @@ helper takes the address of a literal:
 func boolp(b bool) *bool { return &b }
 
 tabnas.Options{Comment: &tabnas.CommentOptions{Lex: boolp(false)}}
+```
+
+## Grammar validation
+
+Pure functions that check a grammar held as **data** — a `*GrammarSpec` from
+the `Grammar()` / GrammarText path, a generator, or an editor — before any
+parser exists. They report problems instead of returning errors, so one pass
+can collect everything wrong with a grammar rather than stopping at the first.
+
+### `ValidateAlt(alt *AltSpec) []string`
+
+Problems with one alternate: declarative (`CD`) conditions and `G` group
+tags. A condition given as a function is opaque and is skipped.
+
+### `ValidateAlts(alts []*AltSpec, label string) []string`
+
+`ValidateAlt` across a list, each problem prefixed with where it is — `label`
+names the list, e.g. `"val.open alt[0]: …"`.
+
+### `ValidateGrammar(gs *GrammarSpec, known []string) []string`
+
+Every **dangling rule reference** in a whole spec: an alternate whose `P` or
+`R` names a rule nothing defines. This is the one check that needs the whole
+rule map in scope, so `ValidateAlt` cannot make it — and the reference is a
+static typo the engine can otherwise only report at parse time, as
+`unknown_rule`, and only once an input reaches the alternate carrying it.
+
+- `known` names rules that already exist on the target instance, so a spec
+  that **extends** a grammar can push to a rule it does not itself define.
+  Pass `nil` to check a spec as a self-contained document.
+- A `nil` rule entry *removes* that rule, so referencing it dangles — even if
+  it was in `known`. `Clear: true` discards `known` entirely, since it wipes
+  every rule on the instance.
+- A FuncRef (`"@name"`) and an empty slot are skipped: each yields its rule
+  name at parse time, so no static check can follow it.
+
+Deliberately narrow — rule references only. Run `ValidateAlts` per list for
+the per-alternate checks; note those two runtimes word their group-tag
+message differently, which is why they are not folded in here. Problems are
+sorted **by UTF-16 code unit** (JavaScript's order, reproduced deliberately —
+see `utf16Less`) and the rule name is quoted verbatim rather than with `%q`,
+so this function returns byte-identical output to TypeScript's
+`validateGrammar`.
+
+```go
+gs := &tabnas.GrammarSpec{Rule: map[string]*tabnas.GrammarRuleSpec{
+    "val": {Open: []*tabnas.GrammarAltSpec{{S: "#OB", P: "mapp"}}},
+}}
+tabnas.ValidateGrammar(gs, nil)
+// [val.open alt[0]: unknown rule in p: "mapp"]
 ```
 
 ## Constants

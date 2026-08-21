@@ -22,12 +22,32 @@ FIX="$DIR/fixtures"
 MODE="${1:-full}"
 if [ "$MODE" = quick ]; then ITERS=10 WARMUP=5 BENCHTIME=5x; else ITERS=30 WARMUP=15 BENCHTIME=2s; fi
 
+# --- TS wiring: measure the WORKING TREE, not whatever npm installed ---
+# Without this the harness benchmarks the PUBLISHED @tabnas/parser that
+# json/ and jsonic/ resolve from their own node_modules, so an engine
+# change under test contributes nothing to the numbers and the run looks
+# entirely normal. Relying on run-gate.sh to have wired it first is not
+# enough: it is a separate script a bench run need not have executed.
+. "$DIR/../lib/wire.sh"
+link_ts_dep "$ROOT/json/ts" parser "$PARSER_ROOT/ts"
+link_ts_dep "$ROOT/jsonic/ts" parser "$PARSER_ROOT/ts"
+link_ts_dep "$ROOT/jsonic/ts" json "$ROOT/json/ts"
+if [ -d "$ROOT/debug/ts" ]; then
+  link_ts_dep "$ROOT/jsonic/ts" debug "$ROOT/debug/ts"
+fi
+echo "=== wired @tabnas/parser -> $PARSER_ROOT/ts ==="
+
 echo "=== generate fixtures (pinned seed) ==="
 node "$DIR/genfixture.js" "$FIX"
 
 echo
 echo "=== TS benchmarks ==="
-for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json; do
+# records-cjk-1mb.json is the non-ASCII arm: without it every fixture
+# here is ASCII (the escape-dense one included, since escape SEQUENCES
+# are ASCII bytes) and the per-character fallback scan path is never
+# measured. Generating it and not benchmarking it is worse than not
+# having it — it reads as coverage and produces no timing data.
+for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json; do
   node "$DIR/bench.js" json "$FIX/$f" "$ITERS" "$WARMUP"
   node "$DIR/bench.js" native "$FIX/$f" "$ITERS" "$WARMUP"
 done

@@ -123,8 +123,7 @@ interface ValueConfig {
 // function-free grammar builds the identical `{rule,src,kids}` tree.
 
 // Allocate (when `init`) and/or accumulate matched terminals' src.
-const node$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
-  const cfg: NodeConfig = (alt && alt.k && alt.k.node$) || {}
+const makeNode$ = (cfg: NodeConfig): AltAction => (r: Rule) => {
   if (cfg.init) r.node = mkNode(cfg.rule, cfg.kind)
   const n = r.node as AstNode
   const nterms = cfg.nterms || 0
@@ -134,8 +133,7 @@ const node$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
 // Merge the just-returned child node into the current node. Tagged
 // children push into `kids`; untagged ones flatten (src concatenates,
 // kids extend).
-const capture$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
-  const cfg: CaptureConfig = (alt && alt.k && alt.k.capture$) || {}
+const makeCapture$ = (cfg: CaptureConfig): AltAction => (r: Rule) => {
   if (null == r.node) r.node = mkNode(cfg.rule, cfg.kind)
   const n = r.node as AstNode
   const c = r.child && (r.child.node as any)
@@ -166,8 +164,7 @@ const bubble$: AltAction = (r: Rule) => {
 // `cfg.cN` close-phase tokens (the separator, e.g. `+`) append their src
 // to the parent after the fold, so the parent's src spans the full run
 // while each kid spans only its own segment.
-const fold$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
-  const cfg: FoldConfig = (alt && alt.k && alt.k.fold$) || {}
+const makeFold$ = (cfg: FoldConfig): AltAction => (r: Rule) => {
   const p = r.parent && (r.parent.node as any)
   if (null == p || 'object' !== typeof p || !('src' in p)) return
   const own = r.node as any
@@ -231,22 +228,20 @@ const probePhase2$: AltCond = (r: Rule) => 2 === r.k.pd_phase
 
 // Allocate a fresh empty object into r.node (no prototype, like JSON).
 // When info.map is on, attach the marker with the static `implicit` flag.
-const object$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+const makeObject$ = (cfg: ObjectConfig): AltAction => (r: Rule, ctx: Context) => {
   const node = Object.create(null)
   r.node = node
   if (ctx.cfg.info.map) {
-    const cfg: ObjectConfig = (alt && alt.k && alt.k.object$) || {}
     markNode(node, ctx.cfg.info.marker, { implicit: !!cfg.implicit, meta: {} })
   }
 }
 
 // Allocate a fresh empty array into r.node. When info.list is on, attach
 // the marker with the static `implicit` flag.
-const array$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+const makeArray$ = (cfg: ArrayConfig): AltAction => (r: Rule, ctx: Context) => {
   const node: any[] = []
   r.node = node
   if (ctx.cfg.info.list) {
-    const cfg: ArrayConfig = (alt && alt.k && alt.k.array$) || {}
     markNode(node, ctx.cfg.info.marker, { implicit: !!cfg.implicit, meta: {} })
   }
 }
@@ -259,8 +254,7 @@ const reset$: AltAction = (r: Rule) => {
 
 // Capture the matched key token's value into a (non-propagated) r.u slot,
 // for a later @setval$ on the same rule to consume.
-const key$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
-  const cfg: KeyConfig = (alt && alt.k && alt.k.key$) || {}
+const makeKey$ = (cfg: KeyConfig): AltAction => (r: Rule) => {
   r.u[cfg.slot || 'key'] = r.o[cfg.from || 0]?.val
 }
 
@@ -269,8 +263,7 @@ const key$: AltAction = (r: Rule, _ctx: Context, alt: AltMatch) => {
 // key that collides with the marker is dropped (the marker rides as a
 // hidden property, so a literal `"__info__"` key must not overwrite it) —
 // this guard is TS-only; Go's field-based metadata has no key collision.
-const setval$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
-  const cfg: SetvalConfig = (alt && alt.k && alt.k.setval$) || {}
+const makeSetval$ = (cfg: SetvalConfig): AltAction => (r: Rule, ctx: Context) => {
   const n = r.node as any
   if (null != n && 'object' === typeof n) {
     const key = r.u[cfg.slot || 'key']
@@ -297,12 +290,11 @@ const push$: AltAction = (r: Rule) => {
 // string from a string/text token, box it as a `String` carrying the
 // quote char (the leaf whose output type changes under info — it has no
 // container to hang the marker on). The Go counterpart wraps in a `Text`.
-const value$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
+const makeValue$ = (cfg: ValueConfig): AltAction => (r: Rule, ctx: Context) => {
   if (undefined !== r.child.node) {
     r.node = r.child.node
     return
   }
-  const cfg: ValueConfig = (alt && alt.k && alt.k.value$) || {}
   const tok = r.o[cfg.from || 0]
   let val = tok ? tok.resolveVal(r, ctx) : undefined
   const info = ctx.cfg.info
@@ -320,6 +312,40 @@ const value$: AltAction = (r: Rule, ctx: Context, alt: AltMatch) => {
   r.node = val
 }
 
+
+// A default-config instance of each config-bound builtin. These are what
+// BUILTIN_REFS exposes, so a bare `@node$` with no `k` declaration — and
+// any caller reaching for the ref directly — behaves exactly as before.
+const node$ = makeNode$({})
+const capture$ = makeCapture$({})
+const fold$ = makeFold$({})
+const object$ = makeObject$({})
+const array$ = makeArray$({})
+const key$ = makeKey$({})
+const setval$ = makeSetval$({})
+const value$ = makeValue$({})
+
+// The CLOSED set of builtins whose config is bound at grammar load (A1,
+// ruling #120) instead of read from the keep bag when the action runs.
+//
+// Keyed by the ref exactly as a spec writes it. Never by a `$`-suffix
+// test: a grammar's own `k: { myTotal$: 1 }` is ordinary user data and
+// must survive untouched, and a suffix test would strip it. The probe
+// family is absent by construction rather than by carve-out — those
+// builtins read and write `r.k` (pd_phase, pd_mark), which is rule state
+// that MUST propagate, not per-alternate configuration.
+export const BUILTIN_CONFIG_FACTORY: Readonly<
+  Record<string, (cfg: any) => AltAction>
+> = Object.freeze({
+  '@node$': makeNode$,
+  '@capture$': makeCapture$,
+  '@fold$': makeFold$,
+  '@object$': makeObject$,
+  '@array$': makeArray$,
+  '@key$': makeKey$,
+  '@setval$': makeSetval$,
+  '@value$': makeValue$,
+})
 
 // The standard builtin library, frozen so a grammar that (illegally)
 // overrides a `$` ref cannot mutate the shared map for other instances.

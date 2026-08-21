@@ -116,7 +116,7 @@ import {
 } from './lexer'
 
 import { makeParser, makeRule, makeRuleSpec } from './parser'
-import { validateAlt, validateAlts, continuationTins } from './rules'
+import { validateAlt, validateAlts, validateGrammar, continuationTins } from './rules'
 
 import { mergeInstances, deshareMatchTokens } from './merge'
 
@@ -893,6 +893,7 @@ export {
   makeToken,
   validateAlt,
   validateAlts,
+  validateGrammar,
 }
 
 // VERSION is this package's version. It MUST equal package.json "version":

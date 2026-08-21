@@ -489,3 +489,60 @@ func TestDivergenceRegexDialect(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltinConfigIsAlternateScoped replaces a divergence pin. Until
+// ruling #120's A1, Go's builtins read their config from r.K — which
+// PROPAGATES to children on push and replace — so a parent that merely
+// DECLARED a config handed it to a child running the builtin bare, and
+// the same function-free serialized grammar answered 4 here against
+// TypeScript's 3. See DIVERGENCE.md, "Repaired, and what replaced them".
+//
+// Kept as a PARITY test rather than deleted, because the regression is
+// SILENT: restoring an r.K read would leave every fleet grammar working,
+// since all four declaration sites pair a config with its action on the
+// same alternate. Only the set-then-push shape below can see it.
+//
+// ts/test/builtins.test.js asserts the same two shapes with the same
+// input — not the opposite, because the two ports now agree.
+func TestBuiltinConfigIsAlternateScoped(t *testing.T) {
+	// top matches `#NR #NR`, carries k:{value$:{from:1}} and pushes leaf,
+	// which runs @value$ bare. On `1 2 3 4`: 3 means the config did NOT
+	// reach the child, 4 means it did.
+	spec := func(parentRuns bool) string {
+		openAlt := `{"s":["#NR","#NR"],"k":{"value$":{"from":1}},"p":"leaf"`
+		if parentRuns {
+			openAlt += `,"a":"@value$"`
+		}
+		openAlt += `}`
+		return `{"options":{"rule":{"start":"top"}},"rule":{` +
+			`"top":{"open":[` + openAlt + `],"close":[{"a":"@value$"}]},` +
+			`"leaf":{"open":[{"s":["#NR","#NR"],"a":"@value$"}],"close":[{}]}}}`
+	}
+
+	for _, c := range []struct {
+		label string
+		runs  bool
+	}{
+		{"set-then-push (parent declares the config, never runs it)", false},
+		{"run-then-push (parent runs the builtin first)", true},
+	} {
+		gs, err := GrammarSpecFromJSON([]byte(spec(c.runs)))
+		if err != nil {
+			t.Fatalf("%s: spec: %v", c.label, err)
+		}
+		j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+		if err := j.Grammar(gs); err != nil {
+			t.Fatalf("%s: grammar: %v", c.label, err)
+		}
+		v, perr := j.Parse("1 2 3 4")
+		if perr != nil {
+			t.Fatalf("%s: parse: %v", c.label, perr)
+		}
+		if f, _ := v.(float64); f != 3 {
+			t.Errorf("%s: got %v, want 3 — builtin config must be scoped to "+
+				"the alternate that DECLARES it. A 4 here means config is "+
+				"reaching the child through r.K again, which is the "+
+				"divergence #120 repaired", c.label, v)
+		}
+	}
+}
