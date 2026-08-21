@@ -494,6 +494,62 @@ Customise messages and hints through the [`error` and `hint`
 options](options.md#error). Error-code keys come from
 `src/defaults.ts`.
 
+## Grammar validation
+
+Pure functions that check a grammar held as **data** — a `GrammarSpec` from
+the `grammar()` / GrammarText path, a generator, or an editor — before any
+parser exists. They report problems instead of throwing, so one pass can
+collect everything wrong with a grammar rather than stopping at the first.
+
+### `validateAlt(alt)`
+
+```ts
+validateAlt(alt: any): string[]
+```
+
+Problems with one alternate: declarative (object-form) conditions and group
+tags. A condition given as a function is opaque and is skipped.
+
+### `validateAlts(alts, label?)`
+
+```ts
+validateAlts(alts: any[], label?: string): string[]
+```
+
+`validateAlt` across a list, each problem prefixed with where it is —
+`label` names the list, e.g. `"val.open alt[0]: …"`.
+
+### `validateGrammar(spec, known?)`
+
+```ts
+validateGrammar(spec: any, known?: string[] | Set<string>): string[]
+```
+
+Every **dangling rule reference** in a whole spec: an alternate whose `p` or
+`r` names a rule nothing defines. This is the one check that needs the whole
+rule map in scope, so `validateAlt` cannot make it — and the reference is a
+static typo the engine can otherwise only report at parse time, as
+`unknown_rule`, and only once an input reaches the alternate carrying it.
+
+- `known` names rules that already exist on the target instance, so a spec
+  that **extends** a grammar can push to a rule it does not itself define.
+  Omit it to check a spec as a self-contained document.
+- A `null` rule entry *removes* that rule, so referencing it dangles — even
+  if it was in `known`. `clear: true` discards `known` entirely, since it
+  wipes every rule on the instance.
+- A FuncRef (`@name`), a `false` slot and an absent slot are skipped: each
+  yields its rule name at parse time, so no static check can follow it.
+
+Deliberately narrow — rule references only. Run `validateAlts` per list for
+the per-alternate checks. Problems are labelled as `validateAlts` labels them
+and sorted **by UTF-16 code unit**, and the Go port reproduces both exactly,
+so the two runtimes return the same list in the same order.
+
+```js
+validateGrammar({ rule: { val: { open: [{ s: '#OB', p: 'mapp' }] } } })
+// [ 'val.open alt[0]: unknown rule in p: "mapp"' ]
+```
+
 ## Module Exports
 
 ```js
@@ -509,6 +565,9 @@ const {
   makeToken, makePoint, makeRule, makeRuleSpec,
   makeFixedMatcher, makeSpaceMatcher, makeLineMatcher,
   makeStringMatcher, makeCommentMatcher, makeNumberMatcher, makeTextMatcher,
+
+  // Grammar validation (pure; see "Grammar validation" above)
+  validateAlt, validateAlts, validateGrammar,
 
   // Utility bag (also Tabnas.util)
   util,

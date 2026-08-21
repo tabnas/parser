@@ -142,3 +142,9 @@ dist-test
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# ci/bench/ab-compare.sh stages a byte-identical copy of the baseline
+# build here so its null run gets its own module graph, and removes it on
+# exit. Ignored so a crashed or interrupted run cannot leave a duplicate
+# dist/ staged for commit.
+.abba-null/

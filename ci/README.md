@@ -19,28 +19,99 @@ built for, with the richest corpus) is not even cloned.
   ~1,500 unit tests, including the error-code parity contract). TS deps
   are wired via `node_modules/@tabnas` symlinks; Go via a throwaway
   `go.work` (GOWORK env) — no repo files are modified.
-- `fixture-sync.sh` — verifies the shared TSV corpus has not drifted
-  between `parser/test/spec` and `jsonic/ts/test/spec` (name map:
-  `tabnas-*` ⇄ `jsonic-*`). Known divergences live in
-  `fixture-sync-allow.txt` (currently: three UTF-8 fixtures that exist
-  only in the parser repo — with a TODO to decide their fate).
+- `fixture-sync.sh` — verifies the fixtures the two repos SHARE have not
+  drifted, between `parser/test/spec` and `jsonic/test/spec` (name map:
+  `tabnas-*` ⇄ `jsonic-*`; older jsonic checkouts under `ts/test/spec`
+  are still found). The corpora are no longer mirrors — this repo owns
+  the engine's own surface, jsonic owns the relaxed-grammar corpus — so a
+  file on one side only is INFO, not a failure, and only files present on
+  both are compared byte-for-byte.
+
+  `fixture-sync-allow.txt` carries two kinds of line, and they are not
+  interchangeable:
+
+  - A **plain filename** only keeps a parser-owned file from being
+    reported as INFO. It does NOT permit drift.
+  - A **`not-shared: <name>`** line declares that a filename exists on
+    both sides and names two DIFFERENT fixtures, so comparing them is a
+    category error; the comparison is then skipped. Today that is
+    `divergent.tsv`, the ADR-14 divergence register, which both repos
+    keep at the same name deliberately and in two different shapes.
+    A `not-shared:` entry naming a file no longer present on both sides
+    FAILS — an exemption that outlives its purpose is one that will
+    eventually hide a real drift.
+
+  Nothing in that file can silence drift in a genuinely shared fixture.
+  That is the one thing this gate exists to catch: the shared
+  `include-json.tsv` drifted by five rows while an earlier version of the
+  script was pointing at a path that no longer existed and exiting 1 on
+  every run.
 
 ## bench/ — dual-runtime benchmark harness
 
 - `genfixture.js` — deterministic fixture matrix (pinned seed, NOT
   checked in): key-repetitive records (16KB/1MB), escape-dense strings,
-  number-heavy, deep nesting, whitespace-padded tiny, and a relaxed
-  unquoted-text jsonic shape.
+  number-heavy, deep nesting, whitespace-padded tiny, a CJK
+  (literal non-ASCII) records shape, and a relaxed unquoted-text jsonic
+  shape. The CJK arm exists because everything else here is ASCII — the
+  escape-dense fixture included, since escape SEQUENCES are ASCII bytes —
+  which left the per-character non-ASCII scan path unmeasured.
 - `bench.js` — one parser × one fixture per process (fresh V8 state);
   median/p5/p95 and MB/s. Parsers: `json`, `jsonic`, `native`
   (JSON.parse baseline).
 - `gobench/` — `go test -bench` module (tabnas json + jsonic vs
   encoding/json, with -benchmem).
-- `run-bench.sh [quick]` — generates fixtures and runs everything.
+- `run-bench.sh [quick]` — wires the downstream checkouts at this
+  working tree (`ci/lib/wire.sh`), generates fixtures, runs everything.
+- `abba.js` / `ab-compare.sh` — the DECISION instrument for an engine
+  performance claim; see below.
 
 Numbers are advisory: compare back-to-back runs on the same machine
 (the proposed bench.yml never gates; it uploads results as an
 artifact).
+
+### Deciding whether a change is real: `ab-compare.sh`
+
+`run-bench.sh` tracks throughput. It cannot tell an effect from noise,
+and the noise here is bigger than the effects usually being argued
+about: measured on BYTE-IDENTICAL builds, whichever tree sat in the
+second slot won 5-9 rounds of 12, with the "delta" ranging over 3.25
+percentage points. Any single A-then-B run can therefore report a
+couple of percent in either direction from nothing at all.
+
+So a claim needs the paired protocol:
+
+```bash
+(cd ts && npm run build)                 # build the candidate
+ci/bench/ab-compare.sh --base main       # or --base <a-built-ts-dir>
+```
+
+It runs the A/B/B/A rig three times — forward, slots reversed, and a
+null of the baseline against a byte-identical COPY of itself on the same
+fixture in the same session — and reports EFFECT ESTABLISHED only when
+the sign REVERSES with the slots and the estimate clears that session's
+null. Otherwise it says UNRESOLVED and tells you not to quote either
+number. Both builds supply their own strict-JSON test grammar, so no
+downstream checkout is involved, and the rig refuses to time two builds
+that disagree on the parse result.
+
+**The null runs against a copy at a different path, not the same path
+twice.** `abba.js` loads each slot with `require()`, which caches by
+resolved path, so passing one directory twice hands both slots the same
+module object — one module graph where forward and reverse have two.
+Every artifact that exists only because there are two graphs (separate
+inline caches, separate JIT tier-up histories, load order) would then be
+missing from the null, making the band too narrow. Measured on identical
+builds: the same-path null read −0.41% on `d_min` where the two-graph
+null on the same machine read +1.42%. The copy is made under the
+baseline tree (so bare specifiers still resolve) and removed on exit.
+
+**Both metrics get a verdict**, not just `d_min`. `min`-of-N excludes GC
+pauses by construction, which is the one channel an allocation change
+moves, so deciding from `d_min` alone can miss a real allocation effect
+or promote min-time noise. When the two disagree the rig says so and
+declines to pick — read `d_min` for compute, `d_total` for allocation,
+and report the pair.
 
 ## parity/ — cross-runtime token-stream parity
 

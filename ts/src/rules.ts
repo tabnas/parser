@@ -38,6 +38,8 @@ import {
   tokenize,
 } from './utility'
 
+import { BUILTIN_CONFIG_FACTORY, BUILTIN_REFS } from './builtins'
+
 import { TabnasError } from './error'
 
 // A single application of a RuleSpec on the parser stack; lives through an "open" then "close" pass.
@@ -1726,6 +1728,10 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
     a.a = null
   }
   else {
+    // A1 (ruling #120) — bind builtin config HERE, at grammar load,
+    // before the ref is resolved to a function. Must precede
+    // resolveFunctionRef: it works from the ref string the spec wrote.
+    bindBuiltinConfig(r, a)
     resolveFunctionRef('action', rs, r, a, 'a')
   }
 
@@ -1818,6 +1824,72 @@ function normalt(a: AltSpec, rs: RuleState, r: RuleSpec): NormAltSpec {
 
 function isfnref(v: any) {
   return 'string' === typeof v && v.startsWith('@')
+}
+
+
+// Bind a builtin's configuration into the action at GRAMMAR LOAD, and
+// take the key out of the alternate's keep bag (A1, ruling #120).
+//
+// WHY, in two parts.
+//
+// Correctness: config in `alt.k` is merged into `rule.k` when the
+// alternate matches, and `rule.k` PROPAGATES to children on push and
+// replace. Go's builtins read `r.K`, so a parent that declares
+// `k: {value$: {from: 1}}` without running the builtin hands it to a
+// child running `@value$` bare — the same serialized grammar answers 4
+// there and 3 here. Binding at load leaves exactly one regime: the
+// alternate that declares the config is the alternate that gets it.
+//
+// Cost: every key in `rule.k` is copied into the child on push and on
+// replace. Builtin config was by far the commonest occupant of that bag
+// in a value grammar, and it never needed to travel. Emptying `k`
+// entirely lets the merge and both copy loops skip the alternate
+// altogether.
+//
+// TWO GUARDS, both load-bearing.
+//
+// The set is keyed by the ref a spec writes, never by a `$` suffix: a
+// grammar's own `k: {myTotal$: 1}` is user data and must survive.
+//
+// And the ref must still resolve to the STOCK builtin. This is NOT
+// reachable today: `grammar()` reserves the whole `$` ref namespace and
+// throws on a user ref key containing `$`, so nothing can shadow a
+// builtin (verified — the throw fires before the fnref merge). It is a
+// cheap assertion that binding only ever touches the engine's own
+// function, so that relaxing the reservation later cannot silently bind
+// config into someone else's function and delete the key that function
+// was reading. A shadowed ref would be left exactly as it was.
+function bindBuiltinConfig(r: RuleSpec, a: AltSpec) {
+  const bindOne = (ref: any): any => {
+    if (!isfnref(ref)) return ref
+    const factory = BUILTIN_CONFIG_FACTORY[ref as string]
+    if (null == factory) return ref
+    if (r.def.fnref[ref as FuncRef] !== BUILTIN_REFS[ref as string]) return ref
+
+    const name = (ref as string).slice(1) // '@value$' -> 'value$'
+    const bound = factory((a.k && a.k[name]) || {})
+    if (a.k && name in a.k) {
+      delete a.k[name]
+      // An alternate whose ONLY `k` entry was builtin config now has an
+      // empty bag. Leaving `{}` behind would keep it merging into
+      // `rule.k` on every match for nothing, which is most of what this
+      // change exists to remove.
+      if (0 === Object.keys(a.k).length) {
+        a.k = undefined
+      }
+    }
+    return bound
+  }
+
+  // Idempotent by construction: a second pass sees a function rather
+  // than a ref and returns it untouched, so re-normalising a rule spec
+  // cannot rebind an already-bound action with an empty config.
+  if (isarr(a.a)) {
+    a.a = (a.a as any[]).map(bindOne)
+  }
+  else {
+    a.a = bindOne(a.a)
+  }
 }
 
 
@@ -1965,6 +2037,112 @@ export function validateAlts(alts: any[], label: string = ''): string[] {
     }
   }
 
+  return out
+}
+
+/** The alternates a rule-spec state holds, in either shipped shape: a bare
+ * array, or the `{ alts, inject }` form that carries injection modifiers.
+ * Anything else yields undefined — validation reports what it can read and
+ * stays silent about what it cannot. */
+function specAltList(state: any): any[] | undefined {
+  if (Array.isArray(state)) {
+    return state
+  }
+  if (null != state && 'object' === typeof state && Array.isArray(state.alts)) {
+    return state.alts
+  }
+  return undefined
+}
+
+/** Whether a `p`/`r` slot names a rule nothing defines. Returns undefined
+ * when there is nothing to check: absent, `false` (disabled), a function, or
+ * a FuncRef — a `@name` resolves to a function that yields its rule name at
+ * parse time, so no static check can follow it. */
+function unknownRuleRef(ref: any, defined: Set<string>): string | undefined {
+  if (null == ref || false === ref || 'string' !== typeof ref || '' === ref) {
+    return undefined
+  }
+  if (ref.startsWith('@')) {
+    return undefined
+  }
+  return defined.has(ref) ? undefined : ref
+}
+
+/** Every dangling rule reference in a grammar spec: an alternate whose `p`
+ * or `r` names a rule nothing defines. This is the one check that needs the
+ * whole rule map in scope, which is why `validateAlt` cannot make it — and
+ * the reference is a static typo the engine can otherwise only report at
+ * parse time, once an input happens to reach the alternate carrying it.
+ *
+ * Deliberately narrow: this reports rule references and nothing else. Run
+ * `validateAlts` per list for the per-alternate checks — those two runtimes
+ * word their messages differently today, and composing them here would bake
+ * that difference into a new API. These messages are identical in both.
+ *
+ * `known` names rules that already exist on the target instance, so a spec
+ * that EXTENDS a grammar can push to a rule it does not itself define without
+ * being flagged. Omit it to check a spec as a self-contained document.
+ *
+ * Problems are labelled as `validateAlts` labels them (`val.open alt[0]: …`)
+ * and sorted, so the two runtimes report the same list in the same order.
+ * The order is JavaScript's — by UTF-16 code unit — which the Go port
+ * reproduces deliberately; byte-wise ordering disagrees as soon as a rule
+ * name outside the BMP meets one above U+E000. */
+export function validateGrammar(
+  spec: any,
+  known?: string[] | Set<string>
+): string[] {
+  const out: string[] = []
+
+  if (null == spec || 'object' !== typeof spec ||
+    null == spec.rule || 'object' !== typeof spec.rule) {
+    return out
+  }
+
+  // `clear` wipes every rule on the instance before the spec is applied, so
+  // nothing the caller knew about survives to be referenced.
+  const defined: Set<string> = new Set(spec.clear ? [] : (known || []))
+  for (const rulename of Object.keys(spec.rule)) {
+    if (null == spec.rule[rulename]) {
+      // A null entry REMOVES that rule — including one the instance had.
+      defined.delete(rulename)
+    }
+    else {
+      defined.add(rulename)
+    }
+  }
+
+  for (const rulename of Object.keys(spec.rule)) {
+    const rulespec = spec.rule[rulename]
+    if (null == rulespec || 'object' !== typeof rulespec) {
+      continue
+    }
+
+    for (const state of ['open', 'close']) {
+      const alts = specAltList((rulespec as any)[state])
+      if (null == alts) {
+        continue
+      }
+
+      const label = rulename + '.' + state
+
+      for (let index = 0; index < alts.length; index++) {
+        const alt = alts[index]
+        if (null == alt || 'object' !== typeof alt) {
+          continue
+        }
+        for (const slot of ['p', 'r']) {
+          const bad = unknownRuleRef(alt[slot], defined)
+          if (undefined !== bad) {
+            out.push(label + ' alt[' + index + ']: unknown rule in ' +
+              slot + ': "' + bad + '"')
+          }
+        }
+      }
+    }
+  }
+
+  out.sort()
   return out
 }
 

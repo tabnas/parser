@@ -20,3 +20,18 @@ include-json-utf8.tsv
 # fixture, not a grammar corpus — its first column is an option value,
 # so the jsonic grammar suites cannot consume it.
 lex-string-control.tsv
+
+# A `not-shared:` line declares a filename that exists on BOTH sides and
+# names two DIFFERENT fixtures. Give the PARSER-side name (unlike a plain
+# line above, which may be spelled either side's way). The content comparison is then skipped —
+# and only then. A plain line above cannot do this, deliberately: nothing
+# here may be read as "this shared fixture is allowed to drift".
+#
+# Both repos keep an ADR-14 divergence register at this name, and they
+# are the same IDEA rather than the same file: jsonic's rows are
+# `input -> parse result` against its grammar, while this engine ships no
+# grammar and its rows carry a `probe` column naming which observation
+# they make. Neither runner could consume the other's file. The shared
+# name is the point — a reader who knows one repo's register should find
+# the other's without looking it up.
+not-shared: divergent.tsv

@@ -31,12 +31,24 @@ function prng(seed) {
 const WORDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta',
   'server', 'client', 'active', 'weight', 'value', 'config']
 
-function str(r, escapes) {
+// Literal non-ASCII, NOT \uXXXX escapes — an escape sequence is ASCII
+// bytes and exercises the escape decoder, not the non-ASCII scan path.
+// Every fixture in this matrix was ASCII, which left that path unmeasured:
+// ScanSpec.fallback runs per non-ASCII character and never fires on ASCII.
+// Three bytes per character in UTF-8, two UTF-16 units for none of these
+// (all BMP), so this isolates "not ASCII" from "not BMP".
+const CJK_WORDS = ['設定', '名前', 'サーバ', '接続', '値', '重み',
+  '有効', '記録', '配列', '文字列', '数値', '状態']
+
+function str(r, escapes, cjk) {
   const n = 3 + Math.floor(r() * 12)
   let s = ''
   for (let i = 0; i < n; i++) {
     if (escapes && r() < 0.08) {
       s += ['\\n', '\\t', '\\"', '\\\\', '\\u00e9', '\\ud83d\\ude00'][Math.floor(r() * 6)]
+    } else if (cjk) {
+      s += CJK_WORDS[Math.floor(r() * CJK_WORDS.length)]
+        + Math.floor(r() * 100)
     } else {
       s += WORDS[Math.floor(r() * WORDS.length)][0]
         + Math.floor(r() * 100)
@@ -55,20 +67,23 @@ function num(r) {
 
 // One record with REPEATED keys — the dominant real-world JSON shape
 // (arrays of records), and what the Go intern pool targets.
-function record(r, i, escapes) {
-  return `{"id":${i},"name":"${str(r, escapes)}","host":"h-${i % 64}.example.com",` +
+function record(r, i, escapes, cjk) {
+  return `{"id":${i},"name":"${str(r, escapes, cjk)}","host":"h-${i % 64}.example.com",` +
     `"port":${1024 + (i % 40000)},"active":${0 === i % 3},"weight":${num(r)},` +
-    `"tags":["${str(r, escapes)}","${str(r, escapes)}"],"note":null}`
+    `"tags":["${str(r, escapes, cjk)}","${str(r, escapes, cjk)}"],"note":null}`
 }
 
-function genRecords(sizeBytes, escapes, seedAdj) {
+function genRecords(sizeBytes, escapes, seedAdj, cjk) {
   const r = prng(SEED + seedAdj)
   const parts = []
   let n = 0, i = 0
   while (n < sizeBytes) {
-    const rec = record(r, i++, escapes)
+    const rec = record(r, i++, escapes, cjk)
     parts.push(rec)
-    n += rec.length + 1
+    // Bytes, not UTF-16 units: a CJK record is ~3x its .length, so
+    // counting characters would emit a ~3 MB "1 MB" fixture. Identical
+    // to .length for the ASCII fixtures, which are unchanged.
+    n += Buffer.byteLength(rec) + 1
   }
   return '[' + parts.join(',') + ']'
 }
@@ -115,10 +130,15 @@ const fixtures = {
   'numbers-1mb.json': genNumbers(1 * MB),
   'nested-256.json': genNested(256),
   'padded-tiny.json': '{"a":1}' + ' '.repeat(10000),
+  // The non-ASCII arm of the matrix. Everything else here is ASCII, so
+  // the per-character scan fallback never ran under any measurement.
+  'records-cjk-1mb.json': genRecords(1 * MB, false, 5, true),
   'text-1mb.jsonic': genJsonicText(1 * MB),
 }
 
 for (const [name, content] of Object.entries(fixtures)) {
   fs.writeFileSync(path.join(outDir, name), content)
-  console.log(`${name}\t${content.length} bytes`)
+  // Byte length, not .length: they differ for the non-ASCII fixture, and
+  // bytes are what the throughput numbers are per.
+  console.log(`${name}\t${Buffer.byteLength(content)} bytes`)
 }

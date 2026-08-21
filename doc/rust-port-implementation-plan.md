@@ -26,6 +26,13 @@ document, and sections of *this* document are written `§1.2 here`.
 > cites the document that measured it. The plan targets **v0.1 as scoped
 > by `§5.1 risks`** (the serialized-spec engine); the imperative plugin
 > tier stays unscheduled per `§5.6 strategy`.
+>
+> That stamp is deliberately not advanced as work lands: it records when
+> Part 1's *review* claims were checked, not how far the plan has got.
+> **Current execution status lives in two places, and both are kept
+> live:** the `**Done**` / `**Partly**` markers on each numbered step in
+> Part 2, and the Gate G table below. Where the two disagree with this
+> stamp, they are the newer statement.
 
 ---
 
@@ -253,7 +260,7 @@ than defaulting to a port.
 
 | # | Decision | Evidence | Recommendation |
 |---|---|---|---|
-| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **DECIDED 2026-08-21: A1**, amendment recorded on #120. TypeScript hoists at `normalt`; Go follows at spec load; Go's five deletes are then deleted as unnecessary. |
+| D1 | **The #120 route: A1 or S0.** Amend the ruling on issue #120 accordingly (the set-without-run row flips from the ruled `4` to today's `3` under A1 — §1.4 here). | `§3.A1/A2 changes` (−12%, four regimes → one, zero fleet inheritance); `§5.1 strategy` (the S0 shape) | **DECIDED 2026-08-21: A1**, amendment recorded on #120. **LANDED `202664d`** — TypeScript binds at `normalt`, Go at spec load, and all five of Go's `delete(r.K, …)` sites are gone (with `mapConfig`, its last caller removed). #120 closed. The register row staged for it went red on the repair and forced its own deletion; the two shapes now sit in `TestBuiltinConfigIsAlternateScoped` in both ports. One caveat recorded honestly: the −12% this route was argued on is **unmeasured**, not confirmed — the rig's grammar declares no builtin config, so there was nothing there for A1 to remove (Phase 2a step 2). |
 | D2 | **Write the port ADR; assign the crate namespace.** Supersede ADR-12's no-native-ports premise for the *engine* (its numbered clauses, including the uniform-symbol contract, stand); record v0.1's scope line (`§5.1 risks`) and stop conditions as the ADR's reconsideration triggers; claim `tabnas`, `tabnas-spec` on crates.io (`tabnas-clib` per its staged plan), with checklist rows landing per ADR-12 clause 4; crate versions **independent from 0.1.0** — engine-implementing crates report the engine version they implement (`§3.5 risks`, `py/` precedent), the engine-agnostic loader reports its ABI template version — and the four-location version machinery gains no fifth member. | §1.5 F1/F2 here; `§5.3 risks` | Do it in one `admin` PR. |
 | D3 | **The engine-changes §5 set**, each direction stated per ADR-13: (1) = D1; (2) option-merge classes B/C/D (class A is recorded with its `*string` repair — schedule the breaking bump per the DIVERGENCE.md note); (3) `Lex.next` IGNORE filtering — direction: Go moves, **with the `@tabnas/c` three-line filter landing in the same commit** (`§5.3 changes`); (4) C1 loud-or-silent; (5) `RuleDone` payload resolved-vs-static (zero subscribers exist; pick TS's resolved and pin); (6) `e`/`h` order (adopt Go's straight-line order, one TS assertion moves, shared fixture + DIVERGENCE row); (7) **continuations divergence — now LSP-blocking** (§1.5 F3 here); (8) matcher state slot (defer unless concurrent `parse(&self)` is a stated requirement — `yaml`'s 13 closure variables are the cost). | `§5 changes` | Rule (2)(3)(5)(6)(7) now — five of the six are free today and stop being free the moment a consumer exists. |
 | D4 | **#130: the serialized-options leaf set S**, folding #142 (`rewind.history <= 0`: TS retain-nothing vs Go unbounded — on the DoS bound itself), #143 (ill-typed leaves: TS crashes, Go drops silently), #144 (`history: null` → `Infinity`). One ruling naming S, an exhaustiveness test over `Options` in both runtimes failing on any leaf not in S and not handled, and `Option<usize>`/`None`-is-unbounded as the Rust shape. | `§2.2 risks`; issues #130/#142/#143/#144 | Rule now; 1–2 days to land; genuinely blocks M2a. |
@@ -289,6 +296,64 @@ only decision-grade measurement; (4) re-run the decision set on
 off-support. A1's −12% and C1's −2% must reproduce under (3)+(4) before
 they are cited in a release note.
 
+*Status, 2026-08-21.* (1) **Done** — `ci/lib/wire.sh` is now shared by
+`run-gate.sh` and `run-bench.sh` so the two cannot drift; it removes the
+destination before linking and proves the swap took. The `ln -snf`
+no-op was reproduced first (exit 0, link buried inside the directory,
+package still resolving to the published engine), as was the hole in the
+first version of the guard — `readlink -f` normalises a dangling link and
+a missing target to the same string, so a missing target passed silently
+until an explicit check was added. The staged `bench.yml` **keeps** its
+`npm i`, correcting `§6.1 changes`: a clean runner has no `node_modules`
+and no `dist`, so dropping the install yields a workflow that dies before
+measuring. (2) **Done** — `records-cjk-1mb.json`, literal UTF-8, zero
+astral characters, so it isolates "not ASCII" from "not BMP"; sizing
+moved to bytes, with all seven existing ASCII fixtures verified
+byte-identical. **Review caught that the fixture was generated and never
+run**: neither `run-bench.sh`'s TS loop nor `gobench` named it, so the
+non-ASCII arm produced no timing data at all — coverage in appearance
+only, which is the failure mode this repo cares most about. Both runners
+now benchmark it. Wiring it also exposed that `bench.js` measured
+`src.length`, i.e. UTF-16 code units: identical to the byte count for
+every ASCII fixture and 33% short on this one, against a Go harness
+reporting true bytes. Fixed, so the two runtimes' throughput on the one
+non-ASCII arm is comparable. (3) **Done** — `ci/bench/abba.js` plus
+`ci/bench/ab-compare.sh` implement the sign-flip protocol and refuse to
+pronounce without a reversal clearing the session null. Each side loads
+its own strict-JSON test grammar from `dist-test`, so the rig needs no
+downstream checkout — a simplification over the isolated-trees approach
+`§2.3 changes` describes.
+
+**Two defects in the first version, both found in review, both real.**
+The null ran the baseline against ITSELF *at the same path*, and
+`abba.js` loads a slot with `require()`, which caches by resolved path —
+so both null slots got the same module object where forward and reverse
+get two. The null therefore excluded every artifact that exists only
+because there ARE two graphs, and a band that is too narrow makes a
+false EFFECT ESTABLISHED easier to reach. It now runs against a
+byte-identical copy at a distinct path, and the difference is not
+theoretical: on identical builds the same-path null read −0.41% on
+`d_min` where the two-graph null on the same machine read **+1.42%**.
+Second, the verdict was computed from `d_min` alone while `d_total` was
+merely printed — so an allocation change, the one thing `d_min` cannot
+see, could take a verdict from min-time noise. Both metrics now get a
+verdict, and the rig says so plainly when they disagree instead of
+picking.
+
+Re-validated after the repairs, on `records-16kb.json`, 8 rounds:
+
+| case | `d_min` fwd / rev / null | verdict |
+|---|---|---|
+| identical builds | +1.75 / +4.82 / +1.42 | UNRESOLVED both metrics, no flip |
+| baseline slowed ~20% | −35.94 / +61.69 / −0.39 | EFFECT ESTABLISHED both metrics, candidate FASTER (−47.09% `d_min`, −39.61% `d_total`) |
+| builds disagree on the parse result | — | refuses to time, exit 3 |
+
+(4) **Partly** — the suite and the rig both run clean on Node
+24 (the same two pre-existing `doc-examples` failures as Node 22). What cannot be done
+yet is the part that matters: A1 and C1 do not exist as code, so there is
+nothing to re-measure. That step belongs to Phase 2a/2b, and the rig is
+what it must be measured with.
+
 ### Phase 2 — Canonical repairs (TypeScript and Go; no Rust)
 
 Ordered; items within a letter-group are independent. Sources in
@@ -296,25 +361,132 @@ parentheses; fleet blast radius is as measured in the series unless
 marked re-verify.
 
 **2a — The config route (after D1).**
-0. Create this repo's ADR-14 executable register first — it does not
-   exist here yet: the parser tree has no `divergent.tsv`, and its
-   divergences live as prose plus separate per-runtime tests. The
-   precedent is `jsonic`'s `test/spec/divergent.tsv` — a column per
-   runtime, run by **both** suites (which the `nonParity` honesty gate
-   requires of any new fixture anyway), where a row failing means the
-   divergence it records was repaired or drifted. 2a and 2i stage their
-   red rows there; without this step they have nowhere to stage.
-1. Land the shared builtin-config fixture first, red on the divergent
-   shape: run-then-push and set-then-push rows
-   (`§3.A2 changes`; the ADR-14 register carries the divergent row until
-   the repair lands, then the row moves into the permanent fixture).
-2. A1 in TypeScript: hoist at `normalt` keyed on the **closed builtin
-   name set** (never a `$`-suffix test — the probed
-   `k: {myTotal$: 1}` trap), probe family excluded; builders become
-   factories with a default-config instance each.
-3. A1 in Go: bind at spec load; delete the five `delete(r.K, …)` sites;
-   rewrite `go/builtins.go:19-25`'s "Equivalent behaviour" comment and
-   `doc/value-builtins.md`'s single-lifetime description. Close #120.
+0. **Done** — this repo's ADR-14 executable register now exists:
+   `test/spec/divergent.tsv` plus `ts/test/divergent.test.js` and
+   `go/divergent_test.go`, fifteen rows over the five `DIVERGENCE.md`
+   entries that a probe can reach. It departs from the `jsonic`
+   precedent in one way that mattered more than expected: jsonic's
+   `input → parse result` shape assumes a grammar, and this engine ships
+   none, so rows carry a **probe** column naming which observation they
+   make — `lex` (one selected token's fields) or `spec` (install a
+   serialized `GrammarSpec`, then parse). The `spec` probe is what lets
+   step 1 below stage a builtin-config row at all; a lex-only register
+   would have served 2i and not 2a.
+
+   Three properties were worth the extra work. Rows render through a
+   **shared canonical form** — verbatim values, keys sorted by UTF-16
+   code unit — because a renderer built on `%q` or `JSON.stringify`
+   manufactures differences of its own, which is what #156 cost a review
+   round over. Every group carries a **control row** where the ports
+   agree, so a repair cannot be confused with unrelated breakage. And a
+   **coverage gate** requires every `### ` heading in `DIVERGENCE.md` to
+   be either a register group or a declared `notRegistered` exemption
+   (one today: the fractional `rule.maxmul`, which needs a full value
+   grammar no probe builds), failing in both directions so neither file
+   can drift from the other.
+
+   Validated by breaking it thirteen ways — a stale `ts` column, a stale
+   `go` column, a *repaired* divergence, an unregistered entry, a new
+   prose heading, a renamed heading, a missing justification, a
+   duplicate name, an unknown probe, a short row, an undefined `@spec`
+   reference and an unknown `show` field — each confirmed red on the
+   runner it should be red on and green on the other.
+
+   **A repo-wide trap fell out of that validation, and it defeats
+   `test/AGENTS.md`'s own instruction to "check it runs by breaking a
+   row on purpose".** `go test` caches a fixture read against the file's
+   `stat`, not its contents: with the mtime pinned, a corrupted
+   `divergent.tsv` stays `(cached)` and green even when the file's size
+   changes. Every shared-fixture Go runner in this repo has the same
+   exposure, and every `go test` invocation in the tree is cache-enabled.
+   CI is unaffected — a fresh runner has an empty cache — so this bites
+   exactly the person editing a fixture and re-running immediately.
+   `test/AGENTS.md` now says `-count=1` at that step.
+1. **Done** — both shapes are now staged in the register, and the
+   divergence is **reproduced rather than predicted**. A two-rule
+   function-free serialized spec (`top` matches `#NR #NR`, carries
+   `k: {value$: {from: 1}}` and pushes `leaf`, which runs `@value$`
+   bare) over the input `1 2 3 4` answers exactly what `§3.A2 changes`
+   said it would:
+
+   | grammar shape | TypeScript | Go |
+   |---|---|---|
+   | parent sets `k`, **runs** the builtin, pushes | `3` | `3` |
+   | parent sets `k`, does **not** run it, pushes | `3` | **`4`** |
+
+   The second row is the divergence, the first its control — and the
+   control agrees for a reason that makes the split worse rather than
+   better, so the row carries that in its justification: Go's five value
+   builders delete their config key right after reading it, so *running*
+   the builtin consumes the config. Remove the delete and the control
+   row moves too.
+
+   Three things this turned up. The divergence had **no
+   `DIVERGENCE.md` entry** (`§3.A2 changes` said so; confirmed against
+   the file), so one is written — as a defect with a ruling and a slot,
+   not a deliberate split, since the coverage gate from step 0 requires
+   every register group to name a real entry. `go/builtins.go:19-25`
+   **asserted the opposite** — "Equivalent behaviour" — and now points
+   at the entry instead; the plan had that rewrite in step 3, but
+   leaving a knowingly false parity claim in the source while writing a
+   divergence entry about it was not defensible, and it is comment-only.
+   And the value renders identically through the register's canonical
+   form despite Go producing a `float64` and TypeScript a `number`,
+   which is what that renderer is for.
+
+   Verified live in both directions: with the row edited to say Go
+   answers `3` (what A1 will make true) the Go runner goes red and tells
+   the reader to delete the row and the entry; with it edited to say TS
+   answers `4` the TypeScript runner goes red. So when A1 lands in step
+   3 the register forces its own cleanup rather than needing to be
+   remembered.
+2. **Done** — A1 in TypeScript. The eight config-reading builtins are
+   factories; `normalt` binds each alternate's config into its action at
+   load and takes the key out of `alt.k`, keyed on the closed builtin
+   name set. The `k: {myTotal$: 1}` trap is avoided by construction and
+   pinned. The probe family needed no carve-out at all: it reads and
+   writes `r.k` (`pd_phase`, `pd_mark`) rather than per-alternate
+   config, so it is simply absent from the bound set.
+
+   One correction to the design as written: the "shadowed ref" guard it
+   implies is not reachable. `grammar()` reserves the whole `$` ref
+   namespace and throws on a user ref key containing `$`, so nothing can
+   shadow a builtin. The check is kept as a cheap assertion against that
+   reservation being relaxed, and says so rather than claiming a defence
+   it does not provide.
+3. **Done** — A1 in Go, and it closes the split. The same eight builtins
+   take bound config; `bindBuiltinConfig` in `grammarspec.go` binds at
+   spec load and `copyAltK` drops the consumed keys, nilling a bag that
+   ends up empty. **All five `delete(r.K, …)` sites are gone** — they
+   were containment for a design that no longer exists, and were
+   themselves a third scoping regime (consumed-once against
+   alternate-scoped), which is why the run-then-push shape used to agree
+   for the wrong reason. `mapConfig` went with them, its last caller
+   removed.
+
+   Two resolvers needed it, not one: `ResolveGrammarAltStatic` is
+   exported, bypasses `resolveGrammarAlt` entirely, and would have left
+   any caller silently on the pre-A1 semantics.
+
+   **The register did exactly what it was built for.** The moment Go's
+   half landed, `a2-config-set-then-push` went red — Go now answers `3`
+   where the row records `4` — with the message instructing deletion of
+   the row *and* its `DIVERGENCE.md` entry. Both are gone; the entry is
+   replaced by a forwarding address in "Repaired, and what replaced
+   them", and the two shapes moved to
+   `TestBuiltinConfigIsAlternateScoped` in both ports, as the plan said
+   they should. That is step 0's mechanism forcing its own cleanup on
+   its first real repair, without anyone having to remember.
+
+   `go/builtins.go`'s header and `doc/value-builtins.md`'s config
+   section are rewritten. The doc's note still cited #120's *original*
+   rule-scoped ruling, which A1 amends — corrected, with the amendment
+   named. Close #120.
+
+   Fleet verified: the gate is green across parser, json and jsonic in
+   both runtimes, including jsonic — the only repo with live builtin
+   config declarations (`ts/src/grammar.ts:303` `array$ implicit`,
+   `:386` `object$ implicit`).
 4. The propagation fixture `test/spec/propagate.{fixture.json,tsv}`
    (`§5.1 strategy` item 5): `n`/`k` on push and replace, `u`
    exclusion — with the `@setval$` missing-key coercion divergence fixed
@@ -451,14 +623,16 @@ diagnostic — is exactly Gate G's condition 1.
 
 ### Gate G — before any Rust engine code
 
-All five, in writing, per `§5.3 strategy` — current status:
+All five, in writing, per `§5.3 strategy`. **This table is kept live as
+work lands** — last moved at `202664d` (2026-08-21, engine v0.8.11), 21
+commits after `abfed2c`, when A1 closed #120:
 
-| # | Condition | Status at `abfed2c` |
+| # | Condition | Status |
 |---|---|---|
 | 1 | A named consumer `libtabnas` + a serialized spec provably cannot serve (wasm / no-Go-runtime / in-Rust authoring — the third reopens the plugin question and must say so) | **Open** — Phase 3 is the experiment; the LSP design names the C ABI, not Rust, for its engine access |
 | 2 | The differential-tier entry cost paid or waived in writing (`json` leg free via `json-core`; the relaxed `jsonic` leg has no function-free artifact — waive it explicitly or produce one) | **Open** |
 | 3 | The two-runtime machinery generalised (Phase 2g) | **Not started** — `nonParity`/`goOnly` verified still binary |
-| 4 | The unpinned surface **landed**: #120-as-D1, #122, the `p`/`r`-channel fixture, M0.2 orderings, the propagation fixture, #130's exhaustiveness test. (`pos` ✅, regex dialect ✅, key order ✅ via ADR-15 — already done, §1.3 here) | **Partial** |
+| 4 | The unpinned surface **landed**: ~~#120-as-D1~~ ✅ (A1, both runtimes, `202664d` — Phase 2a steps 2–3), #122, the `p`/`r`-channel fixture, M0.2 orderings, the propagation fixture (Phase 2a step 4), #130's exhaustiveness test (blocked on D4). (`pos` ✅, regex dialect ✅, key order ✅ via ADR-15 — already done, §1.3 here) | **Partial** — one of six landed; the verdict does not move until the rest do |
 | 5 | D5 answered in the ADR | **Open** |
 
 ### Phase 4 — M2a: `tabnas-spec` (~1–2k lines, zero parity obligations)

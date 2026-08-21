@@ -18,6 +18,7 @@ const warmup = Number(process.argv[5] || 15)
 
 const ROOT = process.env.TABNAS_ROOT || path.resolve(__dirname, '../../..')
 const src = fs.readFileSync(fixture, 'utf8')
+const byteLen = Buffer.byteLength(src, 'utf8')
 
 let parse
 if ('native' === which) {
@@ -50,10 +51,16 @@ const median = q(0.5)
 console.log(JSON.stringify({
   parser: which,
   fixture: path.basename(fixture),
-  bytes: src.length,
+  // BYTES, not UTF-16 code units. `src.length` is the same number for an
+  // ASCII fixture, which is why this went unnoticed while every fixture
+  // was ASCII — and is 33% short on records-cjk-1mb.json, whose 1,048,816
+  // bytes are 706,226 code units. The Go harness reports MB/s from a byte
+  // count, so leaving this would make the two runtimes' throughput on the
+  // one non-ASCII arm silently incomparable.
+  bytes: byteLen,
   iters,
   median_ms: +median.toFixed(3),
   p5_ms: +q(0.05).toFixed(3),
   p95_ms: +q(0.95).toFixed(3),
-  mb_per_s: +(src.length / 1048576 / (median / 1000)).toFixed(2),
+  mb_per_s: +(byteLen / 1048576 / (median / 1000)).toFixed(2),
 }))
