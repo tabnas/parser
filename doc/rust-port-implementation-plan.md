@@ -289,6 +289,33 @@ only decision-grade measurement; (4) re-run the decision set on
 off-support. A1's −12% and C1's −2% must reproduce under (3)+(4) before
 they are cited in a release note.
 
+*Status, 2026-08-21.* (1) **Done** — `ci/lib/wire.sh` is now shared by
+`run-gate.sh` and `run-bench.sh` so the two cannot drift; it removes the
+destination before linking and proves the swap took. The `ln -snf`
+no-op was reproduced first (exit 0, link buried inside the directory,
+package still resolving to the published engine), as was the hole in the
+first version of the guard — `readlink -f` normalises a dangling link and
+a missing target to the same string, so a missing target passed silently
+until an explicit check was added. The staged `bench.yml` **keeps** its
+`npm i`, correcting `§6.1 changes`: a clean runner has no `node_modules`
+and no `dist`, so dropping the install yields a workflow that dies before
+measuring. (2) **Done** — `records-cjk-1mb.json`, literal UTF-8, zero
+astral characters, so it isolates "not ASCII" from "not BMP"; sizing
+moved to bytes, with all seven existing ASCII fixtures verified
+byte-identical. (3) **Done** — `ci/bench/abba.js` plus
+`ci/bench/ab-compare.sh` implement the sign-flip protocol and refuse to
+pronounce without a reversal clearing the session null; validated on a
+deliberately-slowed build across all four paths (established / no-flip /
+under-band / result-disagreement). Each side loads its own strict-JSON
+test grammar from `dist-test`, so the rig needs no downstream checkout —
+a simplification over the isolated-trees approach `§2.3 changes`
+describes. (4) **Partly** — the suite and the rig both run clean on Node
+24 (421/423, the same two pre-existing `doc-examples` failures as Node
+22; null band there is tighter, ±0.62% on `d_min`). What cannot be done
+yet is the part that matters: A1 and C1 do not exist as code, so there is
+nothing to re-measure. That step belongs to Phase 2a/2b, and the rig is
+what it must be measured with.
+
 ### Phase 2 — Canonical repairs (TypeScript and Go; no Rust)
 
 Ordered; items within a letter-group are independent. Sources in
