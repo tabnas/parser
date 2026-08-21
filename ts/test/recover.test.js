@@ -285,6 +285,29 @@ describe('recover', () => {
     assert.equal(JSON.stringify(out.value), '"old"')
   })
 
+  it('an alt action does not run after its own error', () => {
+    // The canonical half of go TestAltActionSkippedAfterItsOwnError.
+    // TS throws at the raise site, so an alt whose `e` returns a bad
+    // token never reaches its `a`. Go's Process deliberately keeps
+    // running past the raise, and the action's mutation used to stick —
+    // harmless while a raised error always discarded the value, visible
+    // once recovery started returning a partial one.
+    const tn = new Tabnas({ parse: { recover: { enabled: true, maxSkip: 0 } } })
+    tn.grammar({
+      clear: true,
+      options: { rule: { start: 'top' } },
+      ref: {
+        '@boom': (rule, ctx) => ctx.t0.bad('boom_code', {}),
+        '@mutate': (rule) => { rule.node = 'after-error' },
+      },
+      rule: { top: { open: [{ s: '#NR', e: '@boom', a: '@mutate' }] } },
+    })
+
+    const out = tn.parse('42')
+    assert.deepEqual(out.errors.map((e) => e.code), ['boom_code'])
+    assert.equal(out.value, undefined)
+  })
+
   it('reports trailing content after a complete value', () => {
     // The completeness checks run AFTER the rule loop: a document
     // whose value parses cleanly but is followed by junk must still

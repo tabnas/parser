@@ -631,3 +631,48 @@ func TestRecoverGiveUpWithReplacedStartRule(t *testing.T) {
 		t.Errorf("value = %s, want \"old\" (TS returns the original root)", enc(v))
 	}
 }
+
+func TestAltActionSkippedAfterItsOwnError(t *testing.T) {
+	// TS throws at the raise site, so an alt whose E returns a token
+	// never runs that alt's A. Go's Process keeps going past the raise
+	// (by design — see the alt.E comment in rule.go), and the action's
+	// mutations used to stick. Invisible while a raised error always
+	// discarded the value; visible once recovery began returning a
+	// partial one:
+	//
+	//   '42'  maxSkip 0   TS undefined   GO "after-error"
+	//
+	// Mirrors the TS case "an alt action does not run after its own
+	// error".
+	j := Make(Options{Parse: &ParseOptions{
+		Recover: &RecoverOptions{Enabled: true, MaxSkip: intp(0)},
+	}})
+	if err := j.Grammar(&GrammarSpec{
+		Clear:   true,
+		Options: &Options{Rule: &RuleOptions{Start: "top"}},
+		Ref: map[FuncRef]any{
+			"@boom": AltError(func(r *Rule, ctx *Context) *Token {
+				return ctx.T0.Bad("boom_code", map[string]any{})
+			}),
+			"@mutate": AltAction(func(r *Rule, ctx *Context) {
+				r.Node = "after-error"
+			}),
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {Open: []*GrammarAltSpec{{S: "#NR", E: "@boom", A: "@mutate"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, errs, err := j.ParseRecover(`42`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "boom_code" != errs[0].Code {
+		t.Fatalf("errors = %v, want one boom_code", errs)
+	}
+	if nil != v {
+		t.Errorf("value = %s, want no value (the action ran after its own error)", enc(v))
+	}
+}

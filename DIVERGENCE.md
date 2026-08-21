@@ -136,6 +136,28 @@ An entry that leaves this file should leave a forwarding address: a
 reader who remembers one and cannot find it needs to know whether it was
 fixed or quietly dropped.
 
+- **An alt action running after that alt's own error.** Go's `Process`
+  keeps going past an `alt.E` raise — deliberately, since the parser
+  loop only observes `ctx.ParseErr` after `Process` returns — so the
+  alt's `A` still ran and its mutations stuck. TS throws at the raise
+  site and never reaches the action. Harmless while a raised error
+  always discarded the value; visible as soon as recovery began
+  returning a partial one:
+
+  | input | grammar | TypeScript | Go |
+  |---|---|---|---|
+  | `42` | `top: {s:'#NR', e:@boom, a:@mutate}` | `undefined` | `"after-error"` |
+
+  The action is now skipped when THAT alt's own `E` raised. Only its own
+  raise counts: an error already standing from elsewhere does not
+  suppress it, because TS would have thrown before reaching the alt at
+  all, so there is no canonical behaviour to match and skipping would
+  silence actions that legitimately run. The diagnostic context was
+  already snapshotted at the raise site for the same underlying reason;
+  this extends that compensation to the node. Pinned by
+  `TestAltActionSkippedAfterItsOwnError` and the TS case "an alt action
+  does not run after its own error".
+
 - **The value kept when recovery gives up.** Two defects, same fallback,
   both Go-only and both repaired. (1) A give-up inside a structure
   leaves the root open, and Go returned `nil` where TS returns the most
@@ -358,25 +380,6 @@ Sibling ports are not all exposed: of the four call sites in the fleet
 that set an empty value, only css's was live. `csv` sets `Lex: false`
 alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
 never a quote character to begin with.
-
-## Reported and unresolved
-
-- **Actions that run after an alternate's error function.** Reported
-  against the recovery give-up fallback (2026-08): Go records `ParseErr`
-  from an alternate's `E` and then still runs that alternate's `A`,
-  where TS calls `bad()` immediately and never executes the action. If
-  so, a node mutated after the error becomes visible once the give-up
-  fallback returns a partial value — the report's example is a root that
-  ends up `"after-error"` in Go and absent in TS.
-
-  Not reproduced here: the probe used to trigger it parsed normally
-  instead, so the shape needed is narrower than the description and the
-  divergence is unconfirmed. Recorded rather than fixed because the
-  remedy is in the ALTERNATE machinery — stop processing an alternate
-  once `E` has raised, or snapshot the node at that point — which
-  changes behaviour for every grammar with an `E`+`A` pair, far outside
-  the fallback that surfaced it. Needs a targeted fixture in both
-  runtimes before anything moves.
 
 ## Not divergences
 
