@@ -43,6 +43,11 @@ jobs:
         for pkg in parser debug json jsonic; do
           ( cd "$pkg/ts" && npm i && npm run build --if-present )
         done
+    # The install step above leaves each sibling resolving the PUBLISHED
+    # @tabnas/parser; run-bench.sh re-points them at this checkout's ts/
+    # (ci/lib/wire.sh) and fails if the swap does not take. Do not drop
+    # the install to "fix" that — a clean runner has no node_modules and
+    # no built dist at all, so the run would die before measuring.
     - name: Run benchmarks
       shell: bash
       run: |
