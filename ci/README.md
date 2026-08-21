@@ -87,18 +87,31 @@ ci/bench/ab-compare.sh --base main       # or --base <a-built-ts-dir>
 ```
 
 It runs the A/B/B/A rig three times — forward, slots reversed, and a
-null of the baseline against itself on the same fixture in the same
-session — and reports EFFECT ESTABLISHED only when the sign REVERSES
-with the slots and the estimate clears that session's null. Otherwise
-it says UNRESOLVED and tells you not to quote either number. Both
-builds supply their own strict-JSON test grammar, so no downstream
-checkout is involved, and the rig refuses to time two builds that
-disagree on the parse result.
+null of the baseline against a byte-identical COPY of itself on the same
+fixture in the same session — and reports EFFECT ESTABLISHED only when
+the sign REVERSES with the slots and the estimate clears that session's
+null. Otherwise it says UNRESOLVED and tells you not to quote either
+number. Both builds supply their own strict-JSON test grammar, so no
+downstream checkout is involved, and the rig refuses to time two builds
+that disagree on the parse result.
 
-Read `d_min` for compute changes and `d_total` for allocation changes:
-min-of-N excludes GC pauses by construction, which is the one channel
-an allocation change moves, and reporting min alone has inverted a
-verdict before.
+**The null runs against a copy at a different path, not the same path
+twice.** `abba.js` loads each slot with `require()`, which caches by
+resolved path, so passing one directory twice hands both slots the same
+module object — one module graph where forward and reverse have two.
+Every artifact that exists only because there are two graphs (separate
+inline caches, separate JIT tier-up histories, load order) would then be
+missing from the null, making the band too narrow. Measured on identical
+builds: the same-path null read −0.41% on `d_min` where the two-graph
+null on the same machine read +1.42%. The copy is made under the
+baseline tree (so bare specifiers still resolve) and removed on exit.
+
+**Both metrics get a verdict**, not just `d_min`. `min`-of-N excludes GC
+pauses by construction, which is the one channel an allocation change
+moves, so deciding from `d_min` alone can miss a real allocation effect
+or promote min-time noise. When the two disagree the rig says so and
+declines to pick — read `d_min` for compute, `d_total` for allocation,
+and report the pair.
 
 ## parity/ — cross-runtime token-stream parity
 

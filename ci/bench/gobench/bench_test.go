@@ -60,11 +60,18 @@ func benchJsonic(b *testing.B, src string) {
 	}
 }
 
-func BenchmarkJsonRecords1MB(b *testing.B)  { benchTabnasJson(b, fixture(b, "records-1mb.json")) }
-func BenchmarkJsonEscaped1MB(b *testing.B)  { benchTabnasJson(b, fixture(b, "records-escaped-1mb.json")) }
+func BenchmarkJsonRecords1MB(b *testing.B) { benchTabnasJson(b, fixture(b, "records-1mb.json")) }
+func BenchmarkJsonEscaped1MB(b *testing.B) {
+	benchTabnasJson(b, fixture(b, "records-escaped-1mb.json"))
+}
 func BenchmarkJsonNumbers1MB(b *testing.B)  { benchTabnasJson(b, fixture(b, "numbers-1mb.json")) }
 func BenchmarkJsonRecords16KB(b *testing.B) { benchTabnasJson(b, fixture(b, "records-16kb.json")) }
 func BenchmarkJsonNested(b *testing.B)      { benchTabnasJson(b, fixture(b, "nested-256.json")) }
+
+// The non-ASCII arm. Every other fixture here is ASCII — the escape-dense
+// one included, since escape SEQUENCES are ASCII bytes — so without this
+// the per-character fallback scan path is never measured on either side.
+func BenchmarkJsonCJK1MB(b *testing.B) { benchTabnasJson(b, fixture(b, "records-cjk-1mb.json")) }
 
 func BenchmarkJsonTiny(b *testing.B) { benchTabnasJson(b, `{"a":1,"b":[true,null,2.5],"c":"x"}`) }
 func BenchmarkJsonPadded(b *testing.B) {

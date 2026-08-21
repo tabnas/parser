@@ -302,16 +302,47 @@ and no `dist`, so dropping the install yields a workflow that dies before
 measuring. (2) **Done** — `records-cjk-1mb.json`, literal UTF-8, zero
 astral characters, so it isolates "not ASCII" from "not BMP"; sizing
 moved to bytes, with all seven existing ASCII fixtures verified
-byte-identical. (3) **Done** — `ci/bench/abba.js` plus
+byte-identical. **Review caught that the fixture was generated and never
+run**: neither `run-bench.sh`'s TS loop nor `gobench` named it, so the
+non-ASCII arm produced no timing data at all — coverage in appearance
+only, which is the failure mode this repo cares most about. Both runners
+now benchmark it. Wiring it also exposed that `bench.js` measured
+`src.length`, i.e. UTF-16 code units: identical to the byte count for
+every ASCII fixture and 33% short on this one, against a Go harness
+reporting true bytes. Fixed, so the two runtimes' throughput on the one
+non-ASCII arm is comparable. (3) **Done** — `ci/bench/abba.js` plus
 `ci/bench/ab-compare.sh` implement the sign-flip protocol and refuse to
-pronounce without a reversal clearing the session null; validated on a
-deliberately-slowed build across all four paths (established / no-flip /
-under-band / result-disagreement). Each side loads its own strict-JSON
-test grammar from `dist-test`, so the rig needs no downstream checkout —
-a simplification over the isolated-trees approach `§2.3 changes`
-describes. (4) **Partly** — the suite and the rig both run clean on Node
-24 (421/423, the same two pre-existing `doc-examples` failures as Node
-22; null band there is tighter, ±0.62% on `d_min`). What cannot be done
+pronounce without a reversal clearing the session null. Each side loads
+its own strict-JSON test grammar from `dist-test`, so the rig needs no
+downstream checkout — a simplification over the isolated-trees approach
+`§2.3 changes` describes.
+
+**Two defects in the first version, both found in review, both real.**
+The null ran the baseline against ITSELF *at the same path*, and
+`abba.js` loads a slot with `require()`, which caches by resolved path —
+so both null slots got the same module object where forward and reverse
+get two. The null therefore excluded every artifact that exists only
+because there ARE two graphs, and a band that is too narrow makes a
+false EFFECT ESTABLISHED easier to reach. It now runs against a
+byte-identical copy at a distinct path, and the difference is not
+theoretical: on identical builds the same-path null read −0.41% on
+`d_min` where the two-graph null on the same machine read **+1.42%**.
+Second, the verdict was computed from `d_min` alone while `d_total` was
+merely printed — so an allocation change, the one thing `d_min` cannot
+see, could take a verdict from min-time noise. Both metrics now get a
+verdict, and the rig says so plainly when they disagree instead of
+picking.
+
+Re-validated after the repairs, on `records-16kb.json`, 8 rounds:
+
+| case | `d_min` fwd / rev / null | verdict |
+|---|---|---|
+| identical builds | +1.75 / +4.82 / +1.42 | UNRESOLVED both metrics, no flip |
+| baseline slowed ~20% | −35.94 / +61.69 / −0.39 | EFFECT ESTABLISHED both metrics, candidate FASTER (−47.09% `d_min`, −39.61% `d_total`) |
+| builds disagree on the parse result | — | refuses to time, exit 3 |
+
+(4) **Partly** — the suite and the rig both run clean on Node
+24 (the same two pre-existing `doc-examples` failures as Node 22). What cannot be done
 yet is the part that matters: A1 and C1 do not exist as code, so there is
 nothing to re-measure. That step belongs to Phase 2a/2b, and the rig is
 what it must be measured with.

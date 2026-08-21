@@ -61,7 +61,10 @@ const byUtf16 = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 function canon(v) {
   if (null === v || undefined === v) return 'null'
   if ('boolean' === typeof v) return v ? 'true' : 'false'
-  if ('number' === typeof v) return Number.isInteger(v) ? String(v) : String(v)
+  // String() IS the canonical form: ECMAScript Number::toString is what
+  // the Go twin's jsNumberString reimplements, because Go's %v disagrees
+  // with it (1e20, 1e-7, ...). Nothing to do here but say so.
+  if ('number' === typeof v) return String(v)
   if ('bigint' === typeof v) return String(v)
   if ('string' === typeof v) return '"' + v + '"'
   if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']'
@@ -109,7 +112,20 @@ function probeLex(arg, input) {
   })
 
   const tokens = []
-  for (let i = 0; i < MAX_TOKENS; i++) {
+  // The cap counts RETAINED tokens, not next() calls, and #SP is dropped
+  // before it counts. Both halves are load-bearing. This port emits an
+  // #SP between whitespace-separated tokens and Go emits none, so a cap
+  // on calls is reached after half as many real tokens here: measured, a
+  // `find` target 40 tokens in was NOT-FOUND here and found at column 79
+  // in Go, under an identical cap — manufacturing the exact
+  // sequence-dependent difference selecting one token is meant to avoid.
+  // Dropping #SP also makes `at` mean the same token in both ports.
+  //
+  // The consequence, stated so nobody is surprised by it: this probe
+  // cannot address an #SP token. Whether that asymmetry is itself a
+  // divergence is an open question and not one a row here should
+  // prejudge.
+  for (let guard = 0; tokens.length < MAX_TOKENS && guard < 4 * MAX_TOKENS; guard++) {
     const t = lex.next()
     if (!t) break
     // A lex failure surfaces as a #BD token here and on lex.Err in Go.
@@ -119,6 +135,7 @@ function probeLex(arg, input) {
       return 'ERROR:' + t.why + ':' + t.cI + ':' + t.src
     }
     if ('#ZZ' === t.name) break
+    if ('#SP' === t.name) continue
     tokens.push(t)
   }
 
@@ -206,6 +223,50 @@ function collectSpecs(rows) {
   }
   return specs
 }
+
+// The twin of go/divergent_test.go's TestJSNumberStringMatchesJavaScript.
+// Go cannot use its %v here — it disagrees with String() on 1e20, 1e-7
+// and more — so it reimplements ECMAScript Number::toString, and this
+// side asserts the same table against the real thing. A value added to
+// one table belongs in the other.
+const JS_NUMBER_CASES = [
+  [0, '0'],
+  [1, '1'],
+  [-1, '-1'],
+  [3, '3'],
+  [0.1, '0.1'],
+  [-0.1, '-0.1'],
+  [0.5, '0.5'],
+  [1.5, '1.5'],
+  [100, '100'],
+  [1e6, '1000000'],
+  // The two Go's %v got wrong, and the reason the twin exists.
+  [1e20, '100000000000000000000'],
+  [1e-7, '1e-7'],
+  // Either side of each threshold in the spec's case split.
+  [1e21, '1e+21'],
+  [1e-6, '0.000001'],
+  [1e-21, '1e-21'],
+  [123456789012345680000, '123456789012345680000'],
+  [5e-324, '5e-324'],
+  [1.7976931348623157e308, '1.7976931348623157e+308'],
+  [0.30000000000000004, '0.30000000000000004'],
+  [2 / 3, '0.6666666666666666'],
+  [-0, '0'],
+  [9007199254740993, '9007199254740992'],
+  [1e100, '1e+100'],
+  [1.25e-10, '1.25e-10'],
+  [255, '255'],
+  [1e-3, '0.001'],
+]
+
+describe('divergent canonical number rendering', () => {
+  it('canon renders a number exactly as String() does', () => {
+    for (const [v, want] of JS_NUMBER_CASES) {
+      assert.equal(canon(v), want, 'canon(' + want + ')')
+    }
+  })
+})
 
 describe('divergent', () => {
   it('every register row still diverges exactly as recorded', () => {

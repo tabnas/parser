@@ -99,15 +99,28 @@ done
 
 # A declaration that is no longer needed is a declaration that will one
 # day hide a real drift. Every `not-shared:` entry must still name a file
-# present on BOTH sides; the same honesty rule `nonParity` follows in
-# go/spec_registration_test.go.
+# present on BOTH sides, AND the two must still actually differ; the same
+# honesty rule `nonParity` follows in go/spec_registration_test.go.
+#
+# The second half matters as much as the first. "Both files exist" alone
+# would let the declaration survive the two repos converging on one
+# representation — at which point it silences the comparison forever and
+# every later drift with it, which is precisely the failure this gate was
+# repaired to stop.
 while read -r name; do
   [ -n "$name" ] || continue
-  if [ ! -f "$A/$name" ] || [ ! -f "$B/$(map_name "$name")" ]; then
+  mapped="$(map_name "$name")"
+  if [ ! -f "$A/$name" ] || [ ! -f "$B/$mapped" ]; then
     fail=1
     echo "FAIL (stale declaration): not-shared: $name — that name is no" \
          "longer present on both sides, so the declaration has outlived" \
          "its purpose and must be removed"
+  elif cmp -s "$A/$name" "$B/$mapped"; then
+    fail=1
+    echo "FAIL (stale declaration): not-shared: $name — the two files are" \
+         "now BYTE-IDENTICAL, so they are the same fixture after all." \
+         "Remove the declaration and let them be compared, or this" \
+         "exemption hides every future drift between them"
   fi
 done < <(grep -v '^#' "$ALLOW" 2>/dev/null | sed -n 's/^not-shared: *//p')
 

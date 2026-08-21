@@ -25,9 +25,11 @@ package tabnas
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -88,10 +90,7 @@ func divergentCanon(v any) string {
 	case int64:
 		return fmt.Sprintf("%d", t)
 	case float64:
-		if t == float64(int64(t)) {
-			return fmt.Sprintf("%d", int64(t))
-		}
-		return fmt.Sprintf("%v", t)
+		return jsNumberString(t)
 	case []any:
 		parts := make([]string, len(t))
 		for i, e := range t {
@@ -112,6 +111,78 @@ func divergentCanon(v any) string {
 	default:
 		return "UNRENDERABLE"
 	}
+}
+
+// jsNumberString renders a float64 exactly as JavaScript's String(number)
+// does — ECMAScript Number::toString, base 10.
+//
+// The obvious spelling, %v, is wrong, and wrong in a way that would make
+// this renderer MANUFACTURE divergences: measured, Go's %v gives `1e+20`
+// where JavaScript gives `100000000000000000000`, and `1e-07` where
+// JavaScript gives `1e-7`. Two ports agreeing on the IEEE-754 value would
+// then be recorded as disagreeing, which is the precise failure the
+// canonical form exists to prevent. An earlier "just use %d when it is an
+// integer" guard did not help either: int64(1e20) overflows, so the guard
+// declined and fell through to %v.
+//
+// The spec's own variable names are kept so the cases can be checked
+// against it: s is the shortest decimal digit string, k its length, and n
+// the position of the decimal point, so that s x 10^(n-k) == x.
+//
+// Pinned against the real String() by TestJSNumberStringMatchesJavaScript
+// here and its twin in ts/test/divergent.test.js; the two tables must
+// stay in step.
+func jsNumberString(x float64) string {
+	switch {
+	case math.IsNaN(x):
+		return "NaN"
+	case math.IsInf(x, 1):
+		return "Infinity"
+	case math.IsInf(x, -1):
+		return "-Infinity"
+	case x == 0:
+		return "0" // String(-0) is "0" in JavaScript, not "-0"
+	}
+
+	sign := ""
+	if x < 0 {
+		sign = "-"
+		x = -x
+	}
+
+	// FormatFloat with 'e' and precision -1 gives the SHORTEST digit
+	// string that round-trips, which is exactly the spec's s and n.
+	e := strconv.FormatFloat(x, 'e', -1, 64)
+	mant, expPart, _ := strings.Cut(e, "e")
+	exp, err := strconv.Atoi(expPart)
+	if err != nil {
+		return sign + e
+	}
+	digits := strings.Replace(mant, ".", "", 1)
+	k := len(digits)
+	n := exp + 1
+
+	switch {
+	case k <= n && n <= 21:
+		return sign + digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		return sign + digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		return sign + "0." + strings.Repeat("0", -n) + digits
+	}
+
+	// Exponential. JavaScript writes the exponent with a sign and NO
+	// zero padding, where Go's 'e' pads to two digits.
+	expSign := "+"
+	ev := n - 1
+	if ev < 0 {
+		expSign = "-"
+		ev = -ev
+	}
+	if k == 1 {
+		return sign + digits + "e" + expSign + strconv.Itoa(ev)
+	}
+	return sign + digits[:1] + "." + digits[1:] + "e" + expSign + strconv.Itoa(ev)
 }
 
 // ---------------------------------------------------------------------
@@ -165,12 +236,20 @@ func divergentShow(arg map[string]any, dflt []string) ([]string, error) {
 // stream: the two ports emit different token SEQUENCES for the same
 // source (this port emits no #SP where TypeScript does), so a stream
 // render would go red for a reason no row is about.
+//
+// The cap counts RETAINED tokens rather than Next() calls, matching the
+// TypeScript twin, which additionally drops the #SP tokens this port
+// never produces. Capping calls instead would reach the limit after half
+// as many real tokens there: measured, a `find` target 40 tokens in was
+// NOT-FOUND in TypeScript and found at column 79 here, under an
+// identical cap — manufacturing the very sequence-dependent difference
+// selecting one token is meant to avoid.
 func divergentProbeLex(arg map[string]any, input string) (string, error) {
 	j := Make(divergentOpts(arg))
 	lex := NewLex(input, j.Config())
 
 	var tokens []*Token
-	for i := 0; i < divergentMaxTokens; i++ {
+	for guard := 0; len(tokens) < divergentMaxTokens && guard < 4*divergentMaxTokens; guard++ {
 		tk := lex.Next()
 		// A lex failure surfaces on lex.Err here and as a #BD token in
 		// TypeScript. The register asserts the observable — code, column,
@@ -181,6 +260,11 @@ func divergentProbeLex(arg map[string]any, input string) (string, error) {
 		}
 		if tk == nil || tk.Name == "#ZZ" {
 			break
+		}
+		// Never produced here today; skipped anyway so the two runners
+		// retain the same list if that ever changes.
+		if tk.Name == "#SP" {
+			continue
 		}
 		tokens = append(tokens, tk)
 	}
@@ -408,6 +492,55 @@ func TestDivergentRegister(t *testing.T) {
 	}
 }
 
+// TestJSNumberStringMatchesJavaScript pins jsNumberString against the
+// real String(number), value by value.
+//
+// The expectations were TAKEN from `node -e 'console.log(String(v))'`,
+// not written from the spec by hand — a shared-rendering claim that is
+// only asserted is exactly what cost this PR a review round. The twin
+// table is in ts/test/divergent.test.js; the two must stay in step, and
+// a value added to one belongs in the other.
+func TestJSNumberStringMatchesJavaScript(t *testing.T) {
+	for _, c := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{-1, "-1"},
+		{3, "3"},
+		{0.1, "0.1"},
+		{-0.1, "-0.1"},
+		{0.5, "0.5"},
+		{1.5, "1.5"},
+		{100, "100"},
+		{1e6, "1000000"},
+		// The two %v got wrong, and the reason this function exists.
+		{1e20, "100000000000000000000"},
+		{1e-7, "1e-7"},
+		// Either side of each threshold in the spec's case split.
+		{1e21, "1e+21"},
+		{1e-6, "0.000001"},
+		{1e-21, "1e-21"},
+		{123456789012345680000, "123456789012345680000"},
+		{5e-324, "5e-324"},
+		{1.7976931348623157e308, "1.7976931348623157e+308"},
+		{0.30000000000000004, "0.30000000000000004"},
+		{2.0 / 3.0, "0.6666666666666666"},
+		{math.Copysign(0, -1), "0"}, // String(-0) is "0", not "-0"
+		{9007199254740993, "9007199254740992"},
+		{1e100, "1e+100"},
+		{1.25e-10, "1.25e-10"},
+		{255, "255"},
+		{1e-3, "0.001"},
+	} {
+		if got := jsNumberString(c.in); got != c.want {
+			t.Errorf("jsNumberString(%v) = %q, want %q (what JavaScript's "+
+				"String() produces)", c.in, got, c.want)
+		}
+	}
+}
+
 // notRegistered lists DIVERGENCE.md entries that are NOT yet rows in the
 // register, with the reason and where they ARE pinned. An entry here is a
 // gap being declared, not a gap being excused: the register is the
@@ -449,13 +582,52 @@ func TestDivergenceRegisterCoversEveryEntry(t *testing.T) {
 	if lerr != nil {
 		t.Fatalf("cannot load divergent.tsv: %v", lerr)
 	}
+	// Walk in file order so each row is attributed to the group it sits
+	// under, and record whether that group still holds a row where the
+	// two ports actually DISAGREE.
+	//
+	// The marker alone is not registration. Without this, repairing a
+	// divergence and deleting its divergent row — or simply editing both
+	// expected columns to the same value — leaves the marker, the control
+	// row, both runners and this gate all green, and the DIVERGENCE.md
+	// entry outlives the executable evidence that is the entire point of
+	// ADR-14. The gate would then be asserting that prose exists, which
+	// prose is quite capable of doing by itself.
 	registered := map[string]bool{}
+	divergentRow := map[string]bool{}
+	group := ""
 	for _, row := range rows {
-		if len(row.cols) != 1 || !strings.HasPrefix(row.cols[0], "# @divergence: ") {
+		if len(row.cols) == 1 {
+			if strings.HasPrefix(row.cols[0], "# @divergence: ") {
+				group = strings.TrimSpace(
+					strings.TrimPrefix(row.cols[0], "# @divergence: "))
+				registered[group] = true
+			}
 			continue
 		}
-		registered[strings.TrimSpace(
-			strings.TrimPrefix(row.cols[0], "# @divergence: "))] = true
+		if len(row.cols) != divergentCols {
+			continue // the runner reports a malformed row; not this gate's job
+		}
+		if group == "" {
+			t.Errorf("line %d: row %q sits above every `# @divergence:` marker, "+
+				"so it is attributed to no DIVERGENCE.md entry",
+				row.lineNo, row.cols[0])
+			continue
+		}
+		if row.cols[4] != row.cols[5] {
+			divergentRow[group] = true
+		}
+	}
+
+	for g := range registered {
+		if !divergentRow[g] {
+			t.Errorf("register group %q has no row where the `go` and `ts` "+
+				"columns differ. Either the divergence was repaired — in which "+
+				"case delete the group AND its DIVERGENCE.md entry, which is "+
+				"what the repair is for — or its divergent row was lost and the "+
+				"control rows are now pinning agreement under a heading that "+
+				"claims disagreement", g)
+		}
 	}
 
 	known := map[string]bool{}

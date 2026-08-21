@@ -42,7 +42,12 @@ node "$DIR/genfixture.js" "$FIX"
 
 echo
 echo "=== TS benchmarks ==="
-for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json; do
+# records-cjk-1mb.json is the non-ASCII arm: without it every fixture
+# here is ASCII (the escape-dense one included, since escape SEQUENCES
+# are ASCII bytes) and the per-character fallback scan path is never
+# measured. Generating it and not benchmarking it is worse than not
+# having it — it reads as coverage and produces no timing data.
+for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json; do
   node "$DIR/bench.js" json "$FIX/$f" "$ITERS" "$WARMUP"
   node "$DIR/bench.js" native "$FIX/$f" "$ITERS" "$WARMUP"
 done

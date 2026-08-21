@@ -117,13 +117,28 @@ Three things about it differ from every other file here:
   to both runners, or the row cannot be asserted on both sides.
 - **Rows render through a shared canonical form, never a runtime's own.**
   Go's `%q` and JavaScript's `JSON.stringify` escape different
-  characters, and the two runtimes sort strings by different units. Both
-  traps were paid for once already in this repo (#156). Values render
-  verbatim and map keys sort by UTF-16 code unit in both ports, so the
-  renderer cannot manufacture a difference of its own.
+  characters; the two runtimes sort strings by different units; and Go's
+  `%v` disagrees with `String(number)` on ordinary values (`1e+20` vs
+  `100000000000000000000`, `1e-07` vs `1e-7`), so the Go runner
+  reimplements ECMAScript `Number::toString` and pins it against the real
+  thing. All three traps were paid for in review. Values render verbatim,
+  map keys sort by UTF-16 code unit, and numbers render as JavaScript
+  writes them — so the renderer cannot manufacture a difference of its
+  own.
 - **Every group carries a control row** — an adjacent case where the
   ports AGREE. Without one, a repair to the divergent row and unrelated
-  breakage look identical.
+  breakage look identical. A group must also keep at least one row where
+  the two columns actually DIFFER; the gate fails otherwise, or a
+  repaired divergence could keep its `DIVERGENCE.md` entry with only
+  control rows left behind it.
+- **A `lex` row selects one token from a comparable list.** The cap
+  counts retained tokens, not `next()` calls, and `#SP` — which
+  TypeScript emits between whitespace-separated tokens and Go does not —
+  is dropped before it counts. Without both, an identical cap reached a
+  different token in each port: measured, a target 40 tokens in was
+  `NOT-FOUND` in TypeScript and found in Go. The cost is that no row here
+  can address an `#SP` token, and whether that asymmetry is itself a
+  divergence is an open question.
 
 `go/divergent_test.go` also gates coverage: every `### ` heading in
 `DIVERGENCE.md` must be either an `# @divergence:` group in the register
