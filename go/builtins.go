@@ -16,26 +16,32 @@ package tabnas
 // `{rule, src, kids}` AST; probe dispatch (@probeInit$/@probeDecide$/
 // @probePhase0$/1$/2$) resolves the optional-prefix `[X D] Y` ambiguity.
 //
-// Parity note vs TS: the TS AltAction takes a 3rd `alt` argument and the
-// tree builtins read per-alt config from `alt.k` (avoiding `r.k`
-// pollution). Go's AltAction is `func(*Rule, *Context)`, and the engine
-// merges `alt.K` into `r.K` *before* running the action (rule.go), so
-// the Go builtins read their config from `r.K`.
+// CONFIG LIFETIME. A builtin's configuration is bound when the GRAMMAR
+// LOADS (ruling #120's A1) and travels in the action's closure, not in
+// any rule state. `bindBuiltinConfig` in grammarspec.go takes the key out
+// of the alternate's `K` as it binds, so it never reaches `r.K` at all.
+// There is exactly one regime: the alternate that declares a config is
+// the alternate that gets it — the same rule TypeScript has always had,
+// where the AltAction takes the matched alternate and reads `alt.k`.
 //
-// This is NOT equivalent behaviour, and this comment said it was. Config
-// in `r.K` propagates to children on push, so a parent that DECLARES a
-// builtin config without running the builtin passes it to a child that
-// runs one bare: the same function-free serialized grammar answers 4
-// here and 3 in TypeScript. The old wording's escape clause — "harmless
-// for the bounded set the compiler emits" — is a claim about
-// @tabnas/bnf's output, not about the contract this package offers every
-// other grammar.
+// This comment used to claim the two ports were equivalent while Go read
+// config from `r.K`. They were not. `r.K` propagates to children on push
+// and replace, so a parent that DECLARED a config without running the
+// builtin passed it to a child running one bare, and the same
+// function-free serialized grammar answered 4 here and 3 in TypeScript.
+// The escape clause it offered — "harmless for the bounded set the
+// compiler emits" — was a claim about @tabnas/bnf's output, not about
+// the contract this package offers every other grammar.
 //
-// See DIVERGENCE.md, "Builtin config reaches a child rule in Go and not
-// in TypeScript", where it is registered with both shapes in
-// test/spec/divergent.tsv. The repair is #120's A1 — bind config at
-// grammar load, so it never enters `r.K` — after which the
-// delete-after-read below becomes unnecessary rather than load-bearing.
+// The five value builders used to `delete` their own key immediately
+// after reading it, to stop that leak. Those deletes are gone: they were
+// containment for a design that no longer exists, and were themselves a
+// THIRD scoping regime — consumed-once here against alternate-scoped in
+// TypeScript — which is why the run-then-push shape used to agree for a
+// different reason than the one that made it correct.
+//
+// Pinned by TestBuiltinConfigIsAlternateScoped and its TypeScript twin.
+// See DIVERGENCE.md, "Repaired, and what replaced them".
 
 import "reflect"
 
@@ -72,15 +78,9 @@ func cfgInt(v any) int {
 func cfgStr(v any) string { s, _ := v.(string); return s }
 func cfgBool(v any) bool  { b, _ := v.(bool); return b }
 
-func mapConfig(r *Rule, key string) map[string]any {
-	m, _ := r.K[key].(map[string]any)
-	return m
-}
-
 // @node$ — allocate (when init) and/or accumulate matched terminals' src.
 // Config in r.K["node$"] = {init?, rule?, kind?, nterms?}.
-func builtinNode(r *Rule, _ *Context) {
-	cfg := mapConfig(r, "node$")
+func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if cfgBool(cfg["init"]) {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
 	}
@@ -99,8 +99,7 @@ func builtinNode(r *Rule, _ *Context) {
 // @capture$ — merge the just-returned child node into the current node.
 // Tagged children push into kids; untagged ones flatten (src + kids).
 // Config in r.K["capture$"] = {rule?, kind?}.
-func builtinCapture(r *Rule, _ *Context) {
-	cfg := mapConfig(r, "capture$")
+func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Node == nil {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
 	}
@@ -155,8 +154,7 @@ func builtinBubble(r *Rule, _ *Context) {
 // the parent after the fold, so the parent's src spans the full run
 // while each kid spans only its own segment.
 // Config in r.K["fold$"] = {cN?}.
-func builtinFold(r *Rule, _ *Context) {
-	cfg := mapConfig(r, "fold$")
+func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Parent == nil || r.Parent == NoRule {
 		return
 	}
@@ -256,9 +254,7 @@ func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 // (K:{object$:{sort:true}}) selects a Sorted node instead — the only way
 // to get alphabetical keys. With MapRef info on, allocate a MapRef
 // carrying the static `implicit` flag and an empty Meta bag.
-func builtinObject(r *Rule, ctx *Context) {
-	cfg := mapConfig(r, "object$")
-	delete(r.K, "object$")
+func builtinObjectCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.MapRef {
 		r.Node = MapRef{Val: make(map[string]any), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
 		return
@@ -276,10 +272,8 @@ func builtinObject(r *Rule, ctx *Context) {
 
 // @array$ — allocate a fresh empty array. With ListRef info on, allocate
 // a ListRef carrying the static `implicit` flag and an empty Meta bag.
-func builtinArray(r *Rule, ctx *Context) {
+func builtinArrayCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.ListRef {
-		cfg := mapConfig(r, "array$")
-		delete(r.K, "array$")
 		r.Node = ListRef{Val: make([]any, 0), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
 		return
 	}
@@ -293,9 +287,7 @@ func builtinReset(r *Rule, _ *Context) {
 
 // @key$ — capture the matched key token's value into a (non-propagated)
 // r.U slot for a later @setval$ on the same rule.
-func builtinKey(r *Rule, _ *Context) {
-	cfg := mapConfig(r, "key$")
-	delete(r.K, "key$")
+func builtinKeyCfg(r *Rule, _ *Context, cfg map[string]any) {
 	slot := cfgStr(cfg["slot"])
 	if slot == "" {
 		slot = "key"
@@ -310,9 +302,7 @@ func builtinKey(r *Rule, _ *Context) {
 // Works on either a plain map[string]any or a MapRef wrapper (info mode)
 // via NodeMapSet. Go's metadata lives in MapRef struct fields, so there
 // is no marker-key collision to guard against (unlike the TS side).
-func builtinSetval(r *Rule, _ *Context) {
-	cfg := mapConfig(r, "setval$")
-	delete(r.K, "setval$")
+func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 	slot := cfgStr(cfg["slot"])
 	if slot == "" {
 		slot = "key"
@@ -348,9 +338,7 @@ func builtinPush(r *Rule, _ *Context) {
 // the matched scalar token. With TextInfo on, a string/text token's value
 // is wrapped in a Text carrying its source quote char (the leaf whose
 // output type changes under info — the TS counterpart boxes a String).
-func builtinValue(r *Rule, ctx *Context) {
-	cfg := mapConfig(r, "value$")
-	delete(r.K, "value$")
+func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if r.Child != nil && !IsUndefined(r.Child.Node) {
 		r.Node = r.Child.Node
 		return
@@ -372,6 +360,81 @@ func builtinValue(r *Rule, ctx *Context) {
 		val = Text{Quote: quote, Str: str}
 	}
 	r.Node = val
+}
+
+// ---- Config binding (A1, ruling #120) -----------------------------
+//
+// A builtin's configuration is bound when the GRAMMAR LOADS, not read
+// from the rule's keep bag when the action runs. Each `make…` returns an
+// AltAction closed over its alternate's config; BUILTIN_REFS holds the
+// nil-config instance, which is what a bare `@node$` gets.
+//
+// This is the repair for the split registered in DIVERGENCE.md as
+// "Builtin config reaches a child rule in Go and not in TypeScript".
+// Config used to ride in `r.K`, which PROPAGATES to children on push and
+// replace, so a parent that merely DECLARED `k: {value$: {from: 1}}`
+// handed it to a child running `@value$` bare — 4 here against
+// TypeScript's 3 for the same serialized grammar.
+//
+// The five value builders used to `delete` their key right after reading
+// it, to stop exactly that leak. Those deletes are gone: they were a
+// containment measure for a design that no longer exists, and they were
+// themselves a THIRD scoping regime — config was consumed by running the
+// builtin here and merely alternate-scoped in TypeScript, so the two
+// ports agreed on the run-then-push shape for different reasons.
+func makeBuiltinNode(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinNodeCfg(r, ctx, cfg) }
+}
+func makeBuiltinCapture(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinCaptureCfg(r, ctx, cfg) }
+}
+func makeBuiltinFold(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinFoldCfg(r, ctx, cfg) }
+}
+func makeBuiltinObject(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinObjectCfg(r, ctx, cfg) }
+}
+func makeBuiltinArray(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinArrayCfg(r, ctx, cfg) }
+}
+func makeBuiltinKey(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinKeyCfg(r, ctx, cfg) }
+}
+func makeBuiltinSetval(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinSetvalCfg(r, ctx, cfg) }
+}
+func makeBuiltinValue(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinValueCfg(r, ctx, cfg) }
+}
+
+// Default-config instances: what BUILTIN_REFS exposes.
+var (
+	builtinNode    = makeBuiltinNode(nil)
+	builtinCapture = makeBuiltinCapture(nil)
+	builtinFold    = makeBuiltinFold(nil)
+	builtinObject  = makeBuiltinObject(nil)
+	builtinArray   = makeBuiltinArray(nil)
+	builtinKey     = makeBuiltinKey(nil)
+	builtinSetval  = makeBuiltinSetval(nil)
+	builtinValue   = makeBuiltinValue(nil)
+)
+
+// BUILTIN_CONFIG_FACTORY is the CLOSED set of builtins whose config is
+// bound at grammar load. Keyed by the ref a spec writes — never by a `$`
+// suffix test, which would also strip a grammar's own `k: {myTotal$: 1}`.
+//
+// The probe family is absent by construction, not by carve-out: those
+// builtins read and write `r.K` (pd_phase, pd_mark), which is rule state
+// that MUST propagate, and is not per-alternate configuration.
+var BUILTIN_CONFIG_FACTORY = map[FuncRef]func(map[string]any) AltAction{
+	"@node$":    makeBuiltinNode,
+	"@capture$": makeBuiltinCapture,
+	"@fold$":    makeBuiltinFold,
+	"@object$":  makeBuiltinObject,
+	"@array$":   makeBuiltinArray,
+	"@key$":     makeBuiltinKey,
+	"@setval$":  makeBuiltinSetval,
+	"@value$":   makeBuiltinValue,
 }
 
 // BUILTIN_REFS is the standard builtin library. Tree/probe/value actions

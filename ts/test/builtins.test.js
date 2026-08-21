@@ -126,6 +126,50 @@ describe('builtins', () => {
   // registered against Go, where builtins read `r.K`. Cost: every key in
   // `rule.k` is copied into the child on both paths, and builtin config
   // was the commonest occupant of a bag that never needed to travel.
+  // The TypeScript half of go/divergence_test.go
+  // TestBuiltinConfigIsAlternateScoped, over the same two shapes and the
+  // same input — the SAME assertion, not the opposite, because the two
+  // ports now agree.
+  //
+  // This replaces a divergence pin. Until ruling #120's A1, Go's builtins
+  // read config from `r.K`, which propagates to children, so a parent
+  // that merely DECLARED a config handed it to a child running the
+  // builtin bare: 4 there against 3 here. Kept as a parity test because
+  // the regression is silent — every fleet grammar pairs a config with
+  // its action on the same alternate, so only the set-then-push shape
+  // can see it.
+  describe('builtin config is scoped to the declaring alternate', () => {
+    const spec = (parentRuns) => {
+      const openAlt = { s: ['#NR', '#NR'], k: { value$: { from: 1 } }, p: 'leaf' }
+      if (parentRuns) openAlt.a = '@value$'
+      return {
+        options: { rule: { start: 'top' } },
+        rule: {
+          top: { open: [openAlt], close: [{ a: '@value$' }] },
+          leaf: { open: [{ s: ['#NR', '#NR'], a: '@value$' }], close: [{}] },
+        },
+      }
+    }
+
+    // On `1 2 3 4`: 3 means the config did NOT reach the child, 4 means
+    // it did.
+    for (const [label, runs] of [
+      ['set-then-push (parent declares the config, never runs it)', false],
+      ['run-then-push (parent runs the builtin first)', true],
+    ]) {
+      it(label + ' answers 3', () => {
+        const j = new Tabnas({ rule: { start: 'top' } })
+        j.grammar(JSON.parse(JSON.stringify(spec(runs))))
+        assert.equal(
+          j.parse('1 2 3 4'), 3,
+          'builtin config must be scoped to the alternate that DECLARES ' +
+          'it; a 4 means it reached the child, which is the divergence ' +
+          '#120 repaired',
+        )
+      })
+    }
+  })
+
   describe('builtin config is bound at grammar load (A1, #120)', () => {
     const altOf = (spec) => {
       const j = new Tabnas({ rule: { start: 'top' } })

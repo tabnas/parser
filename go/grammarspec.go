@@ -829,6 +829,99 @@ func (j *Tabnas) resolveGrammarAlts(gas []*GrammarAltSpec, ref map[FuncRef]any) 
 // (or nil for none). An array is collapsed to one ordered call that
 // short-circuits when a prior action sets ctx.ParseErr (the engine's
 // equivalent of the TS error-token short-circuit).
+// bindBuiltinConfig resolves an action field, binding each stock builtin's
+// configuration out of the alternate's keep bag and into the action, at
+// GRAMMAR LOAD (A1, ruling #120). Every key it consumes is recorded in
+// `consumed` so the caller can leave it out of the alternate's K.
+//
+// WHY. Config in alt.K is merged into r.K before the action runs, and
+// r.K PROPAGATES to children on push and replace — so a parent that
+// merely DECLARED `k: {value$: {from: 1}}` handed it to a child running
+// `@value$` bare. Binding at load leaves one regime: the alternate that
+// declares the config is the alternate that gets it, which is what
+// TypeScript has always done and what AGENTS.md requires.
+//
+// TWO GUARDS. The set is keyed by the ref a spec writes, never by a `$`
+// suffix — a grammar's own `k: {myTotal$: 1}` is user data and must
+// survive. And the ref must still resolve to the stock builtin; that is
+// NOT reachable today, because Grammar() reserves the whole `$` ref
+// namespace and returns an error for a user ref key containing `$`, so
+// this is a cheap assertion rather than a live defence.
+func bindBuiltinConfig(
+	a any, ref map[FuncRef]any, k map[string]any, consumed map[string]bool,
+) (AltAction, error) {
+	bind := func(name string) (AltAction, bool) {
+		factory, isBuiltin := BUILTIN_CONFIG_FACTORY[FuncRef(name)]
+		if !isBuiltin {
+			return nil, false
+		}
+		if ref != nil {
+			if _, stock := ref[FuncRef(name)].(AltAction); !stock {
+				return nil, false
+			}
+		}
+		key := strings.TrimPrefix(name, "@")
+		cfg, _ := k[key].(map[string]any)
+		if _, present := k[key]; present {
+			consumed[key] = true
+		}
+		return factory(cfg), true
+	}
+
+	switch av := a.(type) {
+	case string:
+		if fn, ok := bind(av); ok {
+			return fn, nil
+		}
+	case []any:
+		out := make([]any, len(av))
+		for i, el := range av {
+			if name, isStr := el.(string); isStr {
+				if fn, ok := bind(name); ok {
+					out[i] = fn
+					continue
+				}
+			}
+			out[i] = el
+		}
+		return resolveActionField(out, ref)
+	case []string:
+		out := make([]any, len(av))
+		for i, name := range av {
+			if fn, ok := bind(name); ok {
+				out[i] = fn
+				continue
+			}
+			out[i] = name
+		}
+		return resolveActionField(out, ref)
+	}
+	return resolveActionField(a, ref)
+}
+
+// copyAltK copies a GrammarAltSpec's keep bag onto the AltSpec, leaving
+// out the keys bindBuiltinConfig consumed. An alternate whose only entry
+// was builtin config ends with NO bag: leaving an empty map behind would
+// keep it merging into r.K on every match for nothing, which is most of
+// what A1 exists to remove.
+func copyAltK(dst *AltSpec, src map[string]any, consumed map[string]bool) {
+	if src == nil {
+		return
+	}
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		if consumed[k] {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		dst.K = nil
+		return
+	}
+	dst.K = out
+}
+
 func resolveActionField(a any, ref map[FuncRef]any) (AltAction, error) {
 	switch av := a.(type) {
 	case nil:
@@ -984,7 +1077,8 @@ func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*Al
 	// Resolve A (action): a FuncRef string, or an array of refs/AltActions
 	// run in order (matched alt's own action first, then composed user
 	// actions), short-circuiting if a prior action sets ctx.ParseErr.
-	if action, err := resolveActionField(ga.A, ref); err != nil {
+	altConsumed := map[string]bool{}
+	if action, err := bindBuiltinConfig(ga.A, ref, ga.K, altConsumed); err != nil {
 		return nil, err
 	} else if action != nil {
 		alt.A = action
@@ -1046,10 +1140,7 @@ func (j *Tabnas) resolveGrammarAlt(ga *GrammarAltSpec, ref map[FuncRef]any) (*Al
 		}
 	}
 	if ga.K != nil {
-		alt.K = make(map[string]any, len(ga.K))
-		for k, v := range ga.K {
-			alt.K[k] = v
-		}
+		copyAltK(alt, ga.K, altConsumed)
 	}
 	alt.G = ga.G
 
@@ -1365,7 +1456,8 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 		}
 	}
 
-	if action, err := resolveActionField(ga.A, ref); err == nil && action != nil {
+	staticConsumed := map[string]bool{}
+	if action, err := bindBuiltinConfig(ga.A, ref, ga.K, staticConsumed); err == nil && action != nil {
 		alt.A = action
 	}
 	if ga.E != "" {
@@ -1395,7 +1487,10 @@ func ResolveGrammarAltStatic(ga *GrammarAltSpec, ref map[FuncRef]any) *AltSpec {
 		alt.U = ga.U
 	}
 	if ga.K != nil {
-		alt.K = ga.K
+		// Same binding as resolveGrammarAlt. This resolver is exported
+		// and bypasses that path entirely, so skipping it here would
+		// leave a caller silently on the pre-A1 semantics.
+		copyAltK(alt, ga.K, staticConsumed)
 	}
 	alt.G = ga.G
 

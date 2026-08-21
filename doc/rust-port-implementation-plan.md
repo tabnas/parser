@@ -433,13 +433,53 @@ marked re-verify.
    answers `4` the TypeScript runner goes red. So when A1 lands in step
    3 the register forces its own cleanup rather than needing to be
    remembered.
-2. A1 in TypeScript: hoist at `normalt` keyed on the **closed builtin
-   name set** (never a `$`-suffix test — the probed
-   `k: {myTotal$: 1}` trap), probe family excluded; builders become
-   factories with a default-config instance each.
-3. A1 in Go: bind at spec load; delete the five `delete(r.K, …)` sites;
-   rewrite `go/builtins.go:19-25`'s "Equivalent behaviour" comment and
-   `doc/value-builtins.md`'s single-lifetime description. Close #120.
+2. **Done** — A1 in TypeScript. The eight config-reading builtins are
+   factories; `normalt` binds each alternate's config into its action at
+   load and takes the key out of `alt.k`, keyed on the closed builtin
+   name set. The `k: {myTotal$: 1}` trap is avoided by construction and
+   pinned. The probe family needed no carve-out at all: it reads and
+   writes `r.k` (`pd_phase`, `pd_mark`) rather than per-alternate
+   config, so it is simply absent from the bound set.
+
+   One correction to the design as written: the "shadowed ref" guard it
+   implies is not reachable. `grammar()` reserves the whole `$` ref
+   namespace and throws on a user ref key containing `$`, so nothing can
+   shadow a builtin. The check is kept as a cheap assertion against that
+   reservation being relaxed, and says so rather than claiming a defence
+   it does not provide.
+3. **Done** — A1 in Go, and it closes the split. The same eight builtins
+   take bound config; `bindBuiltinConfig` in `grammarspec.go` binds at
+   spec load and `copyAltK` drops the consumed keys, nilling a bag that
+   ends up empty. **All five `delete(r.K, …)` sites are gone** — they
+   were containment for a design that no longer exists, and were
+   themselves a third scoping regime (consumed-once against
+   alternate-scoped), which is why the run-then-push shape used to agree
+   for the wrong reason. `mapConfig` went with them, its last caller
+   removed.
+
+   Two resolvers needed it, not one: `ResolveGrammarAltStatic` is
+   exported, bypasses `resolveGrammarAlt` entirely, and would have left
+   any caller silently on the pre-A1 semantics.
+
+   **The register did exactly what it was built for.** The moment Go's
+   half landed, `a2-config-set-then-push` went red — Go now answers `3`
+   where the row records `4` — with the message instructing deletion of
+   the row *and* its `DIVERGENCE.md` entry. Both are gone; the entry is
+   replaced by a forwarding address in "Repaired, and what replaced
+   them", and the two shapes moved to
+   `TestBuiltinConfigIsAlternateScoped` in both ports, as the plan said
+   they should. That is step 0's mechanism forcing its own cleanup on
+   its first real repair, without anyone having to remember.
+
+   `go/builtins.go`'s header and `doc/value-builtins.md`'s config
+   section are rewritten. The doc's note still cited #120's *original*
+   rule-scoped ruling, which A1 amends — corrected, with the amendment
+   named. Close #120.
+
+   Fleet verified: the gate is green across parser, json and jsonic in
+   both runtimes, including jsonic — the only repo with live builtin
+   config declarations (`ts/src/grammar.ts:303` `array$ implicit`,
+   `:386` `object$ implicit`).
 4. The propagation fixture `test/spec/propagate.{fixture.json,tsv}`
    (`§5.1 strategy` item 5): `n`/`k` on push and replace, `u`
    exclusion — with the `@setval$` missing-key coercion divergence fixed
