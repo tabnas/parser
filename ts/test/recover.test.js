@@ -181,4 +181,52 @@ describe('recover', () => {
     assert.deepStrictEqual(good.errors, [])
     assert.equal(good.value.a, 1)
   })
+
+  it('give-up leaves only the recorded errors: no post-loop extras', () => {
+    // When recovery gives up (skip cap hit, no sync token), the
+    // terminal fault is already recorded and the parse converts to
+    // { value, errors } — the post-loop completeness checks never run,
+    // so no error is manufactured from text recovery deliberately
+    // stopped processing. Mirrors go TestRecoverGiveUpAddsNoTrailingError.
+    const tn = mk({ maxSkip: 0 })
+    const out = tn.parse('[1 : abc def ghi]')
+    assert.deepStrictEqual(out.errors.map((e) => e.code), ['unexpected'])
+  })
+
+  it('trailing bad tokens keep their own error code', () => {
+    // A bad token in trailing content carries its own code (the
+    // parser.ts buffered/endtry checks raise why || unexpected): the
+    // generic label must not swallow unterminated_string. Both the
+    // prefetched-lookahead route (json grammar) and the no-lookahead
+    // route (a rule closing on an empty alternate) are pinned.
+    // Mirrors go TestRecoverTrailingBadTokenKeepsCode.
+    const viaLookahead = mk().parse('1 "abc')
+    assert.deepStrictEqual(
+      viaLookahead.errors.map((e) => e.code), ['unterminated_string'])
+    assert.equal(viaLookahead.value, 1)
+
+    const noLookahead = new Tabnas({ parse: { recover: { enabled: true } } })
+    noLookahead.grammar({
+      options: { rule: { start: 'top' } },
+      rule: { top: { open: [{ s: '#TX' }], close: [{}] } },
+    })
+    const out = noLookahead.parse('x "')
+    assert.deepStrictEqual(out.errors.map((e) => e.code), ['unterminated_string'])
+  })
+
+  it('reports trailing content after a complete value', () => {
+    // The completeness checks run AFTER the rule loop: a document
+    // whose value parses cleanly but is followed by junk must still
+    // produce a diagnostic in recovery mode, with the value kept.
+    // Pinned in both runtimes (go TestRecoverTrailingContent): the Go
+    // port once skipped these checks entirely under recovery and
+    // silently ACCEPTED `"x" q` — an accept/reject divergence.
+    const tn = mk()
+    for (const [src, value] of [['"x" q', 'x'], ['1 q', 1], ['"a" "b"', 'a']]) {
+      const out = tn.parse(src)
+      assert.equal(out.errors.length, 1, src + ' -> ' + JSON.stringify(out.errors))
+      assert.equal(out.errors[0].code, 'unexpected', src)
+      assert.equal(out.value, value, src)
+    }
+  })
 })

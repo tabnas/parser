@@ -410,3 +410,94 @@ func TestRecoverForcedCloseEventsAreEmitted(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoverTrailingContent(t *testing.T) {
+	// The completeness checks run AFTER the rule loop: a document
+	// whose value parses cleanly but is followed by junk must still
+	// produce a diagnostic in recovery mode, with the value kept —
+	// mirroring TS, where the trailing-content raise is recorded by
+	// the TabnasError constructor and converted to { value, errors }.
+	// This port once skipped those checks entirely under recovery and
+	// silently ACCEPTED `"x" q`. Mirrors the TS case
+	// "reports trailing content after a complete value".
+	j := mkRec(t)
+	for _, c := range []struct {
+		src   string
+		value string
+	}{
+		{`"x" q`, `"x"`},
+		{`1 q`, `1`},
+		{`"a" "b"`, `"a"`},
+	} {
+		v, errs, err := j.ParseRecover(c.src)
+		if err != nil {
+			t.Fatalf("%s: unexpected terminal error: %v", c.src, err)
+		}
+		if 1 != len(errs) {
+			t.Fatalf("%s: errs = %s, want one `unexpected`", c.src, enc(errs))
+		}
+		if "unexpected" != errs[0].Code {
+			t.Fatalf("%s: code = %s", c.src, errs[0].Code)
+		}
+		if c.value != enc(v) {
+			t.Fatalf("%s: value = %s, want %s", c.src, enc(v), c.value)
+		}
+	}
+}
+
+func TestRecoverGiveUpAddsNoTrailingError(t *testing.T) {
+	// When recovery gives up, the terminal fault is already recorded
+	// and TS's catch converts without ever reaching the post-loop
+	// completeness checks — so those checks must not run here either:
+	// they would fetch a LATER token and report a second error from
+	// text recovery deliberately stopped processing. Mirrors the TS
+	// case "give-up leaves only the recorded errors: no post-loop
+	// extras".
+	j := mkRec(t, func(r *RecoverOptions) { r.MaxSkip = intp(0) })
+	_, errs, err := j.ParseRecover(`[1 : abc def ghi]`)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unexpected" != errs[0].Code {
+		t.Fatalf("want the one recorded `unexpected`, got %s", enc(errs))
+	}
+}
+
+func TestRecoverTrailingBadTokenKeepsCode(t *testing.T) {
+	// A bad token in trailing content carries its own code — TS raises
+	// `why || unexpected` with the token's use details in both the
+	// buffered and the final-lookahead checks. Both routes are pinned:
+	// the prefetched-lookahead one (json grammar) and the no-lookahead
+	// one (a rule closing on an empty alternate, where the final
+	// Lex.Next returns a deferred #BD with lex.Err nil). Mirrors the
+	// TS case "trailing bad tokens keep their own error code".
+	j := mkRec(t)
+	v, errs, err := j.ParseRecover(`1 "abc`)
+	if err != nil {
+		t.Fatalf("lookahead route: unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unterminated_string" != errs[0].Code {
+		t.Fatalf("lookahead route: want one unterminated_string, got %s", enc(errs))
+	}
+	if `1` != enc(v) {
+		t.Fatalf("lookahead route: value = %s, want 1", enc(v))
+	}
+
+	n := Make(Options{Parse: &ParseOptions{Recover: &RecoverOptions{Enabled: true}}})
+	gs, gerr := GrammarSpecFromJSON([]byte(
+		`{"options":{"rule":{"start":"top"}},` +
+			`"rule":{"top":{"open":[{"s":"#TX"}],"close":[{}]}}}`))
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if gerr = n.Grammar(gs); gerr != nil {
+		t.Fatal(gerr)
+	}
+	_, errs, err = n.ParseRecover(`x "`)
+	if err != nil {
+		t.Fatalf("no-lookahead route: unexpected terminal error: %v", err)
+	}
+	if 1 != len(errs) || "unterminated_string" != errs[0].Code {
+		t.Fatalf("no-lookahead route: want one unterminated_string, got %s", enc(errs))
+	}
+}
