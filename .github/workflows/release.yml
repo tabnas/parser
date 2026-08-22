@@ -113,18 +113,41 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           V="${{ steps.v.outputs.version }}"
-          MISSING=""
-          git rev-parse -q --verify "refs/tags/ts/v$V" >/dev/null || MISSING="$MISSING ts/v$V"
-          if [ "${{ inputs.go }}" = "true" ]; then
-            git rev-parse -q --verify "refs/tags/go/v$V" >/dev/null || MISSING="$MISSING go/v$V"
-          fi
+          MISSING=""; ANCHOR=""
+          for T in "ts/v$V" "go/v$V"; do
+            case "$T" in
+              go/*) [ "${{ inputs.go }}" = "true" ] || continue ;;
+            esac
+            if C="$(git rev-parse -q --verify "refs/tags/$T^{commit}")"; then
+              [ -n "$ANCHOR" ] || ANCHOR="$C"
+            else
+              MISSING="$MISSING $T"
+            fi
+          done
           MISSING="$(echo $MISSING)"
           if [ -z "$MISSING" ]; then
             echo "::error::every tag this run would create already exists — bump the version first"
             exit 1
           fi
+
+          # A REPAIR must name the commit the release actually happened at,
+          # not whatever main has become since. If ts/v landed and go/v did
+          # not, and main moved on, tagging HEAD would leave the two tags
+          # identifying DIFFERENT commits — permanent for the Go module,
+          # because proxy.golang.org caches module versions immutably.
+          HEAD_C="$(git rev-parse HEAD)"
+          if [ -z "$ANCHOR" ]; then
+            ANCHOR="$HEAD_C"
+          elif [ "$ANCHOR" != "$HEAD_C" ]; then
+            if ! npm view "@tabnas/parser@$V" version >/dev/null 2>&1; then
+              echo "::error::$V is tagged at $ANCHOR but is not on npm — publishing would ship HEAD while the tags name an older commit; resolve by hand"
+              exit 1
+            fi
+            echo "repairing an earlier release: anchoring to $ANCHOR (HEAD has moved on)"
+          fi
           echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
-          echo "will create:$MISSING"
+          echo "anchor=$ANCHOR" >> "$GITHUB_OUTPUT"
+          echo "will create:$MISSING at $ANCHOR"
 
       # Fails closed: the schema embeds the version, so a bump PR that
       # forgot `npm run gen-registry` would publish a package whose
@@ -173,6 +196,6 @@ jobs:
           # half-release could never be repaired. --atomic makes it
           # both-or-neither: neither is recoverable, both is done.
           for T in ${{ steps.tags.outputs.missing }}; do
-            git tag "$T"
+            git tag "$T" "${{ steps.tags.outputs.anchor }}"
           done
           git push --atomic origin ${{ steps.tags.outputs.missing }}
