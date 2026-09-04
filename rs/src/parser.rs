@@ -105,6 +105,20 @@ impl Parser {
         self.run_action_with_config(name, rule, context, None)
     }
 
+    fn run_after_actions(
+        &self,
+        spec: &RuleSpec,
+        is_open: bool,
+        rule: &mut Rule,
+        context: &mut Context,
+    ) -> Result<(), TabnasError> {
+        let actions = if is_open { &spec.ao } else { &spec.ac };
+        for action in actions {
+            self.run_action(action, rule, context)?;
+        }
+        Ok(())
+    }
+
     fn run_action_with_config(
         &self,
         name: &str,
@@ -794,18 +808,6 @@ impl Parser {
                 }
                 mode.partial = best_partial_value(&root_node, &current_rule, &stack);
 
-                // After-actions belong to the rule whose alternate matched.
-                // Running them after a push/pop mutates the child or parent.
-                if is_open {
-                    for ao_action in &spec.ao {
-                        self.run_action(ao_action, &mut current_rule, &mut context)?;
-                    }
-                } else {
-                    for ac_action in &spec.ac {
-                        self.run_action(ac_action, &mut current_rule, &mut context)?;
-                    }
-                }
-
                 let done_alt = Some(RuleDoneAlt {
                     b: alt.b,
                     g: alt
@@ -820,11 +822,12 @@ impl Parser {
                     err: None,
                 });
 
-                // Check transition
+                // Resolve the transition before running lifecycle after-actions,
+                // so they can inspect rule.next just like the canonical engine.
+                // The action still belongs to the rule whose alternate matched.
                 let completed_rule;
                 let mut completed_value = None;
                 if let Some(ref push_name) = alt.p {
-                    current_rule.state = RuleState::Close;
                     let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
                     child.i = next_rule_id;
                     next_rule_id += 1;
@@ -836,13 +839,15 @@ impl Parser {
                     current_rule.next_rule_name = Some(push_name.clone());
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
+                    self.run_after_actions(&spec, is_open, &mut current_rule, &mut context)?;
+                    if is_open {
+                        current_rule.state = RuleState::Close;
+                    }
+                    child.parent_rule = Some(current_rule.snapshot());
                     completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
                 } else if let Some(ref replace_name) = alt.r {
-                    if is_open {
-                        current_rule.state = RuleState::Close;
-                    }
                     let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -853,18 +858,27 @@ impl Parser {
                     next.k = current_rule.k.clone();
                     current_rule.next_rule_name = Some(replace_name.clone());
                     current_rule.next_rule = Some(next.snapshot());
+                    self.run_after_actions(&spec, is_open, &mut current_rule, &mut context)?;
+                    if is_open {
+                        current_rule.state = RuleState::Close;
+                    }
                     next.prev_rule = Some(current_rule.snapshot());
                     completed_rule = current_rule;
                     current_rule = next;
                 } else if is_open {
-                    current_rule.state = RuleState::Close;
                     current_rule.next_rule_name = Some(current_rule.name.clone());
+                    current_rule.next_rule = Some(current_rule.snapshot());
+                    self.run_after_actions(&spec, true, &mut current_rule, &mut context)?;
+                    current_rule.state = RuleState::Close;
                     completed_rule = current_rule.clone();
                 } else {
                     // Close phase pop
-                    current_rule.next_rule_name = stack.last().map(|parent| parent.name.clone());
+                    let parent = stack.pop();
+                    current_rule.next_rule_name = parent.as_ref().map(|rule| rule.name.clone());
+                    current_rule.next_rule = parent.as_ref().map(Rule::snapshot);
+                    self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
                     completed_rule = current_rule.clone();
-                    if let Some(mut parent) = stack.pop() {
+                    if let Some(mut parent) = parent {
                         parent.child_node = current_rule.node.borrow().clone();
                         parent.child_rule = Some(current_rule.snapshot());
                         parent.next_rule = parent.child_rule.clone();
@@ -889,8 +903,49 @@ impl Parser {
                     break;
                 }
                 mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+            } else if alts.is_empty() {
+                // A state with no alternatives performs an implicit empty
+                // pass. It still resolves next and runs lifecycle after-actions.
+                let completed_rule;
+                let mut completed_value = None;
+                if is_open {
+                    current_rule.next_rule_name = Some(current_rule.name.clone());
+                    current_rule.next_rule = Some(current_rule.snapshot());
+                    self.run_after_actions(&spec, true, &mut current_rule, &mut context)?;
+                    current_rule.state = RuleState::Close;
+                    completed_rule = current_rule.clone();
+                } else {
+                    let parent = stack.pop();
+                    current_rule.next_rule_name = parent.as_ref().map(|rule| rule.name.clone());
+                    current_rule.next_rule = parent.as_ref().map(Rule::snapshot);
+                    self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
+                    completed_rule = current_rule.clone();
+                    if let Some(mut parent) = parent {
+                        parent.child_node = current_rule.node.borrow().clone();
+                        parent.child_rule = Some(current_rule.snapshot());
+                        parent.next_rule = parent.child_rule.clone();
+                        current_rule = parent;
+                    } else {
+                        completed_value = Some(current_rule.node.borrow().clone());
+                    }
+                }
+                self.notify_rule_done(
+                    &completed_rule,
+                    &context,
+                    if is_open {
+                        RuleState::Open
+                    } else {
+                        RuleState::Close
+                    },
+                    None,
+                );
+                if let Some(value) = completed_value {
+                    final_value = Some(value);
+                    break;
+                }
+                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
             } else {
-                // No alt matched
+                // Declared alternatives exist, but none matched.
                 if is_open {
                     if let Err(error) = self.ensure_lookahead(
                         &mut lexer,
@@ -949,91 +1004,62 @@ impl Parser {
                     mode.partial = best_partial_value(&root_node, &current_rule, &stack);
                     return Err(error);
                 } else {
-                    // A rule without close alternatives closes implicitly. If
-                    // alternatives were declared, a mismatch is a syntax
-                    // error at this rule rather than permission to pop it.
-                    if alts.is_empty() {
-                        current_rule.next_rule_name =
-                            stack.last().map(|parent| parent.name.clone());
-                        let completed_rule = current_rule.clone();
-                        let mut completed_value = None;
-                        if let Some(mut parent) = stack.pop() {
-                            parent.child_node = current_rule.node.borrow().clone();
-                            parent.child_rule = Some(current_rule.snapshot());
-                            parent.next_rule = parent.child_rule.clone();
-                            current_rule = parent;
-                        } else {
-                            completed_value = Some(current_rule.node.borrow().clone());
-                        }
-                        self.notify_rule_done(&completed_rule, &context, RuleState::Close, None);
-                        if let Some(value) = completed_value {
-                            final_value = Some(value);
-                            break;
-                        }
-                    } else {
-                        if let Err(error) = self.ensure_lookahead(
-                            &mut lexer,
-                            &mut context,
-                            &mut current_rule,
-                            &stack,
-                            1,
-                            mode,
-                        ) {
-                            return Err(self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                None,
-                            ));
-                        }
-                        if let Some(capture) = mode.continuation.as_deref_mut() {
-                            let base = failed_alt_tins(&context, alts, &self.options);
-                            capture.failure = continuation_tins(
-                                &context,
-                                &current_rule,
-                                &stack,
-                                &self.rules,
-                                &self.options,
-                                0,
-                                Some(&base),
-                            );
-                        }
-                        let token = context.t.first().cloned();
-                        let (source, pos, row, col) = token.as_ref().map_or_else(
-                            || (String::new(), src.chars().count(), 1, 1),
-                            |value| (value.src.clone(), value.pos, value.ri, value.ci),
-                        );
-                        let error = TabnasError::new("unexpected", source, src, pos, row, col);
-                        self.notify_rule_done(
-                            &current_rule,
-                            &context,
-                            RuleState::Close,
-                            Some(RuleDoneAlt {
-                                b: 0,
-                                g: Vec::new(),
-                                p: String::new(),
-                                r: String::new(),
-                                err: token.clone(),
-                            }),
-                        );
-                        let error =
-                            self.attach_error(error, &current_rule, &stack, alts, token.as_ref());
-                        if mode.recovering
-                            && self.attempt_recover(
-                                error.clone(),
-                                &mut current_rule,
-                                &mut stack,
-                                &mut context,
-                                &mut lexer,
-                                mode,
-                            )
-                        {
-                            continue;
-                        }
-                        mode.partial = best_partial_value(&root_node, &current_rule, &stack);
-                        return Err(error);
+                    if let Err(error) = self.ensure_lookahead(
+                        &mut lexer,
+                        &mut context,
+                        &mut current_rule,
+                        &stack,
+                        1,
+                        mode,
+                    ) {
+                        return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
+                    if let Some(capture) = mode.continuation.as_deref_mut() {
+                        let base = failed_alt_tins(&context, alts, &self.options);
+                        capture.failure = continuation_tins(
+                            &context,
+                            &current_rule,
+                            &stack,
+                            &self.rules,
+                            &self.options,
+                            0,
+                            Some(&base),
+                        );
+                    }
+                    let token = context.t.first().cloned();
+                    let (source, pos, row, col) = token.as_ref().map_or_else(
+                        || (String::new(), src.chars().count(), 1, 1),
+                        |value| (value.src.clone(), value.pos, value.ri, value.ci),
+                    );
+                    let error = TabnasError::new("unexpected", source, src, pos, row, col);
+                    self.notify_rule_done(
+                        &current_rule,
+                        &context,
+                        RuleState::Close,
+                        Some(RuleDoneAlt {
+                            b: 0,
+                            g: Vec::new(),
+                            p: String::new(),
+                            r: String::new(),
+                            err: token.clone(),
+                        }),
+                    );
+                    let error =
+                        self.attach_error(error, &current_rule, &stack, alts, token.as_ref());
+                    if mode.recovering
+                        && self.attempt_recover(
+                            error.clone(),
+                            &mut current_rule,
+                            &mut stack,
+                            &mut context,
+                            &mut lexer,
+                            mode,
+                        )
+                    {
+                        continue;
+                    }
+                    mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                    return Err(error);
                 }
             }
         }

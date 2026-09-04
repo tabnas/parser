@@ -85,6 +85,75 @@ fn custom_actions_run_on_the_matching_rule() {
 }
 
 #[test]
+fn lifecycle_after_actions_run_after_next_resolution_on_implicit_states() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut tn = Tabnas::new();
+    tn.options.rule.start = "top".into();
+
+    let mut top = RuleSpec::new("top");
+    top.ao.push("top-after-open".into());
+    top.close.push(AltSpec {
+        s: vec![vec![TIN_VL]],
+        ..Default::default()
+    });
+    tn.rule(top);
+
+    let open_seen = seen.clone();
+    tn.action("top-after-open", move |rule| {
+        open_seen.lock().unwrap().push((
+            rule.name.clone(),
+            rule.state,
+            rule.next_rule_name.clone(),
+        ));
+    });
+
+    tn.parse("true").unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [("top".into(), tabnas::RuleState::Open, Some("top".into()))]
+    );
+}
+
+#[test]
+fn pushed_child_after_close_action_can_see_its_parent_as_next() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut tn = Tabnas::new();
+    tn.options.rule.start = "top".into();
+
+    let mut top = RuleSpec::new("top");
+    top.open.push(AltSpec {
+        s: vec![vec![TIN_VL]],
+        p: Some("child".into()),
+        b: 1,
+        ..Default::default()
+    });
+    tn.rule(top);
+
+    let mut child = RuleSpec::new("child");
+    child.open.push(AltSpec {
+        s: vec![vec![TIN_VL]],
+        ..Default::default()
+    });
+    child.ac.push("child-after-close".into());
+    tn.rule(child);
+
+    let close_seen = seen.clone();
+    tn.action("child-after-close", move |rule| {
+        close_seen.lock().unwrap().push((
+            rule.name.clone(),
+            rule.state,
+            rule.next_rule_name.clone(),
+        ));
+    });
+
+    tn.parse("true").unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [("child".into(), tabnas::RuleState::Close, Some("top".into()))]
+    );
+}
+
+#[test]
 fn unknown_actions_fail_loudly() {
     let mut tn = Tabnas::new();
     let mut root = RuleSpec::new("root");
