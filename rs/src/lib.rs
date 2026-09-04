@@ -24,7 +24,7 @@ pub use options::{
     RewindOptions,
 };
 pub use parser::Parser;
-pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
+pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSpec, RuleState};
 pub use token::{
     Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
     TIN_VL, TIN_ZZ,
@@ -39,6 +39,9 @@ pub type Action = Arc<dyn Fn(&mut Rule) + Send + Sync>;
 pub type ContextAction =
     Arc<dyn Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync>;
 pub type TokenSubscriber = Arc<dyn Fn(&Token) + Send + Sync>;
+pub type LexSubscriber = Arc<dyn Fn(&mut Token, &mut Rule, &mut Context) + Send + Sync>;
+pub type RuleSubscriber = Arc<dyn Fn(&mut Rule, &mut Context) + Send + Sync>;
+pub type RuleDoneSubscriber = Arc<dyn Fn(&Rule, &Context, &RuleDone) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Tabnas {
@@ -47,6 +50,9 @@ pub struct Tabnas {
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
+    pub lex_subscribers: Vec<LexSubscriber>,
+    pub rule_subscribers: Vec<RuleSubscriber>,
+    pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
 }
 
 impl Default for Tabnas {
@@ -63,6 +69,9 @@ impl Tabnas {
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
+            lex_subscribers: Vec::new(),
+            rule_subscribers: Vec::new(),
+            rule_done_subscribers: Vec::new(),
         }
     }
 
@@ -73,6 +82,9 @@ impl Tabnas {
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
+            lex_subscribers: Vec::new(),
+            rule_subscribers: Vec::new(),
+            rule_done_subscribers: Vec::new(),
         }
     }
 
@@ -95,6 +107,32 @@ impl Tabnas {
         subscriber: impl Fn(&Token) + Send + Sync + 'static,
     ) -> &mut Self {
         self.token_subscribers.push(Arc::new(subscriber));
+        self
+    }
+
+    /// Subscribe to every lexer token, including ignored trivia. The
+    /// subscriber may annotate or replace token fields before parsing uses it.
+    pub fn subscribe_lex(
+        &mut self,
+        subscriber: impl Fn(&mut Token, &mut Rule, &mut Context) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.lex_subscribers.push(Arc::new(subscriber));
+        self
+    }
+
+    pub fn subscribe_rules(
+        &mut self,
+        subscriber: impl Fn(&mut Rule, &mut Context) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.rule_subscribers.push(Arc::new(subscriber));
+        self
+    }
+
+    pub fn subscribe_rule_done(
+        &mut self,
+        subscriber: impl Fn(&Rule, &Context, &RuleDone) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.rule_done_subscribers.push(Arc::new(subscriber));
         self
     }
 
@@ -130,6 +168,15 @@ impl Tabnas {
         }
         for subscriber in &self.token_subscribers {
             p.add_token_subscriber(subscriber.clone());
+        }
+        for subscriber in &self.lex_subscribers {
+            p.add_lex_subscriber(subscriber.clone());
+        }
+        for subscriber in &self.rule_subscribers {
+            p.add_rule_subscriber(subscriber.clone());
+        }
+        for subscriber in &self.rule_done_subscribers {
+            p.add_rule_done_subscriber(subscriber.clone());
         }
         p.parse(src)
     }

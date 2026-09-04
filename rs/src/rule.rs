@@ -12,6 +12,25 @@ pub enum RuleState {
     Close,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleDoneAlt {
+    pub b: usize,
+    pub g: Vec<String>,
+    pub p: String,
+    pub r: String,
+    pub err: Option<Token>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleDone {
+    /// Rule state before the completed pass.
+    pub state: RuleState,
+    /// `None` only when that state declared no alternatives.
+    pub alt: Option<RuleDoneAlt>,
+    /// True only for a close synthesized by recovery.
+    pub forced: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
     Eq,

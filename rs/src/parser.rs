@@ -5,10 +5,14 @@ use crate::context::Context;
 use crate::error::TabnasError;
 use crate::lexer::Lexer;
 use crate::options::Options;
-use crate::rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
-use crate::token::{Token, TIN_BD, TIN_ZZ};
+use crate::rule::{
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSpec, RuleState,
+};
+use crate::token::{Token, TIN_BD, TIN_CM, TIN_LN, TIN_SP, TIN_ZZ};
 use crate::value::Value;
-use crate::{Action, ContextAction, TokenSubscriber};
+use crate::{
+    Action, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber, TokenSubscriber,
+};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
@@ -18,6 +22,9 @@ pub struct Parser {
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
+    pub lex_subscribers: Vec<LexSubscriber>,
+    pub rule_subscribers: Vec<RuleSubscriber>,
+    pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
 }
 
 impl Parser {
@@ -28,6 +35,9 @@ impl Parser {
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
+            lex_subscribers: Vec::new(),
+            rule_subscribers: Vec::new(),
+            rule_done_subscribers: Vec::new(),
         }
     }
 
@@ -45,6 +55,18 @@ impl Parser {
 
     pub fn add_token_subscriber(&mut self, subscriber: TokenSubscriber) {
         self.token_subscribers.push(subscriber);
+    }
+
+    pub fn add_lex_subscriber(&mut self, subscriber: LexSubscriber) {
+        self.lex_subscribers.push(subscriber);
+    }
+
+    pub fn add_rule_subscriber(&mut self, subscriber: RuleSubscriber) {
+        self.rule_subscribers.push(subscriber);
+    }
+
+    pub fn add_rule_done_subscriber(&mut self, subscriber: RuleDoneSubscriber) {
+        self.rule_done_subscribers.push(subscriber);
     }
 
     fn run_action(
@@ -118,6 +140,26 @@ impl Parser {
         error
     }
 
+    fn notify_rule_done(
+        &self,
+        rule: &Rule,
+        context: &Context,
+        state: RuleState,
+        alt: Option<RuleDoneAlt>,
+    ) {
+        if self.rule_done_subscribers.is_empty() {
+            return;
+        }
+        let done = RuleDone {
+            state,
+            alt,
+            forced: false,
+        };
+        for subscriber in &self.rule_done_subscribers {
+            subscriber(rule, context, &done);
+        }
+    }
+
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         if src.is_empty() {
             return if self.options.lex.empty {
@@ -146,14 +188,22 @@ impl Parser {
         let mut final_value = None;
 
         let mut ensure_lookahead =
-            |context: &mut Context, count: usize| -> Result<(), TabnasError> {
+            |context: &mut Context, rule: &mut Rule, count: usize| -> Result<(), TabnasError> {
                 while context.t.len() < count {
                     if context.t.last().is_some_and(|t| t.tin == TIN_ZZ) {
                         break;
                     }
-                    let t = match context.next_replay() {
-                        Some(token) => token,
-                        None => lexer.next_token()?,
+                    let t = loop {
+                        let mut token = match context.next_replay() {
+                            Some(token) => token,
+                            None => lexer.next_raw_token()?,
+                        };
+                        for subscriber in &self.lex_subscribers {
+                            subscriber(&mut token, rule, context);
+                        }
+                        if !matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
+                            break token;
+                        }
                     };
                     for subscriber in &self.token_subscribers {
                         subscriber(&t);
@@ -230,6 +280,10 @@ impl Parser {
 
             let is_open = current_rule.state == RuleState::Open;
 
+            for subscriber in &self.rule_subscribers {
+                subscriber(&mut current_rule, &mut context);
+            }
+
             // 1. Run before-actions
             if is_open {
                 for bo_action in &spec.bo {
@@ -254,7 +308,7 @@ impl Parser {
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
                 if s_len > 0 {
-                    if let Err(error) = ensure_lookahead(&mut context, s_len) {
+                    if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, s_len) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
 
@@ -365,7 +419,8 @@ impl Parser {
                                         .into();
                                 return Err(error);
                             };
-                            if let Err(error) = ensure_lookahead(&mut context, 1) {
+                            if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1)
+                            {
                                 return Err(self.attach_error(
                                     error,
                                     &current_rule,
@@ -414,7 +469,23 @@ impl Parser {
                     }
                 }
 
+                let done_alt = Some(RuleDoneAlt {
+                    b: alt.b,
+                    g: alt
+                        .g
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|group| !group.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                    p: alt.p.clone().unwrap_or_default(),
+                    r: alt.r.clone().unwrap_or_default(),
+                    err: None,
+                });
+
                 // Check transition
+                let completed_rule;
+                let mut completed_value = None;
                 if let Some(ref push_name) = alt.p {
                     current_rule.state = RuleState::Close;
                     let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
@@ -424,9 +495,13 @@ impl Parser {
                     child.parent_node = Some(current_rule.node.clone());
                     child.n = current_rule.n.clone();
                     child.k = current_rule.k.clone();
+                    completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
                 } else if let Some(ref replace_name) = alt.r {
+                    if is_open {
+                        current_rule.state = RuleState::Close;
+                    }
                     let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -434,24 +509,40 @@ impl Parser {
                     next.parent_node = current_rule.parent_node.clone();
                     next.n = current_rule.n.clone();
                     next.k = current_rule.k.clone();
+                    completed_rule = current_rule;
                     current_rule = next;
                 } else if is_open {
                     current_rule.state = RuleState::Close;
+                    completed_rule = current_rule.clone();
                 } else {
                     // Close phase pop
+                    completed_rule = current_rule.clone();
                     if let Some(mut parent) = stack.pop() {
                         parent.child_node = current_rule.node.borrow().clone();
                         current_rule = parent;
                     } else {
                         // Root rule popped! Done.
-                        final_value = Some(current_rule.node.borrow().clone());
-                        break;
+                        completed_value = Some(current_rule.node.borrow().clone());
                     }
+                }
+                self.notify_rule_done(
+                    &completed_rule,
+                    &context,
+                    if is_open {
+                        RuleState::Open
+                    } else {
+                        RuleState::Close
+                    },
+                    done_alt,
+                );
+                if let Some(value) = completed_value {
+                    final_value = Some(value);
+                    break;
                 }
             } else {
                 // No alt matched
                 if is_open {
-                    if let Err(error) = ensure_lookahead(&mut context, 1) {
+                    if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
                     let t0 = context.t.first();
@@ -461,21 +552,39 @@ impl Parser {
                         (String::new(), src.len(), 1, 1)
                     };
                     let error = TabnasError::new("unexpected", src_token, src, si, ri, ci);
+                    self.notify_rule_done(
+                        &current_rule,
+                        &context,
+                        RuleState::Open,
+                        (!alts.is_empty()).then(|| RuleDoneAlt {
+                            b: 0,
+                            g: Vec::new(),
+                            p: String::new(),
+                            r: String::new(),
+                            err: t0.cloned(),
+                        }),
+                    );
                     return Err(self.attach_error(error, &current_rule, &stack, alts, t0));
                 } else {
                     // A rule without close alternatives closes implicitly. If
                     // alternatives were declared, a mismatch is a syntax
                     // error at this rule rather than permission to pop it.
                     if alts.is_empty() {
+                        let completed_rule = current_rule.clone();
+                        let mut completed_value = None;
                         if let Some(mut parent) = stack.pop() {
                             parent.child_node = current_rule.node.borrow().clone();
                             current_rule = parent;
                         } else {
-                            final_value = Some(current_rule.node.borrow().clone());
+                            completed_value = Some(current_rule.node.borrow().clone());
+                        }
+                        self.notify_rule_done(&completed_rule, &context, RuleState::Close, None);
+                        if let Some(value) = completed_value {
+                            final_value = Some(value);
                             break;
                         }
                     } else {
-                        if let Err(error) = ensure_lookahead(&mut context, 1) {
+                        if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1) {
                             return Err(self.attach_error(
                                 error,
                                 &current_rule,
@@ -490,6 +599,18 @@ impl Parser {
                             |value| (value.src.clone(), value.pos, value.ri, value.ci),
                         );
                         let error = TabnasError::new("unexpected", source, src, pos, row, col);
+                        self.notify_rule_done(
+                            &current_rule,
+                            &context,
+                            RuleState::Close,
+                            Some(RuleDoneAlt {
+                                b: 0,
+                                g: Vec::new(),
+                                p: String::new(),
+                                r: String::new(),
+                                err: token.cloned(),
+                            }),
+                        );
                         return Err(self.attach_error(error, &current_rule, &stack, alts, token));
                     }
                 }
@@ -497,7 +618,7 @@ impl Parser {
         }
 
         // Post-loop check: ensure no unexpected trailing tokens
-        ensure_lookahead(&mut context, 1)?;
+        ensure_lookahead(&mut context, &mut current_rule, 1)?;
         if let Some(t0) = context.t.first() {
             if t0.tin != TIN_ZZ {
                 let error = TabnasError::new("unexpected", &t0.src, src, t0.pos, t0.ri, t0.ci);
