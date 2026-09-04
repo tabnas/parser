@@ -4,6 +4,7 @@
 
 use crate::rule::{AltSpec, RuleSpec};
 use crate::token::name_to_tin;
+use crate::utility::{modlist, ListMods};
 use crate::{Tabnas, Value};
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue};
@@ -161,39 +162,11 @@ fn apply_alt_list(
     {
         target.clear();
     }
-    let mut existing: Vec<Option<AltSpec>> = target.drain(..).map(Some).collect();
-    if let Some(indices) = inject
-        .and_then(|item| item.get("delete"))
-        .and_then(JsonValue::as_array)
-    {
-        for raw in indices.iter().filter_map(JsonValue::as_i64) {
-            let index = if raw < 0 {
-                existing.len().checked_sub(raw.unsigned_abs() as usize)
-            } else {
-                Some(raw as usize)
-            };
-            if let Some(slot) = index.and_then(|index| existing.get_mut(index)) {
-                *slot = None;
-            }
-        }
-    }
-    if let Some(moves) = inject
-        .and_then(|item| item.get("move"))
-        .and_then(JsonValue::as_array)
-    {
-        let moves: Vec<i64> = moves.iter().filter_map(JsonValue::as_i64).collect();
-        for pair in moves.chunks_exact(2) {
-            if existing.is_empty() {
-                break;
-            }
-            let len = existing.len() as i64;
-            let from = pair[0].rem_euclid(len) as usize;
-            let to = pair[1].rem_euclid(len) as usize;
-            let entry = existing.remove(from);
-            existing.insert(to, entry);
-        }
-    }
-    *target = existing.into_iter().flatten().collect();
+    let mods = inject.map(|inject| ListMods {
+        delete: integer_list(inject.get("delete")),
+        move_items: integer_list(inject.get("move")),
+    });
+    *target = modlist(std::mem::take(target), mods.as_ref());
     let parsed: Result<Vec<_>, _> = alts
         .iter()
         .enumerate()
@@ -211,6 +184,16 @@ fn apply_alt_list(
         *target = parsed;
     }
     Ok(())
+}
+
+fn integer_list(value: Option<&JsonValue>) -> Vec<isize> {
+    value
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_i64)
+        .filter_map(|value| isize::try_from(value).ok())
+        .collect()
 }
 
 fn parse_alt(

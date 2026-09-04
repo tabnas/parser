@@ -20,7 +20,8 @@ grammar: `Tabnas::new()` has no rules.
 Implemented: ordered grammar rules, open/close/push/replace transitions,
 inheritable `n` and `k` state, rule-local `u` state, named actions, built-in
 lexers, Unicode-scalar source positions, structured diagnostics, and the shared
-strict-JSON and lexer conformance fixtures.
+strict-JSON, lexer, diagnostic, and utility conformance fixtures. Rust directly
+executes 286 shared TSV rows; the fixture paths are not copied into the crate.
 
 Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,

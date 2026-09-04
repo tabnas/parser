@@ -12,6 +12,7 @@ pub mod options;
 pub mod parser;
 pub mod rule;
 pub mod token;
+pub mod utility;
 pub mod value;
 
 pub use error::TabnasError;
