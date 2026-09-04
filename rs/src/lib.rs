@@ -20,12 +20,12 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ErrMsgOptions,
-    ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken, InfoOptions,
-    LexCheck, LexCheckResult, LexCheckToken, LexMatcher, LexMatcherCallback, MatchToken,
-    MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options, ParseOptions,
-    ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, TextModifier,
-    ValueDef, ValueOptions, ValueTransform,
+    BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
+    ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken,
+    InfoOptions, LexCheck, LexCheckResult, LexCheckToken, LexMatcher, LexMatcherCallback,
+    MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options,
+    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
+    TextModifier, ValueDef, ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -76,6 +76,7 @@ pub struct Tabnas {
     pub(crate) budget_check_refs: HashMap<String, BudgetCheck>,
     pub(crate) lex_match_refs: HashMap<String, LexMatcherCallback>,
     pub(crate) error_suffix_refs: HashMap<String, ErrorSuffixCallback>,
+    pub(crate) config_modifier_refs: HashMap<String, ConfigModifier>,
 }
 
 impl Default for Tabnas {
@@ -111,6 +112,7 @@ impl Tabnas {
             budget_check_refs: HashMap::new(),
             lex_match_refs: HashMap::new(),
             error_suffix_refs: HashMap::new(),
+            config_modifier_refs: HashMap::new(),
         }
     }
 
@@ -140,6 +142,7 @@ impl Tabnas {
             budget_check_refs: HashMap::new(),
             lex_match_refs: HashMap::new(),
             error_suffix_refs: HashMap::new(),
+            config_modifier_refs: HashMap::new(),
         }
     }
 
@@ -350,6 +353,18 @@ impl Tabnas {
         render: impl Fn(&ErrorSuffixContext) -> String + Send + Sync + 'static,
     ) -> &mut Self {
         self.error_suffix_refs.insert(name.into(), Arc::new(render));
+        self
+    }
+
+    /// Register a typed load-time mutator for a serialized
+    /// `options.config.modify.<name>` function reference.
+    pub fn config_modifier_ref(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl Fn(&mut Options) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.config_modifier_refs
+            .insert(name.into(), ConfigModifier::new(modifier));
         self
     }
 

@@ -9,6 +9,29 @@ use std::sync::Arc;
 
 use crate::context::Context;
 
+#[derive(Clone)]
+pub struct ConfigModifier {
+    callback: Arc<dyn Fn(&mut Options) + Send + Sync>,
+}
+
+impl ConfigModifier {
+    pub(crate) fn new(callback: impl Fn(&mut Options) + Send + Sync + 'static) -> Self {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    pub(crate) fn run(&self, options: &mut Options) {
+        (self.callback)(options);
+    }
+}
+
+impl fmt::Debug for ConfigModifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConfigModifier(<function>)")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColorOptions {
     pub active: bool,
@@ -776,6 +799,7 @@ pub struct Options {
     pub hint: HashMap<String, String>,
     pub errmsg: ErrMsgOptions,
     pub color: ColorOptions,
+    pub config_modify: IndexMap<String, ConfigModifier>,
     pub tag: String,
 }
 
@@ -813,6 +837,7 @@ impl Default for Options {
             hint: crate::error::default_error_hints(),
             errmsg: ErrMsgOptions::default(),
             color: ColorOptions::default(),
+            config_modify: IndexMap::new(),
             tag: "-".to_string(),
         }
     }

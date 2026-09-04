@@ -6,8 +6,9 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    BudgetCheck, CommentSuffixMatcher, ErrorSuffixCallback, LexCheck, LexMatcherCallback,
-    MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
+    BudgetCheck, CommentSuffixMatcher, ConfigModifier, ErrorSuffixCallback, LexCheck,
+    LexMatcherCallback, MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value,
+    ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -33,6 +34,7 @@ struct AltRefs {
     budget_checks: HashMap<String, BudgetCheck>,
     lex_matches: HashMap<String, LexMatcherCallback>,
     error_suffixes: HashMap<String, ErrorSuffixCallback>,
+    config_modifiers: HashMap<String, ConfigModifier>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -54,6 +56,7 @@ impl From<&Tabnas> for AltRefs {
             budget_checks: tabnas.budget_check_refs.clone(),
             lex_matches: tabnas.lex_match_refs.clone(),
             error_suffixes: tabnas.error_suffix_refs.clone(),
+            config_modifiers: tabnas.config_modifier_refs.clone(),
         }
     }
 }
@@ -1552,6 +1555,43 @@ fn apply_options(
                 .token_set
                 .insert(name.trim_start_matches('#').to_string(), tins);
         }
+    }
+
+    if let Some(config) = map.get("config") {
+        let config = object(config, "options.config")?;
+        if let Some(modifiers) = config.get("modify") {
+            for (name, reference) in object(modifiers, "options.config.modify")? {
+                if reference.is_null() || reference == &JsonValue::Bool(false) {
+                    options.config_modify.shift_remove(name);
+                    continue;
+                }
+                let reference = reference.as_str().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.config.modify.{name} must be a function reference or null"
+                    ))
+                })?;
+                let modifier = refs
+                    .config_modifiers
+                    .get(reference)
+                    .cloned()
+                    .ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: unknown config modifier function reference: {reference}"
+                        ))
+                    })?;
+                options.config_modify.insert(name.clone(), modifier);
+            }
+        }
+    }
+
+    let modifiers: Vec<_> = options
+        .config_modify
+        .iter()
+        .map(|(name, modifier)| (name.clone(), modifier.clone()))
+        .collect();
+    for (name, modifier) in modifiers {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| modifier.run(options)))
+            .map_err(|_| GrammarError(format!("Grammar: config modifier {name} panicked")))?;
     }
     Ok(())
 }

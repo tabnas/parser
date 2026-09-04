@@ -64,6 +64,9 @@ owned snapshot of the rendered diagnostic and its color palette.
 Named parse lifecycle hooks bind through `parse_prepare_ref` and
 `parse_budget_ref`; serialized prepare maps are deterministic by callback name
 and budget callbacks remain inactive until `checkEveryN` is non-zero.
+Load-time `options.config.modify` callbacks bind through
+`config_modifier_ref`, run in declaration order after option resolution, and
+are reapplied on later grammar option overlays until removed.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
