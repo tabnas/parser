@@ -20,9 +20,9 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, MatchToken, Options,
-    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
-    ValueDef, ValueOptions,
+    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, MatchToken,
+    MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare,
+    RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueDef, ValueOptions,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -63,6 +63,7 @@ pub struct Tabnas {
     pub(crate) alt_pushes: HashMap<String, AltNext>,
     pub(crate) alt_replaces: HashMap<String, AltNext>,
     pub(crate) alt_backtracks: HashMap<String, AltBack>,
+    pub(crate) match_token_refs: HashMap<String, (MatchTokenCallback, bool)>,
 }
 
 impl Default for Tabnas {
@@ -88,6 +89,7 @@ impl Tabnas {
             alt_pushes: HashMap::new(),
             alt_replaces: HashMap::new(),
             alt_backtracks: HashMap::new(),
+            match_token_refs: HashMap::new(),
         }
     }
 
@@ -107,6 +109,7 @@ impl Tabnas {
             alt_pushes: HashMap::new(),
             alt_replaces: HashMap::new(),
             alt_backtracks: HashMap::new(),
+            match_token_refs: HashMap::new(),
         }
     }
 
@@ -224,6 +227,20 @@ impl Tabnas {
         backtrack: impl Fn(&mut Rule, &mut Context) -> usize + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_backtracks.insert(name.into(), Arc::new(backtrack));
+        self
+    }
+
+    /// Register an effect-based function reference for
+    /// `options.match.token`. The callback may consume only a non-empty prefix
+    /// of the remaining source; invalid results are ignored.
+    pub fn match_token_ref(
+        &mut self,
+        name: impl Into<String>,
+        eager: bool,
+        matcher: impl Fn(&str) -> Option<MatchTokenResult> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.match_token_refs
+            .insert(name.into(), (Arc::new(matcher), eager));
         self
     }
 

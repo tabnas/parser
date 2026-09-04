@@ -5,8 +5,8 @@
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
-    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext, Tabnas,
-    Value,
+    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
+    MatchTokenCallback, Tabnas, Value,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -22,6 +22,7 @@ struct AltRefs {
     pushes: HashMap<String, AltNext>,
     replaces: HashMap<String, AltNext>,
     backtracks: HashMap<String, AltBack>,
+    match_tokens: HashMap<String, (MatchTokenCallback, bool)>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -33,6 +34,7 @@ impl From<&Tabnas> for AltRefs {
             pushes: tabnas.alt_pushes.clone(),
             replaces: tabnas.alt_replaces.clone(),
             backtracks: tabnas.alt_backtracks.clone(),
+            match_tokens: tabnas.match_token_refs.clone(),
         }
     }
 }
@@ -126,7 +128,7 @@ impl Tabnas {
             self.options.fixed.tokens.clear();
         }
         if let Some(options) = root.get("options") {
-            apply_options(&mut self.options, object(options, "options")?)?;
+            apply_options(&mut self.options, object(options, "options")?, &refs)?;
         }
         if let Some(rules) = root.get("rule") {
             for (name, value) in object(rules, "rule")? {
@@ -611,6 +613,7 @@ fn value_map(
 fn apply_options(
     options: &mut crate::Options,
     map: &Map<String, JsonValue>,
+    refs: &AltRefs,
 ) -> Result<(), GrammarError> {
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
@@ -1149,8 +1152,24 @@ fn apply_options(
                         "Grammar: options.match.token.{name} must be a serialized regex"
                     ))
                 })?;
-                let (regex, eager) =
-                    compile_serialized_regex(source, &format!("options.match.token.{name}"), true)?;
+                let matcher = if serialized_regex(source).is_some() {
+                    let (regex, eager) = compile_serialized_regex(
+                        source,
+                        &format!("options.match.token.{name}"),
+                        true,
+                    )?;
+                    (crate::MatchTokenMatcher::Regex(regex), eager)
+                } else if let Some((callback, eager)) = refs.match_tokens.get(source) {
+                    (crate::MatchTokenMatcher::Callback(callback.clone()), *eager)
+                } else if source.starts_with('@') {
+                    return Err(GrammarError(format!(
+                        "Grammar: unknown token matcher function reference: {source}"
+                    )));
+                } else {
+                    return Err(GrammarError(format!(
+                        "Grammar: options.match.token.{name} must use @/pattern/flags or a registered function reference"
+                    )));
+                };
                 let tin = options
                     .match_tokens
                     .get(&name)
@@ -1160,8 +1179,8 @@ fn apply_options(
                     crate::options::MatchToken {
                         name,
                         tin,
-                        regex,
-                        eager,
+                        matcher: matcher.0,
+                        eager: matcher.1,
                     },
                 );
             }

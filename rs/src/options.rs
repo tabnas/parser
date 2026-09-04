@@ -304,8 +304,42 @@ pub struct RuleOptions {
 pub struct MatchToken {
     pub name: String,
     pub tin: Tin,
-    pub regex: Regex,
+    pub matcher: MatchTokenMatcher,
     pub eager: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchTokenResult {
+    /// Non-empty source prefix consumed by the match.
+    pub source: String,
+    /// Token value exposed to rule actions.
+    pub value: crate::Value,
+}
+
+impl MatchTokenResult {
+    pub fn new(source: impl Into<String>, value: crate::Value) -> Self {
+        Self {
+            source: source.into(),
+            value,
+        }
+    }
+}
+
+pub type MatchTokenCallback = Arc<dyn Fn(&str) -> Option<MatchTokenResult> + Send + Sync>;
+
+#[derive(Clone)]
+pub enum MatchTokenMatcher {
+    Regex(Regex),
+    Callback(MatchTokenCallback),
+}
+
+impl fmt::Debug for MatchTokenMatcher {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Regex(regex) => formatter.debug_tuple("Regex").field(regex).finish(),
+            Self::Callback(_) => formatter.write_str("Callback(<function>)"),
+        }
+    }
 }
 
 impl Default for RuleOptions {

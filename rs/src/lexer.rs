@@ -1,7 +1,7 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::error::TabnasError;
-use crate::options::Options;
+use crate::options::{MatchTokenMatcher, Options};
 use crate::token::{Point, Token, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ};
 use crate::value::Value;
 use regex::Regex;
@@ -294,28 +294,28 @@ impl<'a> Lexer<'a> {
                 {
                     return None;
                 }
-                matcher.regex.find(remaining).and_then(|found| {
-                    (found.start() == 0).then(|| {
-                        (
-                            matcher.name.clone(),
-                            matcher.tin,
-                            found.as_str().to_string(),
-                        )
-                    })
-                })
+                let result = match &matcher.matcher {
+                    MatchTokenMatcher::Regex(regex) => regex
+                        .find(remaining)
+                        .filter(|found| found.start() == 0)
+                        .map(|found| {
+                            let source = found.as_str().to_string();
+                            (source.clone(), Value::String(source))
+                        }),
+                    MatchTokenMatcher::Callback(callback) => callback(remaining)
+                        .filter(|result| {
+                            !result.source.is_empty() && remaining.starts_with(&result.source)
+                        })
+                        .map(|result| (result.source, result.value)),
+                };
+                result.map(|(source, value)| (matcher.name.clone(), matcher.tin, source, value))
             })
         });
-        if let Some(Some((name, tin, matched))) = custom {
+        if let Some(Some((name, tin, matched, value))) = custom {
             for _ in matched.chars() {
                 self.advance();
             }
-            return Ok(Token::new(
-                name,
-                tin,
-                Value::String(matched.clone()),
-                matched,
-                pnt,
-            ));
+            return Ok(Token::new(name, tin, value, matched, pnt));
         }
 
         // Fixed literals run after custom matchers and use longest-match wins.
