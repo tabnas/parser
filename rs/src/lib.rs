@@ -22,9 +22,9 @@ pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, CommentDef, CommentSuffixMatcher, FixedOptions, FixedToken,
     InfoOptions, LexCheck, LexCheckResult, LexCheckToken, MatchToken, MatchTokenCallback,
-    MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare, RecoverOptions,
-    ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions,
-    ValueTransform,
+    MatchTokenMatcher, MatchTokenResult, MatchValue, Options, ParseOptions, ParsePrepare,
+    RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef,
+    ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -70,6 +70,7 @@ pub struct Tabnas {
     pub(crate) text_modifier_refs: HashMap<String, TextModifier>,
     pub(crate) lex_check_refs: HashMap<String, LexCheck>,
     pub(crate) comment_suffix_refs: HashMap<String, CommentSuffixMatcher>,
+    pub(crate) match_value_refs: HashMap<String, MatchTokenCallback>,
 }
 
 impl Default for Tabnas {
@@ -100,6 +101,7 @@ impl Tabnas {
             text_modifier_refs: HashMap::new(),
             lex_check_refs: HashMap::new(),
             comment_suffix_refs: HashMap::new(),
+            match_value_refs: HashMap::new(),
         }
     }
 
@@ -124,6 +126,7 @@ impl Tabnas {
             text_modifier_refs: HashMap::new(),
             lex_check_refs: HashMap::new(),
             comment_suffix_refs: HashMap::new(),
+            match_value_refs: HashMap::new(),
         }
     }
 
@@ -255,6 +258,17 @@ impl Tabnas {
     ) -> &mut Self {
         self.match_token_refs
             .insert(name.into(), (Arc::new(matcher), eager));
+        self
+    }
+
+    /// Register an effect-based high-priority value matcher for a serialized
+    /// `options.match.value.<name>.match` function reference.
+    pub fn match_value_ref(
+        &mut self,
+        name: impl Into<String>,
+        matcher: impl Fn(&str) -> Option<MatchTokenResult> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.match_value_refs.insert(name.into(), Arc::new(matcher));
         self
     }
 

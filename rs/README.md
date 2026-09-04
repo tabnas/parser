@@ -36,6 +36,10 @@ Function token matchers use `match_token_ref`. They receive the remaining
 source and return a non-empty owned source prefix plus its value. This
 effect-based interface supports eager and parser-slot-gated matchers without
 giving callbacks mutable access to the lexer cursor.
+High-priority `options.match.value` entries support serialized regexps and
+typed `match_value_ref` callbacks. Regexp entries can bind their capture
+transform with `value_transform_ref`; function entries return the owned source
+prefix and `#VL` value directly.
 
 Regexp-backed value definitions can bind a named transformer with
 `value_transform_ref`. It receives the whole match followed by capture groups

@@ -58,6 +58,7 @@ impl<'a> Lexer<'a> {
         options
             .match_tokens
             .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
+        options.match_values.sort_keys();
 
         Lexer {
             src,
@@ -315,11 +316,12 @@ impl<'a> Lexer<'a> {
 
         // User-declared match tokens have the highest matcher priority.
         let match_skipped = if self.options.match_lex
-            && self
-                .options
-                .match_tokens
-                .values()
-                .any(|matcher| self.wants(matcher.tin))
+            && (!self.options.match_values.is_empty()
+                || self
+                    .options
+                    .match_tokens
+                    .values()
+                    .any(|matcher| self.wants(matcher.tin)))
         {
             match self.run_check(self.options.match_check.clone(), pnt) {
                 CheckFlow::Continue => false,
@@ -329,6 +331,55 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        let remaining = &self.src[self.byte_position()..];
+        let custom_value = (self.options.match_lex && !match_skipped && self.want.is_none())
+            .then(|| {
+                self.options
+                    .match_values
+                    .values()
+                    .find_map(|matcher| match &matcher.matcher {
+                        MatchTokenMatcher::Callback(callback) => callback(remaining)
+                            .filter(|result| {
+                                !result.source.is_empty() && remaining.starts_with(&result.source)
+                            })
+                            .map(|result| (result.source, result.value)),
+                        MatchTokenMatcher::Regex(regex) => {
+                            let captures = regex.captures(remaining)?;
+                            let found = captures
+                                .get(0)
+                                .filter(|found| found.start() == 0 && !found.as_str().is_empty())?;
+                            let source = found.as_str().to_string();
+                            let value = matcher.transform.as_ref().map_or_else(
+                                || {
+                                    matcher
+                                        .val
+                                        .clone()
+                                        .unwrap_or_else(|| Value::String(source.clone()))
+                                },
+                                |transform| {
+                                    let groups = captures
+                                        .iter()
+                                        .map(|capture| {
+                                            capture.map_or_else(String::new, |value| {
+                                                value.as_str().into()
+                                            })
+                                        })
+                                        .collect::<Vec<_>>();
+                                    transform(&groups)
+                                },
+                            );
+                            Some((source, value))
+                        }
+                    })
+            })
+            .flatten();
+        if let Some((source, value)) = custom_value {
+            for _ in source.chars() {
+                self.advance();
+            }
+            return Ok(Token::new("#VL", TIN_VL, value, source, pnt));
+        }
+
         let remaining = &self.src[self.byte_position()..];
         let custom = (self.options.match_lex && !match_skipped).then(|| {
             self.options.match_tokens.values().find_map(|matcher| {

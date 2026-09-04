@@ -472,6 +472,26 @@ pub struct MatchToken {
     pub eager: bool,
 }
 
+#[derive(Clone)]
+pub struct MatchValue {
+    pub name: String,
+    pub matcher: MatchTokenMatcher,
+    pub val: Option<crate::Value>,
+    pub transform: Option<ValueTransform>,
+}
+
+impl fmt::Debug for MatchValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MatchValue")
+            .field("name", &self.name)
+            .field("matcher", &self.matcher)
+            .field("val", &self.val)
+            .field("transform", &self.transform.as_ref().map(|_| "<function>"))
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchTokenResult {
     /// Non-empty source prefix consumed by the match.
@@ -604,6 +624,7 @@ pub struct Options {
     pub match_lex: bool,
     pub match_check: Option<LexCheck>,
     pub match_tokens: IndexMap<String, MatchToken>,
+    pub match_values: IndexMap<String, MatchValue>,
     pub tag: String,
 }
 
@@ -635,6 +656,7 @@ impl Default for Options {
             match_lex: true,
             match_check: None,
             match_tokens: IndexMap::new(),
+            match_values: IndexMap::new(),
             tag: "-".to_string(),
         }
     }

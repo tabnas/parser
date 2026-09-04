@@ -28,6 +28,7 @@ struct AltRefs {
     text_modifiers: HashMap<String, TextModifier>,
     lex_checks: HashMap<String, LexCheck>,
     comment_suffixes: HashMap<String, CommentSuffixMatcher>,
+    match_values: HashMap<String, MatchTokenCallback>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -44,6 +45,7 @@ impl From<&Tabnas> for AltRefs {
             text_modifiers: tabnas.text_modifier_refs.clone(),
             lex_checks: tabnas.lex_check_refs.clone(),
             comment_suffixes: tabnas.comment_suffix_refs.clone(),
+            match_values: tabnas.match_value_refs.clone(),
         }
     }
 }
@@ -645,6 +647,22 @@ fn apply_lex_check(
     Ok(())
 }
 
+fn resolve_value_producer(
+    value: Option<&JsonValue>,
+    refs: &AltRefs,
+) -> (Option<Value>, Option<ValueTransform>) {
+    match value.filter(|value| !value.is_null()) {
+        Some(JsonValue::String(reference)) if refs.value_transforms.contains_key(reference) => {
+            (None, refs.value_transforms.get(reference).cloned())
+        }
+        Some(JsonValue::String(reference)) if reference.starts_with("@@") => {
+            (Some(Value::String(reference[1..].to_string())), None)
+        }
+        Some(value) => (Some(Value::from_json(value)), None),
+        None => (None, None),
+    }
+}
+
 fn apply_options(
     options: &mut crate::Options,
     map: &Map<String, JsonValue>,
@@ -923,18 +941,7 @@ fn apply_options(
                     continue;
                 }
                 let value = object(value, &format!("options.value.def.{name}"))?;
-                let (val, transform) = match value.get("val").filter(|value| !value.is_null()) {
-                    Some(JsonValue::String(reference))
-                        if refs.value_transforms.contains_key(reference) =>
-                    {
-                        (None, refs.value_transforms.get(reference).cloned())
-                    }
-                    Some(JsonValue::String(reference)) if reference.starts_with("@@") => {
-                        (Some(Value::String(reference[1..].to_string())), None)
-                    }
-                    Some(value) => (Some(Value::from_json(value)), None),
-                    None => (None, None),
-                };
+                let (val, transform) = resolve_value_producer(value.get("val"), refs);
                 let matcher = value
                     .get("match")
                     .map(|matcher| {
@@ -1301,6 +1308,52 @@ fn apply_options(
                     },
                 );
             }
+        }
+        if let Some(values) = match_options.get("value") {
+            for (name, value) in object(values, "options.match.value")? {
+                if value.is_null() || value == &JsonValue::Bool(false) {
+                    options.match_values.shift_remove(name);
+                    continue;
+                }
+                let value = object(value, &format!("options.match.value.{name}"))?;
+                let source = value
+                    .get("match")
+                    .and_then(JsonValue::as_str)
+                    .ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: options.match.value.{name}.match must be a serialized regex or function reference"
+                        ))
+                    })?;
+                let matcher = if serialized_regex(source).is_some() {
+                    let (regex, _) = compile_serialized_regex(
+                        source,
+                        &format!("options.match.value.{name}.match"),
+                        true,
+                    )?;
+                    crate::MatchTokenMatcher::Regex(regex)
+                } else if let Some(callback) = refs.match_values.get(source) {
+                    crate::MatchTokenMatcher::Callback(callback.clone())
+                } else if source.starts_with('@') {
+                    return Err(GrammarError(format!(
+                        "Grammar: unknown value matcher function reference: {source}"
+                    )));
+                } else {
+                    return Err(GrammarError(format!(
+                        "Grammar: options.match.value.{name}.match must use @/pattern/flags or a registered function reference"
+                    )));
+                };
+                let (val, transform) = resolve_value_producer(value.get("val"), refs);
+                options.match_values.insert(
+                    name.clone(),
+                    crate::MatchValue {
+                        name: name.clone(),
+                        matcher,
+                        val,
+                        transform,
+                    },
+                );
+            }
+            options.match_values.sort_keys();
         }
     }
     if let Some(token_sets) = map.get("tokenSet").or_else(|| map.get("token_set")) {
