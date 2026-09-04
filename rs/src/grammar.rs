@@ -11,8 +11,9 @@ use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Builtin wire schema implemented by this early Rust port.
-pub const BUILTIN_SCHEMA_VERSION: u64 = 2;
+/// Builtin wire schema implemented by the Rust port. Schema v3 adds the
+/// `@fold$` tree action used by current BNF-family compiler output.
+pub const BUILTIN_SCHEMA_VERSION: u64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarError(pub String);

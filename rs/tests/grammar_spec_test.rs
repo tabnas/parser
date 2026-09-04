@@ -411,7 +411,7 @@ fn serialized_bubble_and_fold_builtins_preserve_tree_shape() {
     let mut bubble = Tabnas::new();
     bubble
         .grammar_json(
-            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+            r##"{"v":3,"clear":true,"options":{"rule":{"start":"top"}},"rule":{
               "top":{"open":[{"p":"leaf"}],"close":[{"a":"@bubble$"}]},
               "leaf":{"open":[{"s":"#NR","a":"@value$"}]}
             }}"##,
@@ -421,7 +421,7 @@ fn serialized_bubble_and_fold_builtins_preserve_tree_shape() {
 
     let mut fold = Tabnas::new();
     fold.grammar_json(
-        r##"{"clear":true,"options":{"rule":{"start":"top"},"fixed":{"token":{"#CA":","}}},"rule":{
+        r##"{"v":3,"clear":true,"options":{"rule":{"start":"top"},"fixed":{"token":{"#CA":","}}},"rule":{
           "top":{
             "open":[{"a":"@node$","p":"item","k":{"node$":{"init":true,"rule":"top","kind":"user"}}}],
             "close":[{}]
