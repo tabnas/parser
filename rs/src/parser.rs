@@ -8,13 +8,26 @@ use crate::options::Options;
 use crate::rule::{
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
-use crate::token::{Token, TIN_BD, TIN_CM, TIN_LN, TIN_SP, TIN_ZZ};
+use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_CM, TIN_LN, TIN_SP, TIN_ZZ};
 use crate::value::Value;
 use crate::{
     Action, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber, TokenSubscriber,
 };
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Continuations {
+    pub tins: Vec<Tin>,
+    pub tokens: Vec<String>,
+}
+
+#[derive(Default)]
+struct ContinuationCapture {
+    at_end: BTreeSet<Tin>,
+    have_end: bool,
+    failure: Vec<Tin>,
+}
 
 pub struct Parser {
     pub options: Options,
@@ -161,6 +174,127 @@ impl Parser {
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
+        self.parse_inner(src, None)
+    }
+
+    /// Return the token kinds that can legally follow `src` when it is
+    /// treated as a prefix. The result is an intentional over-approximation:
+    /// runtime conditions and counters may still reject a listed token.
+    pub fn continuations(&self, src: &str) -> Continuations {
+        let mut capture = ContinuationCapture::default();
+        let result = self.parse_inner(src, Some(&mut capture));
+        let mut tins = if result.is_ok() {
+            if capture.have_end {
+                capture.at_end.insert(TIN_ZZ);
+                capture.at_end.into_iter().collect()
+            } else {
+                self.start_openers()
+            }
+        } else if capture.failure.is_empty() {
+            self.start_openers()
+        } else {
+            capture.failure
+        };
+        tins.sort_unstable();
+        tins.dedup();
+        let tokens = tins
+            .iter()
+            .map(|tin| self.options.token_name(*tin))
+            .collect();
+        Continuations { tins, tokens }
+    }
+
+    fn start_openers(&self) -> Vec<Tin> {
+        let start = self
+            .rules
+            .get(&self.options.rule.start)
+            .or_else(|| self.rules.values().next());
+        let mut out = BTreeSet::new();
+        if let Some(spec) = start {
+            for alt in &spec.open {
+                if groups_enabled(alt, &self.options) {
+                    if let Some(slot) = alt.s.first() {
+                        out.extend(completion_tins(slot));
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    fn ensure_lookahead(
+        &self,
+        lexer: &mut Lexer,
+        context: &mut Context,
+        rule: &mut Rule,
+        stack: &[Rule],
+        count: usize,
+        mut capture: Option<&mut ContinuationCapture>,
+    ) -> Result<(), TabnasError> {
+        while context.t.len() < count {
+            if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
+                break;
+            }
+            let token = loop {
+                let next = match context.next_replay() {
+                    Some(token) => Ok(token),
+                    None => lexer.next_raw_token(),
+                };
+                let mut token = match next {
+                    Ok(token) => token,
+                    Err(error) => {
+                        if let Some(capture) = capture.as_deref_mut() {
+                            capture.failure = continuation_tins(
+                                context,
+                                rule,
+                                stack,
+                                &self.rules,
+                                &self.options,
+                                context.t.len(),
+                                None,
+                            );
+                        }
+                        return Err(error);
+                    }
+                };
+                for subscriber in &self.lex_subscribers {
+                    subscriber(&mut token, rule, context);
+                }
+                if token.tin == TIN_ZZ {
+                    if let Some(capture) = capture.as_deref_mut() {
+                        capture.have_end = true;
+                        capture.at_end.extend(continuation_tins(
+                            context,
+                            rule,
+                            stack,
+                            &self.rules,
+                            &self.options,
+                            context.t.len(),
+                            None,
+                        ));
+                    }
+                }
+                if !matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
+                    break token;
+                }
+            };
+            for subscriber in &self.token_subscribers {
+                subscriber(&token);
+            }
+            let is_end = token.tin == TIN_ZZ;
+            context.t.push(token);
+            if is_end {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_inner(
+        &self,
+        src: &str,
+        mut capture: Option<&mut ContinuationCapture>,
+    ) -> Result<Value, TabnasError> {
         if src.is_empty() {
             return if self.options.lex.empty {
                 Ok(Value::Null)
@@ -186,36 +320,6 @@ impl Parser {
         let mut next_rule_id = 1;
         #[allow(unused_assignments)]
         let mut final_value = None;
-
-        let mut ensure_lookahead =
-            |context: &mut Context, rule: &mut Rule, count: usize| -> Result<(), TabnasError> {
-                while context.t.len() < count {
-                    if context.t.last().is_some_and(|t| t.tin == TIN_ZZ) {
-                        break;
-                    }
-                    let t = loop {
-                        let mut token = match context.next_replay() {
-                            Some(token) => token,
-                            None => lexer.next_raw_token()?,
-                        };
-                        for subscriber in &self.lex_subscribers {
-                            subscriber(&mut token, rule, context);
-                        }
-                        if !matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
-                            break token;
-                        }
-                    };
-                    for subscriber in &self.token_subscribers {
-                        subscriber(&t);
-                    }
-                    let is_zz = t.tin == TIN_ZZ;
-                    context.t.push(t);
-                    if is_zz {
-                        break;
-                    }
-                }
-                Ok(())
-            };
 
         let mut iterations = 0usize;
         let maxmul = if self.options.rule.maxmul == 0 {
@@ -308,7 +412,14 @@ impl Parser {
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
                 if s_len > 0 {
-                    if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, s_len) {
+                    if let Err(error) = self.ensure_lookahead(
+                        &mut lexer,
+                        &mut context,
+                        &mut current_rule,
+                        &stack,
+                        s_len,
+                        capture.as_deref_mut(),
+                    ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
 
@@ -318,25 +429,9 @@ impl Parser {
                             break;
                         }
                         let t = &context.t[pos];
-                        if pos_tins.is_empty() {
-                            // Wildcard pos matches anything except BAD
-                            if t.tin == TIN_BD {
-                                alt_matches = false;
-                                break;
-                            }
-                        } else {
-                            // Check if tin is in pos_tins
-                            let mut found = false;
-                            for &allowed_tin in pos_tins {
-                                if allowed_tin == t.tin {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                alt_matches = false;
-                                break;
-                            }
+                        if !slot_matches(pos_tins, t.tin) {
+                            alt_matches = false;
+                            break;
                         }
                     }
                 }
@@ -419,8 +514,14 @@ impl Parser {
                                         .into();
                                 return Err(error);
                             };
-                            if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1)
-                            {
+                            if let Err(error) = self.ensure_lookahead(
+                                &mut lexer,
+                                &mut context,
+                                &mut current_rule,
+                                &stack,
+                                1,
+                                capture.as_deref_mut(),
+                            ) {
                                 return Err(self.attach_error(
                                     error,
                                     &current_rule,
@@ -554,8 +655,27 @@ impl Parser {
             } else {
                 // No alt matched
                 if is_open {
-                    if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1) {
+                    if let Err(error) = self.ensure_lookahead(
+                        &mut lexer,
+                        &mut context,
+                        &mut current_rule,
+                        &stack,
+                        1,
+                        capture.as_deref_mut(),
+                    ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
+                    }
+                    if let Some(capture) = capture.as_deref_mut() {
+                        let base = failed_alt_tins(&context, alts, &self.options);
+                        capture.failure = continuation_tins(
+                            &context,
+                            &current_rule,
+                            &stack,
+                            &self.rules,
+                            &self.options,
+                            0,
+                            Some(&base),
+                        );
                     }
                     let t0 = context.t.first();
                     let (src_token, si, ri, ci) = if let Some(t) = t0 {
@@ -600,7 +720,14 @@ impl Parser {
                             break;
                         }
                     } else {
-                        if let Err(error) = ensure_lookahead(&mut context, &mut current_rule, 1) {
+                        if let Err(error) = self.ensure_lookahead(
+                            &mut lexer,
+                            &mut context,
+                            &mut current_rule,
+                            &stack,
+                            1,
+                            capture.as_deref_mut(),
+                        ) {
                             return Err(self.attach_error(
                                 error,
                                 &current_rule,
@@ -608,6 +735,18 @@ impl Parser {
                                 alts,
                                 None,
                             ));
+                        }
+                        if let Some(capture) = capture.as_deref_mut() {
+                            let base = failed_alt_tins(&context, alts, &self.options);
+                            capture.failure = continuation_tins(
+                                &context,
+                                &current_rule,
+                                &stack,
+                                &self.rules,
+                                &self.options,
+                                0,
+                                Some(&base),
+                            );
                         }
                         let token = context.t.first();
                         let (source, pos, row, col) = token.map_or_else(
@@ -634,7 +773,14 @@ impl Parser {
         }
 
         // Post-loop check: ensure no unexpected trailing tokens
-        ensure_lookahead(&mut context, &mut current_rule, 1)?;
+        self.ensure_lookahead(
+            &mut lexer,
+            &mut context,
+            &mut current_rule,
+            &stack,
+            1,
+            capture,
+        )?;
         if let Some(t0) = context.t.first() {
             if t0.tin != TIN_ZZ {
                 let error = TabnasError::new("unexpected", &t0.src, src, t0.pos, t0.ri, t0.ci);
@@ -654,6 +800,160 @@ impl Parser {
         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
         Ok(res)
     }
+}
+
+fn slot_matches(slot: &[Tin], tin: Tin) -> bool {
+    tin != TIN_BD && (slot.is_empty() || slot.contains(&tin) || slot.contains(&TIN_AA))
+}
+
+fn alt_match_depth(alt: &AltSpec, context: &Context) -> usize {
+    let mut depth = 0;
+    while depth < alt.s.len() {
+        let Some(token) = context.t.get(depth) else {
+            break;
+        };
+        if !slot_matches(&alt.s[depth], token.tin) {
+            break;
+        }
+        depth += 1;
+    }
+    depth
+}
+
+fn completion_tins(slot: &[Tin]) -> impl Iterator<Item = Tin> + '_ {
+    slot.iter()
+        .copied()
+        .chain(slot.is_empty().then_some(TIN_AA))
+}
+
+fn failed_alt_tins(context: &Context, alts: &[AltSpec], options: &Options) -> Vec<Tin> {
+    let mut out = BTreeSet::new();
+    for alt in alts {
+        if !groups_enabled(alt, options) {
+            continue;
+        }
+        let depth = alt_match_depth(alt, context);
+        if let Some(slot) = alt.s.get(depth) {
+            out.extend(completion_tins(slot));
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn lead_tins(alts: &[AltSpec], options: &Options, out: &mut BTreeSet<Tin>) {
+    for alt in alts {
+        if !groups_enabled(alt, options) {
+            continue;
+        }
+        if let Some(slot) = alt.s.first() {
+            out.extend(completion_tins(slot));
+        }
+    }
+}
+
+fn has_empty_close(spec: &RuleSpec, options: &Options) -> bool {
+    spec.close
+        .iter()
+        .any(|alt| groups_enabled(alt, options) && alt.s.is_empty())
+}
+
+fn add_openers(
+    name: &str,
+    rules: &IndexMap<String, RuleSpec>,
+    options: &Options,
+    opened: &mut BTreeSet<String>,
+    out: &mut BTreeSet<Tin>,
+) {
+    if name.is_empty() || !opened.insert(name.to_owned()) {
+        return;
+    }
+    let Some(spec) = rules.get(name) else {
+        return;
+    };
+    lead_tins(&spec.open, options, out);
+    for alt in &spec.open {
+        if !groups_enabled(alt, options) || !alt.s.is_empty() {
+            continue;
+        }
+        if let Some(push) = alt.p.as_deref() {
+            add_openers(push, rules, options, opened, out);
+        }
+        if let Some(replace) = alt.r.as_deref() {
+            add_openers(replace, rules, options, opened, out);
+        }
+    }
+}
+
+fn continuation_tins(
+    context: &Context,
+    rule: &Rule,
+    stack: &[Rule],
+    rules: &IndexMap<String, RuleSpec>,
+    options: &Options,
+    query_pos: usize,
+    failed: Option<&[Tin]>,
+) -> Vec<Tin> {
+    let Some(spec) = rules.get(&rule.name) else {
+        return Vec::new();
+    };
+    let state_alts = if rule.state == RuleState::Open {
+        &spec.open
+    } else {
+        &spec.close
+    };
+    let mut out = BTreeSet::new();
+
+    if let Some(failed) = failed.filter(|tins| !tins.is_empty()) {
+        out.extend(failed.iter().copied());
+    } else {
+        for alt in state_alts {
+            if !groups_enabled(alt, options) {
+                continue;
+            }
+            let depth = alt_match_depth(alt, context);
+            if depth == query_pos {
+                if let Some(slot) = alt.s.get(depth) {
+                    out.extend(completion_tins(slot));
+                }
+            }
+        }
+    }
+
+    // If the current rule can close without consuming a token, closing
+    // tokens accepted by each parent are legal at the same point too.
+    let mut close_rule = rule;
+    let mut parent_index = stack.len();
+    while let Some(close_spec) = rules.get(&close_rule.name) {
+        if !has_empty_close(close_spec, options) || parent_index == 0 {
+            break;
+        }
+        parent_index -= 1;
+        let parent = &stack[parent_index];
+        if let Some(parent_spec) = rules.get(&parent.name) {
+            lead_tins(&parent_spec.close, options, &mut out);
+        }
+        close_rule = parent;
+    }
+
+    // A fully matched alternate can immediately hand control to a pushed or
+    // replacement rule. Follow empty opening hand-offs transitively.
+    let mut opened = BTreeSet::new();
+    for alt in state_alts {
+        if !groups_enabled(alt, options) || alt_match_depth(alt, context) != alt.s.len() {
+            continue;
+        }
+        if alt.s.len().checked_sub(alt.b) != Some(query_pos) {
+            continue;
+        }
+        if let Some(push) = alt.p.as_deref() {
+            add_openers(push, rules, options, &mut opened, &mut out);
+        }
+        if let Some(replace) = alt.r.as_deref() {
+            add_openers(replace, rules, options, &mut opened, &mut out);
+        }
+    }
+
+    out.into_iter().collect()
 }
 
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {

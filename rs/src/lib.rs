@@ -23,7 +23,7 @@ pub use options::{
     BudgetCheck, BudgetOptions, FixedOptions, FixedToken, MatchToken, Options, ParseOptions,
     RewindOptions,
 };
-pub use parser::Parser;
+pub use parser::{Continuations, Parser};
 pub use rule::{
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
@@ -158,6 +158,14 @@ impl Tabnas {
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
+        self.parser().parse(src)
+    }
+
+    pub fn continuations(&self, src: &str) -> Continuations {
+        self.parser().continuations(src)
+    }
+
+    fn parser(&self) -> Parser {
         let mut p = Parser::new(self.options.clone());
         for spec in self.rules.values() {
             p.add_rule(spec.clone());
@@ -180,7 +188,7 @@ impl Tabnas {
         for subscriber in &self.rule_done_subscribers {
             p.add_rule_done_subscriber(subscriber.clone());
         }
-        p.parse(src)
+        p
     }
 
     /// Strict JSON parser setup, mirroring `ts/test/json-plugin.ts` and `go/jsonplugin_test.go`.
