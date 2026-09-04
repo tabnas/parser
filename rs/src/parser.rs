@@ -324,7 +324,7 @@ impl Parser {
 
         self.notify_forced_close(current_rule, context);
         while let Some(mut parent) = stack.pop() {
-            parent.child_node = current_rule.node.borrow().clone();
+            parent.accept_child_node(current_rule);
             parent.child_rule = Some(current_rule.snapshot());
             parent.next_rule = parent.child_rule.clone();
             if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
@@ -883,7 +883,7 @@ impl Parser {
                     self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
-                        parent.child_node = current_rule.node.borrow().clone();
+                        parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
                         parent.next_rule = parent.child_rule.clone();
                         current_rule = parent;
@@ -925,7 +925,7 @@ impl Parser {
                     self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
-                        parent.child_node = current_rule.node.borrow().clone();
+                        parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
                         parent.next_rule = parent.child_rule.clone();
                         current_rule = parent;

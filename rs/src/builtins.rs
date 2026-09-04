@@ -140,7 +140,7 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
                     config_string(config, "kind"),
                 )));
             }
-            if !rule.child_node.is_undefined() {
+            if !rule.child_node.is_undefined() && !rule.child_node_is_self {
                 if let Value::Object(node) = &mut *rule.node.borrow_mut() {
                     capture_child(node, rule.child_node.clone());
                 }
@@ -201,6 +201,7 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
         "@reset$" => {
             rule.node = Rc::new(RefCell::new(Value::Undefined));
             rule.child_node = Value::Undefined;
+            rule.child_node_is_self = false;
         }
         "@key$" => {
             if let Some(token) = config_index(config, "from").and_then(|index| rule.o.get(index)) {

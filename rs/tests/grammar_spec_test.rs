@@ -477,6 +477,27 @@ fn serialized_tree_builtins_bind_config_at_load() {
 }
 
 #[test]
+fn capture_does_not_capture_a_child_that_kept_the_parent_node() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{
+                "open":[{"s":"#TX","a":"@node$","p":"child","k":{"node$":{"init":true,"rule":"top","kind":"user","nterms":1}}}],
+                "close":[{"a":"@capture$"}]
+              },
+              "child":{}
+            }}"##,
+        )
+        .unwrap();
+    let expected = Value::from_json(&serde_json::json!({
+        "rule": "top", "src": "x", "kids": []
+    }));
+    let actual = parser.parse("x").unwrap();
+    assert!(actual.deep_equal(&expected), "actual: {actual}");
+}
+
+#[test]
 fn serialized_bubble_and_fold_builtins_preserve_tree_shape() {
     let mut bubble = Tabnas::new();
     bubble

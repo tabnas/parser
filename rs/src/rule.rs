@@ -107,6 +107,7 @@ pub struct Rule {
     pub node: Rc<RefCell<Value>>,
     pub parent_node: Option<Rc<RefCell<Value>>>,
     pub child_node: Value,
+    pub(crate) child_node_is_self: bool,
     pub parent_rule: Option<Rc<RuleSnapshot>>,
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
@@ -152,6 +153,7 @@ impl Rule {
             node: Rc::new(RefCell::new(initial_node)),
             parent_node: None,
             child_node: Value::Undefined,
+            child_node_is_self: false,
             parent_rule: None,
             child_rule: None,
             prev_rule: None,
@@ -176,6 +178,7 @@ impl Rule {
             node,
             parent_node: None,
             child_node: Value::Undefined,
+            child_node_is_self: false,
             parent_rule: None,
             child_rule: None,
             prev_rule: None,
@@ -225,5 +228,10 @@ impl Rule {
             o: self.o.clone(),
             c: self.c.clone(),
         })
+    }
+
+    pub(crate) fn accept_child_node(&mut self, child: &Rule) {
+        self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
+        self.child_node = child.node.borrow().clone();
     }
 }
