@@ -2,9 +2,29 @@
 
 use crate::token::{Tin, Token};
 use crate::value::Value;
+use crate::Context;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// Function-valued alternate condition. The candidate's matched tokens have
+/// already been copied onto `rule` when this callback runs.
+pub type AltCondition = Arc<dyn Fn(&mut Rule, &mut Context) -> bool + Send + Sync>;
+
+/// Function-valued push/replace route.
+pub type AltNext = Arc<dyn Fn(&mut Rule, &mut Context) -> Option<String> + Send + Sync>;
+
+/// Function-valued token backtrack count.
+pub type AltBack = Arc<dyn Fn(&mut Rule, &mut Context) -> usize + Send + Sync>;
+
+/// Function-valued alternate error. Returning a token rejects the alternate
+/// at its match site and uses the token's `err`/`why` field as the error code.
+pub type AltError = Arc<dyn Fn(&mut Rule, &mut Context) -> Option<Token> + Send + Sync>;
+
+/// Post-match alternate modifier. It takes and returns the effective match so
+/// replacement is explicit rather than mutating shared grammar state.
+pub type AltModifier = Arc<dyn Fn(AltSpec, &mut Rule, &mut Context) -> AltSpec + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleState {
@@ -53,16 +73,22 @@ pub struct Condition {
 pub struct AltSpec {
     pub s: Vec<Vec<Tin>>,
     pub p: Option<String>,
+    pub p_fn: Option<AltNext>,
     pub r: Option<String>,
+    pub r_fn: Option<AltNext>,
     pub b: usize,
+    pub b_fn: Option<AltBack>,
     pub a: Vec<String>,
     pub action_configs: HashMap<String, Value>,
     pub c: Vec<Condition>,
     pub c_ref: Option<String>,
+    pub c_fn: Option<AltCondition>,
     pub n: HashMap<String, i32>,
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
     pub g: String,
+    pub h: Option<AltModifier>,
+    pub e: Option<AltError>,
 }
 
 impl AltSpec {

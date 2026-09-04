@@ -4,12 +4,38 @@
 
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
-use crate::{builtins::is_builtin_action, Tabnas, Value};
+use crate::{
+    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext, Tabnas,
+    Value,
+};
 use indexmap::IndexMap;
 use regex::RegexBuilder;
 use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::fmt;
+
+#[derive(Clone)]
+struct AltRefs {
+    conditions: HashMap<String, AltCondition>,
+    modifiers: HashMap<String, AltModifier>,
+    errors: HashMap<String, AltError>,
+    pushes: HashMap<String, AltNext>,
+    replaces: HashMap<String, AltNext>,
+    backtracks: HashMap<String, AltBack>,
+}
+
+impl From<&Tabnas> for AltRefs {
+    fn from(tabnas: &Tabnas) -> Self {
+        Self {
+            conditions: tabnas.alt_conditions.clone(),
+            modifiers: tabnas.alt_modifiers.clone(),
+            errors: tabnas.alt_errors.clone(),
+            pushes: tabnas.alt_pushes.clone(),
+            replaces: tabnas.alt_replaces.clone(),
+            backtracks: tabnas.alt_backtracks.clone(),
+        }
+    }
+}
 
 /// Builtin wire schema implemented by the Rust port. Schema v3 adds the
 /// `@fold$` tree action used by current BNF-family compiler output.
@@ -94,6 +120,7 @@ impl Tabnas {
 
     fn install_grammar(&mut self, grammar: &GrammarSpec) -> Result<(), GrammarError> {
         let root = object(&grammar.document, "document")?;
+        let refs = AltRefs::from(&*self);
         if grammar.clear {
             self.rules.clear();
             self.options.fixed.tokens.clear();
@@ -114,7 +141,13 @@ impl Tabnas {
                     .cloned()
                     .unwrap_or_else(|| RuleSpec::new(name));
                 if let Some(open) = value.get("open") {
-                    apply_alt_list(&mut spec.open, open, &format!("{name}.open"), &self.options)?;
+                    apply_alt_list(
+                        &mut spec.open,
+                        open,
+                        &format!("{name}.open"),
+                        &self.options,
+                        &refs,
+                    )?;
                 }
                 if let Some(close) = value.get("close") {
                     apply_alt_list(
@@ -122,6 +155,7 @@ impl Tabnas {
                         close,
                         &format!("{name}.close"),
                         &self.options,
+                        &refs,
                     )?;
                 }
                 validate_action_references(self, &spec)?;
@@ -151,6 +185,7 @@ fn apply_alt_list(
     value: &JsonValue,
     label: &str,
     options: &crate::Options,
+    refs: &AltRefs,
 ) -> Result<(), GrammarError> {
     let (alts, inject) = if let Some(array) = value.as_array() {
         (array, None)
@@ -177,7 +212,7 @@ fn apply_alt_list(
     let parsed: Result<Vec<_>, _> = alts
         .iter()
         .enumerate()
-        .map(|(index, alt)| parse_alt(alt, &format!("{label} alt[{index}]"), options))
+        .map(|(index, alt)| parse_alt(alt, &format!("{label} alt[{index}]"), options, refs))
         .collect();
     let mut parsed = parsed?;
     if inject
@@ -207,15 +242,9 @@ fn parse_alt(
     value: &JsonValue,
     label: &str,
     options: &crate::Options,
+    refs: &AltRefs,
 ) -> Result<AltSpec, GrammarError> {
     let map = object(value, label)?;
-    for unsupported in ["e", "h"] {
-        if map.contains_key(unsupported) {
-            return Err(GrammarError(format!(
-                "Grammar: {label}.{unsupported} is not supported by the Rust engine"
-            )));
-        }
-    }
     let mut alt = AltSpec::default();
     if let Some(spec) = map.get("s") {
         let slots: Vec<&str> = match spec {
@@ -250,22 +279,41 @@ fn parse_alt(
             alt.s.push(tins);
         }
     }
-    alt.b = map.get("b").map_or(Ok(0), |value| {
-        value.as_u64().map(|v| v as usize).ok_or_else(|| {
-            GrammarError(format!("Grammar: {label}.b must be a non-negative integer"))
-        })
-    })?;
-    alt.p = string_field(map, "p", label)?;
-    alt.r = string_field(map, "r", label)?;
-    for (field, value) in [("p", &alt.p), ("r", &alt.r)] {
-        if value.as_deref().is_some_and(|value| value.starts_with('@')) {
-            return Err(GrammarError(format!(
-                "Grammar: {label}.{field} dynamic references are not supported by the Rust engine"
-            )));
+    match map.get("b") {
+        None | Some(JsonValue::Null) | Some(JsonValue::Bool(false)) => {}
+        Some(JsonValue::String(reference)) if reference.starts_with('@') => {
+            alt.b_fn = Some(refs.backtracks.get(reference).cloned().ok_or_else(|| {
+                GrammarError(format!(
+                    "Grammar: unknown backtrack function reference: {reference}"
+                ))
+            })?);
+        }
+        Some(value) => {
+            alt.b = value.as_u64().map(|v| v as usize).ok_or_else(|| {
+                GrammarError(format!("Grammar: {label}.b must be a non-negative integer"))
+            })?;
         }
     }
+    alt.p = string_field(map, "p", label)?;
+    alt.r = string_field(map, "r", label)?;
+    if let Some(reference) = alt.p.as_deref().filter(|value| value.starts_with('@')) {
+        alt.p_fn = Some(refs.pushes.get(reference).cloned().ok_or_else(|| {
+            GrammarError(format!(
+                "Grammar: unknown push function reference: {reference}"
+            ))
+        })?);
+        alt.p = None;
+    }
+    if let Some(reference) = alt.r.as_deref().filter(|value| value.starts_with('@')) {
+        alt.r_fn = Some(refs.replaces.get(reference).cloned().ok_or_else(|| {
+            GrammarError(format!(
+                "Grammar: unknown replace function reference: {reference}"
+            ))
+        })?);
+        alt.r = None;
+    }
     alt.a = match map.get("a") {
-        None => Vec::new(),
+        None | Some(JsonValue::Null) | Some(JsonValue::Bool(false)) => Vec::new(),
         Some(JsonValue::String(action)) => vec![action.clone()],
         Some(JsonValue::Array(actions)) => actions
             .iter()
@@ -283,17 +331,34 @@ fn parse_alt(
     };
     match map.get("c") {
         Some(JsonValue::String(reference)) => {
-            if !matches!(
+            if matches!(
                 reference.as_str(),
                 "@probePhase0$" | "@probePhase1$" | "@probePhase2$"
             ) {
+                alt.c_ref = Some(reference.clone());
+            } else if let Some(condition) = refs.conditions.get(reference) {
+                alt.c_fn = Some(condition.clone());
+            } else {
                 return Err(GrammarError(format!(
                     "Grammar: unknown condition function reference: {reference}"
                 )));
             }
-            alt.c_ref = Some(reference.clone());
         }
         value => alt.c = parse_conditions(value, label)?,
+    }
+    if let Some(reference) = optional_ref_field(map, "h", label)? {
+        alt.h = Some(refs.modifiers.get(&reference).cloned().ok_or_else(|| {
+            GrammarError(format!(
+                "Grammar: unknown modifier function reference: {reference}"
+            ))
+        })?);
+    }
+    if let Some(reference) = optional_ref_field(map, "e", label)? {
+        alt.e = Some(refs.errors.get(&reference).cloned().ok_or_else(|| {
+            GrammarError(format!(
+                "Grammar: unknown error function reference: {reference}"
+            ))
+        })?);
     }
     alt.n = number_map(map.get("n"), label)?;
     alt.u = value_map(map.get("u"), label)?;
@@ -333,6 +398,22 @@ fn parse_alt(
     };
     validate_group_tags(&alt.g, label)?;
     Ok(alt)
+}
+
+fn optional_ref_field(
+    map: &Map<String, JsonValue>,
+    key: &str,
+    label: &str,
+) -> Result<Option<String>, GrammarError> {
+    match map.get(key) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(JsonValue::String(reference)) if reference.starts_with('@') => {
+            Ok(Some(reference.clone()))
+        }
+        Some(_) => Err(GrammarError(format!(
+            "Grammar: {label}.{key} must be a function reference"
+        ))),
+    }
 }
 
 fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), GrammarError> {
@@ -417,6 +498,9 @@ fn parse_conditions(
     let Some(value) = value else {
         return Ok(Vec::new());
     };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
     let conditions = object(value, &format!("{label}.c"))?;
     let roots = [
         "n", "u", "k", "d", "i", "name", "state", "node", "need", "oN", "cN", "o", "c", "o0", "o1",
@@ -483,14 +567,13 @@ fn string_field(
     key: &str,
     label: &str,
 ) -> Result<Option<String>, GrammarError> {
-    map.get(key)
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| GrammarError(format!("Grammar: {label}.{key} must be a string")))
-        })
-        .transpose()
+    match map.get(key) {
+        None | Some(JsonValue::Null) | Some(JsonValue::Bool(false)) => Ok(None),
+        Some(JsonValue::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(GrammarError(format!(
+            "Grammar: {label}.{key} must be a string"
+        ))),
+    }
 }
 
 fn number_map(

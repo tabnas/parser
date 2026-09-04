@@ -11,6 +11,27 @@ let parser = Tabnas::new();
 // Install rules and actions, then parse input with parser.parse(...).
 ```
 
+Serialized function references are bound through typed Rust registrations
+before the grammar is installed:
+
+```rust
+use tabnas::Tabnas;
+
+let mut parser = Tabnas::new();
+parser.alt_condition("@positive", |rule, _ctx| {
+    rule.o0().is_some_and(|token| token.src != "0")
+});
+parser.grammar_json(
+    r#"{"rule":{"top":{"open":[{"s":"#NR","c":"@positive"}]}}}"#,
+)?;
+# Ok::<(), tabnas::GrammarError>(())
+```
+
+Typed registrations cover conditions (`c`), modifiers (`h`), errors (`e`),
+and dynamic push, replace, and backtrack fields (`p`, `r`, `b`). Modifiers use
+an explicit take-and-return contract, and missing or mistyped references fail
+transactionally during grammar installation.
+
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
 grammar: `Tabnas::new()` has no rules.
@@ -27,19 +48,20 @@ subscribers, public parse actions with bounded mark/rewind history, parse
 budgets, path-aware continuation queries, and opt-in panic-mode recovery with
 structured recovery diagnostics. Opt-in negotiated lexing can re-cut contested
 source spans for scannerless serialized grammars, including rollback when a
-candidate alternate later fails. Rust directly executes every non-exempt shared
-TSV fixture; the fixture paths are not copied into the crate. The
-repository gate requires every non-exempt shared fixture to have a TypeScript,
-Go, and Rust runner, and the strict-JSON differential gate compares token
-streams over every data row in both JSON and parser corpora.
+candidate alternate later fails. Typed named hooks cover alternate conditions,
+modifiers, errors, and dynamic routing/backtracking. Rust directly executes
+every non-exempt shared TSV fixture; the fixture paths are not copied into the
+crate. The repository gate requires every non-exempt shared fixture to have a
+TypeScript, Go, and Rust runner, and the strict-JSON differential gate compares
+token streams over every data row in both JSON and parser corpora.
 
 Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,
 alternate injection, metadata, and schema-version gating. Function-valued
-grammar conditions/modifiers, arbitrary matcher callbacks beyond serialized
-regexes, complete option overlays, and info-bearing result wrappers are not
-yet equivalent.
-Unsupported dynamic grammar fields fail at install time instead of being
+callbacks that need direct lexer re-entry, arbitrary matcher callbacks beyond
+serialized regexes, complete option overlays, and info-bearing result wrappers
+are not yet equivalent.
+Unsupported callback and matcher forms fail at install time instead of being
 silently ignored. See
 `../doc/rust-port-implementation-plan.md` for the architecture and gates for
 that work. Do not present this crate as a drop-in replacement until those

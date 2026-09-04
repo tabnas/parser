@@ -755,6 +755,16 @@ impl Parser {
                         alt_matches = false;
                     }
                     if alt_matches {
+                        if is_open {
+                            current_rule.o = candidate.o.clone();
+                        } else {
+                            current_rule.c = candidate.c.clone();
+                        }
+                        if let Some(condition) = &alt.c_fn {
+                            alt_matches = condition(&mut current_rule, &mut context);
+                        }
+                    }
+                    if alt_matches {
                         matched_alt_idx = Some(idx);
                         matched_count = s_len;
                         break;
@@ -773,7 +783,7 @@ impl Parser {
             }
 
             if let Some(idx) = matched_alt_idx {
-                let alt = &alts[idx];
+                let mut alt = alts[idx].clone();
 
                 // Copy matched tokens
                 let matched_tokens: Vec<Token> =
@@ -784,9 +794,67 @@ impl Parser {
                     current_rule.c = matched_tokens;
                 }
 
-                // Calculate consumed tokens
-                let consumed = matched_count.saturating_sub(alt.b);
-                context.record_consumed(consumed);
+                // A modifier runs after matching and may replace any of the
+                // effective alternate's routing, state, action, or error
+                // fields before they are applied.
+                if let Some(modifier) = alt.h.clone() {
+                    alt = modifier(alt, &mut current_rule, &mut context);
+                }
+
+                // Function-valued alternate errors are raised at the match
+                // site, before counters, actions, consumption, or routing.
+                if let Some(error_hook) = alt.e.clone() {
+                    if let Some(token) = error_hook(&mut current_rule, &mut context) {
+                        let code = raised_error_code(&token);
+                        let error = TabnasError::new(
+                            code,
+                            token.src.clone(),
+                            src,
+                            token.pos,
+                            token.ri,
+                            token.ci,
+                        );
+                        let done_alt = RuleDoneAlt {
+                            b: alt.b,
+                            g: alt
+                                .g
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|group| !group.is_empty())
+                                .map(str::to_owned)
+                                .collect(),
+                            p: alt.p.clone().unwrap_or_default(),
+                            r: alt.r.clone().unwrap_or_default(),
+                            err: Some(token.clone()),
+                        };
+                        self.notify_rule_done(
+                            &current_rule,
+                            &context,
+                            if is_open {
+                                RuleState::Open
+                            } else {
+                                RuleState::Close
+                            },
+                            Some(done_alt),
+                        );
+                        let error =
+                            self.attach_error(error, &current_rule, &stack, alts, Some(&token));
+                        if mode.recovering
+                            && self.attempt_recover(
+                                error.clone(),
+                                &mut current_rule,
+                                &mut stack,
+                                &mut context,
+                                &mut lexer,
+                                mode,
+                            )
+                        {
+                            continue;
+                        }
+                        mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                        return Err(error);
+                    }
+                }
 
                 // Update counters n
                 for (k, v) in &alt.n {
@@ -806,6 +874,28 @@ impl Parser {
                 for (k, v) in &alt.k {
                     current_rule.k.insert(k.clone(), v.clone());
                 }
+
+                // Calculate consumed tokens. Dynamic backtracking observes
+                // the state updates above, matching the mature engine order.
+                let backtrack = alt.b_fn.as_ref().map_or(alt.b, |backtrack| {
+                    backtrack(&mut current_rule, &mut context)
+                });
+                let consumed = matched_count.saturating_sub(backtrack);
+                context.record_consumed(consumed);
+
+                // Resolve dynamic routing before the action. The action may
+                // mutate rule data, but routing is an input to this match,
+                // not a post-action control channel.
+                let push_name = match &alt.p_fn {
+                    Some(route) => route(&mut current_rule, &mut context),
+                    None => alt.p.clone(),
+                }
+                .filter(|name| !name.is_empty());
+                let replace_name = match &alt.r_fn {
+                    Some(route) => route(&mut current_rule, &mut context),
+                    None => alt.r.clone(),
+                }
+                .filter(|name| !name.is_empty());
 
                 // Run action
                 for act_name in &alt.a {
@@ -877,7 +967,7 @@ impl Parser {
                 mode.partial = best_partial_value(&root_node, &current_rule, &stack);
 
                 let done_alt = Some(RuleDoneAlt {
-                    b: alt.b,
+                    b: backtrack,
                     g: alt
                         .g
                         .split(',')
@@ -885,8 +975,8 @@ impl Parser {
                         .filter(|group| !group.is_empty())
                         .map(str::to_owned)
                         .collect(),
-                    p: alt.p.clone().unwrap_or_default(),
-                    r: alt.r.clone().unwrap_or_default(),
+                    p: push_name.clone().unwrap_or_default(),
+                    r: replace_name.clone().unwrap_or_default(),
                     err: None,
                 });
 
@@ -895,7 +985,7 @@ impl Parser {
                 // The action still belongs to the rule whose alternate matched.
                 let completed_rule;
                 let mut completed_value = None;
-                if let Some(ref push_name) = alt.p {
+                if let Some(ref push_name) = push_name {
                     let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
                     child.i = next_rule_id;
                     next_rule_id += 1;
@@ -915,7 +1005,7 @@ impl Parser {
                     completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
-                } else if let Some(ref replace_name) = alt.r {
+                } else if let Some(ref replace_name) = replace_name {
                     let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -1255,6 +1345,16 @@ fn deferred_error_code(token: &Token) -> &str {
     }
 }
 
+fn raised_error_code(token: &Token) -> &str {
+    if !token.err.is_empty() {
+        &token.err
+    } else if !token.why.is_empty() {
+        &token.why
+    } else {
+        "unexpected"
+    }
+}
+
 fn mid_construct(code: &str) -> bool {
     matches!(code, "unprintable" | "invalid_unicode" | "invalid_ascii")
 }
@@ -1520,6 +1620,11 @@ fn continuation_tins(
     let mut opened = BTreeSet::new();
     for alt in state_alts {
         if !groups_enabled(alt, options) || alt_match_depth(alt, context) != alt.s.len() {
+            continue;
+        }
+        // A callback backtrack is only knowable while executing the match.
+        // Do not speculate that its static default is the handover point.
+        if alt.b_fn.is_some() {
             continue;
         }
         if alt.s.len().checked_sub(alt.b) != Some(query_pos) {

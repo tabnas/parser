@@ -26,7 +26,8 @@ pub use options::{
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    AltBack, AltCondition, AltError, AltModifier, AltNext, AltSpec, CompareOp, Condition, Rule,
+    RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
 pub use token::{
     Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
@@ -56,6 +57,12 @@ pub struct Tabnas {
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
+    pub(crate) alt_conditions: HashMap<String, AltCondition>,
+    pub(crate) alt_modifiers: HashMap<String, AltModifier>,
+    pub(crate) alt_errors: HashMap<String, AltError>,
+    pub(crate) alt_pushes: HashMap<String, AltNext>,
+    pub(crate) alt_replaces: HashMap<String, AltNext>,
+    pub(crate) alt_backtracks: HashMap<String, AltBack>,
 }
 
 impl Default for Tabnas {
@@ -75,6 +82,12 @@ impl Tabnas {
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
+            alt_conditions: HashMap::new(),
+            alt_modifiers: HashMap::new(),
+            alt_errors: HashMap::new(),
+            alt_pushes: HashMap::new(),
+            alt_replaces: HashMap::new(),
+            alt_backtracks: HashMap::new(),
         }
     }
 
@@ -88,6 +101,12 @@ impl Tabnas {
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
+            alt_conditions: HashMap::new(),
+            alt_modifiers: HashMap::new(),
+            alt_errors: HashMap::new(),
+            alt_pushes: HashMap::new(),
+            alt_replaces: HashMap::new(),
+            alt_backtracks: HashMap::new(),
         }
     }
 
@@ -145,6 +164,66 @@ impl Tabnas {
         action: impl Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync + 'static,
     ) -> &mut Self {
         self.context_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `c`.
+    pub fn alt_condition(
+        &mut self,
+        name: impl Into<String>,
+        condition: impl Fn(&mut Rule, &mut Context) -> bool + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_conditions.insert(name.into(), Arc::new(condition));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `h`.
+    pub fn alt_modifier(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl Fn(AltSpec, &mut Rule, &mut Context) -> AltSpec + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_modifiers.insert(name.into(), Arc::new(modifier));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `e`.
+    pub fn alt_error(
+        &mut self,
+        name: impl Into<String>,
+        error: impl Fn(&mut Rule, &mut Context) -> Option<Token> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_errors.insert(name.into(), Arc::new(error));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `p`.
+    pub fn alt_push(
+        &mut self,
+        name: impl Into<String>,
+        route: impl Fn(&mut Rule, &mut Context) -> Option<String> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_pushes.insert(name.into(), Arc::new(route));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `r`.
+    pub fn alt_replace(
+        &mut self,
+        name: impl Into<String>,
+        route: impl Fn(&mut Rule, &mut Context) -> Option<String> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_replaces.insert(name.into(), Arc::new(route));
+        self
+    }
+
+    /// Register a typed function reference for a serialized alternate `b`.
+    pub fn alt_backtrack(
+        &mut self,
+        name: impl Into<String>,
+        backtrack: impl Fn(&mut Rule, &mut Context) -> usize + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_backtracks.insert(name.into(), Arc::new(backtrack));
         self
     }
 

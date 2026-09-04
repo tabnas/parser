@@ -141,12 +141,12 @@ fn validation_reports_dangling_static_rule_references() {
 }
 
 #[test]
-fn unsupported_dynamic_fields_fail_during_installation() {
+fn unregistered_dynamic_fields_fail_during_installation() {
     let mut parser = Tabnas::new();
     let error = parser
         .grammar_json(r#"{"rule":{"top":{"open":[{"c":"@condition"}]}}}"#)
         .err()
-        .expect("condition must be rejected");
+        .expect("unregistered condition must be rejected");
     assert!(error.to_string().contains("unknown condition function"));
 }
 
