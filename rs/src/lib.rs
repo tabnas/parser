@@ -148,6 +148,12 @@ impl Tabnas {
         self
     }
 
+    /// Resolve or allocate a named token identity for typed matcher effects
+    /// and imperative rule construction.
+    pub fn token(&mut self, name: impl Into<String>) -> Tin {
+        self.options.register_token(name)
+    }
+
     pub fn action(
         &mut self,
         name: impl Into<String>,

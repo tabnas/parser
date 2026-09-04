@@ -51,6 +51,9 @@ skip that matcher, or emit an owned non-empty prefix token.
 Priority-ordered custom lexer entries bind through `lex_match_ref` and are
 interleaved with the eight built-in matcher bands. During negotiated lexing,
 unwanted custom token effects are discarded without moving the cursor.
+Custom token identities can be allocated explicitly with `Tabnas::token`, or
+implicitly by a serialized rule/token-set reference; `LexCheckToken::named`
+resolves the numeric identity after grammar installation.
 Function-form comment terminators use `comment_suffix_ref` and likewise
 consume only a validated owned source prefix.
 Serialized `error`, `hint`, `errmsg`, and `color` overlays configure both

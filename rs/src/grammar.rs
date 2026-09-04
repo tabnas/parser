@@ -166,7 +166,7 @@ impl Tabnas {
                         &mut spec.open,
                         open,
                         &format!("{name}.open"),
-                        &self.options,
+                        &mut self.options,
                         &refs,
                     )?;
                 }
@@ -175,7 +175,7 @@ impl Tabnas {
                         &mut spec.close,
                         close,
                         &format!("{name}.close"),
-                        &self.options,
+                        &mut self.options,
                         &refs,
                     )?;
                 }
@@ -205,7 +205,7 @@ fn apply_alt_list(
     target: &mut Vec<AltSpec>,
     value: &JsonValue,
     label: &str,
-    options: &crate::Options,
+    options: &mut crate::Options,
     refs: &AltRefs,
 ) -> Result<(), GrammarError> {
     let (alts, inject) = if let Some(array) = value.as_array() {
@@ -262,7 +262,7 @@ fn integer_list(value: Option<&JsonValue>) -> Vec<isize> {
 fn parse_alt(
     value: &JsonValue,
     label: &str,
-    options: &crate::Options,
+    options: &mut crate::Options,
     refs: &AltRefs,
 ) -> Result<AltSpec, GrammarError> {
     let map = object(value, label)?;
@@ -289,12 +289,12 @@ fn parse_alt(
             for name in slot.split_whitespace() {
                 if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
                     tins.extend(set.iter().copied());
-                } else if let Some(tin) = options.token(name) {
-                    tins.push(tin);
                 } else {
-                    return Err(GrammarError(format!(
-                        "Grammar: {label}: unknown token {name}"
-                    )));
+                    tins.push(
+                        options
+                            .token(name)
+                            .unwrap_or_else(|| options.register_token(name)),
+                    );
                 }
             }
             alt.s.push(tins);
@@ -1466,7 +1466,9 @@ fn apply_options(
                 let tin = options
                     .match_tokens
                     .get(&name)
-                    .map_or_else(|| options.next_tin(), |matcher| matcher.tin);
+                    .map(|matcher| matcher.tin)
+                    .or_else(|| options.token(&name))
+                    .unwrap_or_else(|| options.next_tin());
                 options.match_tokens.insert(
                     name.clone(),
                     crate::options::MatchToken {
@@ -1541,11 +1543,9 @@ fn apply_options(
                         "Grammar: options.tokenSet.{name} entries must be strings"
                     ))
                 })?;
-                let tin = options.token(member).ok_or_else(|| {
-                    GrammarError(format!(
-                        "Grammar: options.tokenSet.{name}: unknown token {member}"
-                    ))
-                })?;
+                let tin = options
+                    .token(member)
+                    .unwrap_or_else(|| options.register_token(member));
                 tins.push(tin);
             }
             options

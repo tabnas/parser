@@ -148,12 +148,20 @@ impl<'a> Lexer<'a> {
             LexCheckResult::Token(token)
                 if !token.source.is_empty() && remaining.starts_with(&token.source) =>
             {
+                let tin = if token.tin < 0 {
+                    self.options.token(&token.name).unwrap_or(token.tin)
+                } else {
+                    token.tin
+                };
+                if tin < 0 {
+                    return CheckFlow::Skip;
+                }
                 for _ in token.source.chars() {
                     self.advance();
                 }
                 CheckFlow::Token(Box::new(Token::new(
                     token.name,
-                    token.tin,
+                    tin,
                     token.value,
                     token.source,
                     point,
@@ -189,7 +197,12 @@ impl<'a> Lexer<'a> {
             // TypeScript and Go run opaque custom matchers speculatively for
             // a negotiated cut. An unwanted result rolls back locally so a
             // later matcher can still satisfy the request.
-            if !self.wants(token.tin) {
+            let tin = if token.tin < 0 {
+                self.options.token(&token.name).unwrap_or(token.tin)
+            } else {
+                token.tin
+            };
+            if tin < 0 || !self.wants(tin) {
                 continue;
             }
             for _ in token.source.chars() {
@@ -197,7 +210,7 @@ impl<'a> Lexer<'a> {
             }
             return Some(Token::new(
                 token.name,
-                token.tin,
+                tin,
                 token.value,
                 token.source,
                 point,

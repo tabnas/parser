@@ -168,3 +168,82 @@ fn unknown_custom_matcher_refs_fail_transactionally() {
     assert!(parser.rules.contains_key("kept"));
     assert!(!parser.rules.contains_key("lost"));
 }
+
+#[test]
+fn custom_matchers_emit_tokens_declared_by_serialized_rules() {
+    let mut parser = Tabnas::new();
+    parser.lex_match_ref("@word", |source| {
+        source
+            .starts_with("word")
+            .then(|| LexCheckToken::named("#CUSTOM", "word", Value::String("named".into())))
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "lex":{"match":{"word":{"order":0,"make":"@word"}}}
+              },
+              "rule":{"top":{"open":[{"s":"#CUSTOM","a":"@value$"}]}}
+            }"##,
+        )
+        .unwrap();
+
+    let custom = parser
+        .options
+        .token("#CUSTOM")
+        .expect("rule slot must declare its token");
+    assert_eq!(parser.options.token_name(custom), "#CUSTOM");
+    assert_eq!(parser.parse("word").unwrap(), Value::String("named".into()));
+}
+
+#[test]
+fn token_sets_allocate_custom_members_before_rules_are_loaded() {
+    let mut parser = Tabnas::new();
+    parser.lex_match_ref("@second", |source| {
+        source
+            .starts_with('b')
+            .then(|| LexCheckToken::named("#SECOND", "b", Value::String("set".into())))
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "lex":{"match":{"second":{"order":0,"make":"@second"}}},
+                "tokenSet":{"CUSTOM":["#FIRST","#SECOND"]}
+              },
+              "rule":{"top":{"open":[{"s":"#CUSTOM","a":"@value$"}]}}
+            }"##,
+        )
+        .unwrap();
+
+    let members = &parser.options.token_set["CUSTOM"];
+    assert_eq!(members.len(), 2);
+    assert_eq!(parser.options.token_name(members[0]), "#FIRST");
+    assert_eq!(parser.options.token_name(members[1]), "#SECOND");
+    assert_eq!(parser.parse("b").unwrap(), Value::String("set".into()));
+}
+
+#[test]
+fn explicit_token_registration_is_reused_by_match_definitions() {
+    let mut parser = Tabnas::new();
+    let tin = parser.token("#WORD");
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "match":{"token":{"#WORD":"@/^word/"}}
+              },
+              "rule":{"top":{"open":[{"s":"#WORD","a":"@value$"}]}}
+            }"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.options.token("#WORD"), Some(tin));
+    assert_eq!(parser.parse("word").unwrap(), Value::String("word".into()));
+}

@@ -132,6 +132,22 @@ impl LexCheckToken {
             value,
         }
     }
+
+    /// Build a token effect whose numeric identity is resolved from its name
+    /// after the serialized grammar has declared that token.
+    pub fn named(name: impl Into<String>, source: impl Into<String>, value: crate::Value) -> Self {
+        let name = name.into();
+        Self {
+            name: if name.starts_with('#') {
+                name
+            } else {
+                format!("#{name}")
+            },
+            tin: -1,
+            source: source.into(),
+            value,
+        }
+    }
 }
 
 /// Effect returned by a matcher-family preflight hook.
@@ -748,6 +764,9 @@ pub struct Options {
     pub result: ResultOptions,
     pub parse: ParseOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
+    /// Named token identities without an attached built-in, fixed, or match
+    /// producer. Serialized rule slots allocate these on first reference.
+    pub tokens: IndexMap<String, Tin>,
     /// Enable serialized/custom regexp token matching (`options.match.lex`).
     pub match_lex: bool,
     pub match_check: Option<LexCheck>,
@@ -785,6 +804,7 @@ impl Default for Options {
             result: ResultOptions::default(),
             parse: ParseOptions::default(),
             token_set,
+            tokens: IndexMap::new(),
             match_lex: true,
             match_check: None,
             match_tokens: IndexMap::new(),
@@ -812,11 +832,27 @@ impl Options {
             } else {
                 format!("#{name}")
             };
-            self.match_tokens
+            self.tokens
                 .get(&name)
-                .map(|matcher| matcher.tin)
+                .copied()
+                .or_else(|| self.match_tokens.get(&name).map(|matcher| matcher.tin))
                 .or_else(|| self.fixed.tokens.get(&name).map(|token| token.tin))
         })
+    }
+
+    pub fn register_token(&mut self, name: impl Into<String>) -> Tin {
+        let name = name.into();
+        let name = if name.starts_with('#') {
+            name
+        } else {
+            format!("#{name}")
+        };
+        if let Some(tin) = self.token(&name) {
+            return tin;
+        }
+        let tin = self.next_tin();
+        self.tokens.insert(name, tin);
+        tin
     }
 
     pub fn next_tin(&self) -> Tin {
@@ -824,6 +860,7 @@ impl Options {
             .values()
             .map(|matcher| matcher.tin)
             .chain(self.fixed.tokens.values().map(|token| token.tin))
+            .chain(self.tokens.values().copied())
             .max()
             .unwrap_or(TIN_MAX - 1)
             + 1
@@ -840,6 +877,12 @@ impl Options {
                     .values()
                     .find(|token| token.tin == tin)
                     .map(|token| token.name.clone())
+            })
+            .or_else(|| {
+                self.tokens
+                    .iter()
+                    .find(|(_, token_tin)| **token_tin == tin)
+                    .map(|(name, _)| name.clone())
             })
             .unwrap_or_else(|| crate::token::tin_name(tin).to_string())
     }
