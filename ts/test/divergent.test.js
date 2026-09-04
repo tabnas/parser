@@ -4,8 +4,8 @@
 // The executable cross-port divergence register — TypeScript side.
 //
 // test/spec/divergent.tsv records each KNOWN split as the value each port
-// actually produces. This runner asserts the `ts` column; the Go runner
-// (go/divergent_test.go) asserts the `go` column, from the same file, and
+// actually produces. This runner asserts the `ts` column; the Go and Rust
+// runners assert their columns from the same file, and the Go runner
 // carries the coverage gate that ties the register to DIVERGENCE.md.
 //
 // The property that matters: a divergence which gets FIXED fails here as
@@ -24,7 +24,7 @@ const assert = require('node:assert')
 const { Tabnas, makeLex } = require('..')
 const { loadTSV } = require('./utility')
 
-const COLS = 7
+const COLS = 8
 const MAX_TOKENS = 64
 
 // ---------------------------------------------------------------------
@@ -287,9 +287,9 @@ describe('divergent', () => {
         cols.length,
         COLS,
         `line ${row}: want ${COLS} columns ` +
-          `(name probe arg input go ts justification), got ${cols.length}`,
+          `(name probe arg input go ts rust justification), got ${cols.length}`,
       )
-      const [name, probe, argRaw, input, , wantTs, why] = cols
+      const [name, probe, argRaw, input, , wantTs, , why] = cols
 
       assert.ok(!seen.has(name), `${name}: duplicate row name`)
       seen.add(name)

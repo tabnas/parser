@@ -1,6 +1,8 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
-use crate::token::{Tin, TIN_NR, TIN_ST, TIN_TX, TIN_VL};
+use crate::token::{Tin, TIN_MAX, TIN_NR, TIN_ST, TIN_TX, TIN_VL};
+use indexmap::IndexMap;
+use regex::Regex;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -109,6 +111,14 @@ pub struct RuleOptions {
     pub start: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct MatchToken {
+    pub name: String,
+    pub tin: Tin,
+    pub regex: Regex,
+    pub eager: bool,
+}
+
 impl Default for RuleOptions {
     fn default() -> Self {
         RuleOptions {
@@ -130,6 +140,7 @@ pub struct Options {
     pub lex: LexOptions,
     pub rule: RuleOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
+    pub match_tokens: IndexMap<String, MatchToken>,
     pub tag: String,
 }
 
@@ -149,7 +160,41 @@ impl Default for Options {
             lex: LexOptions::default(),
             rule: RuleOptions::default(),
             token_set,
+            match_tokens: IndexMap::new(),
             tag: "-".to_string(),
         }
+    }
+}
+
+impl Options {
+    pub fn token(&self, name: &str) -> Option<Tin> {
+        crate::token::name_to_tin(name).or_else(|| {
+            if name.starts_with('#') {
+                self.match_tokens.get(name).map(|matcher| matcher.tin)
+            } else {
+                self.match_tokens
+                    .get(&format!("#{name}"))
+                    .map(|matcher| matcher.tin)
+            }
+        })
+    }
+
+    pub fn next_tin(&self) -> Tin {
+        self.match_tokens
+            .values()
+            .map(|matcher| matcher.tin)
+            .max()
+            .unwrap_or(TIN_MAX - 1)
+            + 1
+    }
+
+    pub fn token_name(&self, tin: Tin) -> String {
+        self.match_tokens
+            .values()
+            .find(|matcher| matcher.tin == tin)
+            .map_or_else(
+                || crate::token::tin_name(tin).to_string(),
+                |matcher| matcher.name.clone(),
+            )
     }
 }

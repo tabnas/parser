@@ -23,6 +23,13 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule) -> bool {
                 }
             }
         }
+        "@value$" => {
+            if let Some(token) = rule.o0() {
+                rule.node = Rc::new(RefCell::new(token.val.clone()));
+            } else if !rule.child_node.is_undefined() {
+                rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
+            }
+        }
         "@map-bo" => {
             rule.node = Rc::new(RefCell::new(Value::Object(IndexMap::new())));
         }

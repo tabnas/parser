@@ -93,10 +93,10 @@ impl Value {
             (Value::Null, Value::Null) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Number(a), Value::Number(b)) => {
-                if (a.is_nan() && b.is_nan()) || (*a == 0.0 && *b == 0.0) {
+                if a.is_nan() && b.is_nan() {
                     true
                 } else {
-                    (a - b).abs() < 1e-12
+                    a.to_bits() == b.to_bits()
                 }
             }
             (Value::String(a), Value::String(b)) => a == b,

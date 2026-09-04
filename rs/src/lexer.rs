@@ -57,7 +57,8 @@ impl<'a> Lexer<'a> {
     fn current_point(&self) -> Point {
         Point {
             len: self.char_len,
-            si: self.idx,
+            si: self.byte_position(),
+            pos: self.idx,
             ri: self.ri,
             ci: self.ci,
         }
@@ -149,6 +150,32 @@ impl<'a> Lexer<'a> {
         let pnt = self.current_point();
         let c = self.peek().unwrap();
 
+        // User-declared match tokens have the highest matcher priority.
+        let remaining = &self.src[self.byte_position()..];
+        let custom = self.options.match_tokens.values().find_map(|matcher| {
+            matcher.regex.find(remaining).and_then(|found| {
+                (found.start() == 0).then(|| {
+                    (
+                        matcher.name.clone(),
+                        matcher.tin,
+                        found.as_str().to_string(),
+                    )
+                })
+            })
+        });
+        if let Some((name, tin, matched)) = custom {
+            for _ in matched.chars() {
+                self.advance();
+            }
+            return Ok(Token::new(
+                name,
+                tin,
+                Value::String(matched.clone()),
+                matched,
+                pnt,
+            ));
+        }
+
         // 1. Whitespace
         if c == ' ' || c == '\t' {
             let mut src = String::new();
@@ -207,7 +234,7 @@ impl<'a> Lexer<'a> {
                 "unexpected",
                 bad_char.to_string(),
                 self.src,
-                pnt.si,
+                pnt.pos,
                 pnt.ri,
                 pnt.ci,
             );
@@ -319,7 +346,7 @@ impl<'a> Lexer<'a> {
                         "unterminated_comment",
                         src,
                         self.src,
-                        pnt.si,
+                        pnt.pos,
                         pnt.ri,
                         pnt.ci,
                     );
@@ -356,7 +383,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 8. Text (unquoted) if enabled
-        if self.options.text.lex && (c.is_alphabetic() || c == '_' || c == '$') {
+        if self.options.text.lex && !is_text_delimiter(c, &self.options) {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if is_text_delimiter(ch, &self.options) {
@@ -380,7 +407,7 @@ impl<'a> Lexer<'a> {
             "unexpected",
             bad_char.to_string(),
             self.src,
-            pnt.si,
+            pnt.pos,
             pnt.ri,
             pnt.ci,
         );
@@ -646,7 +673,7 @@ impl<'a> Lexer<'a> {
                     "unprintable",
                     c.to_string(),
                     self.src,
-                    pnt.si,
+                    pnt.pos,
                     pnt.ri,
                     pnt.ci,
                 );
@@ -660,7 +687,7 @@ impl<'a> Lexer<'a> {
                     "unprintable",
                     c.to_string(),
                     self.src,
-                    self.current_point().si,
+                    self.current_point().pos,
                     self.current_point().ri,
                     self.current_point().ci,
                 );
@@ -731,7 +758,7 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{{{}}}", hex),
                                         self.src,
-                                        esc_point.si - 1,
+                                        esc_point.pos - 1,
                                         esc_point.ri,
                                         esc_point.ci - 1,
                                     );
@@ -746,7 +773,7 @@ impl<'a> Lexer<'a> {
                                             "invalid_unicode",
                                             format!("\\u{{{}}}", hex),
                                             self.src,
-                                            esc_point.si - 1,
+                                            esc_point.pos - 1,
                                             esc_point.ri,
                                             esc_point.ci - 1,
                                         );
@@ -768,7 +795,7 @@ impl<'a> Lexer<'a> {
                                             "invalid_unicode",
                                             format!("\\u{{{}}}", hex),
                                             self.src,
-                                            esc_point.si - 1,
+                                            esc_point.pos - 1,
                                             esc_point.ri,
                                             esc_point.ci - 1,
                                         );
@@ -797,7 +824,7 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{}", hex),
                                         self.src,
-                                        esc_point.si - 1,
+                                        esc_point.pos - 1,
                                         esc_point.ri,
                                         esc_point.ci - 1,
                                     );
@@ -810,7 +837,7 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{}", hex),
                                         self.src,
-                                        esc_point.si - 1,
+                                        esc_point.pos - 1,
                                         esc_point.ri,
                                         esc_point.ci - 1,
                                     );
@@ -851,7 +878,7 @@ impl<'a> Lexer<'a> {
                                             "invalid_unicode",
                                             format!("\\u{}", hex),
                                             self.src,
-                                            esc_point.si - 1,
+                                            esc_point.pos - 1,
                                             esc_point.ri,
                                             esc_point.ci - 1,
                                         );
@@ -878,7 +905,7 @@ impl<'a> Lexer<'a> {
                                     "invalid_ascii",
                                     format!("\\x{hex}"),
                                     self.src,
-                                    esc_point.si - 1,
+                                    esc_point.pos - 1,
                                     esc_point.ri,
                                     esc_point.ci - 1,
                                 );
@@ -895,7 +922,7 @@ impl<'a> Lexer<'a> {
                                     "invalid_ascii",
                                     format!("\\{}", other),
                                     self.src,
-                                    esc_point.si - 1,
+                                    esc_point.pos - 1,
                                     esc_point.ri,
                                     esc_point.ci - 1,
                                 );
@@ -911,7 +938,7 @@ impl<'a> Lexer<'a> {
                         "unterminated_string",
                         raw_src,
                         self.src,
-                        pnt.si,
+                        pnt.pos,
                         pnt.ri,
                         pnt.ci,
                     );
@@ -929,7 +956,7 @@ impl<'a> Lexer<'a> {
             "unterminated_string",
             raw_src,
             self.src,
-            pnt.si,
+            pnt.pos,
             pnt.ri,
             pnt.ci,
         );

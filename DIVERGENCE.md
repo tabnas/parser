@@ -1,7 +1,7 @@
 # Divergences
 
-TypeScript is the canonical implementation; the Go port tracks it. This
-file is the single record of where the two ports produce a **different
+TypeScript is the canonical implementation; the Go and Rust ports track it. This
+file is the single record of where the runtimes produce a **different
 result for the same input** — and, for each, whether that is deliberate.
 
 It is deliberately short. Most of what differs between the ports is not a
@@ -26,7 +26,7 @@ belongs here, whatever else is true about it.
 **This file is prose, and prose rots.** Every entry below that carries
 its own `###` heading is therefore also REGISTERED, per ADR-14, in
 [`test/spec/divergent.tsv`](test/spec/divergent.tsv): a row per case, a
-column per runtime, asserted by BOTH suites. A divergence that gets
+column per runtime, asserted by every runtime suite. A divergence that gets
 repaired fails that register as loudly as one that regresses, so the row
 — and the entry here — must then be deleted. Where an entry cannot be
 registered yet it is declared, with a reason, in the `notRegistered` map
@@ -57,12 +57,12 @@ to fix the engine.
 
 A UTF-16 surrogate that does not form a high+low pair with its neighbour:
 
-| input | TypeScript | Go |
-|---|---|---|
-| `"\ud800"` | preserved, code unit `d800`, `isWellFormed()` false | `U+FFFD` |
+| input | TypeScript | Go | Rust |
+|---|---|---|---|
+| `"\ud800"` | preserved, code unit `d800`, `isWellFormed()` false | `U+FFFD` | `U+FFFD` |
 
-TypeScript preserves it because JS strings are UTF-16 and permit it. Go
-folds it to `U+FFFD`, matching `encoding/json`. Each port does the correct
+TypeScript preserves it because JS strings are UTF-16 and permit it. Go and
+Rust fold it to `U+FFFD`, matching their Unicode-scalar string models. Each port does the correct
 thing for its own string model, and neither can adopt the other's without
 either lying about what it stores (Go) or losing a capability (TS).
 
@@ -88,8 +88,8 @@ forms. Three of those were broken in Go until 0.8.4 and are now pinned.
 ### Column positions for astral characters
 
 Error columns count UTF-16 units in TypeScript (an astral character is 2)
-and runes in Go (any character is 1). Forced by the scan unit — TS scans
-UTF-16 code units, Go scans UTF-8 bytes. The `pos` field of the structured
+and scalar values in Go and Rust (any character is 1). Forced by the scan unit — TS scans
+UTF-16 code units, while Go and Rust scan UTF-8. The `pos` field of the structured
 diagnostic (`schema/diagnostic.schema.json`) carries the same divergence —
 a 0-based offset in UTF-16 units (TS) versus runes (Go).
 
@@ -121,15 +121,15 @@ unit directly in its output.
 Measured through `@tabnas/c`, whose CST carries a `span` built from
 `tkn.SI`, on the input `["\u{1F600}" 1]`:
 
-| token | TypeScript | Go |
-| --- | --- | --- |
-| `PUNC_LBRACKET` | 0→1 | 0→1 |
-| `LIT_STRING` | 1→**5** | 1→**7** |
-| `LIT_INT` | **6**→7 | **8**→9 |
-| `PUNC_RBRACKET` | 7→8 | 9→10 |
+| token | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `PUNC_LBRACKET` | 0→1 | 0→1 | 0→1 |
+| `LIT_STRING` | 1→**5** | 1→**7** | 1→**7** |
+| `LIT_INT` | **6**→7 | **8**→9 | **8**→9 |
+| `PUNC_RBRACKET` | 7→8 | 9→10 | 9→10 |
 
-TypeScript counts the astral character as 2 UTF-16 units; Go counts its 4
-UTF-8 bytes. **Go's `Token.SI` is a byte offset — not a rune offset**,
+TypeScript counts the astral character as 2 UTF-16 units; Go and Rust count its 4
+UTF-8 bytes. **`Token.SI` is a byte offset in Go and Rust — not a scalar offset**,
 which is what the column entry above describes for error positions after
 conversion. Every token after a non-ASCII one is displaced.
 
@@ -279,28 +279,30 @@ are read together.
 
 A grammar spec can carry a match token as a serialized regex
 (`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
-`RegExp` in TypeScript, RE2 in Go — and the two dialects disagree on two
+`RegExp` in TypeScript, RE2 in Go, and `regex` in Rust — and the dialects disagree on two
 constructs. **It diverges in both directions.**
 
-| pattern | input | TypeScript | Go |
-|---|---|---|---|
-| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** |
-| `@/^\s+/` | U+2028, U+2000, U+3000, U+FEFF | accepted | **rejected** |
-| `@/^\s+/` | U+0020, U+0009 | accepted | accepted |
-| `@/^k/i` | `k`, `K` | accepted | accepted |
-| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted |
+| pattern | input | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** | accepted |
+| `@/^\s+/` | U+2028, U+2000, U+3000 | accepted | **rejected** | accepted |
+| `@/^\s+/` | U+FEFF | accepted | **rejected** | **rejected** |
+| `@/^\s+/` | U+0020, U+0009 | accepted | accepted | accepted |
+| `@/^k/i` | `k`, `K` | accepted | accepted | accepted |
+| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted | accepted |
 
-JS `\s` is Unicode-aware; RE2's is the Perl class `[\t\n\f\r ]`. JS `/i`
-without `u` does not fold U+212A to `k`; RE2 case-folds by Unicode rules
-and does.
+JS `\s` uses its own Unicode-derived set; RE2's is the Perl class
+`[\t\n\f\r ]`; Rust uses Unicode `White_Space`, which excludes U+FEFF. JS
+`/i` without `u` does not fold U+212A to `k`; RE2 and Rust case-fold by
+Unicode rules and do.
 
 **And two constructs that do not diverge in the result but in whether the
 grammar loads at all**, which for a grammar author is worse:
 
-| pattern | TypeScript | Go |
-|---|---|---|
-| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** |
-| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** |
+| pattern | TypeScript | Go | Rust |
+|---|---|---|---|
+| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** | **install error** |
+| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** | **install error** |
 
 RE2 implements neither, by design — both need backtracking. `go/utility.go`
 refuses them at compile time and `Grammar()` reports it, which is the right
@@ -344,8 +346,9 @@ U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
 `\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
 compile.
 
-Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect` and the
-matching case in `ts/test/divergence.test.js`, which assert **opposite**
+Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect`, the
+matching case in `ts/test/divergence.test.js`, and the Rust divergence
+register runner, which assert the recorded
 results on purpose. Both drive a real `GrammarSpec` through
 `grammar()` / `Grammar()` and parse: the gap was previously known only at
 the regex-engine layer, so "a shared grammar that depends on either will

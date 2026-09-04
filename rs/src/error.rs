@@ -82,7 +82,7 @@ impl TabnasError {
         expected.dedup();
         self.expected = expected;
         if let Some(token) = token {
-            self.pos = token.si;
+            self.pos = token.pos;
             self.row = token.ri;
             self.col = token.ci;
             self.len = token.src.chars().count();

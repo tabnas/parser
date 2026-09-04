@@ -1,7 +1,7 @@
 # Agents Guide — shared spec fixtures
 
 `spec/*.tsv` holds this repo's cross-runtime conformance fixtures: the
-strict-JSON surface and the utility-function cases, run by **both**
+strict-JSON surface and the utility-function cases, run by **all three**
 runtimes. Every file here is executed by a runner in this repo — if you
 add one, wire it up, or it will pin nothing.
 
@@ -28,7 +28,7 @@ Those fixtures now live in `tabnas/jsonic` only.
 
 `divergent.tsv` is the exception to everything in this section: it is the
 ADR-14 divergence register, not a conformance fixture, and it has its own
-seven-column shape with a `probe` column. Its own header documents it.
+eight-column shape with a `probe` column. Its own header documents it.
 See "The divergence register" below.
 
 Every other file here is tab-separated, one case per line, with a header
@@ -58,13 +58,14 @@ column of any fixture that also lives in jsonic.
 
 Every fixture here, and the runner that executes it:
 
-| Fixture | TypeScript runner | Go runner |
-|---|---|---|
-| `include-json.tsv`, `include-json-errors.tsv`, `include-json-utf8.tsv`, `include-json-utf8-errors.tsv` | `ts/test/json-spec.test.js` | `go/spec_test.go` |
-| `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` |
-| `lex-string-control.tsv` | `ts/test/lex.test.js` | `go/lexer_optionplumbing_test.go` |
-| `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — |
-| `divergent.tsv` | `ts/test/divergent.test.js` (the `ts` column) | `go/divergent_test.go` (the `go` column) |
+| Fixture | TypeScript runner | Go runner | Rust runner |
+|---|---|---|---|
+| `include-json.tsv`, `include-json-errors.tsv`, `include-json-utf8.tsv`, `include-json-utf8-errors.tsv` | `ts/test/json-spec.test.js` | `go/spec_test.go` | `rs/tests/json_spec_test.rs` |
+| `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` | `rs/tests/utility_spec_test.rs` |
+| `lex-string-control.tsv`, `lex-text-line-terminator.tsv`, `lex-text-quote.tsv` | `ts/test/lex.test.js` | Go lexer tests | `rs/tests/lexer_spec_test.rs` |
+| `diagnostic.tsv` | `ts/test/diagnostic.test.js` | `go/diagnostic_spec_test.go` | `rs/tests/diagnostic_spec_test.rs` |
+| `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — | — |
+| `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |
 
 Both strict-JSON runners go through the strict-JSON grammar that lives as
 a test fixture in each runtime (`ts/test/json-plugin.ts`,
@@ -92,15 +93,16 @@ sharing it at all.
 - Prefer adding a fixture here over a one-off in-language assertion when
   a case is expressible as input → output **and** the engine alone can
   check it. If it needs a grammar, it belongs in that grammar's repo.
-- A new case must pass in BOTH runtimes: run `go test ./...` (from `go/`)
-  and `npm test` (from `ts/`) before considering it done.
+- A new case must pass in all runtime suites: run `go test ./...` (from
+  `go/`), `npm test` (from `ts/`), and `cargo test --all-targets` (from
+  `rs/`) before considering it done.
 - Keep `expected` JSON canonical (sorted-key-independent comparison is
   the loaders' job, but write it readably).
 
 ## The divergence register
 
-`divergent.tsv` is not a conformance fixture. It records where the two
-ports **disagree**, one column per runtime, and both suites assert their
+`divergent.tsv` is not a conformance fixture. It records where the
+runtimes **disagree**, one column per runtime, and every suite asserts its
 own column — so a divergence that gets REPAIRED fails it as loudly as one
 that regresses, and the row must then be deleted. That is the property
 prose cannot have: `go/doc/differences.md` claimed things about `2.e3`
@@ -114,7 +116,7 @@ Three things about it differ from every other file here:
   up at several layers — token columns, token spans, decoded values,
   whether a grammar loads at all. The probe names which observation the
   row makes. The set is closed and shared: adding a probe means adding it
-  to both runners, or the row cannot be asserted on both sides.
+  to every runner, or the row cannot be asserted across all runtimes.
 - **Rows render through a shared canonical form, never a runtime's own.**
   Go's `%q` and JavaScript's `JSON.stringify` escape different
   characters; the two runtimes sort strings by different units; and Go's

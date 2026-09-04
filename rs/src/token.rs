@@ -75,9 +75,10 @@ pub fn name_to_tin(name: &str) -> Option<Tin> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Point {
     pub len: usize,
-    pub si: usize, // 0-based character/byte position
-    pub ri: usize, // 1-based row
-    pub ci: usize, // 1-based column
+    pub si: usize,  // 0-based UTF-8 byte position used for source slicing
+    pub pos: usize, // 0-based Unicode-scalar position used by diagnostics
+    pub ri: usize,  // 1-based row
+    pub ci: usize,  // 1-based column
 }
 
 impl Default for Point {
@@ -85,6 +86,7 @@ impl Default for Point {
         Point {
             len: 0,
             si: 0,
+            pos: 0,
             ri: 1,
             ci: 1,
         }
@@ -99,6 +101,7 @@ pub struct Token {
     pub val: Value,
     pub src: String,
     pub si: usize,
+    pub pos: usize,
     pub ri: usize,
     pub ci: usize,
     pub err: String,
@@ -114,6 +117,7 @@ impl Default for Token {
             val: Value::Undefined,
             src: String::new(),
             si: 0,
+            pos: 0,
             ri: 1,
             ci: 1,
             err: String::new(),
@@ -137,6 +141,7 @@ impl Token {
             val,
             src: src.into(),
             si: pnt.si,
+            pos: pnt.pos,
             ri: pnt.ri,
             ci: pnt.ci,
             err: String::new(),
@@ -152,6 +157,7 @@ impl Token {
             val: Value::Undefined,
             src: String::new(),
             si: 0,
+            pos: 0,
             ri: 1,
             ci: 1,
             err: String::new(),

@@ -3,10 +3,10 @@
 //! Loading and installing the JSON-serializable grammar interchange format.
 
 use crate::rule::{AltSpec, RuleSpec};
-use crate::token::name_to_tin;
 use crate::utility::{modlist, ListMods};
 use crate::{Tabnas, Value};
 use indexmap::IndexMap;
+use regex::RegexBuilder;
 use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::fmt;
@@ -103,19 +103,14 @@ impl Tabnas {
                     .cloned()
                     .unwrap_or_else(|| RuleSpec::new(name));
                 if let Some(open) = value.get("open") {
-                    apply_alt_list(
-                        &mut spec.open,
-                        open,
-                        &format!("{name}.open"),
-                        &self.options.token_set,
-                    )?;
+                    apply_alt_list(&mut spec.open, open, &format!("{name}.open"), &self.options)?;
                 }
                 if let Some(close) = value.get("close") {
                     apply_alt_list(
                         &mut spec.close,
                         close,
                         &format!("{name}.close"),
-                        &self.options.token_set,
+                        &self.options,
                     )?;
                 }
                 self.rules.insert(name.clone(), spec);
@@ -143,7 +138,7 @@ fn apply_alt_list(
     target: &mut Vec<AltSpec>,
     value: &JsonValue,
     label: &str,
-    token_sets: &HashMap<String, Vec<i32>>,
+    options: &crate::Options,
 ) -> Result<(), GrammarError> {
     let (alts, inject) = if let Some(array) = value.as_array() {
         (array, None)
@@ -170,7 +165,7 @@ fn apply_alt_list(
     let parsed: Result<Vec<_>, _> = alts
         .iter()
         .enumerate()
-        .map(|(index, alt)| parse_alt(alt, &format!("{label} alt[{index}]"), token_sets))
+        .map(|(index, alt)| parse_alt(alt, &format!("{label} alt[{index}]"), options))
         .collect();
     let mut parsed = parsed?;
     if inject
@@ -199,7 +194,7 @@ fn integer_list(value: Option<&JsonValue>) -> Vec<isize> {
 fn parse_alt(
     value: &JsonValue,
     label: &str,
-    token_sets: &HashMap<String, Vec<i32>>,
+    options: &crate::Options,
 ) -> Result<AltSpec, GrammarError> {
     let map = object(value, label)?;
     for unsupported in ["e", "h", "c"] {
@@ -230,9 +225,9 @@ fn parse_alt(
         for slot in slots {
             let mut tins = Vec::new();
             for name in slot.split_whitespace() {
-                if let Some(set) = token_sets.get(name.trim_start_matches('#')) {
+                if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
                     tins.extend(set.iter().copied());
-                } else if let Some(tin) = name_to_tin(name) {
+                } else if let Some(tin) = options.token(name) {
                     tins.push(tin);
                 } else {
                     return Err(GrammarError(format!(
@@ -348,6 +343,73 @@ fn apply_options(
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
     }
+    if let Some(text) = map.get("text") {
+        let text = object(text, "options.text")?;
+        set_bool(text, "lex", &mut options.text.lex);
+    }
+    if let Some(number) = map.get("number") {
+        let number = object(number, "options.number")?;
+        set_bool(number, "hex", &mut options.number.hex);
+        set_bool(number, "oct", &mut options.number.oct);
+        set_bool(number, "bin", &mut options.number.bin);
+        if let Some(separator) = number.get("sep") {
+            options.number.sep = separator.as_str().map(str::to_owned);
+        }
+        if let Some(exclude) = number.get("exclude") {
+            options.number.exclude = exclude.as_str().map(str::to_owned);
+        }
+    }
+    if let Some(string) = map.get("string") {
+        let string = object(string, "options.string")?;
+        if let Some(chars) = string.get("chars").and_then(JsonValue::as_str) {
+            options.string.chars = chars.into();
+        }
+        if let Some(chars) = string
+            .get("multiChars")
+            .or_else(|| string.get("multi_chars"))
+            .and_then(JsonValue::as_str)
+        {
+            options.string.multi_chars = chars.into();
+        }
+        if let Some(value) = string
+            .get("allowUnknown")
+            .or_else(|| string.get("allow_unknown"))
+            .and_then(JsonValue::as_bool)
+        {
+            options.string.allow_unknown = value;
+        }
+        if let Some(value) = string
+            .get("allowControl")
+            .or_else(|| string.get("allow_control"))
+            .and_then(JsonValue::as_bool)
+        {
+            options.string.allow_control = value;
+        }
+    }
+    if let Some(line) = map.get("line") {
+        let line = object(line, "options.line")?;
+        set_bool(line, "lex", &mut options.line.lex);
+        if let Some(chars) = line.get("fixed").and_then(JsonValue::as_str) {
+            options.line.fixed = chars.chars().collect();
+        }
+    }
+    if let Some(comment) = map.get("comment") {
+        set_bool(
+            object(comment, "options.comment")?,
+            "lex",
+            &mut options.comment.lex,
+        );
+    }
+    if let Some(map_options) = map.get("map") {
+        set_bool(
+            object(map_options, "options.map")?,
+            "extend",
+            &mut options.map.extend,
+        );
+    }
+    if let Some(lex) = map.get("lex") {
+        set_bool(object(lex, "options.lex")?, "empty", &mut options.lex.empty);
+    }
     if let Some(rule) = map.get("rule") {
         let rule = object(rule, "options.rule")?;
         if let Some(start) = rule.get("start").and_then(JsonValue::as_str) {
@@ -360,7 +422,83 @@ fn apply_options(
             options.rule.include = include.into();
         }
     }
+    if let Some(match_options) = map.get("match") {
+        let match_options = object(match_options, "options.match")?;
+        if let Some(tokens) = match_options.get("token") {
+            for (name, source) in object(tokens, "options.match.token")? {
+                let name = if name.starts_with('#') {
+                    name.clone()
+                } else {
+                    format!("#{name}")
+                };
+                if source.is_null() {
+                    options.match_tokens.shift_remove(&name);
+                    continue;
+                }
+                let source = source.as_str().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.match.token.{name} must be a serialized regex"
+                    ))
+                })?;
+                let (pattern, flags, eager) = serialized_regex(source).ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.match.token.{name} must use @/pattern/flags"
+                    ))
+                })?;
+                if flags.contains('v')
+                    || flags
+                        .chars()
+                        .any(|flag| !matches!(flag, 'i' | 'm' | 's' | 'u' | 'g' | 'y' | 'd'))
+                {
+                    return Err(GrammarError(format!(
+                        "Grammar: unsupported regex flags: {flags}"
+                    )));
+                }
+                let mut builder = RegexBuilder::new(pattern);
+                builder
+                    .case_insensitive(flags.contains('i'))
+                    .multi_line(flags.contains('m'))
+                    .dot_matches_new_line(flags.contains('s'));
+                let regex = builder.build().map_err(|error| {
+                    GrammarError(format!("Grammar: invalid regex for {name}: {error}"))
+                })?;
+                if regex.is_match("") {
+                    return Err(GrammarError(format!(
+                        "Grammar: regex for {name} must not match empty input"
+                    )));
+                }
+                let tin = options
+                    .match_tokens
+                    .get(&name)
+                    .map_or_else(|| options.next_tin(), |matcher| matcher.tin);
+                options.match_tokens.insert(
+                    name.clone(),
+                    crate::options::MatchToken {
+                        name,
+                        tin,
+                        regex,
+                        eager,
+                    },
+                );
+            }
+        }
+    }
     Ok(())
+}
+
+fn set_bool(map: &Map<String, JsonValue>, key: &str, target: &mut bool) {
+    if let Some(value) = map.get(key).and_then(JsonValue::as_bool) {
+        *target = value;
+    }
+}
+
+fn serialized_regex(source: &str) -> Option<(&str, &str, bool)> {
+    let (body, eager) = source
+        .strip_prefix("@~/")
+        .map(|body| (body, true))
+        .or_else(|| source.strip_prefix("@/").map(|body| (body, false)))?;
+    let slash = body.rfind('/')?;
+    Some((&body[..slash], &body[slash + 1..], eager))
 }
 
 pub fn validate_grammar(rules: &IndexMap<String, RuleSpec>) -> Vec<String> {

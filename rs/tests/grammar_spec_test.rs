@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use tabnas::grammar::{validate_grammar, BUILTIN_SCHEMA_VERSION};
-use tabnas::{GrammarSpec, Tabnas};
+use tabnas::{GrammarSpec, Tabnas, Value};
 
 #[test]
 fn loads_ordered_serialized_grammar_and_start_rule() {
@@ -127,4 +127,54 @@ fn injection_delete_and_move_match_cross_runtime_indexing() {
     assert_eq!(alts.len(), 2);
     assert_eq!(alts[0].s[0][0], tabnas::TIN_ST);
     assert_eq!(alts[1].s[0][0], tabnas::TIN_NR);
+}
+
+#[test]
+fn serialized_regex_tokens_lex_and_parse() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{
+              "rule":{"start":"top"},
+              "match":{"token":{"#WS":"@/^\\s+/"}}
+            },"rule":{"top":{
+              "open":[{"s":["#WS"],"a":"@value$"}],"close":[{}]
+            }}}"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse(" ").unwrap(), Value::String(" ".into()));
+    assert_eq!(
+        parser.parse("\u{00a0}").unwrap(),
+        Value::String("\u{00a0}".into())
+    );
+    assert_eq!(
+        parser.parse("\u{3000}").unwrap(),
+        Value::String("\u{3000}".into())
+    );
+    assert_eq!(parser.rules["top"].open[0].s[0].len(), 1);
+}
+
+#[test]
+fn unsupported_javascript_regex_constructs_fail_at_installation() {
+    for expression in ["@/^(?=x)x/", "@/^(a)\\1/"] {
+        let mut parser = Tabnas::new();
+        let source = format!(r##"{{"options":{{"match":{{"token":{{"#X":"{expression}"}}}}}}}}"##);
+        assert!(
+            parser.grammar_json(&source).is_err(),
+            "accepted {expression}"
+        );
+    }
+}
+
+#[test]
+fn explicitly_empty_string_chars_are_not_treated_as_unset() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(r#"{"options":{"string":{"chars":""}}}"#)
+        .unwrap();
+    let mut lexer = tabnas::lexer::Lexer::new(r#""ab""#, parser.options);
+    let token = lexer.next_raw_token().unwrap();
+    assert_eq!(token.name, "#TX");
+    assert_eq!(token.src, r#""ab""#);
 }

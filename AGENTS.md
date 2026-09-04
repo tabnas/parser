@@ -174,24 +174,24 @@ that does.
 
 What "correct" means here, in order of authority:
 
-1. **The shared fixtures pass in BOTH runtimes.** `test/spec/*.tsv` is the
+1. **The shared fixtures pass in all runtimes.** `test/spec/*.tsv` is the
    parity contract. A row green in one runtime and red in the other is a
    failure, not a discrepancy.
    The one exception is declared in code, not folklore: `nonParity` in
    `go/spec_registration_test.go` exempts `happy.tsv` (a TypeScript loader
    smoke-test whose relaxed inputs the grammar-free Go engine cannot parse at
    all). That list is itself asserted to stay honest — an entry that *is* run
-   by both runners fails the test — so do not try to wire an exempt fixture
+   by all runners fails the test — so do not try to wire an exempt fixture
    into Go, and do not add an exemption without the reason.
 2. **Any genuine difference is recorded — in the right one of two files.**
    They are not interchangeable, and the authority rules above point at the
    other one:
-   - [`DIVERGENCE.md`](DIVERGENCE.md) is the **parity record**: the two ports
+   - [`DIVERGENCE.md`](DIVERGENCE.md) is the **parity record**: the runtimes
      produce a *different result for the same input*. The bar is high — a
      divergence is a bug until someone argues otherwise and is agreed with,
      and the default response is to fix the engine. Its entries are also
      REGISTERED, per ADR-14, in `test/spec/divergent.tsv` — a column per
-     runtime, asserted by both suites, so a divergence that gets repaired
+     runtime, asserted by every suite, so a divergence that gets repaired
      fails as loudly as one that regresses and the row must then be
      deleted. Prose alone rots silently, and has here. A gate in
      `go/divergent_test.go` requires every `### ` heading in

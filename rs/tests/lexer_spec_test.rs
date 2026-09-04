@@ -95,14 +95,14 @@ fn text_quote_fixture() {
 }
 
 #[test]
-fn token_positions_count_unicode_scalars() {
+fn token_offsets_are_bytes_and_diagnostic_positions_are_scalars() {
     let mut lexer = Lexer::new("é a true", Options::default());
     let first = lexer.next_token().expect("first text token");
     let second = lexer.next_token().expect("second text token");
     let third = lexer.next_token().expect("value token");
-    assert_eq!((first.si, first.ci), (0, 1));
-    assert_eq!((second.si, second.ci), (2, 3));
-    assert_eq!((third.si, third.ci), (4, 5));
+    assert_eq!((first.si, first.pos, first.ci), (0, 0, 1));
+    assert_eq!((second.si, second.pos, second.ci), (3, 2, 3));
+    assert_eq!((third.si, third.pos, third.ci), (5, 4, 5));
 }
 
 #[test]
@@ -118,4 +118,22 @@ fn configured_number_forms_are_honored() {
         let token = lexer.next_token().expect("number token");
         assert_eq!(token.val, Value::Number(expected), "source {source}");
     }
+}
+
+#[test]
+fn negative_number_boundaries_do_not_panic_and_keep_the_sign() {
+    let mut lexer = Lexer::new("-", Options::default());
+    let token = lexer.next_raw_token().expect("bare minus falls through");
+    assert_eq!(token.name, "#TX");
+
+    let mut lexer = Lexer::new("-0x10", Options::default());
+    let token = lexer.next_raw_token().unwrap();
+    assert_eq!(token.val, Value::Number(-16.0));
+
+    let mut lexer = Lexer::new("-0", Options::default());
+    let token = lexer.next_raw_token().unwrap();
+    let Value::Number(number) = token.val else {
+        panic!("expected number")
+    };
+    assert!(number.is_sign_negative());
 }

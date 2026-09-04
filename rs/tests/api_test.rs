@@ -96,3 +96,8 @@ fn unknown_actions_fail_loudly() {
     assert_eq!(error.code, "unknown");
     assert!(error.detail.contains("missing-action"));
 }
+
+#[test]
+fn value_equality_preserves_signed_zero() {
+    assert!(!Value::Number(-0.0).deep_equal(&Value::Number(0.0)));
+}

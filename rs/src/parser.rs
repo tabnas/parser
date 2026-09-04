@@ -5,7 +5,7 @@ use crate::error::TabnasError;
 use crate::lexer::Lexer;
 use crate::options::Options;
 use crate::rule::{AltSpec, Rule, RuleSpec, RuleState};
-use crate::token::{tin_name, Token, TIN_BD, TIN_ZZ};
+use crate::token::{Token, TIN_BD, TIN_ZZ};
 use crate::value::Value;
 use crate::Action;
 use indexmap::IndexMap;
@@ -47,7 +47,7 @@ impl Parser {
             "unknown",
             name,
             "",
-            token.map_or(0, |value| value.si),
+            token.map_or(0, |value| value.pos),
             token.map_or(1, |value| value.ri),
             token.map_or(1, |value| value.ci),
         );
@@ -69,7 +69,7 @@ impl Parser {
             .iter()
             .filter_map(|alt| alt.s.first())
             .flat_map(|tins| tins.iter().copied())
-            .map(|tin| tin_name(tin).to_string())
+            .map(|tin| self.options.token_name(tin))
             .collect();
         error.attach_context(&rule.name, rule_stack, token, expected);
         error
@@ -120,7 +120,7 @@ impl Parser {
             if iterations > max_iterations {
                 let pnt = lookahead
                     .first()
-                    .map(|t| (t.si, t.ri, t.ci))
+                    .map(|t| (t.pos, t.ri, t.ci))
                     .unwrap_or((0, 1, 1));
                 return Err(TabnasError::new("cancel", "", src, pnt.0, pnt.1, pnt.2));
             }
@@ -130,7 +130,7 @@ impl Parser {
                 None => {
                     let pnt = lookahead
                         .first()
-                        .map(|t| (t.si, t.ri, t.ci))
+                        .map(|t| (t.pos, t.ri, t.ci))
                         .unwrap_or((0, 1, 1));
                     return Err(TabnasError::new(
                         "unknown_rule",
@@ -300,7 +300,7 @@ impl Parser {
                     }
                     let t0 = lookahead.first();
                     let (src_token, si, ri, ci) = if let Some(t) = t0 {
-                        (t.src.clone(), t.si, t.ri, t.ci)
+                        (t.src.clone(), t.pos, t.ri, t.ci)
                     } else {
                         (String::new(), src.len(), 1, 1)
                     };
@@ -331,7 +331,7 @@ impl Parser {
                         let token = lookahead.first();
                         let (source, pos, row, col) = token.map_or_else(
                             || (String::new(), src.chars().count(), 1, 1),
-                            |value| (value.src.clone(), value.si, value.ri, value.ci),
+                            |value| (value.src.clone(), value.pos, value.ri, value.ci),
                         );
                         let error = TabnasError::new("unexpected", source, src, pos, row, col);
                         return Err(self.attach_error(error, &current_rule, &stack, alts, token));
@@ -344,7 +344,7 @@ impl Parser {
         ensure_lookahead(&mut lookahead, 1)?;
         if let Some(t0) = lookahead.first() {
             if t0.tin != TIN_ZZ {
-                let error = TabnasError::new("unexpected", &t0.src, src, t0.si, t0.ri, t0.ci);
+                let error = TabnasError::new("unexpected", &t0.src, src, t0.pos, t0.ri, t0.ci);
                 return Err(self.attach_error(
                     error,
                     &current_rule,
