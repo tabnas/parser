@@ -513,6 +513,8 @@ describe('builtins', () => {
     // insensitive literal, which serializes its match token as the eager
     // sentinel `@~/^hi/i`.
     const eagerSpec = require('./eager-literal.fixture.json')
+    const replaceChildSpec = require('./replace-child.fixture.json')
+    const relexRollbackSpec = require('./relex-rollback.fixture.json')
     const clone = (o) => JSON.parse(JSON.stringify(o))
 
     it('the probe fixture is pure data (no closures) and carries the probe builtins', () => {
@@ -551,6 +553,24 @@ describe('builtins', () => {
       // Non-matches still rejected.
       assert.equal(accepts('ho'), false)
       assert.equal(accepts('h'), false)
+    })
+
+    it('a replaced child publishes its final node to the pushed parent', () => {
+      const j = new Tabnas()
+      j.grammar(clone(replaceChildSpec))
+      assert.deepEqual(j.parse('a'), {
+        rule: 'top',
+        src: 'a',
+        kids: [{ rule: 'leaf', src: 'a', kids: [] }],
+      })
+    })
+
+    it('failed relex restores lookahead fetched by an earlier alternate', () => {
+      const j = new Tabnas()
+      j.grammar(clone(relexRollbackSpec))
+      assert.deepEqual(j.parse('abc'), {
+        rule: 'top', src: 'abc', kids: [],
+      })
     })
 
     it('the native-value builders build values byte-identical to JSON.parse', () => {

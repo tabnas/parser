@@ -705,6 +705,11 @@ class RuleSpec {
     // Pop closed rule off stack.
     else if (!is_open) {
       next = ctx.rs[--ctx.rsI] || ctx.NORULE
+      // A pushed rule may replace itself one or more times before it
+      // closes. Publish the final rule, not merely the instance that was
+      // created by the original push, so parent actions see the node that
+      // actually consumed the input.
+      if (next !== ctx.NORULE) next.child = rule
     }
 
 
@@ -1278,6 +1283,7 @@ function parse_alts(
   let unCI = 0
   let unQueue: Token[] | null = null
   let unEnd: Token | undefined = undefined
+  let unTokens: Token[] | null = null
 
   let deepest = 0
 
@@ -1442,6 +1448,11 @@ function parse_alts(
             const u = lex.relexUndo
             unI = i
             unTkn = tkn
+            // Later alternates may have inherited lookahead beyond this
+            // position. A failed recut must restore those tokens too: the
+            // saved lexer point is already past them, so merely clearing
+            // the slots would skip their source spans on the next fetch.
+            unTokens = tbuf.slice()
             unSI = u.sI
             unRI = u.rI
             unCI = u.cI
@@ -1495,9 +1506,10 @@ function parse_alts(
       // the buffer as it was before this one touched it.
       if (-1 !== unI) {
         lex.unrelex(unSI, unRI, unCI, unQueue as Token[], unEnd)
-        tbuf[unI] = unTkn
-        for (let j = unI + 1; j < tbuf.length; j++) {
-          tbuf[j] = NOTOKEN
+        const restored = unTokens as Token[]
+        tbuf.length = restored.length
+        for (let j = 0; j < restored.length; j++) {
+          tbuf[j] = restored[j]
         }
         // Re-announce the RESTORED token to lex subscribers: the recut
         // fired an event when it was cut, and without a matching event

@@ -1,0 +1,34 @@
+{
+  "v": 3,
+  "options": {
+    "rule": { "start": "top" },
+    "lex": { "relex": true },
+    "match": { "token": { "#CH": "@~/^[abc]/" } },
+    "fixed": { "token": { "#AB": "ab", "#NO": "z" } },
+    "number": { "lex": false },
+    "string": { "lex": false },
+    "text": { "lex": false },
+    "value": { "lex": false }
+  },
+  "rule": {
+    "top": {
+      "open": [
+        { "s": "#CH #CH #NO" },
+        { "s": "#AB #NO" },
+        {
+          "s": "#CH #CH #CH",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "top",
+              "kind": "user",
+              "nterms": 3
+            }
+          }
+        }
+      ],
+      "close": [{ "s": "#ZZ" }]
+    }
+  }
+}

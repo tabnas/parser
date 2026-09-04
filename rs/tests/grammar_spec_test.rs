@@ -450,6 +450,34 @@ fn shared_probe_grammar_fixture_executes_in_rust() {
 }
 
 #[test]
+fn replaced_child_publishes_its_final_node_to_the_parent() {
+    let source = include_str!("../../ts/test/replace-child.fixture.json");
+    let mut parser = Tabnas::new();
+    parser.grammar_json(source).unwrap();
+    assert_eq!(
+        parser.parse("a").unwrap(),
+        Value::from_json(&serde_json::json!({
+            "rule": "top",
+            "src": "a",
+            "kids": [{"rule": "leaf", "src": "a", "kids": []}]
+        }))
+    );
+}
+
+#[test]
+fn failed_relex_restores_lookahead_from_an_earlier_alternate() {
+    let source = include_str!("../../ts/test/relex-rollback.fixture.json");
+    let mut parser = Tabnas::new();
+    parser.grammar_json(source).unwrap();
+    assert_eq!(
+        parser.parse("abc").unwrap(),
+        Value::from_json(&serde_json::json!({
+            "rule": "top", "src": "abc", "kids": []
+        }))
+    );
+}
+
+#[test]
 fn serialized_tree_builtins_bind_config_at_load() {
     let mut parser = Tabnas::new();
     parser
