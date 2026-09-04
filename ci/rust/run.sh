@@ -15,4 +15,5 @@ cd "$ROOT"
 ci/parity/run-parity.sh json ../json/test/spec
 ci/parity/run-parity.sh json test/spec
 node ci/rust/json-fuzz.js
+node ci/rust/notation-corpus.js
 node ci/rust/gbnf-corpus.js
