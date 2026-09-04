@@ -545,6 +545,20 @@ fn builtin_config_is_scoped_to_its_declaring_alternate() {
 }
 
 #[test]
+fn builtin_value_indices_do_not_coerce_to_token_zero() {
+    for from in [-1, 2] {
+        let source = format!(
+            r##"{{"clear":true,"options":{{"rule":{{"start":"top"}}}},"rule":{{
+              "top":{{"open":[{{"s":"#NR","a":"@value$","k":{{"value$":{{"from":{from}}}}}}}]}}
+            }}}}"##
+        );
+        let mut parser = Tabnas::new();
+        parser.grammar_json(&source).unwrap();
+        assert_eq!(parser.parse("7").unwrap(), Value::Null, "from={from}");
+    }
+}
+
+#[test]
 fn serialized_empty_result_and_result_fail_options_are_applied() {
     let mut empty = Tabnas::new();
     empty

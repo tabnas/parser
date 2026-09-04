@@ -60,6 +60,21 @@ fn config_usize(config: Option<&Value>, name: &str) -> usize {
     }
 }
 
+fn config_index(config: Option<&Value>, name: &str) -> Option<usize> {
+    match config_object(config).and_then(|map| map.get(name)) {
+        None => Some(0),
+        Some(Value::Number(value))
+            if value.is_finite()
+                && value.fract() == 0.0
+                && *value >= 0.0
+                && *value <= usize::MAX as f64 =>
+        {
+            Some(*value as usize)
+        }
+        _ => None,
+    }
+}
+
 fn ast_node(rule: String, kind: String) -> Value {
     let mut node = IndexMap::new();
     if kind == "user" {
@@ -170,8 +185,11 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
         "@value$" => {
             if !rule.child_node.is_undefined() {
                 rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
-            } else if let Some(token) = rule.o.get(config_usize(config, "from")) {
-                rule.node = Rc::new(RefCell::new(token.val.clone()));
+            } else {
+                let value = config_index(config, "from")
+                    .and_then(|index| rule.o.get(index))
+                    .map_or(Value::Undefined, |token| token.val.clone());
+                rule.node = Rc::new(RefCell::new(value));
             }
         }
         "@object$" => {
@@ -185,7 +203,7 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
             rule.child_node = Value::Undefined;
         }
         "@key$" => {
-            if let Some(token) = rule.o.get(config_usize(config, "from")) {
+            if let Some(token) = config_index(config, "from").and_then(|index| rule.o.get(index)) {
                 let slot = {
                     let configured = config_string(config, "slot");
                     if configured.is_empty() {
