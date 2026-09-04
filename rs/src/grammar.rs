@@ -553,11 +553,46 @@ fn apply_options(
         if let Some(finish) = rule.get("finish").and_then(JsonValue::as_bool) {
             options.rule.finish = finish;
         }
+        if let Some(maxmul) = rule.get("maxmul") {
+            options.rule.maxmul = match maxmul.as_i64() {
+                Some(value) if value <= 0 => 3,
+                Some(value) => usize::try_from(value).map_err(|_| {
+                    GrammarError(
+                        "Grammar: options.rule.maxmul is outside the supported range".into(),
+                    )
+                })?,
+                None => {
+                    return Err(GrammarError(
+                        "Grammar: options.rule.maxmul must be an integer".into(),
+                    ))
+                }
+            };
+        }
         if let Some(include) = rule.get("include").and_then(JsonValue::as_str) {
             options.rule.include = include.into();
         }
         if let Some(exclude) = rule.get("exclude").and_then(JsonValue::as_str) {
             options.rule.exclude = exclude.into();
+        }
+    }
+    if let Some(parse) = map.get("parse") {
+        let parse = object(parse, "options.parse")?;
+        if let Some(budget) = parse.get("budget") {
+            let budget = object(budget, "options.parse.budget")?;
+            if let Some(interval) = budget
+                .get("checkEveryN")
+                .or_else(|| budget.get("check_every_n"))
+            {
+                options.parse.budget.check_every_n = interval
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        GrammarError(
+                            "Grammar: options.parse.budget.checkEveryN must be a non-negative integer"
+                                .into(),
+                        )
+                    })?;
+            }
         }
     }
     if let Some(fixed_options) = map.get("fixed") {

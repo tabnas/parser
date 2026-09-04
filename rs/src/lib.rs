@@ -19,7 +19,10 @@ pub mod value;
 pub use context::{ActionError, Context};
 pub use error::TabnasError;
 pub use grammar::{GrammarError, GrammarSpec};
-pub use options::{FixedOptions, FixedToken, MatchToken, Options, RewindOptions};
+pub use options::{
+    BudgetCheck, BudgetOptions, FixedOptions, FixedToken, MatchToken, Options, ParseOptions,
+    RewindOptions,
+};
 pub use parser::Parser;
 pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 pub use token::{
@@ -101,6 +104,16 @@ impl Tabnas {
         action: impl Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync + 'static,
     ) -> &mut Self {
         self.context_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
+    pub fn parse_budget(
+        &mut self,
+        check_every_n: usize,
+        check: impl Fn(&Context) -> bool + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.options.parse.budget.check_every_n = check_every_n;
+        self.options.parse.budget.on_check = Some(Arc::new(check));
         self
     }
 

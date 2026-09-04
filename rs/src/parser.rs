@@ -167,8 +167,20 @@ impl Parser {
                 Ok(())
             };
 
-        let mut iterations = 0;
-        let max_iterations = (src.len() + 10) * 100 + 1000;
+        let mut iterations = 0usize;
+        let maxmul = if self.options.rule.maxmul == 0 {
+            3
+        } else {
+            self.options.rule.maxmul
+        };
+        let max_iterations = self
+            .rules
+            .len()
+            .saturating_mul(src.encode_utf16().count())
+            .saturating_mul(4)
+            .saturating_mul(maxmul)
+            .max(100);
+        let budget = &self.options.parse.budget;
 
         loop {
             iterations += 1;
@@ -178,7 +190,23 @@ impl Parser {
                     .first()
                     .map(|t| (t.pos, t.ri, t.ci))
                     .unwrap_or((0, 1, 1));
-                return Err(TabnasError::new("cancel", "", src, pnt.0, pnt.1, pnt.2));
+                return Err(TabnasError::new("unexpected", "", src, pnt.0, pnt.1, pnt.2));
+            }
+            context.iteration = iterations - 1;
+            if budget.check_every_n > 0
+                && context.iteration > 0
+                && context.iteration % budget.check_every_n == 0
+                && budget
+                    .on_check
+                    .as_ref()
+                    .is_some_and(|check| !check(&context))
+            {
+                let pnt = context
+                    .t
+                    .first()
+                    .map(|token| (token.src.as_str(), token.pos, token.ri, token.ci))
+                    .unwrap_or(("", 0, 1, 1));
+                return Err(TabnasError::new("cancel", pnt.0, src, pnt.1, pnt.2, pnt.3));
             }
 
             let spec = match self.rules.get(&current_rule.name) {

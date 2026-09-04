@@ -4,6 +4,10 @@ use crate::token::{Tin, TIN_MAX, TIN_NR, TIN_ST, TIN_TX, TIN_VL};
 use indexmap::IndexMap;
 use regex::Regex;
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+
+use crate::context::Context;
 
 #[derive(Debug, Clone)]
 pub struct FixedToken {
@@ -159,6 +163,7 @@ impl Default for LexOptions {
 #[derive(Debug, Clone)]
 pub struct RuleOptions {
     pub finish: bool,
+    pub maxmul: usize,
     pub include: String,
     pub exclude: String,
     pub start: String,
@@ -176,11 +181,35 @@ impl Default for RuleOptions {
     fn default() -> Self {
         RuleOptions {
             finish: true,
+            maxmul: 3,
             include: String::new(),
             exclude: String::new(),
             start: "val".to_string(),
         }
     }
+}
+
+pub type BudgetCheck = Arc<dyn Fn(&Context) -> bool + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct BudgetOptions {
+    pub check_every_n: usize,
+    pub on_check: Option<BudgetCheck>,
+}
+
+impl fmt::Debug for BudgetOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BudgetOptions")
+            .field("check_every_n", &self.check_every_n)
+            .field("on_check", &self.on_check.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ParseOptions {
+    pub budget: BudgetOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +224,7 @@ pub struct Options {
     pub lex: LexOptions,
     pub rewind: RewindOptions,
     pub rule: RuleOptions,
+    pub parse: ParseOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
     pub match_tokens: IndexMap<String, MatchToken>,
     pub tag: String,
@@ -217,6 +247,7 @@ impl Default for Options {
             lex: LexOptions::default(),
             rewind: RewindOptions::default(),
             rule: RuleOptions::default(),
+            parse: ParseOptions::default(),
             token_set,
             match_tokens: IndexMap::new(),
             tag: "-".to_string(),

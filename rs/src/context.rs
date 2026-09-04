@@ -44,6 +44,8 @@ impl From<ActionError> for TabnasError {
 /// meaning.
 #[derive(Debug)]
 pub struct Context {
+    /// Zero-based rule-loop iteration currently being processed.
+    pub iteration: usize,
     /// Retained consumed-token history, oldest first.
     pub v: Vec<Token>,
     /// Absolute number of tokens consumed minus tokens rewound.
@@ -57,6 +59,7 @@ pub struct Context {
 impl Context {
     pub(crate) fn new(history_limit: Option<usize>) -> Self {
         Self {
+            iteration: 0,
             v: Vec::new(),
             v_abs: 0,
             t: Vec::with_capacity(8),
