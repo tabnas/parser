@@ -72,7 +72,7 @@ impl<'a> Lexer<'a> {
         if self.idx < self.char_len {
             let c = self.chars[self.idx];
             self.idx += 1;
-            if c == '\n' {
+            if self.options.line.row_chars.contains(c) {
                 self.ri += 1;
                 self.ci = 1;
             } else {
@@ -235,33 +235,26 @@ impl<'a> Lexer<'a> {
         }
 
         // 2. Line ending
-        if self.options.line.lex && (c == '\n' || c == '\r') {
+        if self.options.line.lex
+            && (self.options.line.chars.contains(c) || self.options.line.fixed.contains(&c))
+        {
             let mut src = String::new();
-            if c == '\r' && self.peek_at(1) == Some('\n') {
-                src.push('\r');
-                src.push('\n');
-                self.advance();
-                self.advance();
-            } else {
-                src.push(c);
-                self.advance();
+            let mut seen = std::collections::HashSet::new();
+            while let Some(ch) = self.peek() {
+                if !self.options.line.chars.contains(ch) && !self.options.line.fixed.contains(&ch) {
+                    break;
+                }
+                if self.options.line.single && !seen.insert(ch) {
+                    break;
+                }
+                src.push(self.advance().expect("peeked character must advance"));
             }
+            self.ci = 1;
             return Ok(Token::new(
                 "#LN",
                 TIN_LN,
                 Value::String(src.clone()),
                 src,
-                pnt,
-            ));
-        }
-
-        if self.options.line.fixed.contains(&c) {
-            self.advance();
-            return Ok(Token::new(
-                "#LN",
-                TIN_LN,
-                Value::String(c.to_string()),
-                c.to_string(),
                 pnt,
             ));
         }
@@ -280,40 +273,72 @@ impl<'a> Lexer<'a> {
             return Err(err);
         }
 
-        // 3. Comments (if comment lexing enabled)
-        if self.options.comment.lex && c == '/' {
-            if self.peek_at(1) == Some('/') {
+        // 3. Comments (longest opening marker wins; ties sort by name).
+        if self.options.comment.lex {
+            let mut definitions: Vec<_> = self
+                .options
+                .comment
+                .definitions
+                .iter()
+                .filter(|(_, definition)| {
+                    definition.lex
+                        && !definition.start.is_empty()
+                        && remaining.starts_with(&definition.start)
+                })
+                .collect();
+            definitions.sort_by(|(name_a, a), (name_b, b)| {
+                b.start
+                    .len()
+                    .cmp(&a.start.len())
+                    .then_with(|| name_a.cmp(name_b))
+            });
+            if let Some((_, definition)) = definitions.first() {
+                let definition = (*definition).clone();
                 let mut src = String::new();
-                src.push(self.advance().unwrap());
-                src.push(self.advance().unwrap());
-                while let Some(ch) = self.peek() {
-                    if ch == '\n' || ch == '\r' {
-                        break;
-                    }
-                    src.push(ch);
-                    self.advance();
+                for _ in definition.start.chars() {
+                    src.push(self.advance().expect("comment marker must advance"));
                 }
-                return Ok(Token::new(
-                    "#CM",
-                    TIN_CM,
-                    Value::String(src.clone()),
-                    src,
-                    pnt,
-                ));
-            } else if self.peek_at(1) == Some('*') {
-                let mut src = String::new();
-                src.push(self.advance().unwrap());
-                src.push(self.advance().unwrap());
-                let mut closed = false;
-                while let Some(ch) = self.peek() {
-                    src.push(ch);
-                    self.advance();
-                    if ch == '*' && self.peek() == Some('/') {
-                        src.push(self.advance().unwrap());
+
+                let mut terminated_by_suffix = false;
+                let mut closed = definition.line;
+                loop {
+                    let remainder = &self.src[self.byte_position()..];
+                    let suffix = definition
+                        .suffixes
+                        .iter()
+                        .filter(|suffix| !suffix.is_empty() && remainder.starts_with(*suffix))
+                        .max_by_key(|suffix| suffix.len())
+                        .cloned();
+                    if let Some(suffix) = suffix {
+                        for _ in suffix.chars() {
+                            src.push(self.advance().expect("comment suffix must advance"));
+                        }
+                        terminated_by_suffix = true;
                         closed = true;
                         break;
                     }
+                    if !definition.line
+                        && !definition.end.is_empty()
+                        && remainder.starts_with(&definition.end)
+                    {
+                        for _ in definition.end.chars() {
+                            src.push(self.advance().expect("comment end must advance"));
+                        }
+                        closed = true;
+                        break;
+                    }
+                    let Some(ch) = self.peek() else {
+                        break;
+                    };
+                    if definition.line
+                        && (self.options.line.chars.contains(ch)
+                            || self.options.line.fixed.contains(&ch))
+                    {
+                        break;
+                    }
+                    src.push(self.advance().expect("comment body must advance"));
                 }
+
                 if !closed {
                     let err = TabnasError::new(
                         "unterminated_comment",
@@ -326,6 +351,18 @@ impl<'a> Lexer<'a> {
                     self.err = Some(err.clone());
                     return Err(err);
                 }
+
+                if definition.eat_line && !terminated_by_suffix {
+                    while let Some(ch) = self.peek() {
+                        if !self.options.line.chars.contains(ch)
+                            && !self.options.line.fixed.contains(&ch)
+                        {
+                            break;
+                        }
+                        src.push(self.advance().expect("comment line tail must advance"));
+                    }
+                }
+
                 return Ok(Token::new(
                     "#CM",
                     TIN_CM,
@@ -338,7 +375,15 @@ impl<'a> Lexer<'a> {
 
         // 5. Quoted Strings
         if self.options.string.lex && self.options.string.chars.contains(c) {
-            return self.match_string(c, pnt);
+            let start = (self.idx, self.ri, self.ci);
+            match self.match_string(c, pnt) {
+                result @ Ok(_) => return result,
+                Err(error) if !self.options.string.abandon => return Err(error),
+                Err(_) => {
+                    (self.idx, self.ri, self.ci) = start;
+                    self.err = None;
+                }
+            }
         }
 
         // 6. Keywords: true, false, null
@@ -636,8 +681,15 @@ impl<'a> Lexer<'a> {
                 ));
             }
 
-            if c == '\n' || c == '\r' {
-                if quote == '`' {
+            if let Some(replacement) = self.options.string.replace.get(&c).cloned() {
+                raw_src.push(self.advance().expect("peeked character must advance"));
+                self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
+                out_str.push_str(&replacement);
+                continue;
+            }
+
+            if self.options.line.chars.contains(c) {
+                if self.options.string.multi_chars.contains(quote) {
                     raw_src.push(self.advance().expect("peeked character must advance"));
                     out_str.push(c);
                     continue;
@@ -655,7 +707,7 @@ impl<'a> Lexer<'a> {
             }
 
             // Check for unprintable unescaped control characters in string (< 32)
-            if (c as u32) < 32 && !(c == '\t' && self.options.string.allow_control) {
+            if (c as u32) < 32 && !self.options.string.allow_control {
                 let err = TabnasError::new(
                     "unprintable",
                     c.to_string(),
@@ -668,44 +720,17 @@ impl<'a> Lexer<'a> {
                 return Err(err);
             }
 
-            if c == '\\' {
+            if c == self.options.string.escape_char {
                 raw_src.push(self.advance().unwrap());
                 let esc_point = self.current_point();
                 if let Some(esc) = self.advance() {
                     raw_src.push(esc);
+                    if let Some(replacement) = self.options.string.escape.get(&esc).cloned() {
+                        self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
+                        out_str.push_str(&replacement);
+                        continue;
+                    }
                     match esc {
-                        '"' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('"');
-                        }
-                        '\\' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\\');
-                        }
-                        '/' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('/');
-                        }
-                        'b' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\x08');
-                        }
-                        'f' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\x0c');
-                        }
-                        'n' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\n');
-                        }
-                        'r' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\r');
-                        }
-                        't' => {
-                            self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                            out_str.push('\t');
-                        }
                         'u' => {
                             // Unicode escape: \uXXXX or \u{X...}
                             if self.peek() == Some('{') && !self.options.string.escape_strict {
@@ -960,6 +985,14 @@ fn is_text_delimiter(ch: char, options: &Options) -> bool {
                 .tokens
                 .values()
                 .any(|token| token.source.starts_with(ch)))
-        || options.line.fixed.contains(&ch)
-        || (options.line.lex && matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+        || (options.line.lex
+            && (options.line.chars.contains(ch)
+                || options.line.fixed.contains(&ch)
+                || matches!(ch, '\u{2028}' | '\u{2029}')))
+        || (options.comment.lex
+            && options
+                .comment
+                .definitions
+                .values()
+                .any(|definition| definition.lex && definition.start.starts_with(ch)))
 }

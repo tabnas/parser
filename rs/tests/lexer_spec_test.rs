@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tabnas::lexer::Lexer;
 use tabnas::options::Options;
-use tabnas::{Value, TIN_ZZ};
+use tabnas::{CommentDef, Value, TIN_ZZ};
 
 fn unescape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -177,4 +177,121 @@ fn builtin_lexer_enable_switches_fall_through_to_text() {
     custom_space.space.chars = "_".into();
     let mut lexer = Lexer::new("_", custom_space);
     assert_eq!(lexer.next_raw_token().unwrap().name, "#SP");
+}
+
+#[test]
+fn configured_line_characters_rows_and_single_mode_are_honored() {
+    let mut options = Options::default();
+    options.line.chars = ";".into();
+    options.line.row_chars = ";".into();
+    let mut lexer = Lexer::new(";;x", options);
+    let line = lexer.next_raw_token().unwrap();
+    let text = lexer.next_raw_token().unwrap();
+    assert_eq!((line.name.as_str(), line.src.as_str()), ("#LN", ";;"));
+    assert_eq!((text.name.as_str(), text.ri, text.ci), ("#TX", 3, 1));
+
+    let mut single = Options::default();
+    single.line.single = true;
+    let mut lexer = Lexer::new("\n\nx", single);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "\n");
+    assert_eq!(lexer.next_raw_token().unwrap().src, "\n");
+}
+
+#[test]
+fn configured_string_escape_replace_multiline_and_abandon_are_honored() {
+    let mut options = Options::default();
+    options.string.escape_char = '~';
+    options.string.escape.insert('q', "Q".into());
+    options.string.replace.insert('x', "yz".into());
+    assert_eq!(lex(r#""x~q""#, options).unwrap(), "#ST:yzQ");
+
+    let mut removed_escape = Options::default();
+    removed_escape.string.escape.remove(&'n');
+    removed_escape.string.allow_unknown = false;
+    assert_eq!(lex(r#""\n""#, removed_escape).unwrap_err(), "unexpected");
+
+    let mut multiline = Options::default();
+    multiline.string.multi_chars = "\"".into();
+    assert_eq!(lex("\"a\nb\"", multiline).unwrap(), "#ST:a\nb");
+
+    let mut control = Options::default();
+    control.string.allow_control = true;
+    assert_eq!(lex("\"a\u{0007}b\"", control).unwrap(), "#ST:a\u{0007}b");
+
+    let mut abandon = Options::default();
+    abandon.string.abandon = true;
+    assert_eq!(lex(r#""open"#, abandon).unwrap(), r#"#TX:"open"#);
+}
+
+#[test]
+fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
+    let mut default = Lexer::new("# note\nx", Options::default());
+    assert_eq!(default.next_raw_token().unwrap().src, "# note");
+    assert_eq!(default.next_raw_token().unwrap().name, "#LN");
+
+    let mut options = Options::default();
+    options.comment.definitions.clear();
+    options.comment.definitions.insert(
+        "short".into(),
+        CommentDef {
+            line: true,
+            start: "#".into(),
+            end: String::new(),
+            lex: true,
+            suffixes: Vec::new(),
+            eat_line: false,
+        },
+    );
+    options.comment.definitions.insert(
+        "long".into(),
+        CommentDef {
+            line: true,
+            start: "##".into(),
+            end: String::new(),
+            lex: true,
+            suffixes: vec!["!".into()],
+            eat_line: false,
+        },
+    );
+    let mut lexer = Lexer::new("##a!x\n", options);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "##a!");
+    assert_eq!(lexer.next_raw_token().unwrap().src, "x");
+
+    let mut eat = Options::default();
+    eat.comment.definitions.clear();
+    eat.comment.definitions.insert(
+        "semi".into(),
+        CommentDef {
+            line: true,
+            start: ";".into(),
+            end: String::new(),
+            lex: true,
+            suffixes: Vec::new(),
+            eat_line: true,
+        },
+    );
+    let mut lexer = Lexer::new("; note\nx", eat);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "; note\n");
+    assert_eq!(lexer.next_raw_token().unwrap().src, "x");
+
+    let mut block = Options::default();
+    block.comment.definitions.clear();
+    block.comment.definitions.insert(
+        "block".into(),
+        CommentDef {
+            line: false,
+            start: "<*".into(),
+            end: "*>".into(),
+            lex: true,
+            suffixes: vec!["END".into()],
+            eat_line: false,
+        },
+    );
+    assert_eq!(
+        Lexer::new("<* body ENDx", block)
+            .next_raw_token()
+            .unwrap()
+            .src,
+        "<* body END"
+    );
 }

@@ -509,4 +509,61 @@ fn serialized_builtin_lexer_switches_reach_the_runtime() {
         )
         .unwrap();
     assert!(custom_space.parse("_").is_ok());
+
+    let mut custom_line = Tabnas::new();
+    custom_line
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"line":{"chars":";","rowChars":";","single":true},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#LN"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(custom_line.options.line.chars, ";");
+    assert_eq!(custom_line.options.line.row_chars, ";");
+    assert!(custom_line.options.line.single);
+    assert!(custom_line.parse(";").is_ok());
+}
+
+#[test]
+fn serialized_string_behavior_options_reach_the_runtime() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"string":{"escapeChar":"~","escape":{"q":"Q","n":null},"replace":{"x":"yz"},"multiChars":"\"","allowUnknown":false,"abandon":false}},"rule":{"top":{"open":[{"s":"#ST","a":"@value$"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(
+        parser.parse(r#""x~q""#).unwrap(),
+        Value::String("yzQ".into())
+    );
+    assert_eq!(parser.parse(r#""~n""#).unwrap_err().code, "unexpected");
+    assert_eq!(
+        parser.parse("\"a\nb\"").unwrap(),
+        Value::String("a\nb".into())
+    );
+
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"string":{"escapeChar":""}}}"#)
+        .is_err());
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"string":{"replace":{"xx":"x"}}}}"#)
+        .is_err());
+}
+
+#[test]
+fn serialized_comment_definitions_reach_the_runtime() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"comment":{"def":{"hash":null,"semi":{"line":true,"start":";","lex":true,"suffix":["!!","!"],"eatline":false}}},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#CM"}]}}}"##,
+        )
+        .unwrap();
+    assert!(!parser.options.comment.definitions.contains_key("hash"));
+    assert_eq!(
+        parser.options.comment.definitions["semi"].suffixes,
+        ["!!", "!"]
+    );
+    assert!(parser.parse("; note!!").is_ok());
+
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"comment":{"def":{"x":{"suffix":[1]}}}}}"#)
+        .is_err());
 }

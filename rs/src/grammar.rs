@@ -487,6 +487,55 @@ fn apply_options(
         {
             options.string.multi_chars = chars.into();
         }
+        if let Some(escape_char) = string.get("escapeChar") {
+            let escape_char = escape_char.as_str().ok_or_else(|| {
+                GrammarError("Grammar: options.string.escapeChar must be a string".into())
+            })?;
+            let mut chars = escape_char.chars();
+            options.string.escape_char = chars.next().ok_or_else(|| {
+                GrammarError("Grammar: options.string.escapeChar must not be empty".into())
+            })?;
+            if chars.next().is_some() {
+                return Err(GrammarError(
+                    "Grammar: options.string.escapeChar must contain one character".into(),
+                ));
+            }
+        }
+        for (field, target) in [
+            ("escape", &mut options.string.escape),
+            ("replace", &mut options.string.replace),
+        ] {
+            if let Some(entries) = string.get(field) {
+                for (key, value) in object(entries, &format!("options.string.{field}"))? {
+                    let mut chars = key.chars();
+                    let character = chars.next().ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: options.string.{field} keys must not be empty"
+                        ))
+                    })?;
+                    if chars.next().is_some() {
+                        return Err(GrammarError(format!(
+                            "Grammar: options.string.{field} keys must contain one character"
+                        )));
+                    }
+                    if value.is_null() {
+                        target.remove(&character);
+                    } else {
+                        target.insert(
+                            character,
+                            value
+                                .as_str()
+                                .ok_or_else(|| {
+                                    GrammarError(format!(
+                                        "Grammar: options.string.{field}.{key} must be a string or null"
+                                    ))
+                                })?
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
         if let Some(value) = string
             .get("allowUnknown")
             .or_else(|| string.get("allow_unknown"))
@@ -508,20 +557,106 @@ fn apply_options(
         {
             options.string.allow_control = value;
         }
+        if let Some(value) = string.get("abandon").and_then(JsonValue::as_bool) {
+            options.string.abandon = value;
+        }
     }
     if let Some(line) = map.get("line") {
         let line = object(line, "options.line")?;
         set_bool(line, "lex", &mut options.line.lex);
+        set_bool(line, "single", &mut options.line.single);
+        if let Some(chars) = line.get("chars") {
+            options.line.chars = chars
+                .as_str()
+                .ok_or_else(|| GrammarError("Grammar: options.line.chars must be a string".into()))?
+                .into();
+        }
+        if let Some(chars) = line.get("rowChars") {
+            options.line.row_chars = chars
+                .as_str()
+                .ok_or_else(|| {
+                    GrammarError("Grammar: options.line.rowChars must be a string".into())
+                })?
+                .into();
+        }
         if let Some(chars) = line.get("fixed").and_then(JsonValue::as_str) {
             options.line.fixed = chars.chars().collect();
         }
     }
     if let Some(comment) = map.get("comment") {
-        set_bool(
-            object(comment, "options.comment")?,
-            "lex",
-            &mut options.comment.lex,
-        );
+        let comment = object(comment, "options.comment")?;
+        set_bool(comment, "lex", &mut options.comment.lex);
+        if let Some(definitions) = comment.get("def") {
+            for (name, value) in object(definitions, "options.comment.def")? {
+                if value.is_null() || value == &JsonValue::Bool(false) {
+                    options.comment.definitions.shift_remove(name);
+                    continue;
+                }
+                let value = object(value, &format!("options.comment.def.{name}"))?;
+                let definition =
+                    options
+                        .comment
+                        .definitions
+                        .entry(name.clone())
+                        .or_insert(crate::CommentDef {
+                            line: false,
+                            start: String::new(),
+                            end: String::new(),
+                            lex: false,
+                            suffixes: Vec::new(),
+                            eat_line: false,
+                        });
+                set_bool(value, "line", &mut definition.line);
+                set_bool(value, "lex", &mut definition.lex);
+                set_bool(value, "eatline", &mut definition.eat_line);
+                for (field, target) in [
+                    ("start", &mut definition.start),
+                    ("end", &mut definition.end),
+                ] {
+                    if let Some(text) = value.get(field) {
+                        *target = text
+                            .as_str()
+                            .ok_or_else(|| {
+                                GrammarError(format!(
+                                    "Grammar: options.comment.def.{name}.{field} must be a string"
+                                ))
+                            })?
+                            .into();
+                    }
+                }
+                if let Some(suffix) = value.get("suffix") {
+                    definition.suffixes = match suffix {
+                        JsonValue::Null => Vec::new(),
+                        JsonValue::String(suffix) => {
+                            if suffix.is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![suffix.clone()]
+                            }
+                        }
+                        JsonValue::Array(suffixes) => suffixes
+                            .iter()
+                            .map(|suffix| {
+                                suffix.as_str().map(str::to_owned).ok_or_else(|| {
+                                    GrammarError(format!(
+                                        "Grammar: options.comment.def.{name}.suffix entries must be strings"
+                                    ))
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        _ => {
+                            return Err(GrammarError(format!(
+                                "Grammar: options.comment.def.{name}.suffix must be a string, array, or null"
+                            )))
+                        }
+                    };
+                    definition.suffixes.retain(|suffix| !suffix.is_empty());
+                    definition
+                        .suffixes
+                        .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+                }
+            }
+        }
     }
     if let Some(value) = map.get("value") {
         set_bool(

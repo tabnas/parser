@@ -20,8 +20,9 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, FixedOptions, FixedToken, MatchToken, Options, ParseOptions,
-    ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueOptions,
+    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, MatchToken, Options,
+    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
+    ValueOptions,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -225,6 +226,9 @@ impl Tabnas {
         opts.string.multi_chars = "".to_string();
         opts.string.allow_unknown = false;
         opts.string.escape_strict = true;
+        for escape in ['v', '\'', '`'] {
+            opts.string.escape.remove(&escape);
+        }
 
         let mut tn = Tabnas::with_options(opts);
 

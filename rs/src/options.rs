@@ -100,20 +100,44 @@ pub struct StringOptions {
     pub lex: bool,
     pub chars: String,
     pub multi_chars: String,
+    pub escape_char: char,
+    pub escape: HashMap<char, String>,
+    pub replace: HashMap<char, String>,
     pub allow_unknown: bool,
     pub escape_strict: bool,
     pub allow_control: bool,
+    pub abandon: bool,
 }
 
 impl Default for StringOptions {
     fn default() -> Self {
+        let escape = [
+            ('b', "\u{0008}"),
+            ('f', "\u{000c}"),
+            ('n', "\n"),
+            ('r', "\r"),
+            ('t', "\t"),
+            ('v', "\u{000b}"),
+            ('"', "\""),
+            ('\'', "'"),
+            ('`', "`"),
+            ('\\', "\\"),
+            ('/', "/"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key, value.into()))
+        .collect();
         StringOptions {
             lex: true,
             chars: "\"'`".to_string(),
-            multi_chars: "".to_string(),
+            multi_chars: "`".to_string(),
+            escape_char: '\\',
+            escape,
+            replace: HashMap::new(),
             allow_unknown: true,
             escape_strict: false,
             allow_control: false,
+            abandon: false,
         }
     }
 }
@@ -121,6 +145,11 @@ impl Default for StringOptions {
 #[derive(Debug, Clone)]
 pub struct LineOptions {
     pub lex: bool,
+    pub chars: String,
+    pub row_chars: String,
+    pub single: bool,
+    /// Extra line terminators retained for compatibility with the first
+    /// Rust slice. Serialized grammars should prefer `line.chars`.
     pub fixed: Vec<char>,
 }
 
@@ -128,14 +157,28 @@ impl Default for LineOptions {
     fn default() -> Self {
         Self {
             lex: true,
+            chars: "\r\n".into(),
+            row_chars: "\n".into(),
+            single: false,
             fixed: Vec::new(),
         }
     }
 }
 
 #[derive(Debug, Clone)]
+pub struct CommentDef {
+    pub line: bool,
+    pub start: String,
+    pub end: String,
+    pub lex: bool,
+    pub suffixes: Vec<String>,
+    pub eat_line: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct CommentOptions {
     pub lex: bool,
+    pub definitions: IndexMap<String, CommentDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +194,28 @@ impl Default for ValueOptions {
 
 impl Default for CommentOptions {
     fn default() -> Self {
-        CommentOptions { lex: true }
+        let mut definitions = IndexMap::new();
+        for (name, line, start, end) in [
+            ("hash", true, "#", ""),
+            ("slash", true, "//", ""),
+            ("multi", false, "/*", "*/"),
+        ] {
+            definitions.insert(
+                name.into(),
+                CommentDef {
+                    line,
+                    start: start.into(),
+                    end: end.into(),
+                    lex: true,
+                    suffixes: Vec::new(),
+                    eat_line: false,
+                },
+            );
+        }
+        CommentOptions {
+            lex: true,
+            definitions,
+        }
     }
 }
 
