@@ -463,3 +463,50 @@ fn builtin_config_is_scoped_to_its_declaring_alternate() {
         );
     }
 }
+
+#[test]
+fn serialized_empty_result_and_result_fail_options_are_applied() {
+    let mut empty = Tabnas::new();
+    empty
+        .grammar_json(r#"{"options":{"lex":{"empty":true,"emptyResult":"none"}}}"#)
+        .unwrap();
+    assert_eq!(empty.parse("").unwrap(), Value::String("none".into()));
+
+    let mut rejected = Tabnas::make_json();
+    rejected
+        .grammar_json(r#"{"options":{"result":{"fail":[1]}}}"#)
+        .unwrap();
+    assert_eq!(rejected.parse("1").unwrap_err().code, "unexpected");
+
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"result":{"fail":1}}}"#)
+        .is_err());
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"parse":{"prepare":{"x":"@x"}}}}"#)
+        .is_err());
+}
+
+#[test]
+fn serialized_builtin_lexer_switches_reach_the_runtime() {
+    for (option, source) in [
+        (r#""number":{"lex":false}"#, "12"),
+        (r#""string":{"lex":false}"#, r#""x""#),
+        (r#""value":{"lex":false}"#, "true"),
+        (r#""space":{"lex":false}"#, "a b"),
+    ] {
+        let grammar = format!(
+            r##"{{"clear":true,"options":{{"rule":{{"start":"top"}},{option}}},"rule":{{"top":{{"open":[{{"s":"#TX"}}]}}}}}}"##
+        );
+        let mut parser = Tabnas::new();
+        parser.grammar_json(&grammar).unwrap();
+        assert!(parser.parse(source).is_ok(), "{option}: {source:?}");
+    }
+
+    let mut custom_space = Tabnas::new();
+    custom_space
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"space":{"chars":"_"},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#SP"}]}}}"##,
+        )
+        .unwrap();
+    assert!(custom_space.parse("_").is_ok());
+}

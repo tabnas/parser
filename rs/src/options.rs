@@ -1,6 +1,6 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
-use crate::token::{Tin, TIN_MAX, TIN_NR, TIN_ST, TIN_TX, TIN_VL};
+use crate::token::{Tin, TIN_CM, TIN_LN, TIN_MAX, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL};
 use indexmap::IndexMap;
 use regex::Regex;
 use std::collections::HashMap;
@@ -58,7 +58,23 @@ impl Default for TextOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct SpaceOptions {
+    pub lex: bool,
+    pub chars: String,
+}
+
+impl Default for SpaceOptions {
+    fn default() -> Self {
+        Self {
+            lex: true,
+            chars: " \t".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct NumberOptions {
+    pub lex: bool,
     pub hex: bool,
     pub oct: bool,
     pub bin: bool,
@@ -69,6 +85,7 @@ pub struct NumberOptions {
 impl Default for NumberOptions {
     fn default() -> Self {
         NumberOptions {
+            lex: true,
             hex: true,
             oct: true,
             bin: true,
@@ -80,6 +97,7 @@ impl Default for NumberOptions {
 
 #[derive(Debug, Clone)]
 pub struct StringOptions {
+    pub lex: bool,
     pub chars: String,
     pub multi_chars: String,
     pub allow_unknown: bool,
@@ -90,6 +108,7 @@ pub struct StringOptions {
 impl Default for StringOptions {
     fn default() -> Self {
         StringOptions {
+            lex: true,
             chars: "\"'`".to_string(),
             multi_chars: "".to_string(),
             allow_unknown: true,
@@ -119,6 +138,17 @@ pub struct CommentOptions {
     pub lex: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ValueOptions {
+    pub lex: bool,
+}
+
+impl Default for ValueOptions {
+    fn default() -> Self {
+        Self { lex: true }
+    }
+}
+
 impl Default for CommentOptions {
     fn default() -> Self {
         CommentOptions { lex: true }
@@ -139,6 +169,7 @@ impl Default for MapOptions {
 #[derive(Debug, Clone)]
 pub struct LexOptions {
     pub empty: bool,
+    pub empty_result: crate::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -156,8 +187,16 @@ impl Default for RewindOptions {
 
 impl Default for LexOptions {
     fn default() -> Self {
-        LexOptions { empty: true }
+        LexOptions {
+            empty: true,
+            empty_result: crate::Value::Undefined,
+        }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResultOptions {
+    pub fail: Vec<crate::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,24 +271,41 @@ impl Default for RecoverOptions {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+pub type ParsePrepare = Arc<dyn Fn(&mut Context) + Send + Sync>;
+
+#[derive(Clone, Default)]
 pub struct ParseOptions {
+    pub prepare: Vec<ParsePrepare>,
     pub budget: BudgetOptions,
     pub recover: RecoverOptions,
+}
+
+impl fmt::Debug for ParseOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ParseOptions")
+            .field("prepare", &self.prepare.len())
+            .field("budget", &self.budget)
+            .field("recover", &self.recover)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Options {
     pub fixed: FixedOptions,
+    pub space: SpaceOptions,
     pub text: TextOptions,
     pub number: NumberOptions,
     pub string: StringOptions,
     pub line: LineOptions,
     pub comment: CommentOptions,
+    pub value: ValueOptions,
     pub map: MapOptions,
     pub lex: LexOptions,
     pub rewind: RewindOptions,
     pub rule: RuleOptions,
+    pub result: ResultOptions,
     pub parse: ParseOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
     pub match_tokens: IndexMap<String, MatchToken>,
@@ -259,20 +315,24 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         let mut token_set = HashMap::new();
+        token_set.insert("IGNORE".to_string(), vec![TIN_SP, TIN_LN, TIN_CM]);
         token_set.insert("VAL".to_string(), vec![TIN_TX, TIN_NR, TIN_ST, TIN_VL]);
         token_set.insert("KEY".to_string(), vec![TIN_TX, TIN_NR, TIN_ST, TIN_VL]);
 
         Options {
             fixed: FixedOptions::default(),
+            space: SpaceOptions::default(),
             text: TextOptions::default(),
             number: NumberOptions::default(),
             string: StringOptions::default(),
             line: LineOptions::default(),
             comment: CommentOptions::default(),
+            value: ValueOptions::default(),
             map: MapOptions::default(),
             lex: LexOptions::default(),
             rewind: RewindOptions::default(),
             rule: RuleOptions::default(),
+            result: ResultOptions::default(),
             parse: ParseOptions::default(),
             token_set,
             match_tokens: IndexMap::new(),
@@ -282,6 +342,12 @@ impl Default for Options {
 }
 
 impl Options {
+    pub fn is_ignored(&self, tin: Tin) -> bool {
+        self.token_set
+            .get("IGNORE")
+            .is_some_and(|ignored| ignored.contains(&tin))
+    }
+
     pub fn token(&self, name: &str) -> Option<Tin> {
         crate::token::name_to_tin(name).or_else(|| {
             let name = if name.starts_with('#') {

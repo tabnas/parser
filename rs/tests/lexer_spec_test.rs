@@ -154,3 +154,27 @@ fn negative_number_boundaries_do_not_panic_and_keep_the_sign() {
     };
     assert!(number.is_sign_negative());
 }
+
+#[test]
+fn builtin_lexer_enable_switches_fall_through_to_text() {
+    let mut number = Options::default();
+    number.number.lex = false;
+    assert_eq!(lex("12", number).unwrap(), "#TX:12");
+
+    let mut string = Options::default();
+    string.string.lex = false;
+    assert_eq!(lex(r#""x""#, string).unwrap(), r#"#TX:"x""#);
+
+    let mut value = Options::default();
+    value.value.lex = false;
+    assert_eq!(lex("true", value).unwrap(), "#TX:true");
+
+    let mut space = Options::default();
+    space.space.lex = false;
+    assert_eq!(lex("a b", space).unwrap(), "#TX:a b");
+
+    let mut custom_space = Options::default();
+    custom_space.space.chars = "_".into();
+    let mut lexer = Lexer::new("_", custom_space);
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#SP");
+}

@@ -110,7 +110,7 @@ impl<'a> Lexer<'a> {
         loop {
             let tkn = self.next_raw()?;
             // Check if ignore token
-            if tkn.tin == TIN_SP || tkn.tin == TIN_LN || tkn.tin == TIN_CM {
+            if self.options.is_ignored(tkn.tin) {
                 continue;
             }
             return Ok(tkn);
@@ -215,10 +215,10 @@ impl<'a> Lexer<'a> {
         }
 
         // 1. Whitespace
-        if c == ' ' || c == '\t' {
+        if self.options.space.lex && self.options.space.chars.contains(c) {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
-                if ch == ' ' || ch == '\t' {
+                if self.options.space.chars.contains(ch) {
                     src.push(ch);
                     self.advance();
                 } else {
@@ -337,19 +337,19 @@ impl<'a> Lexer<'a> {
         }
 
         // 5. Quoted Strings
-        if self.options.string.chars.contains(c) {
+        if self.options.string.lex && self.options.string.chars.contains(c) {
             return self.match_string(c, pnt);
         }
 
         // 6. Keywords: true, false, null
-        if c == 't' || c == 'f' || c == 'n' {
+        if self.options.value.lex && (c == 't' || c == 'f' || c == 'n') {
             if let Some(tkn) = self.match_keyword(pnt) {
                 return Ok(tkn);
             }
         }
 
         // 7. Numbers
-        if c == '-' || c == '.' || c.is_ascii_digit() {
+        if self.options.number.lex && (c == '-' || c == '.' || c.is_ascii_digit()) {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
@@ -953,7 +953,7 @@ fn is_ident_char(ch: Option<char>) -> bool {
 }
 
 fn is_text_delimiter(ch: char, options: &Options) -> bool {
-    matches!(ch, ' ' | '\t')
+    (options.space.lex && options.space.chars.contains(ch))
         || (options.fixed.lex
             && options
                 .fixed

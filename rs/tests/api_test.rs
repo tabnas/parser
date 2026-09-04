@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tabnas::{AltSpec, RuleSpec, Tabnas, Value, TIN_VL, TIN_ZZ};
 
@@ -191,4 +192,27 @@ fn token_subscribers_observe_the_filtered_parser_stream() {
         *seen.lock().expect("subscriber log lock"),
         ["#OS", "#NR", "#CA", "#NR", "#CS", "#ZZ", "#ZZ"]
     );
+}
+
+#[test]
+fn parse_prepare_empty_result_and_result_fail_are_honored() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = calls.clone();
+    let mut empty = Tabnas::new();
+    empty.options.lex.empty_result = Value::String("empty".into());
+    empty.parse_prepare(move |_context| {
+        called.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(empty.parse("").unwrap(), Value::String("empty".into()));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let mut rejected = Tabnas::make_json();
+    rejected.options.result.fail.push(Value::Number(1.0));
+    assert_eq!(rejected.parse("1").unwrap_err().code, "unexpected");
+
+    rejected.options.parse.recover.enabled = true;
+    let recovered = rejected.parse_recover("1");
+    assert_eq!(recovered.value, Some(Value::Number(1.0)));
+    assert_eq!(recovered.errors.len(), 1);
+    assert!(recovered.fatal.is_none());
 }

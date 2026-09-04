@@ -8,7 +8,7 @@ use crate::options::Options;
 use crate::rule::{
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
-use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_CM, TIN_LN, TIN_SP, TIN_ZZ};
+use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_ZZ};
 use crate::value::Value;
 use crate::{
     Action, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber, TokenSubscriber,
@@ -250,7 +250,7 @@ impl Parser {
                             for subscriber in &self.lex_subscribers {
                                 subscriber(&mut token, current_rule, context);
                             }
-                            if matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
+                            if self.options.is_ignored(token.tin) {
                                 continue;
                             }
                             for subscriber in &self.token_subscribers {
@@ -518,7 +518,7 @@ impl Parser {
                         ));
                     }
                 }
-                if !matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
+                if !self.options.is_ignored(token.tin) {
                     break token;
                 }
             };
@@ -535,16 +535,20 @@ impl Parser {
     }
 
     fn parse_inner(&self, src: &str, mode: &mut ParseMode<'_>) -> Result<Value, TabnasError> {
+        let mut context = Context::new(self.options.rewind.history);
+        for prepare in &self.options.parse.prepare {
+            prepare(&mut context);
+        }
+
         if src.is_empty() {
             return if self.options.lex.empty {
-                Ok(Value::Null)
+                Ok(self.options.lex.empty_result.clone())
             } else {
                 Err(TabnasError::new("unexpected", "", src, 0, 1, 1))
             };
         }
 
         let mut lexer = Lexer::new(src, self.options.clone());
-        let mut context = Context::new(self.options.rewind.history);
 
         let start_name = if self.rules.contains_key(&self.options.rule.start) {
             self.options.rule.start.as_str()
@@ -1107,6 +1111,26 @@ impl Parser {
                 }
                 return Err(error);
             }
+        }
+        if self
+            .options
+            .result
+            .fail
+            .iter()
+            .any(|failed| failed.deep_equal(&res))
+        {
+            let token = context.t.first();
+            let error = token.map_or_else(
+                || TabnasError::new("unexpected", "", src, 0, 1, 1),
+                |token| {
+                    TabnasError::new("unexpected", &token.src, src, token.pos, token.ri, token.ci)
+                },
+            );
+            if mode.recovering {
+                mode.errors.push(error);
+                return Ok(res);
+            }
+            return Err(error);
         }
         Ok(res)
     }

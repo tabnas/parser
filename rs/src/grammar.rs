@@ -449,8 +449,21 @@ fn apply_options(
         let text = object(text, "options.text")?;
         set_bool(text, "lex", &mut options.text.lex);
     }
+    if let Some(space) = map.get("space") {
+        let space = object(space, "options.space")?;
+        set_bool(space, "lex", &mut options.space.lex);
+        if let Some(chars) = space.get("chars") {
+            options.space.chars = chars
+                .as_str()
+                .ok_or_else(|| {
+                    GrammarError("Grammar: options.space.chars must be a string".into())
+                })?
+                .into();
+        }
+    }
     if let Some(number) = map.get("number") {
         let number = object(number, "options.number")?;
+        set_bool(number, "lex", &mut options.number.lex);
         set_bool(number, "hex", &mut options.number.hex);
         set_bool(number, "oct", &mut options.number.oct);
         set_bool(number, "bin", &mut options.number.bin);
@@ -463,6 +476,7 @@ fn apply_options(
     }
     if let Some(string) = map.get("string") {
         let string = object(string, "options.string")?;
+        set_bool(string, "lex", &mut options.string.lex);
         if let Some(chars) = string.get("chars").and_then(JsonValue::as_str) {
             options.string.chars = chars.into();
         }
@@ -509,6 +523,13 @@ fn apply_options(
             &mut options.comment.lex,
         );
     }
+    if let Some(value) = map.get("value") {
+        set_bool(
+            object(value, "options.value")?,
+            "lex",
+            &mut options.value.lex,
+        );
+    }
     if let Some(map_options) = map.get("map") {
         set_bool(
             object(map_options, "options.map")?,
@@ -517,7 +538,11 @@ fn apply_options(
         );
     }
     if let Some(lex) = map.get("lex") {
-        set_bool(object(lex, "options.lex")?, "empty", &mut options.lex.empty);
+        let lex = object(lex, "options.lex")?;
+        set_bool(lex, "empty", &mut options.lex.empty);
+        if let Some(value) = lex.get("emptyResult") {
+            options.lex.empty_result = Value::from_json(value);
+        }
     }
     if let Some(rewind) = map.get("rewind") {
         let rewind = object(rewind, "options.rewind")?;
@@ -577,6 +602,14 @@ fn apply_options(
     }
     if let Some(parse) = map.get("parse") {
         let parse = object(parse, "options.parse")?;
+        if let Some(prepare) = parse.get("prepare") {
+            let prepare = object(prepare, "options.parse.prepare")?;
+            if !prepare.is_empty() {
+                return Err(GrammarError(
+                    "Grammar: options.parse.prepare callbacks cannot be serialized".into(),
+                ));
+            }
+        }
         if let Some(budget) = parse.get("budget") {
             let budget = object(budget, "options.parse.budget")?;
             if let Some(interval) = budget
@@ -659,6 +692,19 @@ fn apply_options(
                         })?;
                 }
             }
+        }
+    }
+    if let Some(result) = map.get("result") {
+        let result = object(result, "options.result")?;
+        if let Some(fail) = result.get("fail") {
+            options.result.fail = fail
+                .as_array()
+                .ok_or_else(|| {
+                    GrammarError("Grammar: options.result.fail must be an array".into())
+                })?
+                .iter()
+                .map(Value::from_json)
+                .collect();
         }
     }
     if let Some(fixed_options) = map.get("fixed") {

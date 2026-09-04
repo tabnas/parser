@@ -21,7 +21,7 @@ pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, FixedOptions, FixedToken, MatchToken, Options, ParseOptions,
-    RecoverOptions, RewindOptions,
+    ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueOptions,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -154,6 +154,14 @@ impl Tabnas {
     ) -> &mut Self {
         self.options.parse.budget.check_every_n = check_every_n;
         self.options.parse.budget.on_check = Some(Arc::new(check));
+        self
+    }
+
+    pub fn parse_prepare(
+        &mut self,
+        prepare: impl Fn(&mut Context) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.options.parse.prepare.push(Arc::new(prepare));
         self
     }
 
