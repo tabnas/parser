@@ -270,7 +270,20 @@ fn parse_alt(
             )))
         }
     };
-    alt.c = parse_conditions(map.get("c"), label)?;
+    match map.get("c") {
+        Some(JsonValue::String(reference)) => {
+            if !matches!(
+                reference.as_str(),
+                "@probePhase0$" | "@probePhase1$" | "@probePhase2$"
+            ) {
+                return Err(GrammarError(format!(
+                    "Grammar: unknown condition function reference: {reference}"
+                )));
+            }
+            alt.c_ref = Some(reference.clone());
+        }
+        value => alt.c = parse_conditions(value, label)?,
+    }
     alt.n = number_map(map.get("n"), label)?;
     alt.u = value_map(map.get("u"), label)?;
     alt.k = value_map(map.get("k"), label)?;
@@ -301,8 +314,8 @@ fn parse_conditions(
     };
     let conditions = object(value, &format!("{label}.c"))?;
     let roots = [
-        "n", "u", "k", "d", "i", "name", "state", "node", "oN", "cN", "o", "c", "o0", "o1", "c0",
-        "c1", "parent", "child", "prev", "next", "spec",
+        "n", "u", "k", "d", "i", "name", "state", "node", "need", "oN", "cN", "o", "c", "o0", "o1",
+        "c0", "c1", "parent", "child", "prev", "next", "spec",
     ];
     let mut output = Vec::new();
     for (path, definition) in conditions {

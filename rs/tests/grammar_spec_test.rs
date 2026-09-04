@@ -104,7 +104,7 @@ fn unsupported_dynamic_fields_fail_during_installation() {
         .grammar_json(r#"{"rule":{"top":{"open":[{"c":"@condition"}]}}}"#)
         .err()
         .expect("condition must be rejected");
-    assert!(error.to_string().contains("must be an object"));
+    assert!(error.to_string().contains("unknown condition function"));
 }
 
 #[test]
@@ -280,6 +280,22 @@ fn shared_eager_literal_grammar_fixture_executes_in_rust() {
         ("Hi", true),
         ("ho", false),
         ("h", false),
+    ] {
+        let mut parser = Tabnas::new();
+        parser.grammar_json(source).unwrap();
+        assert_eq!(parser.parse(input).is_ok(), accepted, "input {input:?}");
+    }
+}
+
+#[test]
+fn shared_probe_grammar_fixture_executes_in_rust() {
+    let source = include_str!("../../ts/test/probe-grammar.fixture.json");
+    for (input, accepted) in [
+        ("abc", true),
+        ("ab@cd", true),
+        ("a@b", true),
+        ("@", false),
+        ("ab@", false),
     ] {
         let mut parser = Tabnas::new();
         parser.grammar_json(source).unwrap();

@@ -82,6 +82,7 @@ impl Parser {
 
         let mut lexer = Lexer::new(src, self.options.clone());
         let mut lookahead: Vec<Token> = Vec::with_capacity(8);
+        let mut history: Vec<Token> = Vec::new();
 
         let start_name = if self.rules.contains_key(&self.options.rule.start) {
             self.options.rule.start.as_str()
@@ -169,42 +170,37 @@ impl Parser {
                     continue;
                 }
                 let s_len = alt.s.len();
-                if s_len == 0 {
-                    // Wildcard / unconditionally matches
-                    matched_alt_idx = Some(idx);
-                    matched_count = 0;
-                    break;
-                }
-
-                if let Err(error) = ensure_lookahead(&mut lookahead, s_len) {
-                    return Err(self.attach_error(error, &current_rule, &stack, alts, None));
-                }
-
                 let mut alt_matches = true;
-                for (pos, pos_tins) in alt.s.iter().enumerate() {
-                    if pos >= lookahead.len() {
-                        alt_matches = false;
-                        break;
+                if s_len > 0 {
+                    if let Err(error) = ensure_lookahead(&mut lookahead, s_len) {
+                        return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
-                    let t = &lookahead[pos];
-                    if pos_tins.is_empty() {
-                        // Wildcard pos matches anything except BAD
-                        if t.tin == TIN_BD {
+
+                    for (pos, pos_tins) in alt.s.iter().enumerate() {
+                        if pos >= lookahead.len() {
                             alt_matches = false;
                             break;
                         }
-                    } else {
-                        // Check if tin is in pos_tins
-                        let mut found = false;
-                        for &allowed_tin in pos_tins {
-                            if allowed_tin == t.tin {
-                                found = true;
+                        let t = &lookahead[pos];
+                        if pos_tins.is_empty() {
+                            // Wildcard pos matches anything except BAD
+                            if t.tin == TIN_BD {
+                                alt_matches = false;
                                 break;
                             }
-                        }
-                        if !found {
-                            alt_matches = false;
-                            break;
+                        } else {
+                            // Check if tin is in pos_tins
+                            let mut found = false;
+                            for &allowed_tin in pos_tins {
+                                if allowed_tin == t.tin {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                alt_matches = false;
+                                break;
+                            }
                         }
                     }
                 }
@@ -217,7 +213,9 @@ impl Parser {
                     } else {
                         candidate.c = tokens;
                     }
-                    if !conditions_match(&alt.c, &candidate) {
+                    if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
+                        || !conditions_match(&alt.c, &candidate)
+                    {
                         continue;
                     }
                     matched_alt_idx = Some(idx);
@@ -242,7 +240,7 @@ impl Parser {
                 let consumed = matched_count.saturating_sub(alt.b);
                 if consumed > 0 {
                     let drain_len = consumed.min(lookahead.len());
-                    lookahead.drain(0..drain_len);
+                    history.extend(lookahead.drain(0..drain_len));
                 }
 
                 // Update counters n
@@ -266,7 +264,59 @@ impl Parser {
 
                 // Run action
                 for act_name in &alt.a {
-                    self.run_action(act_name, &mut current_rule)?;
+                    match act_name.as_str() {
+                        "@probeInit$" => {
+                            current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
+                            current_rule
+                                .k
+                                .insert("pd_mark".into(), Value::Number(history.len() as f64));
+                        }
+                        "@probeDecide$" => {
+                            let mark = current_rule.k.get("pd_mark").and_then(|value| {
+                                if let Value::Number(mark) = value {
+                                    usize::try_from(*mark as u64).ok()
+                                } else {
+                                    None
+                                }
+                            });
+                            let Some(mark) = mark.filter(|mark| *mark <= history.len()) else {
+                                let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
+                                error.detail =
+                                    "@probeDecide$: phase-0 @probeInit$ did not record a valid mark"
+                                        .into();
+                                return Err(error);
+                            };
+                            if let Err(error) = ensure_lookahead(&mut lookahead, 1) {
+                                return Err(self.attach_error(
+                                    error,
+                                    &current_rule,
+                                    &stack,
+                                    alts,
+                                    None,
+                                ));
+                            }
+                            let disambiguator =
+                                current_rule.k.get("pd_d").and_then(|value| match value {
+                                    Value::String(name) => Some(name.as_str()),
+                                    _ => None,
+                                });
+                            let phase = if lookahead
+                                .first()
+                                .is_some_and(|token| Some(token.name.as_str()) == disambiguator)
+                            {
+                                1.0
+                            } else {
+                                2.0
+                            };
+                            let mut replay = history.split_off(mark);
+                            replay.append(&mut lookahead);
+                            lookahead = replay;
+                            current_rule
+                                .k
+                                .insert("pd_phase".into(), Value::Number(phase));
+                        }
+                        _ => self.run_action(act_name, &mut current_rule)?,
+                    }
                 }
 
                 // After-actions belong to the rule whose alternate matched.
@@ -407,6 +457,20 @@ fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
         .collect();
     (includes.is_empty() || includes.iter().any(|include| groups.contains(include)))
         && !excludes.iter().any(|exclude| groups.contains(exclude))
+}
+
+fn builtin_condition_matches(reference: Option<&str>, rule: &Rule) -> bool {
+    let phase = match rule.k.get("pd_phase") {
+        Some(Value::Number(value)) => *value as i32,
+        _ => 0,
+    };
+    match reference {
+        None => true,
+        Some("@probePhase0$") => phase == 0,
+        Some("@probePhase1$") => phase == 1,
+        Some("@probePhase2$") => phase == 2,
+        Some(_) => false,
+    }
 }
 
 fn conditions_match(conditions: &[Condition], rule: &Rule) -> bool {
