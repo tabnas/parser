@@ -185,7 +185,18 @@ impl Parser {
             .flat_map(|tins| tins.iter().copied())
             .map(|tin| self.options.token_name(tin))
             .collect();
-        error.attach_context(&rule.name, rule_stack, token, expected);
+        error.attach_context(
+            &rule.name,
+            if rule.state == RuleState::Open {
+                "o"
+            } else {
+                "c"
+            },
+            rule_stack,
+            token,
+            expected,
+        );
+        error.apply_options(&self.options);
         error
     }
 
@@ -354,7 +365,10 @@ impl Parser {
             errors: &mut errors,
             partial: None,
         };
-        let result = self.parse_inner(src, &mut mode);
+        let result = self.parse_inner(src, &mut mode).map_err(|mut error| {
+            error.apply_options(&self.options);
+            error
+        });
         match result {
             Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
             other => other,
@@ -371,9 +385,15 @@ impl Parser {
                 errors: &mut errors,
                 partial: None,
             };
-            let result = self.parse_inner(src, &mut mode);
+            let result = self.parse_inner(src, &mut mode).map_err(|mut error| {
+                error.apply_options(&self.options);
+                error
+            });
             (result, mode.partial)
         };
+        for error in &mut errors {
+            error.apply_options(&self.options);
+        }
         match result {
             Ok(value) => ParseRecovery {
                 value: Some(value),

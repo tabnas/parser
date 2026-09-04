@@ -290,6 +290,21 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
     ) -> Result<Token, TabnasError> {
+        let result = self.next_raw_inner(expected_match_tins);
+        match result {
+            Ok(token) => Ok(token),
+            Err(mut error) => {
+                error.apply_options(&self.options);
+                self.err = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    fn next_raw_inner(
+        &mut self,
+        expected_match_tins: Option<&[crate::Tin]>,
+    ) -> Result<Token, TabnasError> {
         if self.end_reached {
             return Ok(Token::new(
                 "#ZZ",

@@ -50,6 +50,9 @@ Matcher-family `check` hooks use `lex_check_ref`; callbacks can continue,
 skip that matcher, or emit an owned non-empty prefix token.
 Function-form comment terminators use `comment_suffix_ref` and likewise
 consume only a validated owned source prefix.
+Serialized `error`, `hint`, `errmsg`, and `color` overlays configure both
+structured diagnostic text and human-readable error rendering, including
+source context, links, and internal suffix suppression or replacement.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default

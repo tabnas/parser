@@ -9,6 +9,61 @@ use std::sync::Arc;
 
 use crate::context::Context;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorOptions {
+    pub active: bool,
+    pub reset: String,
+    pub hi: String,
+    pub lo: String,
+    pub line: String,
+}
+
+impl ColorOptions {
+    pub(crate) fn codes(&self) -> (&str, &str, &str, &str) {
+        if self.active {
+            (&self.hi, &self.lo, &self.line, &self.reset)
+        } else {
+            ("", "", "", "")
+        }
+    }
+}
+
+impl Default for ColorOptions {
+    fn default() -> Self {
+        Self {
+            active: true,
+            reset: "\x1b[0m".into(),
+            hi: "\x1b[91m".into(),
+            lo: "\x1b[2m".into(),
+            line: "\x1b[34m".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorSuffix {
+    Standard,
+    Disabled,
+    Text(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrMsgOptions {
+    pub name: String,
+    pub suffix: ErrorSuffix,
+    pub link: String,
+}
+
+impl Default for ErrMsgOptions {
+    fn default() -> Self {
+        Self {
+            name: "tabnas".into(),
+            suffix: ErrorSuffix::Standard,
+            link: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexCheckToken {
     pub name: String,
@@ -625,6 +680,10 @@ pub struct Options {
     pub match_check: Option<LexCheck>,
     pub match_tokens: IndexMap<String, MatchToken>,
     pub match_values: IndexMap<String, MatchValue>,
+    pub error: HashMap<String, String>,
+    pub hint: HashMap<String, String>,
+    pub errmsg: ErrMsgOptions,
+    pub color: ColorOptions,
     pub tag: String,
 }
 
@@ -657,6 +716,10 @@ impl Default for Options {
             match_check: None,
             match_tokens: IndexMap::new(),
             match_values: IndexMap::new(),
+            error: crate::error::default_error_messages(),
+            hint: crate::error::default_error_hints(),
+            errmsg: ErrMsgOptions::default(),
+            color: ColorOptions::default(),
             tag: "-".to_string(),
         }
     }

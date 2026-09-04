@@ -20,11 +20,11 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, CommentDef, CommentSuffixMatcher, FixedOptions, FixedToken,
-    InfoOptions, LexCheck, LexCheckResult, LexCheckToken, MatchToken, MatchTokenCallback,
-    MatchTokenMatcher, MatchTokenResult, MatchValue, Options, ParseOptions, ParsePrepare,
-    RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef,
-    ValueOptions, ValueTransform,
+    BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ErrMsgOptions,
+    ErrorSuffix, FixedOptions, FixedToken, InfoOptions, LexCheck, LexCheckResult, LexCheckToken,
+    MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options,
+    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
+    TextModifier, ValueDef, ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{

@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
-use tabnas::VERSION;
+use tabnas::{Options, VERSION};
 
 #[test]
 fn error_registry_matches_the_rust_contract() {
@@ -30,6 +30,29 @@ fn error_registry_matches_the_rust_contract() {
         "unterminated_string",
     ]);
     assert_eq!(actual, expected);
+
+    let options = Options::default();
+    for (code, entry) in registry["codes"].as_object().expect("registry codes") {
+        assert_eq!(
+            options.error.get(code).map(String::as_str),
+            entry["message"].as_str(),
+            "message catalogue drift for {code}"
+        );
+        assert_eq!(
+            options.hint.get(code).map(String::as_str),
+            entry["hint"].as_str(),
+            "hint catalogue drift for {code}"
+        );
+    }
+    let internal = &registry["goOnly"]["internal"];
+    assert_eq!(
+        options.error.get("internal").map(String::as_str),
+        internal["message"].as_str()
+    );
+    assert_eq!(
+        options.hint.get("internal").map(String::as_str),
+        internal["hint"].as_str()
+    );
 }
 
 #[test]

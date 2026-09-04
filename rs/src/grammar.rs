@@ -671,6 +671,80 @@ fn apply_options(
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
     }
+    for (field, target) in [("error", &mut options.error), ("hint", &mut options.hint)] {
+        if let Some(overrides) = map.get(field) {
+            for (code, template) in object(overrides, &format!("options.{field}"))? {
+                if template.is_null() || template == &JsonValue::Bool(false) {
+                    target.remove(code);
+                } else {
+                    target.insert(
+                        code.clone(),
+                        template
+                            .as_str()
+                            .ok_or_else(|| {
+                                GrammarError(format!(
+                                    "Grammar: options.{field}.{code} must be a string or null"
+                                ))
+                            })?
+                            .into(),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(errmsg) = map.get("errmsg") {
+        let errmsg = object(errmsg, "options.errmsg")?;
+        if let Some(name) = errmsg.get("name") {
+            options.errmsg.name = name
+                .as_str()
+                .ok_or_else(|| {
+                    GrammarError("Grammar: options.errmsg.name must be a string".into())
+                })?
+                .into();
+        }
+        if let Some(suffix) = errmsg.get("suffix") {
+            options.errmsg.suffix = match suffix {
+                JsonValue::Null | JsonValue::Bool(false) => crate::ErrorSuffix::Disabled,
+                JsonValue::Bool(true) => crate::ErrorSuffix::Standard,
+                JsonValue::String(text) => crate::ErrorSuffix::Text(text.clone()),
+                _ => {
+                    return Err(GrammarError(
+                        "Grammar: options.errmsg.suffix must be a boolean, string, or null".into(),
+                    ))
+                }
+            };
+        }
+        if let Some(link) = errmsg.get("link") {
+            options.errmsg.link = if link.is_null() {
+                String::new()
+            } else {
+                link.as_str()
+                    .ok_or_else(|| {
+                        GrammarError("Grammar: options.errmsg.link must be a string or null".into())
+                    })?
+                    .into()
+            };
+        }
+    }
+    if let Some(color) = map.get("color") {
+        let color = object(color, "options.color")?;
+        set_bool(color, "active", &mut options.color.active);
+        for (field, target) in [
+            ("reset", &mut options.color.reset),
+            ("hi", &mut options.color.hi),
+            ("lo", &mut options.color.lo),
+            ("line", &mut options.color.line),
+        ] {
+            if let Some(value) = color.get(field) {
+                *target = value
+                    .as_str()
+                    .ok_or_else(|| {
+                        GrammarError(format!("Grammar: options.color.{field} must be a string"))
+                    })?
+                    .into();
+            }
+        }
+    }
     if let Some(text) = map.get("text") {
         let text = object(text, "options.text")?;
         set_bool(text, "lex", &mut options.text.lex);
