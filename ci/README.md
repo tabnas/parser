@@ -154,8 +154,10 @@ Go, and Rust.
 - `run.sh` checks formatting, builds and tests every Rust target at the
   locked dependency graph, runs strict Clippy, then executes both shared TSV
   token-stream parity arms against TypeScript and Go. It then compiles the
-  sibling GBNF repo's explicit llama.cpp corpus to schema-v3 pure data and
-  requires Rust to match TypeScript values and error codes for all 96 samples.
+  shared strict-JSON grammar against a seeded generated value/error corpus,
+  then compiles the sibling GBNF repo's explicit llama.cpp corpus to schema-v3
+  pure data and requires Rust to match TypeScript values and error codes for
+  all 96 samples.
   This compiler-consumer gate intentionally reads the corpus's maintained
   census rather than copying cases into this repo; sibling `bnf` and `gbnf`
   checkouts must therefore be present (or located via `TABNAS_ROOT`).

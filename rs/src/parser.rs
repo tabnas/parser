@@ -721,7 +721,7 @@ impl Parser {
         let budget = &self.options.parse.budget;
 
         loop {
-            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+            update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
             if iterations > max_iterations {
                 let pnt = context
@@ -772,7 +772,7 @@ impl Parser {
             for subscriber in &self.rule_subscribers {
                 subscriber(&mut current_rule, &mut context);
             }
-            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+            update_partial(mode, &root_node, &current_rule, &stack);
 
             // 1. Run before-actions. Recovery can retry a failed close pass;
             // its before-close actions have already run and must not replay.
@@ -789,7 +789,7 @@ impl Parser {
                     }
                 }
             }
-            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+            update_partial(mode, &root_node, &current_rule, &stack);
 
             // 2. Select alternates
             let alts = if is_open { &spec.open } else { &spec.close };
@@ -962,7 +962,7 @@ impl Parser {
                         {
                             continue;
                         }
-                        mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                        update_partial(mode, &root_node, &current_rule, &stack);
                         return Err(error);
                     }
                 }
@@ -1075,7 +1075,7 @@ impl Parser {
                         )?,
                     }
                 }
-                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                update_partial(mode, &root_node, &current_rule, &stack);
 
                 let done_alt = Some(RuleDoneAlt {
                     b: backtrack,
@@ -1171,7 +1171,7 @@ impl Parser {
                     final_value = Some(value);
                     break;
                 }
-                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                update_partial(mode, &root_node, &current_rule, &stack);
             } else if alts.is_empty() {
                 // A state with no alternatives performs an implicit empty
                 // pass. It still resolves next and runs lifecycle after-actions.
@@ -1212,7 +1212,7 @@ impl Parser {
                     final_value = Some(value);
                     break;
                 }
-                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                update_partial(mode, &root_node, &current_rule, &stack);
             } else {
                 // Declared alternatives exist, but none matched.
                 if is_open {
@@ -1271,7 +1271,7 @@ impl Parser {
                     {
                         continue;
                     }
-                    mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                    update_partial(mode, &root_node, &current_rule, &stack);
                     return Err(error);
                 } else {
                     if let Err(error) = self.ensure_lookahead(
@@ -1329,14 +1329,16 @@ impl Parser {
                     {
                         continue;
                     }
-                    mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                    update_partial(mode, &root_node, &current_rule, &stack);
                     return Err(error);
                 }
             }
         }
 
         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
-        mode.partial = Some(res.clone());
+        if mode.recovering {
+            mode.partial = Some(res.clone());
+        }
 
         // Post-loop check: ensure no unexpected trailing tokens. Recovery
         // keeps the completed value and reports the trailing fault.
@@ -1400,6 +1402,17 @@ impl Parser {
             return Err(error);
         }
         Ok(res)
+    }
+}
+
+fn update_partial(
+    mode: &mut ParseMode<'_>,
+    root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
+    current_rule: &Rule,
+    stack: &[Rule],
+) {
+    if mode.recovering {
+        mode.partial = best_partial_value(root_node, current_rule, stack);
     }
 }
 
