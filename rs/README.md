@@ -56,6 +56,8 @@ consume only a validated owned source prefix.
 Serialized `error`, `hint`, `errmsg`, and `color` overlays configure both
 structured diagnostic text and human-readable error rendering, including
 source context, links, and internal suffix suppression or replacement.
+Dynamic suffix references bind through `error_suffix_ref` and receive an
+owned snapshot of the rendered diagnostic and its color palette.
 Named parse lifecycle hooks bind through `parse_prepare_ref` and
 `parse_budget_ref`; serialized prepare maps are deterministic by callback name
 and budget callbacks remain inactive until `checkEveryN` is non-zero.

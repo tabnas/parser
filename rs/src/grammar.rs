@@ -6,8 +6,8 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    BudgetCheck, CommentSuffixMatcher, LexCheck, LexMatcherCallback, MatchTokenCallback,
-    ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
+    BudgetCheck, CommentSuffixMatcher, ErrorSuffixCallback, LexCheck, LexMatcherCallback,
+    MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -32,6 +32,7 @@ struct AltRefs {
     parse_prepares: HashMap<String, ParsePrepare>,
     budget_checks: HashMap<String, BudgetCheck>,
     lex_matches: HashMap<String, LexMatcherCallback>,
+    error_suffixes: HashMap<String, ErrorSuffixCallback>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -52,6 +53,7 @@ impl From<&Tabnas> for AltRefs {
             parse_prepares: tabnas.parse_prepare_refs.clone(),
             budget_checks: tabnas.budget_check_refs.clone(),
             lex_matches: tabnas.lex_match_refs.clone(),
+            error_suffixes: tabnas.error_suffix_refs.clone(),
         }
     }
 }
@@ -712,7 +714,12 @@ fn apply_options(
             options.errmsg.suffix = match suffix {
                 JsonValue::Null | JsonValue::Bool(false) => crate::ErrorSuffix::Disabled,
                 JsonValue::Bool(true) => crate::ErrorSuffix::Standard,
-                JsonValue::String(text) => crate::ErrorSuffix::Text(text.clone()),
+                JsonValue::String(reference) => {
+                    refs.error_suffixes.get(reference).cloned().map_or_else(
+                        || crate::ErrorSuffix::Text(reference.clone()),
+                        crate::ErrorSuffix::Callback,
+                    )
+                }
                 _ => {
                     return Err(GrammarError(
                         "Grammar: options.errmsg.suffix must be a boolean, string, or null".into(),

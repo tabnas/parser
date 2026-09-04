@@ -21,11 +21,11 @@ pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ErrMsgOptions,
-    ErrorSuffix, FixedOptions, FixedToken, InfoOptions, LexCheck, LexCheckResult, LexCheckToken,
-    LexMatcher, LexMatcherCallback, MatchToken, MatchTokenCallback, MatchTokenMatcher,
-    MatchTokenResult, MatchValue, Options, ParseOptions, ParsePrepare, RecoverOptions,
-    ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions,
-    ValueTransform,
+    ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken, InfoOptions,
+    LexCheck, LexCheckResult, LexCheckToken, LexMatcher, LexMatcherCallback, MatchToken,
+    MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options, ParseOptions,
+    ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, TextModifier,
+    ValueDef, ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -75,6 +75,7 @@ pub struct Tabnas {
     pub(crate) parse_prepare_refs: HashMap<String, ParsePrepare>,
     pub(crate) budget_check_refs: HashMap<String, BudgetCheck>,
     pub(crate) lex_match_refs: HashMap<String, LexMatcherCallback>,
+    pub(crate) error_suffix_refs: HashMap<String, ErrorSuffixCallback>,
 }
 
 impl Default for Tabnas {
@@ -109,6 +110,7 @@ impl Tabnas {
             parse_prepare_refs: HashMap::new(),
             budget_check_refs: HashMap::new(),
             lex_match_refs: HashMap::new(),
+            error_suffix_refs: HashMap::new(),
         }
     }
 
@@ -137,6 +139,7 @@ impl Tabnas {
             parse_prepare_refs: HashMap::new(),
             budget_check_refs: HashMap::new(),
             lex_match_refs: HashMap::new(),
+            error_suffix_refs: HashMap::new(),
         }
     }
 
@@ -330,6 +333,17 @@ impl Tabnas {
         matcher: impl Fn(&str) -> Option<LexCheckToken> + Send + Sync + 'static,
     ) -> &mut Self {
         self.lex_match_refs.insert(name.into(), Arc::new(matcher));
+        self
+    }
+
+    /// Register a typed dynamic renderer for a serialized
+    /// `options.errmsg.suffix` function reference.
+    pub fn error_suffix_ref(
+        &mut self,
+        name: impl Into<String>,
+        render: impl Fn(&ErrorSuffixContext) -> String + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.error_suffix_refs.insert(name.into(), Arc::new(render));
         self
     }
 

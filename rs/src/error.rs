@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Write;
 
-use crate::options::{ColorOptions, ErrorSuffix, Options};
+use crate::options::{ColorOptions, ErrorSuffix, ErrorSuffixContext, Options};
 use crate::token::Token;
 use crate::value::Value;
 
@@ -235,6 +235,26 @@ impl fmt::Display for TabnasError {
         match &self.suffix {
             ErrorSuffix::Disabled => {}
             ErrorSuffix::Text(text) => write!(f, "\n{text}")?,
+            ErrorSuffix::Callback(render) => {
+                let context = ErrorSuffixContext {
+                    code: self.code.clone(),
+                    source: self.src.clone(),
+                    message: self.detail.clone(),
+                    hint: self.hint.clone(),
+                    pos: self.pos,
+                    row: self.row,
+                    col: self.col,
+                    name: self.tag.clone(),
+                    tag: self.instance_tag.clone(),
+                    rule: self.rule.clone(),
+                    rule_state: self.rule_state.clone(),
+                    token: self.token.name.clone(),
+                    why: self.why.clone(),
+                    plugins: self.plugins.clone(),
+                    color: self.color.clone(),
+                };
+                write!(f, "\n{}", render(&context))?;
+            }
             ErrorSuffix::Standard => {
                 if !self.link.is_empty() {
                     write!(f, "\n\n  {lo}{}{reset}", self.link)?;

@@ -75,6 +75,28 @@ fn false_suffix_suppresses_internal_diagnostics() {
 }
 
 #[test]
+fn serialized_dynamic_suffix_receives_the_rendered_diagnostic() {
+    let mut parser = Tabnas::new();
+    parser.error_suffix_ref("@tail", |error| {
+        format!(
+            "DYNAMIC:{}:{}:{}:{}:{}:{}:{}",
+            error.code, error.source, error.message, error.row, error.col, error.rule, error.token
+        )
+    });
+    parser
+        .grammar_json(&error_grammar(
+            r##"
+              "error":{"unexpected":"bad {src}"},
+              "errmsg":{"name":"vox","suffix":"@tail"}
+            "##,
+        ))
+        .unwrap();
+
+    let rendered = parser.parse("x").unwrap_err().to_string();
+    assert!(rendered.ends_with("\nDYNAMIC:unexpected:x:bad x:1:1:top:#TX"));
+}
+
+#[test]
 fn unknown_catalogue_entries_fall_back_and_interpolate_token_details() {
     let mut parser = Tabnas::new();
     parser.alt_error("@raise", |rule, _context| {

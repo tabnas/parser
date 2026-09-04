@@ -41,11 +41,57 @@ impl Default for ColorOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorSuffixContext {
+    pub code: String,
+    pub source: String,
+    pub message: String,
+    pub hint: String,
+    pub pos: usize,
+    pub row: usize,
+    pub col: usize,
+    pub name: String,
+    pub tag: String,
+    pub rule: String,
+    pub rule_state: String,
+    pub token: String,
+    pub why: String,
+    pub plugins: Vec<String>,
+    pub color: ColorOptions,
+}
+
+pub type ErrorSuffixCallback = Arc<dyn Fn(&ErrorSuffixContext) -> String + Send + Sync>;
+
+#[derive(Clone)]
 pub enum ErrorSuffix {
     Standard,
     Disabled,
     Text(String),
+    Callback(ErrorSuffixCallback),
 }
+
+impl fmt::Debug for ErrorSuffix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Standard => formatter.write_str("Standard"),
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Text(text) => formatter.debug_tuple("Text").field(text).finish(),
+            Self::Callback(_) => formatter.write_str("Callback(<function>)"),
+        }
+    }
+}
+
+impl PartialEq for ErrorSuffix {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Standard, Self::Standard) | (Self::Disabled, Self::Disabled) => true,
+            (Self::Text(left), Self::Text(right)) => left == right,
+            (Self::Callback(left), Self::Callback(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ErrorSuffix {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrMsgOptions {
