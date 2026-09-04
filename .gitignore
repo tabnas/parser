@@ -82,6 +82,7 @@ out
 .nuxt
 dist
 dist-test
+target/
 .output
 
 # Gatsby files

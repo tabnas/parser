@@ -10,17 +10,19 @@ repository for humans and agents alike.
 
 ## Build & test
 
-This repository is *polyglot*: `ts/` and `go/` hold two parallel
-implementations of the same package. **`ts/` is canonical; `go/` tracks
-it** — a behaviour change normally lands in both, with tests in both.
+This repository is *polyglot*: `ts/`, `go/`, and `rs/` hold the canonical
+engine and its ports. **`ts/` is canonical; ports track it** — a behaviour
+change normally lands in each affected runtime, with shared fixtures where the
+surface overlaps.
 
 ```bash
-make build   # builds ts/ and go/
-make test    # tests ts/ and go/
+make build   # builds ts/, go/, and rs/
+make test    # tests ts/, go/, and rs/
 
 # or per stack:
 cd ts && npm install && npm run build && npm test
 cd go && go build ./... && go test ./...
+cd rs && cargo build --all-targets && cargo test --all-targets
 ```
 
 Tabnas repos resolve their unpublished `@tabnas/*` siblings from

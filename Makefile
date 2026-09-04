@@ -4,16 +4,16 @@
 # Local build/test resolve the unpublished @tabnas siblings via the
 # repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
 
-.PHONY: all build test clean build-ts build-go test-ts test-go \
-        clean-ts clean-go publish-ts publish-go tags-go reset
+.PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
+        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset
 
 all: build test
 
-build: build-ts build-go
+build: build-ts build-go build-rs
 
-test: test-ts test-go
+test: test-ts test-go test-rs
 
-clean: clean-ts clean-go
+clean: clean-ts clean-go clean-rs
 
 # --- TypeScript (package in ts/) ---
 build-ts:
@@ -39,6 +39,17 @@ test-go:
 clean-go:
 	cd go && go clean
 
+# --- Rust (crate in rs/) ---
+build-rs:
+	cd rs && cargo build --all-targets
+
+test-rs:
+	cd rs && cargo test --all-targets
+	cd rs && cargo clippy --all-targets --all-features -- -D warnings
+
+clean-rs:
+	cd rs && cargo clean
+
 # Publish the Go module: make publish-go V=x.y.z
 # Injects V into the Go `Version` const, commits, tags go/vX.Y.Z, and
 # (when gh is available) creates a GitHub release.
@@ -61,3 +72,4 @@ tags-go:
 reset:
 	cd ts && npm run reset
 	cd go && go clean -cache && go build ./... && go test -v ./...
+	cd rs && cargo clean && cargo build --all-targets && cargo test --all-targets

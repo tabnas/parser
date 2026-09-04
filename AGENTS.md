@@ -19,6 +19,7 @@ lexer. Grammar is contributed by plugins.
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
 | `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const VERSION` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
+| `rs/` | Early Rust engine slice. It covers core lexing/rule transitions and the shared strict-JSON/diagnostic fixtures, but is not yet the full imperative plugin/recovery port described in `doc/rust-port-implementation-plan.md`. |
 | `test/spec/` | `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`) for the engine's own surface: strict-JSON (`include-json*.tsv`), `utility-*.tsv`, `lex-string-control.tsv`, `happy.tsv`. Every file here has a runner in this repo. Relaxed-grammar fixtures belong in the grammar's repo — see [`test/AGENTS.md`](test/AGENTS.md). |
 
 ## Authority and alignment rules
@@ -83,8 +84,16 @@ go test ./...                  # engine + strict-JSON fixture; shared fixtures
 go test -coverpkg=./... -cover ./...
 ```
 
+From `rs/`:
+
+```bash
+cargo build --all-targets
+cargo test --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 The repo-root [`Makefile`](Makefile) (adapted from voxgig/util) wraps
-both halves: `make build|test|clean` run the TS and Go sides,
+all runtimes: `make build|test|clean` run the TS, Go, and Rust sides,
 `make reset` rebuilds from clean, and `make publish-go V=x.y.z` injects
 `V` into the `const VERSION` in `go/tabnas.go`, commits, and tags
 `go/vX.Y.Z`. `make publish-ts` publishes the TS package at its
@@ -154,10 +163,11 @@ The commands that prove a change is correct:
 make build && make test      # both runtimes, LOCALLY
 make -C ts test              # TypeScript alone, when iterating
 (cd go && go test ./...)     # Go alone
+(cd rs && cargo test --all-targets) # Rust slice alone
 ```
 
-These are **local** checks. The root `Makefile` runs this repo's TypeScript and
-Go targets and nothing else — it does not clone or build any downstream repo,
+These are **local** checks. The root `Makefile` runs this repo's TypeScript,
+Go, and Rust targets and nothing else — it does not clone or build any downstream repo,
 so a change that keeps this repo green while breaking a sibling grammar passes
 all of them. CI is what covers criterion 3 below; there is no local command
 that does.
