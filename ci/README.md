@@ -153,11 +153,16 @@ Go, and Rust.
 
 - `run.sh` checks formatting, builds and tests every Rust target at the
   locked dependency graph, runs strict Clippy, then executes both shared TSV
-  token-stream parity arms against TypeScript and Go.
+  token-stream parity arms against TypeScript and Go. It then compiles the
+  sibling GBNF repo's explicit llama.cpp corpus to schema-v3 pure data and
+  requires Rust to match TypeScript values and error codes for all 96 samples.
+  This compiler-consumer gate intentionally reads the corpus's maintained
+  census rather than copying cases into this repo; sibling `bnf` and `gbnf`
+  checkouts must therefore be present (or located via `TABNAS_ROOT`).
 - `workflows/rust.yml` is its staged PR workflow. It tests the crate's declared
-  Rust 1.85 minimum and clones the strict-JSON grammar needed by the parity
-  dumper. Promote it under ADR-8 to make the existing local Rust gate required
-  on pull requests.
+  Rust 1.85 minimum and clones the strict-JSON and GBNF compiler dependencies
+  needed by the parity gates. Promote it under ADR-8 to make the existing local
+  Rust gate required on pull requests.
 
 This harness found three real engine divergences during bring-up, all
 fixed in the engine alongside it: TS lexed unquoted `__proto__` /

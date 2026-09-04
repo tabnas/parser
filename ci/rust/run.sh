@@ -14,3 +14,4 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cd "$ROOT"
 ci/parity/run-parity.sh json ../json/test/spec
 ci/parity/run-parity.sh json test/spec
+node ci/rust/gbnf-corpus.js
