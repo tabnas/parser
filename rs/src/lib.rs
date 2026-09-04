@@ -17,9 +17,9 @@ pub mod value;
 
 pub use error::TabnasError;
 pub use grammar::{GrammarError, GrammarSpec};
-pub use options::Options;
+pub use options::{FixedOptions, FixedToken, MatchToken, Options};
 pub use parser::Parser;
-pub use rule::{AltSpec, Rule, RuleSpec, RuleState};
+pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 pub use token::{
     Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
     TIN_VL, TIN_ZZ,

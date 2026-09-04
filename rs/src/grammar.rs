@@ -2,7 +2,7 @@
 
 //! Loading and installing the JSON-serializable grammar interchange format.
 
-use crate::rule::{AltSpec, RuleSpec};
+use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{Tabnas, Value};
 use indexmap::IndexMap;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Builtin wire schema implemented by this early Rust port.
-pub const BUILTIN_SCHEMA_VERSION: u64 = 1;
+pub const BUILTIN_SCHEMA_VERSION: u64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarError(pub String);
@@ -86,6 +86,7 @@ impl Tabnas {
         let root = object(&grammar.document, "document")?;
         if grammar.clear {
             self.rules.clear();
+            self.options.fixed.tokens.clear();
         }
         if let Some(options) = root.get("options") {
             apply_options(&mut self.options, object(options, "options")?)?;
@@ -197,7 +198,7 @@ fn parse_alt(
     options: &crate::Options,
 ) -> Result<AltSpec, GrammarError> {
     let map = object(value, label)?;
-    for unsupported in ["e", "h", "c"] {
+    for unsupported in ["e", "h"] {
         if map.contains_key(unsupported) {
             return Err(GrammarError(format!(
                 "Grammar: {label}.{unsupported} is not supported by the Rust engine"
@@ -269,6 +270,7 @@ fn parse_alt(
             )))
         }
     };
+    alt.c = parse_conditions(map.get("c"), label)?;
     alt.n = number_map(map.get("n"), label)?;
     alt.u = value_map(map.get("u"), label)?;
     alt.k = value_map(map.get("k"), label)?;
@@ -286,7 +288,76 @@ fn parse_alt(
             )))
         }
     };
+    validate_group_tags(&alt.g, label)?;
     Ok(alt)
+}
+
+fn parse_conditions(
+    value: Option<&JsonValue>,
+    label: &str,
+) -> Result<Vec<Condition>, GrammarError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let conditions = object(value, &format!("{label}.c"))?;
+    let roots = [
+        "n", "u", "k", "d", "i", "name", "state", "node", "oN", "cN", "o", "c", "o0", "o1", "c0",
+        "c1", "parent", "child", "prev", "next", "spec",
+    ];
+    let mut output = Vec::new();
+    for (path, definition) in conditions {
+        if definition.is_null() {
+            continue;
+        }
+        let parts: Vec<String> = path.split('.').map(str::to_owned).collect();
+        if !roots.contains(&parts[0].as_str()) {
+            return Err(GrammarError(format!(
+                "{label}: unknown condition path: \"{path}\""
+            )));
+        }
+        if let Some(operators) = definition.as_object() {
+            for (operator, value) in operators {
+                let op = match operator.as_str() {
+                    "$eq" => CompareOp::Eq,
+                    "$ne" => CompareOp::Ne,
+                    "$lt" => CompareOp::Lt,
+                    "$lte" => CompareOp::Lte,
+                    "$gt" => CompareOp::Gt,
+                    "$gte" => CompareOp::Gte,
+                    "$exist" => CompareOp::Exist,
+                    _ => {
+                        return Err(GrammarError(format!(
+                            "{label}: unknown condition operator: {operator}"
+                        )))
+                    }
+                };
+                output.push(Condition {
+                    path: parts.clone(),
+                    op,
+                    value: Value::from_json(value),
+                });
+            }
+        } else {
+            output.push(Condition {
+                path: parts,
+                op: CompareOp::Eq,
+                value: Value::from_json(definition),
+            });
+        }
+    }
+    Ok(output)
+}
+
+fn validate_group_tags(tags: &str, label: &str) -> Result<(), GrammarError> {
+    let valid = regex::Regex::new("^[a-z][a-z0-9-]+$").expect("static group regex");
+    for tag in tags.split(',').map(str::trim).filter(|tag| !tag.is_empty()) {
+        if !valid.is_match(tag) {
+            return Err(GrammarError(format!(
+                "{label}: invalid group tag: \"{tag}\""
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn string_field(
@@ -421,6 +492,64 @@ fn apply_options(
         if let Some(include) = rule.get("include").and_then(JsonValue::as_str) {
             options.rule.include = include.into();
         }
+        if let Some(exclude) = rule.get("exclude").and_then(JsonValue::as_str) {
+            options.rule.exclude = exclude.into();
+        }
+    }
+    if let Some(fixed_options) = map.get("fixed") {
+        let fixed_options = object(fixed_options, "options.fixed")?;
+        set_bool(fixed_options, "lex", &mut options.fixed.lex);
+        if let Some(tokens) = fixed_options.get("token") {
+            for (name, source) in object(tokens, "options.fixed.token")? {
+                let name = if name.starts_with('#') {
+                    name.clone()
+                } else {
+                    format!("#{name}")
+                };
+                if source.is_null() {
+                    options.fixed.tokens.shift_remove(&name);
+                    continue;
+                }
+                let source = source.as_str().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.fixed.token.{name} must be a string or null"
+                    ))
+                })?;
+                if matches!(
+                    name.as_str(),
+                    "#BD"
+                        | "#ZZ"
+                        | "#UK"
+                        | "#AA"
+                        | "#SP"
+                        | "#LN"
+                        | "#CM"
+                        | "#NR"
+                        | "#ST"
+                        | "#TX"
+                        | "#VL"
+                ) {
+                    return Err(GrammarError(format!(
+                        "Grammar: {name} is produced by a lexer matcher and cannot be bound to a fixed literal"
+                    )));
+                }
+                let tin = options
+                    .fixed
+                    .tokens
+                    .get(&name)
+                    .map(|token| token.tin)
+                    .or_else(|| options.token(&name))
+                    .unwrap_or_else(|| options.next_tin());
+                options.fixed.tokens.insert(
+                    name.clone(),
+                    crate::options::FixedToken {
+                        name,
+                        tin,
+                        source: source.to_string(),
+                    },
+                );
+            }
+        }
     }
     if let Some(match_options) = map.get("match") {
         let match_options = object(match_options, "options.match")?;
@@ -481,6 +610,34 @@ fn apply_options(
                     },
                 );
             }
+        }
+    }
+    if let Some(token_sets) = map.get("tokenSet").or_else(|| map.get("token_set")) {
+        for (name, members) in object(token_sets, "options.tokenSet")? {
+            if members.is_null() {
+                options.token_set.remove(name.trim_start_matches('#'));
+                continue;
+            }
+            let members = members.as_array().ok_or_else(|| {
+                GrammarError(format!("Grammar: options.tokenSet.{name} must be an array"))
+            })?;
+            let mut tins = Vec::with_capacity(members.len());
+            for member in members {
+                let member = member.as_str().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.tokenSet.{name} entries must be strings"
+                    ))
+                })?;
+                let tin = options.token(member).ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.tokenSet.{name}: unknown token {member}"
+                    ))
+                })?;
+                tins.push(tin);
+            }
+            options
+                .token_set
+                .insert(name.trim_start_matches('#').to_string(), tins);
         }
     }
     Ok(())

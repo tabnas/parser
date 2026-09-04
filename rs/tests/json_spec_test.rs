@@ -137,3 +137,32 @@ fn test_spec_include_json_errors() {
 fn test_spec_include_json_utf8_errors() {
     run_error_tsv("include-json-utf8-errors.tsv");
 }
+
+#[test]
+fn serialized_json_builder_fixture_builds_native_values() {
+    let source = std::fs::read_to_string("../ts/test/json-builder.fixture.json")
+        .expect("json builder fixture");
+    let mut parser = Tabnas::new();
+    parser.options.rule.start = "val".into();
+    parser.grammar_json(&source).expect("install JSON grammar");
+
+    for input in [
+        "1",
+        r#""x""#,
+        "true",
+        "false",
+        "null",
+        "{}",
+        "[]",
+        r#"{"a":1}"#,
+        "[1,2,3]",
+        r#"{"a":{"b":[true,null,"x"]}}"#,
+        r#"{"a":1,"b":2}"#,
+    ] {
+        let expected = Value::from_json(&serde_json::from_str(input).unwrap());
+        let actual = parser
+            .parse(input)
+            .unwrap_or_else(|error| panic!("serialized JSON grammar failed for {input}: {error}"));
+        assert!(actual.deep_equal(&expected), "input {input}: {actual}");
+    }
+}

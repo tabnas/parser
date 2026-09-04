@@ -4,7 +4,7 @@ use crate::builtins::run_builtin_action;
 use crate::error::TabnasError;
 use crate::lexer::Lexer;
 use crate::options::Options;
-use crate::rule::{AltSpec, Rule, RuleSpec, RuleState};
+use crate::rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 use crate::token::{Token, TIN_BD, TIN_ZZ};
 use crate::value::Value;
 use crate::Action;
@@ -92,7 +92,9 @@ impl Parser {
         };
 
         let mut current_rule = Rule::new(start_name, Value::Undefined);
+        current_rule.i = 0;
         let mut stack: Vec<Rule> = Vec::new();
+        let mut next_rule_id = 1;
         #[allow(unused_assignments)]
         let mut final_value = None;
 
@@ -163,6 +165,9 @@ impl Parser {
             let mut matched_count = 0;
 
             for (idx, alt) in alts.iter().enumerate() {
+                if !groups_enabled(alt, &self.options) {
+                    continue;
+                }
                 let s_len = alt.s.len();
                 if s_len == 0 {
                     // Wildcard / unconditionally matches
@@ -205,6 +210,16 @@ impl Parser {
                 }
 
                 if alt_matches {
+                    let mut candidate = current_rule.clone();
+                    let tokens: Vec<Token> = lookahead.iter().take(s_len).cloned().collect();
+                    if is_open {
+                        candidate.o = tokens;
+                    } else {
+                        candidate.c = tokens;
+                    }
+                    if !conditions_match(&alt.c, &candidate) {
+                        continue;
+                    }
                     matched_alt_idx = Some(idx);
                     matched_count = s_len;
                     break;
@@ -270,12 +285,18 @@ impl Parser {
                 if let Some(ref push_name) = alt.p {
                     current_rule.state = RuleState::Close;
                     let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
+                    child.i = next_rule_id;
+                    next_rule_id += 1;
+                    child.d = stack.len() + 1;
                     child.n = current_rule.n.clone();
                     child.k = current_rule.k.clone();
                     stack.push(current_rule);
                     current_rule = child;
                 } else if let Some(ref replace_name) = alt.r {
                     let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
+                    next.i = next_rule_id;
+                    next_rule_id += 1;
+                    next.d = current_rule.d;
                     next.n = current_rule.n.clone();
                     next.k = current_rule.k.clone();
                     current_rule = next;
@@ -360,5 +381,131 @@ impl Parser {
 
         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
         Ok(res)
+    }
+}
+
+fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
+    let groups: Vec<&str> = alt
+        .g
+        .split(',')
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .collect();
+    let includes: Vec<&str> = options
+        .rule
+        .include
+        .split(',')
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .collect();
+    let excludes: Vec<&str> = options
+        .rule
+        .exclude
+        .split(',')
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .collect();
+    (includes.is_empty() || includes.iter().any(|include| groups.contains(include)))
+        && !excludes.iter().any(|exclude| groups.contains(exclude))
+}
+
+fn conditions_match(conditions: &[Condition], rule: &Rule) -> bool {
+    conditions.iter().all(|condition| {
+        let resolved = resolve_condition_path(rule, &condition.path);
+        if condition.op == CompareOp::Exist {
+            let exists = condition_exists(rule, &condition.path);
+            let wanted = match condition.value {
+                Value::Bool(value) => value,
+                Value::Number(value) => value != 0.0,
+                _ => true,
+            };
+            return exists == wanted;
+        }
+        let Some(actual) = resolved else {
+            return !matches!(condition.op, CompareOp::Eq);
+        };
+        match condition.op {
+            CompareOp::Eq => actual.deep_equal(&condition.value),
+            CompareOp::Ne => !actual.deep_equal(&condition.value),
+            CompareOp::Lt => ordered(&actual, &condition.value).is_none_or(|value| value < 0),
+            CompareOp::Lte => ordered(&actual, &condition.value).is_none_or(|value| value <= 0),
+            CompareOp::Gt => ordered(&actual, &condition.value).is_none_or(|value| value > 0),
+            CompareOp::Gte => ordered(&actual, &condition.value).is_none_or(|value| value >= 0),
+            CompareOp::Exist => unreachable!("handled above"),
+        }
+    })
+}
+
+fn ordered(left: &Value, right: &Value) -> Option<i8> {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => Some(if left < right {
+            -1
+        } else if left > right {
+            1
+        } else {
+            0
+        }),
+        (Value::String(left), Value::String(right)) => Some(if left < right {
+            -1
+        } else if left > right {
+            1
+        } else {
+            0
+        }),
+        _ => None,
+    }
+}
+
+fn condition_exists(rule: &Rule, path: &[String]) -> bool {
+    if path.first().map(String::as_str) == Some("n") && path.len() == 2 {
+        rule.n.contains_key(&path[1])
+    } else {
+        resolve_condition_path(rule, path).is_some()
+    }
+}
+
+fn resolve_condition_path(rule: &Rule, path: &[String]) -> Option<Value> {
+    let root = path.first()?.as_str();
+    let rest = &path[1..];
+    match root {
+        "n" if rest.len() == 1 => Some(Value::Number(*rule.n.get(&rest[0]).unwrap_or(&0) as f64)),
+        "u" if rest.len() == 1 => rule.u.get(&rest[0]).cloned(),
+        "k" if rest.len() == 1 => rule.k.get(&rest[0]).cloned(),
+        "d" if rest.is_empty() => Some(Value::Number(rule.d as f64)),
+        "i" if rest.is_empty() => Some(Value::Number(rule.i as f64)),
+        "name" if rest.is_empty() => Some(Value::String(rule.name.clone())),
+        "state" if rest.is_empty() => Some(Value::String(
+            match rule.state {
+                RuleState::Open => "o",
+                RuleState::Close => "c",
+            }
+            .into(),
+        )),
+        "node" if rest.is_empty() => Some(rule.node.borrow().clone()),
+        "oN" if rest.is_empty() => Some(Value::Number(rule.o.len() as f64)),
+        "cN" if rest.is_empty() => Some(Value::Number(rule.c.len() as f64)),
+        "o0" => token_path(rule.o.first(), rest),
+        "o1" => token_path(rule.o.get(1), rest),
+        "c0" => token_path(rule.c.first(), rest),
+        "c1" => token_path(rule.c.get(1), rest),
+        _ => None,
+    }
+}
+
+fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
+    let token = token?;
+    if path.is_empty() {
+        return Some(token.val.clone());
+    }
+    if path.len() != 1 {
+        return None;
+    }
+    match path[0].as_str() {
+        "tin" => Some(Value::Number(token.tin as f64)),
+        "name" => Some(Value::String(token.name.clone())),
+        "src" => Some(Value::String(token.src.clone())),
+        "val" => Some(token.val.clone()),
+        "why" => Some(Value::String(token.why.clone())),
+        _ => None,
     }
 }

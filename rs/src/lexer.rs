@@ -2,10 +2,7 @@
 
 use crate::error::TabnasError;
 use crate::options::Options;
-use crate::token::{
-    Point, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CM, TIN_CS, TIN_LN, TIN_NR, TIN_OB, TIN_OS, TIN_SP,
-    TIN_ST, TIN_TX, TIN_VL, TIN_ZZ,
-};
+use crate::token::{Point, Token, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ};
 use crate::value::Value;
 use regex::Regex;
 
@@ -176,6 +173,29 @@ impl<'a> Lexer<'a> {
             ));
         }
 
+        // Fixed literals run after custom matchers and use longest-match wins.
+        let fixed = self.options.fixed.lex.then(|| {
+            self.options
+                .fixed
+                .tokens
+                .values()
+                .filter(|token| !token.source.is_empty() && remaining.starts_with(&token.source))
+                .max_by_key(|token| token.source.len())
+                .map(|token| (token.name.clone(), token.tin, token.source.clone()))
+        });
+        if let Some(Some((name, tin, matched))) = fixed {
+            for _ in matched.chars() {
+                self.advance();
+            }
+            return Ok(Token::new(
+                name,
+                tin,
+                Value::String(matched.clone()),
+                matched,
+                pnt,
+            ));
+        }
+
         // 1. Whitespace
         if c == ' ' || c == '\t' {
             let mut src = String::new();
@@ -242,72 +262,7 @@ impl<'a> Lexer<'a> {
             return Err(err);
         }
 
-        // 3. Fixed punctuation: { } [ ] : ,
-        match c {
-            '{' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#OB",
-                    TIN_OB,
-                    Value::String("{".into()),
-                    "{",
-                    pnt,
-                ));
-            }
-            '}' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#CB",
-                    TIN_CB,
-                    Value::String("}".into()),
-                    "}",
-                    pnt,
-                ));
-            }
-            '[' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#OS",
-                    TIN_OS,
-                    Value::String("[".into()),
-                    "[",
-                    pnt,
-                ));
-            }
-            ']' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#CS",
-                    TIN_CS,
-                    Value::String("]".into()),
-                    "]",
-                    pnt,
-                ));
-            }
-            ':' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#CL",
-                    TIN_CL,
-                    Value::String(":".into()),
-                    ":",
-                    pnt,
-                ));
-            }
-            ',' => {
-                self.advance();
-                return Ok(Token::new(
-                    "#CA",
-                    TIN_CA,
-                    Value::String(",".into()),
-                    ",",
-                    pnt,
-                ));
-            }
-            _ => {}
-        }
-
-        // 4. Comments (if comment lexing enabled)
+        // 3. Comments (if comment lexing enabled)
         if self.options.comment.lex && c == '/' {
             if self.peek_at(1) == Some('/') {
                 let mut src = String::new();
@@ -980,7 +935,13 @@ fn is_ident_char(ch: Option<char>) -> bool {
 }
 
 fn is_text_delimiter(ch: char, options: &Options) -> bool {
-    matches!(ch, ' ' | '\t' | '{' | '}' | '[' | ']' | ':' | ',')
+    matches!(ch, ' ' | '\t')
+        || (options.fixed.lex
+            && options
+                .fixed
+                .tokens
+                .values()
+                .any(|token| token.source.starts_with(ch)))
         || options.line.fixed.contains(&ch)
         || (options.line.lex && matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
 }

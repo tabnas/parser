@@ -6,6 +6,43 @@ use regex::Regex;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+pub struct FixedToken {
+    pub name: String,
+    pub tin: Tin,
+    pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FixedOptions {
+    pub lex: bool,
+    pub tokens: IndexMap<String, FixedToken>,
+}
+
+impl Default for FixedOptions {
+    fn default() -> Self {
+        let mut tokens = IndexMap::new();
+        for (name, tin, source) in [
+            ("#OB", crate::token::TIN_OB, "{"),
+            ("#CB", crate::token::TIN_CB, "}"),
+            ("#OS", crate::token::TIN_OS, "["),
+            ("#CS", crate::token::TIN_CS, "]"),
+            ("#CL", crate::token::TIN_CL, ":"),
+            ("#CA", crate::token::TIN_CA, ","),
+        ] {
+            tokens.insert(
+                name.to_string(),
+                FixedToken {
+                    name: name.to_string(),
+                    tin,
+                    source: source.to_string(),
+                },
+            );
+        }
+        Self { lex: true, tokens }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TextOptions {
     pub lex: bool,
 }
@@ -108,6 +145,7 @@ impl Default for LexOptions {
 pub struct RuleOptions {
     pub finish: bool,
     pub include: String,
+    pub exclude: String,
     pub start: String,
 }
 
@@ -124,6 +162,7 @@ impl Default for RuleOptions {
         RuleOptions {
             finish: true,
             include: String::new(),
+            exclude: String::new(),
             start: "val".to_string(),
         }
     }
@@ -131,6 +170,7 @@ impl Default for RuleOptions {
 
 #[derive(Debug, Clone)]
 pub struct Options {
+    pub fixed: FixedOptions,
     pub text: TextOptions,
     pub number: NumberOptions,
     pub string: StringOptions,
@@ -151,6 +191,7 @@ impl Default for Options {
         token_set.insert("KEY".to_string(), vec![TIN_TX, TIN_NR, TIN_ST, TIN_VL]);
 
         Options {
+            fixed: FixedOptions::default(),
             text: TextOptions::default(),
             number: NumberOptions::default(),
             string: StringOptions::default(),
@@ -169,13 +210,15 @@ impl Default for Options {
 impl Options {
     pub fn token(&self, name: &str) -> Option<Tin> {
         crate::token::name_to_tin(name).or_else(|| {
-            if name.starts_with('#') {
-                self.match_tokens.get(name).map(|matcher| matcher.tin)
+            let name = if name.starts_with('#') {
+                name.to_string()
             } else {
-                self.match_tokens
-                    .get(&format!("#{name}"))
-                    .map(|matcher| matcher.tin)
-            }
+                format!("#{name}")
+            };
+            self.match_tokens
+                .get(&name)
+                .map(|matcher| matcher.tin)
+                .or_else(|| self.fixed.tokens.get(&name).map(|token| token.tin))
         })
     }
 
@@ -183,6 +226,7 @@ impl Options {
         self.match_tokens
             .values()
             .map(|matcher| matcher.tin)
+            .chain(self.fixed.tokens.values().map(|token| token.tin))
             .max()
             .unwrap_or(TIN_MAX - 1)
             + 1
@@ -192,9 +236,14 @@ impl Options {
         self.match_tokens
             .values()
             .find(|matcher| matcher.tin == tin)
-            .map_or_else(
-                || crate::token::tin_name(tin).to_string(),
-                |matcher| matcher.name.clone(),
-            )
+            .map(|matcher| matcher.name.clone())
+            .or_else(|| {
+                self.fixed
+                    .tokens
+                    .values()
+                    .find(|token| token.tin == tin)
+                    .map(|token| token.name.clone())
+            })
+            .unwrap_or_else(|| crate::token::tin_name(tin).to_string())
     }
 }

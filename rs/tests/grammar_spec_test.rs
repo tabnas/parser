@@ -104,7 +104,74 @@ fn unsupported_dynamic_fields_fail_during_installation() {
         .grammar_json(r#"{"rule":{"top":{"open":[{"c":"@condition"}]}}}"#)
         .err()
         .expect("condition must be rejected");
-    assert!(error.to_string().contains("not supported"));
+    assert!(error.to_string().contains("must be an object"));
+}
+
+#[test]
+fn declarative_conditions_gate_alternates_and_counters() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+    for name in ["@under", "@done"] {
+        let calls = calls.clone();
+        parser.action(name, move |_| calls.lock().unwrap().push(name));
+    }
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{"open":[
+                {"s":"#NR","c":{"n.count":{"$lt":2}},"n":{"count":1},"r":"top","a":"@under"},
+                {"s":"#NR","c":{"n.count":{"$gte":2}},"a":"@done"}
+              ]}
+            }}"##,
+        )
+        .unwrap();
+
+    parser.parse("1 2 3").unwrap();
+    assert_eq!(*calls.lock().unwrap(), ["@under", "@under", "@done"]);
+}
+
+#[test]
+fn condition_validation_and_group_filters_fail_closed() {
+    for (document, message) in [
+        (
+            r##"{"rule":{"top":{"open":[{"c":{"bad.x":{"$eq":1}}}]}}}"##,
+            "unknown condition path",
+        ),
+        (
+            r##"{"rule":{"top":{"open":[{"c":{"n.x":{"$wat":1}}}]}}}"##,
+            "unknown condition operator",
+        ),
+        (
+            r##"{"rule":{"top":{"open":[{"g":"Bad Tag"}]}}}"##,
+            "invalid group tag",
+        ),
+    ] {
+        let mut parser = Tabnas::new();
+        let error = parser
+            .grammar_json(document)
+            .err()
+            .expect("invalid grammar");
+        assert!(error.to_string().contains(message), "{error}");
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+    for name in ["@drop", "@keep"] {
+        let seen = seen.clone();
+        parser.action(name, move |_| seen.lock().unwrap().push(name));
+    }
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top","include":"keep"}},"rule":{
+              "top":{"open":[
+                {"s":"#NR","g":"drop","a":"@drop"},
+                {"s":"#NR","g":"keep","a":"@keep"}
+              ]}
+            }}"##,
+        )
+        .unwrap();
+    parser.parse("1").unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["@keep"]);
 }
 
 #[test]
@@ -177,4 +244,45 @@ fn explicitly_empty_string_chars_are_not_treated_as_unset() {
     let token = lexer.next_raw_token().unwrap();
     assert_eq!(token.name, "#TX");
     assert_eq!(token.src, r#""ab""#);
+}
+
+#[test]
+fn serialized_fixed_tokens_rebind_remove_and_clear() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"options":{"fixed":{"token":{"#CA":";","#AT":"@"}},"match":{"token":{"#HI":"@/^hi/"}}}}"##,
+        )
+        .unwrap();
+
+    let mut lexer = tabnas::lexer::Lexer::new(";@,", parser.options.clone());
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#CA");
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#AT");
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");
+
+    parser
+        .grammar_json(r##"{"options":{"fixed":{"token":{"#AT":null}}}}"##)
+        .unwrap();
+    assert!(!parser.options.fixed.tokens.contains_key("#AT"));
+
+    parser.grammar_json(r#"{"clear":true}"#).unwrap();
+    assert!(parser.options.fixed.tokens.is_empty());
+    assert!(parser.options.match_tokens.contains_key("#HI"));
+    assert!(parser.rules.is_empty());
+}
+
+#[test]
+fn shared_eager_literal_grammar_fixture_executes_in_rust() {
+    let source = include_str!("../../ts/test/eager-literal.fixture.json");
+    for (input, accepted) in [
+        ("hi", true),
+        ("HI", true),
+        ("Hi", true),
+        ("ho", false),
+        ("h", false),
+    ] {
+        let mut parser = Tabnas::new();
+        parser.grammar_json(source).unwrap();
+        assert_eq!(parser.parse(input).is_ok(), accepted, "input {input:?}");
+    }
 }

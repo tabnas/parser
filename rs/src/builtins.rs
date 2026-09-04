@@ -24,10 +24,39 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule) -> bool {
             }
         }
         "@value$" => {
-            if let Some(token) = rule.o0() {
-                rule.node = Rc::new(RefCell::new(token.val.clone()));
-            } else if !rule.child_node.is_undefined() {
+            if !rule.child_node.is_undefined() {
                 rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
+            } else if let Some(token) = rule.o0() {
+                rule.node = Rc::new(RefCell::new(token.val.clone()));
+            }
+        }
+        "@object$" => {
+            rule.node = Rc::new(RefCell::new(Value::Object(IndexMap::new())));
+        }
+        "@array$" => {
+            rule.node = Rc::new(RefCell::new(Value::Array(Vec::new())));
+        }
+        "@reset$" => {
+            rule.node = Rc::new(RefCell::new(Value::Undefined));
+            rule.child_node = Value::Undefined;
+        }
+        "@key$" => {
+            if let Some(token) = rule.o0() {
+                rule.u.insert("key".into(), token.val.clone());
+            }
+        }
+        "@setval$" => {
+            if let Some(Value::String(key)) = rule.u.get("key").cloned() {
+                if let Value::Object(map) = &mut *rule.node.borrow_mut() {
+                    map.insert(key, rule.child_node.clone());
+                }
+            }
+        }
+        "@push$" => {
+            if !rule.child_node.is_undefined() {
+                if let Value::Array(array) = &mut *rule.node.borrow_mut() {
+                    array.push(rule.child_node.clone());
+                }
             }
         }
         "@map-bo" => {

@@ -12,6 +12,24 @@ pub enum RuleState {
     Close,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Exist,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Condition {
+    pub path: Vec<String>,
+    pub op: CompareOp,
+    pub value: Value,
+}
+
 #[derive(Clone, Default)]
 pub struct AltSpec {
     pub s: Vec<Vec<Tin>>,
@@ -19,6 +37,7 @@ pub struct AltSpec {
     pub r: Option<String>,
     pub b: usize,
     pub a: Vec<String>,
+    pub c: Vec<Condition>,
     pub n: HashMap<String, i32>,
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
@@ -58,6 +77,8 @@ impl RuleSpec {
 
 #[derive(Clone)]
 pub struct Rule {
+    pub i: usize,
+    pub d: usize,
     pub name: String,
     pub state: RuleState,
     pub node: Rc<RefCell<Value>>,
@@ -72,6 +93,8 @@ pub struct Rule {
 impl Rule {
     pub fn new(name: impl Into<String>, initial_node: Value) -> Self {
         Rule {
+            i: 0,
+            d: 0,
             name: name.into(),
             state: RuleState::Open,
             node: Rc::new(RefCell::new(initial_node)),
@@ -86,6 +109,8 @@ impl Rule {
 
     pub fn with_shared_node(name: impl Into<String>, node: Rc<RefCell<Value>>) -> Self {
         Rule {
+            i: 0,
+            d: 0,
             name: name.into(),
             state: RuleState::Open,
             node,
