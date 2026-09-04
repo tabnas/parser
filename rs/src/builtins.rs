@@ -6,6 +6,32 @@ use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub(crate) fn is_builtin_action(name: &str) -> bool {
+    matches!(
+        name,
+        "@node$"
+            | "@capture$"
+            | "@bubble$"
+            | "@fold$"
+            | "@probeInit$"
+            | "@probeDecide$"
+            | "@object$"
+            | "@array$"
+            | "@reset$"
+            | "@key$"
+            | "@setval$"
+            | "@push$"
+            | "@value$"
+            | "@map-bo"
+            | "@list-bo"
+            | "@pairkey"
+            | "@pair-bc"
+            | "@elem-bc"
+            | "@val-bo"
+            | "@val-bc"
+    )
+}
+
 fn config_object(config: Option<&Value>) -> Option<&IndexMap<String, Value>> {
     config.and_then(|value| match value {
         Value::Object(map) => Some(map),

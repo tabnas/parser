@@ -86,6 +86,49 @@ fn serialized_action_arrays_run_in_order() {
 }
 
 #[test]
+fn serialized_actions_and_builtin_payloads_fail_at_installation() {
+    let mut parser = Tabnas::new();
+    let unknown = parser
+        .grammar_json(r#"{"rule":{"top":{"open":[{"a":"@missing"}]}}}"#)
+        .err()
+        .expect("unknown action must fail at installation");
+    assert!(unknown
+        .to_string()
+        .contains("unknown action function reference"));
+
+    for document in [
+        r#"{"rule":{"top":{"open":[{"a":"@node$","k":{"node$":{"nterms":"1"}}}]}}}"#,
+        r#"{"rule":{"top":{"open":[{"a":"@value$","k":{"value$":{"form":0.5}}}]}}}"#,
+        r#"{"rule":{"top":{"open":[{"a":"@fold$","k":{"fold$":true}}]}}}"#,
+    ] {
+        assert!(
+            parser.grammar_json(document).is_err(),
+            "accepted malformed builtin payload: {document}"
+        );
+    }
+}
+
+#[test]
+fn failed_grammar_installation_is_transactional() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"options":{"tag":"before","rule":{"start":"top"}},"rule":{"top":{"open":[{"s":"#NR","a":"@value$"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(parser.parse("1").unwrap(), Value::Number(1.0));
+
+    assert!(parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"tag":"after"},"rule":{"bad":{"open":[{"s":"#NR","a":"@missing"}]}}}"##,
+        )
+        .is_err());
+    assert_eq!(parser.options.tag, "before");
+    assert!(parser.rules.contains_key("top"));
+    assert_eq!(parser.parse("2").unwrap(), Value::Number(2.0));
+}
+
+#[test]
 fn validation_reports_dangling_static_rule_references() {
     let mut parser = Tabnas::new();
     parser

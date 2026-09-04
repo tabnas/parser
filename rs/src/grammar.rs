@@ -4,7 +4,7 @@
 
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
-use crate::{Tabnas, Value};
+use crate::{builtins::is_builtin_action, Tabnas, Value};
 use indexmap::IndexMap;
 use regex::RegexBuilder;
 use serde_json::{Map, Value as JsonValue};
@@ -83,7 +83,16 @@ impl GrammarSpec {
 
 impl Tabnas {
     /// Install a serialized grammar without mutating the caller's document.
+    /// Installation is transactional: an invalid option, rule, reference, or
+    /// builtin payload leaves the existing parser unchanged.
     pub fn grammar(&mut self, grammar: &GrammarSpec) -> Result<&mut Self, GrammarError> {
+        let mut staged = self.clone();
+        staged.install_grammar(grammar)?;
+        *self = staged;
+        Ok(self)
+    }
+
+    fn install_grammar(&mut self, grammar: &GrammarSpec) -> Result<(), GrammarError> {
         let root = object(&grammar.document, "document")?;
         if grammar.clear {
             self.rules.clear();
@@ -115,10 +124,11 @@ impl Tabnas {
                         &self.options,
                     )?;
                 }
+                validate_action_references(self, &spec)?;
                 self.rules.insert(name.clone(), spec);
             }
         }
-        Ok(self)
+        Ok(())
     }
 
     pub fn grammar_json(&mut self, src: &str) -> Result<&mut Self, GrammarError> {
@@ -302,6 +312,7 @@ fn parse_alt(
         ) {
             let key = action.trim_start_matches('@');
             if let Some(config) = alt.k.remove(key) {
+                validate_builtin_config(action, &config, label)?;
                 alt.action_configs.insert(action.clone(), config);
             }
         }
@@ -322,6 +333,81 @@ fn parse_alt(
     };
     validate_group_tags(&alt.g, label)?;
     Ok(alt)
+}
+
+fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), GrammarError> {
+    for (state, alts) in [("open", &spec.open), ("close", &spec.close)] {
+        for (index, alt) in alts.iter().enumerate() {
+            for action in &alt.a {
+                if !is_builtin_action(action)
+                    && !tabnas.actions.contains_key(action)
+                    && !tabnas.context_actions.contains_key(action)
+                {
+                    return Err(GrammarError(format!(
+                        "Grammar: {}.{state} alt[{index}]: unknown action function reference: {action}",
+                        spec.name
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_builtin_config(action: &str, config: &Value, label: &str) -> Result<(), GrammarError> {
+    let Value::Object(config) = config else {
+        return Err(GrammarError(format!(
+            "Grammar: {label}.k.{} must be an object",
+            action.trim_start_matches('@')
+        )));
+    };
+    let fields: &[(&str, &str)] = match action {
+        "@node$" => &[
+            ("init", "boolean"),
+            ("rule", "string"),
+            ("kind", "string"),
+            ("nterms", "non-negative integer"),
+        ],
+        "@capture$" => &[("rule", "string"), ("kind", "string")],
+        "@fold$" => &[("cN", "non-negative integer")],
+        "@object$" | "@array$" => &[("implicit", "boolean")],
+        "@key$" => &[("slot", "string"), ("from", "integer")],
+        "@setval$" => &[("slot", "string")],
+        "@value$" => &[("from", "integer")],
+        _ => return Ok(()),
+    };
+    for key in config.keys() {
+        if !fields.iter().any(|(field, _)| key == field) {
+            return Err(GrammarError(format!(
+                "Grammar: {label}.k.{} has unknown field {key}",
+                action.trim_start_matches('@')
+            )));
+        }
+    }
+    for (field, expected) in fields {
+        let Some(value) = config.get(*field) else {
+            continue;
+        };
+        let valid = match *expected {
+            "boolean" => matches!(value, Value::Bool(_)),
+            "string" => matches!(value, Value::String(_)),
+            "integer" => {
+                matches!(value, Value::Number(number) if number.is_finite() && number.fract() == 0.0)
+            }
+            "non-negative integer" => {
+                matches!(value, Value::Number(number) if number.is_finite() && *number >= 0.0 && number.fract() == 0.0)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(GrammarError(format!(
+                "Grammar: {label}.k.{}.{} must be a {expected}",
+                action.trim_start_matches('@'),
+                field
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn parse_conditions(
