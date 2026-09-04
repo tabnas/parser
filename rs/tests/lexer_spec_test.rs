@@ -317,6 +317,7 @@ fn named_and_regex_values_and_text_enders_are_honored() {
         ValueDef {
             val: Some(Value::Bool(true)),
             matcher: None,
+            transform: None,
             consume: false,
         },
     );
@@ -325,6 +326,7 @@ fn named_and_regex_values_and_text_enders_are_honored() {
         ValueDef {
             val: Some(Value::String("dozen".into())),
             matcher: None,
+            transform: None,
             consume: false,
         },
     );
@@ -337,6 +339,7 @@ fn named_and_regex_values_and_text_enders_are_honored() {
         ValueDef {
             val: None,
             matcher: Some(regex::Regex::new(r"^@[a-z]+").unwrap()),
+            transform: None,
             consume: true,
         },
     );

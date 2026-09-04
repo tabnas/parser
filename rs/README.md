@@ -37,6 +37,10 @@ source and return a non-empty owned source prefix plus its value. This
 effect-based interface supports eager and parser-slot-gated matchers without
 giving callbacks mutable access to the lexer cursor.
 
+Regexp-backed value definitions can bind a named transformer with
+`value_transform_ref`. It receives the whole match followed by capture groups
+and returns the token value without direct cursor access.
+
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
 grammar: `Tabnas::new()` has no rules.

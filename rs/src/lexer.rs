@@ -575,7 +575,10 @@ impl<'a> Lexer<'a> {
                 for (_, definition) in definitions {
                     let regex = definition.matcher.as_ref().expect("filtered matcher");
                     let target = if definition.consume { &remaining } else { &src };
-                    let Some(found) = regex.find(target).filter(|found| found.start() == 0) else {
+                    let Some(captures) = regex.captures(target) else {
+                        continue;
+                    };
+                    let Some(found) = captures.get(0).filter(|found| found.start() == 0) else {
                         continue;
                     };
                     if !definition.consume && found.end() != target.len() {
@@ -591,10 +594,24 @@ impl<'a> Lexer<'a> {
                     return Ok(Token::new(
                         "#VL",
                         TIN_VL,
-                        definition
-                            .val
-                            .clone()
-                            .unwrap_or_else(|| Value::String(matched.clone())),
+                        definition.transform.as_ref().map_or_else(
+                            || {
+                                definition
+                                    .val
+                                    .clone()
+                                    .unwrap_or_else(|| Value::String(matched.clone()))
+                            },
+                            |transform| {
+                                let groups = captures
+                                    .iter()
+                                    .map(|capture| {
+                                        capture
+                                            .map_or_else(String::new, |value| value.as_str().into())
+                                    })
+                                    .collect::<Vec<_>>();
+                                transform(&groups)
+                            },
+                        ),
                         matched,
                         pnt,
                     ));

@@ -23,6 +23,7 @@ pub use options::{
     BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, InfoOptions, MatchToken,
     MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare,
     RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueDef, ValueOptions,
+    ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -64,6 +65,7 @@ pub struct Tabnas {
     pub(crate) alt_replaces: HashMap<String, AltNext>,
     pub(crate) alt_backtracks: HashMap<String, AltBack>,
     pub(crate) match_token_refs: HashMap<String, (MatchTokenCallback, bool)>,
+    pub(crate) value_transform_refs: HashMap<String, ValueTransform>,
 }
 
 impl Default for Tabnas {
@@ -90,6 +92,7 @@ impl Tabnas {
             alt_replaces: HashMap::new(),
             alt_backtracks: HashMap::new(),
             match_token_refs: HashMap::new(),
+            value_transform_refs: HashMap::new(),
         }
     }
 
@@ -110,6 +113,7 @@ impl Tabnas {
             alt_replaces: HashMap::new(),
             alt_backtracks: HashMap::new(),
             match_token_refs: HashMap::new(),
+            value_transform_refs: HashMap::new(),
         }
     }
 
@@ -241,6 +245,22 @@ impl Tabnas {
     ) -> &mut Self {
         self.match_token_refs
             .insert(name.into(), (Arc::new(matcher), eager));
+        self
+    }
+
+    /// Register a typed transformer for a regexp-backed
+    /// `options.value.def.<name>.val` function reference.
+    ///
+    /// The slice contains the whole match followed by capture groups;
+    /// unmatched optional groups are represented by empty strings, matching
+    /// the Go port's cross-language callback shape.
+    pub fn value_transform_ref(
+        &mut self,
+        name: impl Into<String>,
+        transform: impl Fn(&[String]) -> Value + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.value_transform_refs
+            .insert(name.into(), Arc::new(transform));
         self
     }
 

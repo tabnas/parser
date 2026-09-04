@@ -6,7 +6,7 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    MatchTokenCallback, Tabnas, Value,
+    MatchTokenCallback, Tabnas, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -23,6 +23,7 @@ struct AltRefs {
     replaces: HashMap<String, AltNext>,
     backtracks: HashMap<String, AltBack>,
     match_tokens: HashMap<String, (MatchTokenCallback, bool)>,
+    value_transforms: HashMap<String, ValueTransform>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -35,6 +36,7 @@ impl From<&Tabnas> for AltRefs {
             replaces: tabnas.alt_replaces.clone(),
             backtracks: tabnas.alt_backtracks.clone(),
             match_tokens: tabnas.match_token_refs.clone(),
+            value_transforms: tabnas.value_transform_refs.clone(),
         }
     }
 }
@@ -841,10 +843,18 @@ fn apply_options(
                     continue;
                 }
                 let value = object(value, &format!("options.value.def.{name}"))?;
-                let val = value
-                    .get("val")
-                    .filter(|value| !value.is_null())
-                    .map(Value::from_json);
+                let (val, transform) = match value.get("val").filter(|value| !value.is_null()) {
+                    Some(JsonValue::String(reference))
+                        if refs.value_transforms.contains_key(reference) =>
+                    {
+                        (None, refs.value_transforms.get(reference).cloned())
+                    }
+                    Some(JsonValue::String(reference)) if reference.starts_with("@@") => {
+                        (Some(Value::String(reference[1..].to_string())), None)
+                    }
+                    Some(value) => (Some(Value::from_json(value)), None),
+                    None => (None, None),
+                };
                 let matcher = value
                     .get("match")
                     .map(|matcher| {
@@ -874,6 +884,7 @@ fn apply_options(
                     crate::ValueDef {
                         val,
                         matcher,
+                        transform,
                         consume,
                     },
                 );

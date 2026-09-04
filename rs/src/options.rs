@@ -181,11 +181,26 @@ pub struct CommentOptions {
     pub definitions: IndexMap<String, CommentDef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ValueDef {
     pub val: Option<crate::Value>,
     pub matcher: Option<Regex>,
+    pub transform: Option<ValueTransform>,
     pub consume: bool,
+}
+
+pub type ValueTransform = Arc<dyn Fn(&[String]) -> crate::Value + Send + Sync>;
+
+impl fmt::Debug for ValueDef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ValueDef")
+            .field("val", &self.val)
+            .field("matcher", &self.matcher)
+            .field("transform", &self.transform.as_ref().map(|_| "<function>"))
+            .field("consume", &self.consume)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +222,7 @@ impl Default for ValueOptions {
                 ValueDef {
                     val: Some(value),
                     matcher: None,
+                    transform: None,
                     consume: false,
                 },
             );
