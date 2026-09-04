@@ -961,6 +961,7 @@ fn apply_options(
     }
     if let Some(match_options) = map.get("match") {
         let match_options = object(match_options, "options.match")?;
+        set_bool(match_options, "lex", &mut options.match_lex);
         if let Some(tokens) = match_options.get("token") {
             for (name, source) in object(tokens, "options.match.token")? {
                 let name = if name.starts_with('#') {

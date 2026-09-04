@@ -291,6 +291,16 @@ fn unsupported_javascript_regex_constructs_fail_at_installation() {
 }
 
 #[test]
+fn serialized_match_lex_switch_disables_custom_tokens() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(r##"{"options":{"match":{"lex":false,"token":{"#HI":"@/^hi/"}}}}"##)
+        .unwrap();
+    let mut lexer = tabnas::lexer::Lexer::new("hi", parser.options);
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");
+}
+
+#[test]
 fn explicitly_empty_string_chars_are_not_treated_as_unset() {
     let mut parser = Tabnas::new();
     parser

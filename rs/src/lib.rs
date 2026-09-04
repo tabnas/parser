@@ -218,9 +218,10 @@ impl Tabnas {
         opts.number.oct = false;
         opts.number.bin = false;
         opts.number.sep = None;
-        // The core number matcher is intentionally lenient; reject the two
-        // prefixes it accepts that can never begin a strict JSON number.
-        opts.number.exclude = Some(r"^(?:\.|0\d)".to_string());
+        // The core number matcher is intentionally lenient; reject leading
+        // plus/dot forms, leading zeroes, and a trailing decimal point for
+        // the strict-JSON compatibility grammar.
+        opts.number.exclude = Some(r"^(?:\+|[+-]?\.|-?0\d)|\.$".to_string());
 
         opts.string.chars = "\"".to_string();
         opts.string.multi_chars = "".to_string();

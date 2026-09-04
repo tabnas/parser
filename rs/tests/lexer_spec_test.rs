@@ -130,10 +130,23 @@ fn configured_number_forms_are_honored() {
         ("0b1010", 10.0),
         ("1_000.5", 1000.5),
         (".25", 0.25),
+        ("+1.5e-3", 0.0015),
+        ("2.e3", 2000.0),
+        ("1.", 1.0),
     ] {
         let mut lexer = Lexer::new(source, Options::default());
         let token = lexer.next_token().expect("number token");
         assert_eq!(token.val, Value::Number(expected), "source {source}");
+    }
+}
+
+#[test]
+fn decimal_separator_edges_fall_through_to_text() {
+    for source in ["+_1", "1_", "1.5_", "1e_2", "1e2_"] {
+        assert_eq!(
+            lex(source, Options::default()).unwrap(),
+            format!("#TX:{source}")
+        );
     }
 }
 

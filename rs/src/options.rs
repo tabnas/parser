@@ -399,6 +399,8 @@ pub struct Options {
     pub result: ResultOptions,
     pub parse: ParseOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
+    /// Enable serialized/custom regexp token matching (`options.match.lex`).
+    pub match_lex: bool,
     pub match_tokens: IndexMap<String, MatchToken>,
     pub tag: String,
 }
@@ -427,6 +429,7 @@ impl Default for Options {
             result: ResultOptions::default(),
             parse: ParseOptions::default(),
             token_set,
+            match_lex: true,
             match_tokens: IndexMap::new(),
             tag: "-".to_string(),
         }

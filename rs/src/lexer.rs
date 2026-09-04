@@ -102,10 +102,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn is_text_delimiter_here(&self) -> bool {
-        let Some(ch) = self.peek() else {
+        self.is_text_delimiter_at(self.idx)
+    }
+
+    fn is_text_delimiter_at(&self, index: usize) -> bool {
+        let Some(ch) = self.chars.get(index).copied() else {
             return true;
         };
-        let remaining = &self.src[self.byte_position()..];
+        let remaining = &self.src[self.byte_indices[index]..];
         (self.options.space.lex && self.options.space.chars.contains(ch))
             || (self.options.fixed.lex
                 && self
@@ -197,18 +201,20 @@ impl<'a> Lexer<'a> {
 
         // User-declared match tokens have the highest matcher priority.
         let remaining = &self.src[self.byte_position()..];
-        let custom = self.options.match_tokens.values().find_map(|matcher| {
-            matcher.regex.find(remaining).and_then(|found| {
-                (found.start() == 0).then(|| {
-                    (
-                        matcher.name.clone(),
-                        matcher.tin,
-                        found.as_str().to_string(),
-                    )
+        let custom = self.options.match_lex.then(|| {
+            self.options.match_tokens.values().find_map(|matcher| {
+                matcher.regex.find(remaining).and_then(|found| {
+                    (found.start() == 0).then(|| {
+                        (
+                            matcher.name.clone(),
+                            matcher.tin,
+                            found.as_str().to_string(),
+                        )
+                    })
                 })
             })
         });
-        if let Some((name, tin, matched)) = custom {
+        if let Some(Some((name, tin, matched))) = custom {
             for _ in matched.chars() {
                 self.advance();
             }
@@ -417,7 +423,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 6. Numbers
-        if self.options.number.lex && (c == '-' || c == '.' || c.is_ascii_digit()) {
+        if self.options.number.lex && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit()) {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
@@ -525,8 +531,8 @@ impl<'a> Lexer<'a> {
         let start_idx = self.idx;
         let mut src = String::new();
 
-        // Optional negative sign
-        if self.peek() == Some('-') {
+        // Optional sign.
+        if matches!(self.peek(), Some('-' | '+')) {
             src.push(self.advance().unwrap());
         }
 
@@ -542,191 +548,165 @@ impl<'a> Lexer<'a> {
                 if let Some(radix) = radix {
                     src.push(self.advance().expect("peeked zero"));
                     src.push(self.advance().expect("peeked base prefix"));
-                    let digits_start = src.len();
+                    let mut saw_digit = false;
                     while let Some(ch) = self.peek() {
-                        if ch.is_digit(radix)
-                            || self
-                                .options
-                                .number
-                                .sep
-                                .as_ref()
-                                .is_some_and(|separator| separator.contains(ch))
+                        if ch.is_digit(radix) {
+                            saw_digit = true;
+                            src.push(self.advance().expect("peeked base digit"));
+                        } else if self
+                            .options
+                            .number
+                            .sep
+                            .as_ref()
+                            .is_some_and(|separator| separator.contains(ch))
                         {
                             src.push(self.advance().expect("peeked base digit"));
                         } else {
                             break;
                         }
                     }
-                    let digits: String = src[digits_start..]
-                        .chars()
-                        .filter(|ch| {
-                            !self
-                                .options
-                                .number
-                                .sep
-                                .as_ref()
-                                .is_some_and(|separator| separator.contains(*ch))
-                        })
-                        .collect();
-                    if !digits.is_empty() {
-                        let value = u128::from_str_radix(&digits, radix)
-                            .map(|value| value as f64)
-                            .ok();
-                        if let Some(mut value) = value {
-                            if !self.is_text_delimiter_here() {
-                                self.idx = start_idx;
-                                self.ri = pnt.ri;
-                                self.ci = pnt.ci;
-                                return Ok(None);
-                            }
-                            if self.options.value.lex {
-                                if let Some(definition) = self
-                                    .options
-                                    .value
-                                    .definitions
-                                    .get(&src)
-                                    .filter(|definition| definition.matcher.is_none())
-                                {
-                                    return Ok(Some(Token::new(
-                                        "#VL",
-                                        TIN_VL,
-                                        definition
-                                            .val
-                                            .clone()
-                                            .unwrap_or_else(|| Value::String(src.clone())),
-                                        src,
-                                        pnt,
-                                    )));
-                                }
-                            }
-                            if src.starts_with('-') {
-                                value = -value;
-                            }
-                            return Ok(Some(Token::new(
-                                "#NR",
-                                TIN_NR,
-                                Value::Number(value),
-                                src,
-                                pnt,
-                            )));
+                    if saw_digit && self.is_text_delimiter_here() {
+                        if self
+                            .exclude_regex
+                            .as_ref()
+                            .is_some_and(|regex| regex.is_match(&src))
+                        {
+                            self.reset_number(start_idx, pnt);
+                            return Ok(None);
                         }
+                        if self.options.value.lex {
+                            if let Some(definition) = self
+                                .options
+                                .value
+                                .definitions
+                                .get(&src)
+                                .filter(|definition| definition.matcher.is_none())
+                            {
+                                return Ok(Some(Token::new(
+                                    "#VL",
+                                    TIN_VL,
+                                    definition
+                                        .val
+                                        .clone()
+                                        .unwrap_or_else(|| Value::String(src.clone())),
+                                    src,
+                                    pnt,
+                                )));
+                            }
+                        }
+                        let digits = src
+                            .chars()
+                            .skip_while(|ch| matches!(ch, '-' | '+'))
+                            .skip(2)
+                            .filter(|ch| {
+                                !self
+                                    .options
+                                    .number
+                                    .sep
+                                    .as_ref()
+                                    .is_some_and(|separator| separator.contains(*ch))
+                            });
+                        let mut value = digits.fold(0.0, |value, digit| {
+                            value * f64::from(radix)
+                                + f64::from(digit.to_digit(radix).expect("validated base digit"))
+                        });
+                        if src.starts_with('-') {
+                            value = -value;
+                        }
+                        return Ok(Some(Token::new(
+                            "#NR",
+                            TIN_NR,
+                            Value::Number(value),
+                            src,
+                            pnt,
+                        )));
                     }
-                    self.idx = start_idx;
-                    self.ri = pnt.ri;
-                    self.ci = pnt.ci;
+                    self.reset_number(start_idx, pnt);
                     return Ok(None);
                 }
             }
         }
 
-        // Check if there are digits
-        if let Some(ch) = self.peek() {
-            if !ch.is_ascii_digit()
-                && !(ch == '.' && self.peek_at(1).is_some_and(|next| next.is_ascii_digit()))
-            {
-                // Not a number; backtrack
-                self.idx = start_idx;
-                self.ri = pnt.ri;
-                self.ci = pnt.ci;
+        let Some(ch) = self.peek() else {
+            self.reset_number(start_idx, pnt);
+            return Ok(None);
+        };
+        if ch == '.' {
+            if !self.peek_at(1).is_some_and(|next| next.is_ascii_digit()) {
+                self.reset_number(start_idx, pnt);
                 return Ok(None);
             }
-        } else {
-            self.idx = start_idx;
-            self.ri = pnt.ri;
-            self.ci = pnt.ci;
+            src.push(self.advance().expect("peeked leading decimal point"));
+        } else if !ch.is_ascii_digit() {
+            self.reset_number(start_idx, pnt);
             return Ok(None);
         }
 
-        // Integer part
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit()
-                || self
-                    .options
-                    .number
-                    .sep
-                    .as_ref()
-                    .is_some_and(|separator| separator.contains(ch))
-            {
-                src.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
+        let (has_digits, edge_separator) = self.scan_number_digits(&mut src);
+        if !has_digits || edge_separator {
+            self.reset_number(start_idx, pnt);
+            return Ok(None);
         }
 
-        // Optional fraction
-        if self.peek() == Some('.') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
-            src.push(self.advance().unwrap()); // '.'
-            while let Some(ch) = self.peek() {
-                if ch.is_ascii_digit()
-                    || self
-                        .options
-                        .number
-                        .sep
-                        .as_ref()
-                        .is_some_and(|separator| separator.contains(ch))
-                {
-                    src.push(ch);
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-
-        // Optional exponent
-        if let Some(e) = self.peek() {
-            if e == 'e' || e == 'E' {
-                let sign_or_digit = self.peek_at(1);
-                let has_exp = if sign_or_digit == Some('+') || sign_or_digit == Some('-') {
-                    self.peek_at(2).is_some_and(|c| c.is_ascii_digit())
-                } else {
-                    sign_or_digit.is_some_and(|c| c.is_ascii_digit())
+        // The canonical regexp admits a trailing decimal point and an
+        // exponent after it (`2.e3`), but declines `0.a` as one text run.
+        if self.peek() == Some('.') {
+            let next = self.peek_at(1);
+            let exponent_after_dot = matches!(next, Some('e' | 'E'))
+                && match self.peek_at(2) {
+                    Some('+' | '-') => self.peek_at(3).is_some_and(|ch| ch.is_ascii_digit()),
+                    Some(ch) => ch.is_ascii_digit(),
+                    None => false,
                 };
-
-                if has_exp {
-                    src.push(self.advance().unwrap()); // 'e' or 'E'
-                    if let Some(s) = self.peek() {
-                        if s == '+' || s == '-' {
-                            src.push(self.advance().unwrap());
-                        }
-                    }
-                    while let Some(ch) = self.peek() {
-                        if ch.is_ascii_digit()
-                            || self
-                                .options
-                                .number
-                                .sep
-                                .as_ref()
-                                .is_some_and(|separator| separator.contains(ch))
-                        {
-                            src.push(ch);
-                            self.advance();
-                        } else {
-                            break;
-                        }
-                    }
+            if next.is_some_and(|ch| ch.is_ascii_digit()) {
+                src.push(self.advance().expect("peeked decimal point"));
+                let (_, edge_separator) = self.scan_number_digits(&mut src);
+                if edge_separator {
+                    self.reset_number(start_idx, pnt);
+                    return Ok(None);
                 }
+            } else if next.is_some()
+                && !self.is_text_delimiter_at(self.idx + 1)
+                && next != Some('.')
+                && !exponent_after_dot
+            {
+                self.reset_number(start_idx, pnt);
+                return Ok(None);
+            } else {
+                src.push(self.advance().expect("peeked trailing decimal point"));
             }
         }
 
-        // Check exclusion regex (e.g. ^00+)
-        if let Some(ref re) = self.exclude_regex {
-            let check_str = src.strip_prefix('-').unwrap_or(&src);
-            if re.is_match(check_str) {
-                // Number is excluded, backtrack
-                self.idx = start_idx;
-                self.ri = pnt.ri;
-                self.ci = pnt.ci;
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let exponent_start = self.idx;
+            let source_len = src.len();
+            src.push(self.advance().expect("peeked exponent marker"));
+            if matches!(self.peek(), Some('+' | '-')) {
+                src.push(self.advance().expect("peeked exponent sign"));
+            }
+            let (has_exponent_digits, edge_separator) = self.scan_number_digits(&mut src);
+            if edge_separator {
+                self.reset_number(start_idx, pnt);
                 return Ok(None);
+            }
+            if !has_exponent_digits {
+                self.idx = exponent_start;
+                src.truncate(source_len);
             }
         }
 
         if !self.is_text_delimiter_here() {
-            self.idx = start_idx;
-            self.ri = pnt.ri;
-            self.ci = pnt.ci;
+            self.reset_number(start_idx, pnt);
             return Ok(None);
+        }
+
+        // Check exclusion regex (e.g. ^00+)
+        if let Some(ref re) = self.exclude_regex {
+            if re.is_match(&src) {
+                // Number is excluded, backtrack
+                self.reset_number(start_idx, pnt);
+                return Ok(None);
+            }
         }
 
         if self.options.value.lex {
@@ -764,12 +744,47 @@ impl<'a> Lexer<'a> {
                 pnt,
             ))),
             Err(_) => {
-                self.idx = start_idx;
-                self.ri = pnt.ri;
-                self.ci = pnt.ci;
+                self.reset_number(start_idx, pnt);
                 Ok(None)
             }
         }
+    }
+
+    fn reset_number(&mut self, start_idx: usize, pnt: Point) {
+        self.idx = start_idx;
+        self.ri = pnt.ri;
+        self.ci = pnt.ci;
+    }
+
+    /// Consume a decimal digit/separator run. Separators are legal only
+    /// between digits; a leading or trailing separator makes the whole run
+    /// fall through to text, matching the TypeScript regexp and Go scanner.
+    fn scan_number_digits(&mut self, src: &mut String) -> (bool, bool) {
+        let separator = self.options.number.sep.clone();
+        let run_start = self.idx;
+        let mut saw_digit = false;
+        let mut last_was_separator = false;
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() {
+                saw_digit = true;
+                last_was_separator = false;
+            } else if separator
+                .as_ref()
+                .is_some_and(|separator| separator.contains(ch))
+            {
+                last_was_separator = true;
+            } else {
+                break;
+            }
+            src.push(self.advance().expect("peeked number character"));
+        }
+        let starts_with_separator = self.idx > run_start
+            && separator.as_ref().is_some_and(|separator| {
+                self.chars[run_start..self.idx]
+                    .first()
+                    .is_some_and(|ch| separator.contains(*ch))
+            });
+        (saw_digit, starts_with_separator || last_was_separator)
     }
 
     fn match_string(&mut self, quote: char, pnt: Point) -> Result<Token, TabnasError> {
