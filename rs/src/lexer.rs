@@ -417,14 +417,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Fixed literals run after custom matchers and use longest-match wins.
-        let fixed_skipped = if self.options.fixed.lex
-            && self
-                .options
-                .fixed
-                .tokens
-                .values()
-                .any(|token| self.wants(token.tin))
-        {
+        let fixed_skipped = if self.options.fixed.lex {
             match self.run_check(self.options.fixed.check.clone(), pnt) {
                 CheckFlow::Continue => false,
                 CheckFlow::Skip => true,
@@ -529,7 +522,11 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if self.options.line.lex && !line_skipped && (c == '\u{2028}' || c == '\u{2029}') {
+        if self.options.line.lex
+            && !line_skipped
+            && self.wants(TIN_LN)
+            && (c == '\u{2028}' || c == '\u{2029}')
+        {
             let bad_char = self.advance().expect("peeked character must advance");
             let err = TabnasError::new(
                 "unexpected",
@@ -588,19 +585,18 @@ impl<'a> Lexer<'a> {
         }
 
         // 5. Numbers
-        let number_skipped =
-            if self.options.number.lex && (self.wants(TIN_NR) || self.wants(TIN_VL)) {
-                match self.run_check(self.options.number.check.clone(), pnt) {
-                    CheckFlow::Continue => false,
-                    CheckFlow::Skip => true,
-                    CheckFlow::Token(token) => return Ok(*token),
-                }
-            } else {
-                false
-            };
+        let number_skipped = if self.options.number.lex && self.wants(TIN_NR) {
+            match self.run_check(self.options.number.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
         if self.options.number.lex
             && !number_skipped
-            && (self.wants(TIN_NR) || self.wants(TIN_VL))
+            && self.wants(TIN_NR)
             && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit())
         {
             if let Some(tkn) = self.match_number(pnt)? {
@@ -609,8 +605,14 @@ impl<'a> Lexer<'a> {
         }
 
         // 6. Text and named/regex values share the same delimited run.
-        let value_lex = self.options.value.lex && self.wants(TIN_VL);
-        let text_lex = self.options.text.lex && self.wants(TIN_TX);
+        // Negotiated lexing gates this combined family by its primary token
+        // identity (#TX), matching the TypeScript and Go dispatchers. Once
+        // entered, an exact or regexp value definition may still produce
+        // #VL; the caller rejects and rolls that cut back when #VL was not
+        // requested.
+        let text_matcher_wanted = self.wants(TIN_TX);
+        let value_lex = self.options.value.lex && text_matcher_wanted;
+        let text_lex = self.options.text.lex && text_matcher_wanted;
         let text_skipped = if text_lex || value_lex {
             match self.run_check(self.options.text.check.clone(), pnt) {
                 CheckFlow::Continue => false,
