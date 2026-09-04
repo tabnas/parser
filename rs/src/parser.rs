@@ -265,7 +265,7 @@ impl Parser {
                 Some(token)
             } else {
                 loop {
-                    match lexer.next_raw_token() {
+                    match lexer.next_raw_token_uncaught() {
                         Ok(mut token) => {
                             for subscriber in &self.lex_subscribers {
                                 subscriber(&mut token, current_rule, context);
@@ -358,6 +358,21 @@ impl Parser {
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
+        match catch_unwind(AssertUnwindSafe(|| self.parse_uncaught(src))) {
+            Ok(result) => result,
+            Err(payload) => Err(TabnasError::from_panic(
+                payload,
+                "Parser::parse",
+                src,
+                0,
+                1,
+                1,
+                &self.options,
+            )),
+        }
+    }
+
+    fn parse_uncaught(&self, src: &str) -> Result<Value, TabnasError> {
         if let Some(result) = self.run_parser_start(src) {
             return result.map_err(|mut error| {
                 error.apply_options(&self.options);
@@ -383,6 +398,25 @@ impl Parser {
     }
 
     pub fn parse_recover(&self, src: &str) -> ParseRecovery {
+        match catch_unwind(AssertUnwindSafe(|| self.parse_recover_uncaught(src))) {
+            Ok(result) => result,
+            Err(payload) => ParseRecovery {
+                value: None,
+                errors: Vec::new(),
+                fatal: Some(TabnasError::from_panic(
+                    payload,
+                    "Parser::parse_recover",
+                    src,
+                    0,
+                    1,
+                    1,
+                    &self.options,
+                )),
+            },
+        }
+    }
+
+    fn parse_recover_uncaught(&self, src: &str) -> ParseRecovery {
         if let Some(result) = self.run_parser_start(src) {
             return match result {
                 Ok(value) => ParseRecovery {
@@ -441,21 +475,15 @@ impl Parser {
         let start = self.options.parser.start.as_ref()?;
         Some(match catch_unwind(AssertUnwindSafe(|| start(src))) {
             Ok(result) => result.map_err(|error| *error),
-            Err(payload) => {
-                let detail = payload
-                    .downcast_ref::<&str>()
-                    .map(|message| (*message).to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic".into());
-                Err(TabnasError::new(
-                    "internal",
-                    format!("parser.start: {detail}"),
-                    src,
-                    0,
-                    1,
-                    1,
-                ))
-            }
+            Err(payload) => Err(TabnasError::from_panic(
+                payload,
+                "parser.start",
+                src,
+                0,
+                1,
+                1,
+                &self.options,
+            )),
         })
     }
 
@@ -463,6 +491,11 @@ impl Parser {
     /// treated as a prefix. The result is an intentional over-approximation:
     /// runtime conditions and counters may still reject a listed token.
     pub fn continuations(&self, src: &str) -> Continuations {
+        catch_unwind(AssertUnwindSafe(|| self.continuations_uncaught(src)))
+            .unwrap_or_else(|_| self.start_continuations())
+    }
+
+    fn continuations_uncaught(&self, src: &str) -> Continuations {
         let mut capture = ContinuationCapture::default();
         let mut errors = Vec::new();
         let result = {
@@ -488,6 +521,15 @@ impl Parser {
         };
         tins.sort_unstable();
         tins.dedup();
+        let tokens = tins
+            .iter()
+            .map(|tin| self.options.token_name(*tin))
+            .collect();
+        Continuations { tins, tokens }
+    }
+
+    fn start_continuations(&self) -> Continuations {
+        let tins = self.start_openers();
         let tokens = tins
             .iter()
             .map(|tin| self.options.token_name(*tin))

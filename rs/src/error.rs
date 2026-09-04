@@ -1,9 +1,11 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Write;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::options::{ColorOptions, ErrorSuffix, ErrorSuffixContext, Options};
 use crate::token::Token;
@@ -130,6 +132,47 @@ impl TabnasError {
         self.color.clone_from(&options.color);
     }
 
+    pub(crate) fn from_panic(
+        payload: Box<dyn Any + Send>,
+        api: &str,
+        full_source: &str,
+        pos: usize,
+        row: usize,
+        col: usize,
+        options: &Options,
+    ) -> Self {
+        let mut error = if let Some(error) = payload.downcast_ref::<Self>() {
+            error.clone()
+        } else if let Some(error) = payload.downcast_ref::<Box<Self>>() {
+            (**error).clone()
+        } else {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".into());
+            Self::new(
+                "internal",
+                format!("{api}: {detail}"),
+                full_source,
+                pos,
+                row,
+                col,
+            )
+        };
+        if error.full_source.is_empty() {
+            error.full_source = full_source.into();
+        }
+        if error.row == 0 {
+            error.row = row;
+        }
+        if error.col == 0 {
+            error.col = col;
+        }
+        error.apply_options(options);
+        error
+    }
+
     pub fn attach_context(
         &mut self,
         rule: &str,
@@ -253,7 +296,9 @@ impl fmt::Display for TabnasError {
                     plugins: self.plugins.clone(),
                     color: self.color.clone(),
                 };
-                write!(f, "\n{}", render(&context))?;
+                let suffix = catch_unwind(AssertUnwindSafe(|| render(&context)))
+                    .unwrap_or_else(|_| "--internal: errmsg.suffix callback panicked--".into());
+                write!(f, "\n{suffix}")?;
             }
             ErrorSuffix::Standard => {
                 if !self.link.is_empty() {

@@ -92,8 +92,9 @@ structured recovery diagnostics. Opt-in negotiated lexing can re-cut contested
 source spans for scannerless serialized grammars, including rollback when a
 candidate alternate later fails. Typed named hooks cover alternate conditions,
 modifiers, errors, dynamic routing/backtracking, and effect-based token
-matchers. Opt-in typed `MapRef`, `ListRef`, and `Text` results expose parse
-metadata while serializing to the same plain JSON shape as TypeScript. Rust
+matchers. Callback panics become structured `internal` diagnostics at public
+parser and lexer boundaries. Opt-in typed `MapRef`, `ListRef`, and `Text`
+results expose parse metadata while serializing to the same plain JSON shape as TypeScript. Rust
 directly executes every non-exempt shared TSV fixture; the
 fixture paths are not copied into the crate. The repository gate requires every
 non-exempt shared fixture to have a TypeScript, Go, and Rust runner, and the

@@ -5,6 +5,7 @@ use crate::options::{LexCheck, LexCheckResult, MatchTokenMatcher, Options};
 use crate::token::{Point, Token, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ};
 use crate::value::Value;
 use regex::Regex;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub struct Lexer<'a> {
     src: &'a str,
@@ -255,23 +256,54 @@ impl<'a> Lexer<'a> {
 
     /// Fetches the next non-IGNORE token (skipping spaces, lines, comments).
     pub fn next_token(&mut self) -> Result<Token, TabnasError> {
-        if let Some(ref e) = self.err {
-            return Err(e.clone());
-        }
-
-        loop {
-            let tkn = self.next_raw(None)?;
-            // Check if ignore token
-            if self.options.is_ignored(tkn.tin) {
-                continue;
+        let point = self.current_point();
+        match catch_unwind(AssertUnwindSafe(|| {
+            if let Some(ref error) = self.err {
+                return Err(error.clone());
             }
-            return Ok(tkn);
+
+            loop {
+                let token = self.next_raw(None)?;
+                if !self.options.is_ignored(token.tin) {
+                    return Ok(token);
+                }
+            }
+        })) {
+            Ok(result) => result,
+            Err(payload) => self.record_panic(payload, "Lexer::next_token", point),
         }
     }
 
     /// Fetch the next token without discarding whitespace, line, or comment tokens.
     pub fn next_raw_token(&mut self) -> Result<Token, TabnasError> {
+        let point = self.current_point();
+        match catch_unwind(AssertUnwindSafe(|| self.next_raw(None))) {
+            Ok(result) => result,
+            Err(payload) => self.record_panic(payload, "Lexer::next_raw_token", point),
+        }
+    }
+
+    pub(crate) fn next_raw_token_uncaught(&mut self) -> Result<Token, TabnasError> {
         self.next_raw(None)
+    }
+
+    fn record_panic(
+        &mut self,
+        payload: Box<dyn std::any::Any + Send>,
+        api: &str,
+        point: Point,
+    ) -> Result<Token, TabnasError> {
+        let error = TabnasError::from_panic(
+            payload,
+            api,
+            self.src,
+            point.pos,
+            point.ri,
+            point.ci,
+            &self.options,
+        );
+        self.err = Some(error.clone());
+        Err(error)
     }
 
     /// Fetch a raw token while restricting non-eager custom token matchers to
