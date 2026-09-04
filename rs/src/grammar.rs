@@ -5,7 +5,7 @@
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
-    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
+    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext, LexCheck,
     MatchTokenCallback, Tabnas, TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
@@ -25,6 +25,7 @@ struct AltRefs {
     match_tokens: HashMap<String, (MatchTokenCallback, bool)>,
     value_transforms: HashMap<String, ValueTransform>,
     text_modifiers: HashMap<String, TextModifier>,
+    lex_checks: HashMap<String, LexCheck>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -39,6 +40,7 @@ impl From<&Tabnas> for AltRefs {
             match_tokens: tabnas.match_token_refs.clone(),
             value_transforms: tabnas.value_transform_refs.clone(),
             text_modifiers: tabnas.text_modifier_refs.clone(),
+            lex_checks: tabnas.lex_check_refs.clone(),
         }
     }
 }
@@ -614,6 +616,32 @@ fn value_map(
         .collect())
 }
 
+fn apply_lex_check(
+    map: &Map<String, JsonValue>,
+    label: &str,
+    target: &mut Option<LexCheck>,
+    refs: &AltRefs,
+) -> Result<(), GrammarError> {
+    let Some(value) = map.get("check") else {
+        return Ok(());
+    };
+    if value.is_null() || value == &JsonValue::Bool(false) {
+        *target = None;
+        return Ok(());
+    }
+    let reference = value.as_str().ok_or_else(|| {
+        GrammarError(format!(
+            "Grammar: {label}.check must be a function reference or null"
+        ))
+    })?;
+    *target = Some(refs.lex_checks.get(reference).cloned().ok_or_else(|| {
+        GrammarError(format!(
+            "Grammar: unknown lexer check function reference: {reference}"
+        ))
+    })?);
+    Ok(())
+}
+
 fn apply_options(
     options: &mut crate::Options,
     map: &Map<String, JsonValue>,
@@ -625,6 +653,7 @@ fn apply_options(
     if let Some(text) = map.get("text") {
         let text = object(text, "options.text")?;
         set_bool(text, "lex", &mut options.text.lex);
+        apply_lex_check(text, "options.text", &mut options.text.check, refs)?;
         if let Some(modify) = text.get("modify") {
             let references =
                 match modify {
@@ -661,6 +690,7 @@ fn apply_options(
     if let Some(space) = map.get("space") {
         let space = object(space, "options.space")?;
         set_bool(space, "lex", &mut options.space.lex);
+        apply_lex_check(space, "options.space", &mut options.space.check, refs)?;
         if let Some(chars) = space.get("chars") {
             options.space.chars = chars
                 .as_str()
@@ -676,6 +706,7 @@ fn apply_options(
         set_bool(number, "hex", &mut options.number.hex);
         set_bool(number, "oct", &mut options.number.oct);
         set_bool(number, "bin", &mut options.number.bin);
+        apply_lex_check(number, "options.number", &mut options.number.check, refs)?;
         if let Some(separator) = number.get("sep") {
             options.number.sep = separator.as_str().map(str::to_owned);
         }
@@ -686,6 +717,7 @@ fn apply_options(
     if let Some(string) = map.get("string") {
         let string = object(string, "options.string")?;
         set_bool(string, "lex", &mut options.string.lex);
+        apply_lex_check(string, "options.string", &mut options.string.check, refs)?;
         if let Some(chars) = string.get("chars").and_then(JsonValue::as_str) {
             options.string.chars = chars.into();
         }
@@ -774,6 +806,7 @@ fn apply_options(
         let line = object(line, "options.line")?;
         set_bool(line, "lex", &mut options.line.lex);
         set_bool(line, "single", &mut options.line.single);
+        apply_lex_check(line, "options.line", &mut options.line.check, refs)?;
         if let Some(chars) = line.get("chars") {
             options.line.chars = chars
                 .as_str()
@@ -795,6 +828,7 @@ fn apply_options(
     if let Some(comment) = map.get("comment") {
         let comment = object(comment, "options.comment")?;
         set_bool(comment, "lex", &mut options.comment.lex);
+        apply_lex_check(comment, "options.comment", &mut options.comment.check, refs)?;
         if let Some(definitions) = comment.get("def") {
             for (name, value) in object(definitions, "options.comment.def")? {
                 if value.is_null() || value == &JsonValue::Bool(false) {
@@ -1140,6 +1174,12 @@ fn apply_options(
     if let Some(fixed_options) = map.get("fixed") {
         let fixed_options = object(fixed_options, "options.fixed")?;
         set_bool(fixed_options, "lex", &mut options.fixed.lex);
+        apply_lex_check(
+            fixed_options,
+            "options.fixed",
+            &mut options.fixed.check,
+            refs,
+        )?;
         if let Some(tokens) = fixed_options.get("token") {
             for (name, source) in object(tokens, "options.fixed.token")? {
                 let name = if name.starts_with('#') {
@@ -1195,6 +1235,12 @@ fn apply_options(
     if let Some(match_options) = map.get("match") {
         let match_options = object(match_options, "options.match")?;
         set_bool(match_options, "lex", &mut options.match_lex);
+        apply_lex_check(
+            match_options,
+            "options.match",
+            &mut options.match_check,
+            refs,
+        )?;
         if let Some(tokens) = match_options.get("token") {
             for (name, source) in object(tokens, "options.match.token")? {
                 let name = if name.starts_with('#') {

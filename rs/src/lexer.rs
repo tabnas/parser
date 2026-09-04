@@ -1,7 +1,7 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::error::TabnasError;
-use crate::options::{MatchTokenMatcher, Options};
+use crate::options::{LexCheck, LexCheckResult, MatchTokenMatcher, Options};
 use crate::token::{Point, Token, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ};
 use crate::value::Value;
 use regex::Regex;
@@ -28,6 +28,12 @@ pub(crate) struct LexerState {
     ci: usize,
     err: Option<TabnasError>,
     end_reached: bool,
+}
+
+enum CheckFlow {
+    Continue,
+    Skip,
+    Token(Box<Token>),
 }
 
 impl<'a> Lexer<'a> {
@@ -123,6 +129,32 @@ impl<'a> Lexer<'a> {
         self.want
             .as_ref()
             .is_none_or(|wanted| wanted.contains(&tin))
+    }
+
+    fn run_check(&mut self, check: Option<LexCheck>, point: Point) -> CheckFlow {
+        let Some(check) = check else {
+            return CheckFlow::Continue;
+        };
+        let remaining = &self.src[self.byte_position()..];
+        match check.run(remaining) {
+            LexCheckResult::Continue => CheckFlow::Continue,
+            LexCheckResult::Skip => CheckFlow::Skip,
+            LexCheckResult::Token(token)
+                if !token.source.is_empty() && remaining.starts_with(&token.source) =>
+            {
+                for _ in token.source.chars() {
+                    self.advance();
+                }
+                CheckFlow::Token(Box::new(Token::new(
+                    token.name,
+                    token.tin,
+                    token.value,
+                    token.source,
+                    point,
+                )))
+            }
+            LexCheckResult::Token(_) => CheckFlow::Skip,
+        }
     }
 
     fn is_text_delimiter_here(&self) -> bool {
@@ -282,8 +314,23 @@ impl<'a> Lexer<'a> {
         let c = self.peek().unwrap();
 
         // User-declared match tokens have the highest matcher priority.
+        let match_skipped = if self.options.match_lex
+            && self
+                .options
+                .match_tokens
+                .values()
+                .any(|matcher| self.wants(matcher.tin))
+        {
+            match self.run_check(self.options.match_check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
         let remaining = &self.src[self.byte_position()..];
-        let custom = self.options.match_lex.then(|| {
+        let custom = (self.options.match_lex && !match_skipped).then(|| {
             self.options.match_tokens.values().find_map(|matcher| {
                 if !self.wants(matcher.tin) {
                     return None;
@@ -319,7 +366,24 @@ impl<'a> Lexer<'a> {
         }
 
         // Fixed literals run after custom matchers and use longest-match wins.
-        let fixed = self.options.fixed.lex.then(|| {
+        let fixed_skipped = if self.options.fixed.lex
+            && self
+                .options
+                .fixed
+                .tokens
+                .values()
+                .any(|token| self.wants(token.tin))
+        {
+            match self.run_check(self.options.fixed.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
+        let remaining = &self.src[self.byte_position()..];
+        let fixed = (self.options.fixed.lex && !fixed_skipped).then(|| {
             self.options
                 .fixed
                 .tokens
@@ -346,7 +410,20 @@ impl<'a> Lexer<'a> {
         }
 
         // 1. Whitespace
-        if self.options.space.lex && self.wants(TIN_SP) && self.options.space.chars.contains(c) {
+        let space_skipped = if self.options.space.lex && self.wants(TIN_SP) {
+            match self.run_check(self.options.space.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
+        if self.options.space.lex
+            && !space_skipped
+            && self.wants(TIN_SP)
+            && self.options.space.chars.contains(c)
+        {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if self.options.space.chars.contains(ch) {
@@ -366,7 +443,17 @@ impl<'a> Lexer<'a> {
         }
 
         // 2. Line ending
+        let line_skipped = if self.options.line.lex && self.wants(TIN_LN) {
+            match self.run_check(self.options.line.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
         if self.options.line.lex
+            && !line_skipped
             && self.wants(TIN_LN)
             && (self.options.line.chars.contains(c) || self.options.line.fixed.contains(&c))
         {
@@ -391,7 +478,7 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if self.options.line.lex && (c == '\u{2028}' || c == '\u{2029}') {
+        if self.options.line.lex && !line_skipped && (c == '\u{2028}' || c == '\u{2029}') {
             let bad_char = self.advance().expect("peeked character must advance");
             let err = TabnasError::new(
                 "unexpected",
@@ -408,7 +495,20 @@ impl<'a> Lexer<'a> {
         // 3. Quoted strings. These precede comments in the canonical matcher
         // order, so an overlapping quote/comment opener is a string unless
         // string matching explicitly abandons the malformed candidate.
-        if self.options.string.lex && self.wants(TIN_ST) && self.options.string.chars.contains(c) {
+        let string_skipped = if self.options.string.lex && self.wants(TIN_ST) {
+            match self.run_check(self.options.string.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
+        if self.options.string.lex
+            && !string_skipped
+            && self.wants(TIN_ST)
+            && self.options.string.chars.contains(c)
+        {
             let start = (self.idx, self.ri, self.ci);
             match self.match_string(c, pnt) {
                 result @ Ok(_) => return result,
@@ -421,14 +521,34 @@ impl<'a> Lexer<'a> {
         }
 
         // 4. Comments (longest opening marker wins; ties sort by name).
-        if self.options.comment.lex && self.wants(TIN_CM) {
+        let comment_skipped = if self.options.comment.lex && self.wants(TIN_CM) {
+            match self.run_check(self.options.comment.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
+        if self.options.comment.lex && !comment_skipped && self.wants(TIN_CM) {
             if let Some(token) = self.match_comment(pnt)? {
                 return Ok(token);
             }
         }
 
         // 5. Numbers
+        let number_skipped =
+            if self.options.number.lex && (self.wants(TIN_NR) || self.wants(TIN_VL)) {
+                match self.run_check(self.options.number.check.clone(), pnt) {
+                    CheckFlow::Continue => false,
+                    CheckFlow::Skip => true,
+                    CheckFlow::Token(token) => return Ok(*token),
+                }
+            } else {
+                false
+            };
         if self.options.number.lex
+            && !number_skipped
             && (self.wants(TIN_NR) || self.wants(TIN_VL))
             && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit())
         {
@@ -440,7 +560,16 @@ impl<'a> Lexer<'a> {
         // 6. Text and named/regex values share the same delimited run.
         let value_lex = self.options.value.lex && self.wants(TIN_VL);
         let text_lex = self.options.text.lex && self.wants(TIN_TX);
-        if (text_lex || value_lex) && !self.is_text_delimiter_here() {
+        let text_skipped = if text_lex || value_lex {
+            match self.run_check(self.options.text.check.clone(), pnt) {
+                CheckFlow::Continue => false,
+                CheckFlow::Skip => true,
+                CheckFlow::Token(token) => return Ok(*token),
+            }
+        } else {
+            false
+        };
+        if (text_lex || value_lex) && !text_skipped && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
             let remaining = self.src[self.byte_position()..].to_string();
             let mut src = String::new();
@@ -527,7 +656,7 @@ impl<'a> Lexer<'a> {
                 }
             }
 
-            if !text_lex {
+            if !text_lex || text_skipped {
                 (self.idx, self.ri, self.ci) = start;
             } else {
                 let mut value = Value::String(src.clone());

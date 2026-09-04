@@ -9,6 +9,70 @@ use std::sync::Arc;
 
 use crate::context::Context;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LexCheckToken {
+    pub name: String,
+    pub tin: Tin,
+    pub source: String,
+    pub value: crate::Value,
+}
+
+impl LexCheckToken {
+    pub fn new(
+        name: impl Into<String>,
+        tin: Tin,
+        source: impl Into<String>,
+        value: crate::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            tin,
+            source: source.into(),
+            value,
+        }
+    }
+}
+
+/// Effect returned by a matcher-family preflight hook.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LexCheckResult {
+    /// Run the matcher's normal implementation.
+    Continue,
+    /// Skip this matcher and try the next matcher family.
+    Skip,
+    /// Emit an owned token while consuming its non-empty source prefix.
+    Token(Box<LexCheckToken>),
+}
+
+impl LexCheckResult {
+    pub fn token(token: LexCheckToken) -> Self {
+        Self::Token(Box::new(token))
+    }
+}
+
+#[derive(Clone)]
+pub struct LexCheck {
+    callback: Arc<dyn Fn(&str) -> LexCheckResult + Send + Sync>,
+}
+
+impl LexCheck {
+    pub(crate) fn new(callback: impl Fn(&str) -> LexCheckResult + Send + Sync + 'static) -> Self {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    pub(crate) fn run(&self, source: &str) -> LexCheckResult {
+        (self.callback)(source)
+    }
+}
+
+impl fmt::Debug for LexCheck {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("LexCheck(<function>)")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FixedToken {
     pub name: String,
@@ -20,6 +84,7 @@ pub struct FixedToken {
 pub struct FixedOptions {
     pub lex: bool,
     pub tokens: IndexMap<String, FixedToken>,
+    pub check: Option<LexCheck>,
 }
 
 impl Default for FixedOptions {
@@ -42,7 +107,11 @@ impl Default for FixedOptions {
                 },
             );
         }
-        Self { lex: true, tokens }
+        Self {
+            lex: true,
+            tokens,
+            check: None,
+        }
     }
 }
 
@@ -52,6 +121,7 @@ pub type TextModifier = Arc<dyn Fn(crate::Value) -> crate::Value + Send + Sync>;
 pub struct TextOptions {
     pub lex: bool,
     pub modify: Vec<TextModifier>,
+    pub check: Option<LexCheck>,
 }
 
 impl fmt::Debug for TextOptions {
@@ -60,6 +130,7 @@ impl fmt::Debug for TextOptions {
             .debug_struct("TextOptions")
             .field("lex", &self.lex)
             .field("modify", &self.modify.len())
+            .field("check", &self.check)
             .finish()
     }
 }
@@ -69,6 +140,7 @@ impl Default for TextOptions {
         TextOptions {
             lex: true,
             modify: Vec::new(),
+            check: None,
         }
     }
 }
@@ -77,6 +149,7 @@ impl Default for TextOptions {
 pub struct SpaceOptions {
     pub lex: bool,
     pub chars: String,
+    pub check: Option<LexCheck>,
 }
 
 impl Default for SpaceOptions {
@@ -84,6 +157,7 @@ impl Default for SpaceOptions {
         Self {
             lex: true,
             chars: " \t".into(),
+            check: None,
         }
     }
 }
@@ -96,6 +170,7 @@ pub struct NumberOptions {
     pub bin: bool,
     pub sep: Option<String>,
     pub exclude: Option<String>, // regex string e.g. "^00+"
+    pub check: Option<LexCheck>,
 }
 
 impl Default for NumberOptions {
@@ -107,6 +182,7 @@ impl Default for NumberOptions {
             bin: true,
             sep: Some("_".to_string()),
             exclude: None,
+            check: None,
         }
     }
 }
@@ -123,6 +199,7 @@ pub struct StringOptions {
     pub escape_strict: bool,
     pub allow_control: bool,
     pub abandon: bool,
+    pub check: Option<LexCheck>,
 }
 
 impl Default for StringOptions {
@@ -154,6 +231,7 @@ impl Default for StringOptions {
             escape_strict: false,
             allow_control: false,
             abandon: false,
+            check: None,
         }
     }
 }
@@ -167,6 +245,7 @@ pub struct LineOptions {
     /// Extra line terminators retained for compatibility with the first
     /// Rust slice. Serialized grammars should prefer `line.chars`.
     pub fixed: Vec<char>,
+    pub check: Option<LexCheck>,
 }
 
 impl Default for LineOptions {
@@ -177,6 +256,7 @@ impl Default for LineOptions {
             row_chars: "\n".into(),
             single: false,
             fixed: Vec::new(),
+            check: None,
         }
     }
 }
@@ -195,6 +275,7 @@ pub struct CommentDef {
 pub struct CommentOptions {
     pub lex: bool,
     pub definitions: IndexMap<String, CommentDef>,
+    pub check: Option<LexCheck>,
 }
 
 #[derive(Clone)]
@@ -273,6 +354,7 @@ impl Default for CommentOptions {
         CommentOptions {
             lex: true,
             definitions,
+            check: None,
         }
     }
 }
@@ -493,6 +575,7 @@ pub struct Options {
     pub token_set: HashMap<String, Vec<Tin>>,
     /// Enable serialized/custom regexp token matching (`options.match.lex`).
     pub match_lex: bool,
+    pub match_check: Option<LexCheck>,
     pub match_tokens: IndexMap<String, MatchToken>,
     pub tag: String,
 }
@@ -523,6 +606,7 @@ impl Default for Options {
             parse: ParseOptions::default(),
             token_set,
             match_lex: true,
+            match_check: None,
             match_tokens: IndexMap::new(),
             tag: "-".to_string(),
         }
