@@ -310,3 +310,43 @@ fn panicking_prepare_is_identified_before_a_rule_exists() {
     assert!(error.rule.is_empty());
     assert!(error.rule_stack.is_empty());
 }
+
+#[test]
+fn imperative_lexer_and_lexer_condition_panics_keep_the_active_site() {
+    let mut matcher = Tabnas::new();
+    matcher.imperative_lex_match_ref("@boom", |_, _, _| panic!("imperative matcher exploded"));
+    matcher
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "lex":{"match":{"boom":{"order":0,"make":"@boom"}}}
+              },
+              "rule":{"top":{"open":[{"s":"#WORD"}]}}
+            }"##,
+        )
+        .unwrap();
+    let error = matcher.parse("word").unwrap_err();
+    assert_top_site(&error, "word");
+    assert!(error.src.contains("imperative matcher exploded"));
+
+    let mut condition = number_parser();
+    condition.rules.get_mut("top").unwrap().open[0].c_lex =
+        Some(Arc::new(|_, _, _| panic!("lexer condition exploded")));
+    let error = condition.parse("1").unwrap_err();
+    assert_top_site(&error, "1");
+    assert!(error.src.contains("lexer condition exploded"));
+}
+
+#[test]
+fn plugin_panics_are_returned_without_unwinding() {
+    let mut tabnas = Tabnas::new();
+    let result = tabnas.use_plugin(
+        tabnas::Plugin::new("boom", |_, _| panic!("plugin exploded")),
+        None,
+    );
+    let error = result.err().expect("plugin panic is an error");
+    assert!(error.to_string().contains("plugin boom panicked"));
+    assert!(error.to_string().contains("plugin exploded"));
+}

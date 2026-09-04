@@ -1,12 +1,13 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::builtins::run_builtin_action_with_info;
-use crate::context::Context;
+use crate::context::{Context, ContextSeed, InstanceInfo};
 use crate::error::TabnasError;
 use crate::lexer::{Lexer, LexerState};
 use crate::options::Options;
 use crate::rule::{
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    resolved_action_order, ActionBinding, AltSpec, CompareOp, Condition, Rule, RuleDone,
+    RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
 use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_ZZ};
 use crate::value::Value;
@@ -68,6 +69,7 @@ pub struct Parser {
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
+    pub instance: InstanceInfo,
 }
 
 impl Parser {
@@ -81,6 +83,7 @@ impl Parser {
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
+            instance: InstanceInfo::default(),
         }
     }
 
@@ -112,6 +115,10 @@ impl Parser {
         self.rule_done_subscribers.push(subscriber);
     }
 
+    pub fn set_instance_info(&mut self, instance: InstanceInfo) {
+        self.instance = instance;
+    }
+
     fn run_action(
         &self,
         name: &str,
@@ -129,13 +136,52 @@ impl Parser {
         context: &mut Context,
         site: ParseSite<'_>,
     ) -> Result<(), TabnasError> {
-        let actions = if is_open { &spec.ao } else { &spec.ac };
-        for action in actions {
-            self.run_action(action, rule, context).map_err(|error| {
+        let (actions, callbacks, order) = if is_open {
+            (&spec.ao, &spec.ao_fns, &spec.ao_order)
+        } else {
+            (&spec.ac, &spec.ac_fns, &spec.ac_order)
+        };
+        for binding in resolved_action_order(actions, callbacks, order) {
+            let result = match binding {
+                ActionBinding::Named(action) => self.run_action(&action, rule, context),
+                ActionBinding::Callback(callback) => {
+                    self.run_context_callback("lifecycle after action", &callback, rule, context)
+                }
+            };
+            result.map_err(|error| {
                 self.attach_action_error(error, site.source, rule, site.stack, site.alts)
             })?;
         }
         Ok(())
+    }
+
+    fn run_context_callback(
+        &self,
+        label: &str,
+        callback: &ContextAction,
+        rule: &mut Rule,
+        context: &mut Context,
+    ) -> Result<(), TabnasError> {
+        context.set_rule(rule);
+        match catch_unwind(AssertUnwindSafe(|| callback(rule, context))) {
+            Ok(result) => result.map_err(|action_error| {
+                let token = match rule.state {
+                    RuleState::Open => rule.o0().or_else(|| rule.c0()),
+                    RuleState::Close => rule.c0().or_else(|| rule.o0()),
+                };
+                let mut error = TabnasError::new(
+                    action_error.code,
+                    token.map_or("", |value| value.src.as_str()),
+                    "",
+                    token.map_or(0, |value| value.pos),
+                    token.map_or(1, |value| value.ri),
+                    token.map_or(1, |value| value.ci),
+                );
+                error.detail = action_error.detail;
+                error
+            }),
+            Err(payload) => Err(self.action_panic(payload, label, rule)),
+        }
     }
 
     fn attach_action_error(
@@ -161,8 +207,13 @@ impl Parser {
         context: &mut Context,
         config: Option<&Value>,
     ) -> Result<(), TabnasError> {
-        if run_builtin_action_with_info(name, rule, config, &self.options.info) {
-            return Ok(());
+        context.set_rule(rule);
+        match catch_unwind(AssertUnwindSafe(|| {
+            run_builtin_action_with_info(name, rule, context, config, &self.options.info)
+        })) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(payload) => return Err(self.action_panic(payload, name, rule)),
         }
         if let Some(action) = self.actions.get(name) {
             return match catch_unwind(AssertUnwindSafe(|| action(rule))) {
@@ -171,25 +222,7 @@ impl Parser {
             };
         }
         if let Some(action) = self.context_actions.get(name) {
-            return match catch_unwind(AssertUnwindSafe(|| action(rule, context))) {
-                Ok(result) => result.map_err(|action_error| {
-                    let token = match rule.state {
-                        RuleState::Open => rule.o0().or_else(|| rule.c0()),
-                        RuleState::Close => rule.c0().or_else(|| rule.o0()),
-                    };
-                    let mut error = TabnasError::new(
-                        action_error.code,
-                        token.map_or("", |value| value.src.as_str()),
-                        "",
-                        token.map_or(0, |value| value.pos),
-                        token.map_or(1, |value| value.ri),
-                        token.map_or(1, |value| value.ci),
-                    );
-                    error.detail = action_error.detail;
-                    error
-                }),
-                Err(payload) => Err(self.action_panic(payload, name, rule)),
-            };
+            return self.run_context_callback(name, action, rule, context);
         }
         let token = match rule.state {
             RuleState::Open => rule.o0().or_else(|| rule.c0()),
@@ -255,8 +288,13 @@ impl Parser {
             token,
             expected,
         );
-        error.apply_options(&self.options);
+        self.decorate_error(&mut error);
         error
+    }
+
+    fn decorate_error(&self, error: &mut TabnasError) {
+        error.apply_options(&self.options);
+        error.plugins = self.instance.plugins.clone();
     }
 
     fn catch_callback<T>(
@@ -284,7 +322,7 @@ impl Parser {
             };
             self.attach_error(error, rule, stack, alts, token)
         } else {
-            error.apply_options(&self.options);
+            self.decorate_error(&mut error);
             error
         }
     }
@@ -403,8 +441,9 @@ impl Parser {
                 Some(token)
             } else {
                 loop {
-                    let next_raw = self
-                        .catch_callback("lexer callback", &src, || lexer.next_raw_token_uncaught());
+                    let next_raw = self.catch_callback("lexer callback", &src, || {
+                        lexer.next_raw_for_rule(current_rule, context)
+                    });
                     let next_raw = next_raw.map_err(|error| {
                         self.attach_active_error(
                             error,
@@ -495,7 +534,8 @@ impl Parser {
             bad: false,
         });
         if !suppressed {
-            mode.errors.push(error);
+            mode.errors.push(error.clone());
+            context.errs.push(error);
         }
 
         context.t.push(candidate.clone());
@@ -536,24 +576,62 @@ impl Parser {
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
-        match catch_unwind(AssertUnwindSafe(|| self.parse_uncaught(src))) {
+        self.parse_with_meta(src, Value::Undefined)
+    }
+
+    pub fn parse_with_meta(&self, src: &str, meta: Value) -> Result<Value, TabnasError> {
+        self.parse_with_owner(src, meta, None, None)
+    }
+
+    pub(crate) fn parse_for(
+        &self,
+        owner: &crate::Tabnas,
+        src: &str,
+        meta: Value,
+    ) -> Result<Value, TabnasError> {
+        self.parse_with_owner(src, meta, Some(owner), None)
+    }
+
+    pub(crate) fn parse_for_with_context(
+        &self,
+        owner: &crate::Tabnas,
+        src: &str,
+        meta: Value,
+        parent: &ContextSeed,
+    ) -> Result<Value, TabnasError> {
+        self.parse_with_owner(src, meta, Some(owner), Some(parent))
+    }
+
+    fn parse_with_owner(
+        &self,
+        src: &str,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> Result<Value, TabnasError> {
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.parse_uncaught(src, meta, owner, parent)
+        })) {
             Ok(result) => result,
-            Err(payload) => Err(TabnasError::from_panic(
-                payload,
-                "Parser::parse",
-                src,
-                0,
-                1,
-                1,
-                &self.options,
-            )),
+            Err(payload) => {
+                let mut error =
+                    TabnasError::from_panic(payload, "Parser::parse", src, 0, 1, 1, &self.options);
+                self.decorate_error(&mut error);
+                Err(error)
+            }
         }
     }
 
-    fn parse_uncaught(&self, src: &str) -> Result<Value, TabnasError> {
-        if let Some(result) = self.run_parser_start(src) {
+    fn parse_uncaught(
+        &self,
+        src: &str,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> Result<Value, TabnasError> {
+        if let Some(result) = self.run_parser_start(src, &meta, owner) {
             return result.map_err(|mut error| {
-                error.apply_options(&self.options);
+                self.decorate_error(&mut error);
                 error
             });
         }
@@ -565,10 +643,12 @@ impl Parser {
             errors: &mut errors,
             partial: None,
         };
-        let result = self.parse_inner(src, &mut mode).map_err(|mut error| {
-            error.apply_options(&self.options);
-            error
-        });
+        let result = self
+            .parse_inner(src, meta, owner, parent, &mut mode)
+            .map_err(|mut error| {
+                self.decorate_error(&mut error);
+                error
+            });
         match result {
             Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
             other => other,
@@ -576,12 +656,45 @@ impl Parser {
     }
 
     pub fn parse_recover(&self, src: &str) -> ParseRecovery {
-        match catch_unwind(AssertUnwindSafe(|| self.parse_recover_uncaught(src))) {
+        self.parse_recover_with_meta(src, Value::Undefined)
+    }
+
+    pub fn parse_recover_with_meta(&self, src: &str, meta: Value) -> ParseRecovery {
+        self.parse_recover_with_owner(src, meta, None, None)
+    }
+
+    pub(crate) fn parse_recover_for(
+        &self,
+        owner: &crate::Tabnas,
+        src: &str,
+        meta: Value,
+    ) -> ParseRecovery {
+        self.parse_recover_with_owner(src, meta, Some(owner), None)
+    }
+
+    pub(crate) fn parse_recover_for_with_context(
+        &self,
+        owner: &crate::Tabnas,
+        src: &str,
+        meta: Value,
+        parent: &ContextSeed,
+    ) -> ParseRecovery {
+        self.parse_recover_with_owner(src, meta, Some(owner), Some(parent))
+    }
+
+    fn parse_recover_with_owner(
+        &self,
+        src: &str,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> ParseRecovery {
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.parse_recover_uncaught(src, meta, owner, parent)
+        })) {
             Ok(result) => result,
-            Err(payload) => ParseRecovery {
-                value: None,
-                errors: Vec::new(),
-                fatal: Some(TabnasError::from_panic(
+            Err(payload) => {
+                let mut error = TabnasError::from_panic(
                     payload,
                     "Parser::parse_recover",
                     src,
@@ -589,13 +702,25 @@ impl Parser {
                     1,
                     1,
                     &self.options,
-                )),
-            },
+                );
+                self.decorate_error(&mut error);
+                ParseRecovery {
+                    value: None,
+                    errors: Vec::new(),
+                    fatal: Some(error),
+                }
+            }
         }
     }
 
-    fn parse_recover_uncaught(&self, src: &str) -> ParseRecovery {
-        if let Some(result) = self.run_parser_start(src) {
+    fn parse_recover_uncaught(
+        &self,
+        src: &str,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> ParseRecovery {
+        if let Some(result) = self.run_parser_start(src, &meta, owner) {
             return match result {
                 Ok(value) => ParseRecovery {
                     value: Some(value),
@@ -603,7 +728,7 @@ impl Parser {
                     fatal: None,
                 },
                 Err(mut error) => {
-                    error.apply_options(&self.options);
+                    self.decorate_error(&mut error);
                     ParseRecovery {
                         value: None,
                         errors: Vec::new(),
@@ -621,14 +746,16 @@ impl Parser {
                 errors: &mut errors,
                 partial: None,
             };
-            let result = self.parse_inner(src, &mut mode).map_err(|mut error| {
-                error.apply_options(&self.options);
-                error
-            });
+            let result = self
+                .parse_inner(src, meta, owner, parent, &mut mode)
+                .map_err(|mut error| {
+                    self.decorate_error(&mut error);
+                    error
+                });
             (result, mode.partial)
         };
         for error in &mut errors {
-            error.apply_options(&self.options);
+            self.decorate_error(error);
         }
         match result {
             Ok(value) => ParseRecovery {
@@ -649,9 +776,26 @@ impl Parser {
         }
     }
 
-    fn run_parser_start(&self, src: &str) -> Option<Result<Value, TabnasError>> {
-        let start = self.options.parser.start.as_ref()?;
-        Some(match catch_unwind(AssertUnwindSafe(|| start(src))) {
+    fn run_parser_start(
+        &self,
+        src: &str,
+        meta: &Value,
+        owner: Option<&crate::Tabnas>,
+    ) -> Option<Result<Value, TabnasError>> {
+        let result = if let Some(start) = self.options.parser.start_with_instance.as_ref() {
+            let Some(owner) = owner else {
+                let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
+                error.detail =
+                    "parser.start requires an owning Tabnas instance; call Tabnas::parse".into();
+                self.decorate_error(&mut error);
+                return Some(Err(error));
+            };
+            catch_unwind(AssertUnwindSafe(|| start(src, owner, meta)))
+        } else {
+            let start = self.options.parser.start.as_ref()?;
+            catch_unwind(AssertUnwindSafe(|| start(src)))
+        };
+        Some(match result {
             Ok(result) => result.map_err(|error| *error),
             Err(payload) => Err(TabnasError::from_panic(
                 payload,
@@ -669,11 +813,19 @@ impl Parser {
     /// treated as a prefix. The result is an intentional over-approximation:
     /// runtime conditions and counters may still reject a listed token.
     pub fn continuations(&self, src: &str) -> Continuations {
-        catch_unwind(AssertUnwindSafe(|| self.continuations_uncaught(src)))
+        self.continuations_with_owner(src, None)
+    }
+
+    pub(crate) fn continuations_for(&self, owner: &crate::Tabnas, src: &str) -> Continuations {
+        self.continuations_with_owner(src, Some(owner))
+    }
+
+    fn continuations_with_owner(&self, src: &str, owner: Option<&crate::Tabnas>) -> Continuations {
+        catch_unwind(AssertUnwindSafe(|| self.continuations_uncaught(src, owner)))
             .unwrap_or_else(|_| self.start_continuations())
     }
 
-    fn continuations_uncaught(&self, src: &str) -> Continuations {
+    fn continuations_uncaught(&self, src: &str, owner: Option<&crate::Tabnas>) -> Continuations {
         let mut capture = ContinuationCapture::default();
         let mut errors = Vec::new();
         let result = {
@@ -683,7 +835,7 @@ impl Parser {
                 errors: &mut errors,
                 partial: None,
             };
-            self.parse_inner(src, &mut mode)
+            self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
         };
         let mut tins = if result.is_ok() {
             if capture.have_end {
@@ -767,7 +919,7 @@ impl Parser {
                     Some(token) => Ok(token),
                     None => {
                         let result = self.catch_callback("lexer callback", site.source, || {
-                            lexer.next_rule_token(&expected_match_tins)
+                            lexer.next_rule_token(&expected_match_tins, rule, context)
                         });
                         result.map_err(|error| {
                             self.attach_active_error(
@@ -884,13 +1036,44 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_inner(&self, src: &str, mode: &mut ParseMode<'_>) -> Result<Value, TabnasError> {
-        let mut context = Context::new(self.options.rewind.history);
+    fn parse_inner(
+        &self,
+        src: &str,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+        mode: &mut ParseMode<'_>,
+    ) -> Result<Value, TabnasError> {
+        let input_meta = meta.clone();
+        let mut context = Context::new(
+            self.options.rewind.history,
+            src,
+            meta,
+            self.options.clone(),
+            self.instance.clone(),
+        );
+        if let Some(parent) = parent {
+            context.apply_seed(parent);
+        }
         for prepare in &self.options.parse.prepare {
-            self.catch_callback("parse.prepare", src, || prepare(&mut context))?;
+            let outcome = self.catch_callback("parse.prepare", src, || {
+                prepare.run(owner, &mut context, &input_meta)
+            })?;
+            if let Err(detail) = outcome {
+                let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
+                error.detail = detail.into();
+                return Err(error);
+            }
         }
         for prepare in self.options.parse.named_prepare.values() {
-            self.catch_callback("parse.prepare", src, || prepare(&mut context))?;
+            let outcome = self.catch_callback("parse.prepare", src, || {
+                prepare.run(owner, &mut context, &input_meta)
+            })?;
+            if let Err(detail) = outcome {
+                let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
+                error.detail = detail.into();
+                return Err(error);
+            }
         }
 
         if src.is_empty() {
@@ -911,6 +1094,7 @@ impl Parser {
         let mut current_rule = Rule::new(start_name, Value::Undefined);
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
+        context.set_root(root_node.clone());
         let mut stack: Vec<Rule> = Vec::new();
         let mut next_rule_id = 1;
         #[allow(unused_assignments)]
@@ -932,6 +1116,7 @@ impl Parser {
         let budget = &self.options.parse.budget;
 
         loop {
+            context.set_active(&current_rule, &stack);
             update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
             if iterations > max_iterations {
@@ -1012,20 +1197,31 @@ impl Parser {
             let skip_befores = current_rule.skip_befores;
             current_rule.skip_befores = false;
             if !skip_befores {
-                if is_open {
-                    for bo_action in &spec.bo {
-                        self.run_action(bo_action, &mut current_rule, &mut context)
-                            .map_err(|error| {
-                                self.attach_action_error(error, src, &current_rule, &stack, alts)
-                            })?;
-                    }
+                let (actions, callbacks, order, label) = if is_open {
+                    (&spec.bo, &spec.bo_fns, &spec.bo_order, "before-open action")
                 } else {
-                    for bc_action in &spec.bc {
-                        self.run_action(bc_action, &mut current_rule, &mut context)
-                            .map_err(|error| {
-                                self.attach_action_error(error, src, &current_rule, &stack, alts)
-                            })?;
-                    }
+                    (
+                        &spec.bc,
+                        &spec.bc_fns,
+                        &spec.bc_order,
+                        "before-close action",
+                    )
+                };
+                for binding in resolved_action_order(actions, callbacks, order) {
+                    let result = match binding {
+                        ActionBinding::Named(action) => {
+                            self.run_action(&action, &mut current_rule, &mut context)
+                        }
+                        ActionBinding::Callback(callback) => self.run_context_callback(
+                            label,
+                            &callback,
+                            &mut current_rule,
+                            &mut context,
+                        ),
+                    };
+                    result.map_err(|error| {
+                        self.attach_action_error(error, src, &current_rule, &stack, alts)
+                    })?;
                 }
             }
             update_partial(mode, &root_node, &current_rule, &stack);
@@ -1066,7 +1262,7 @@ impl Parser {
                             && !pos_tins.is_empty()
                         {
                             let result = self.catch_callback("lexer relex callback", src, || {
-                                lexer.relex(&token, pos_tins)
+                                lexer.relex(&token, pos_tins, &mut current_rule, &mut context)
                             });
                             result.map_err(|error| {
                                 self.attach_error(error, &current_rule, &stack, alts, Some(&token))
@@ -1126,6 +1322,7 @@ impl Parser {
                             current_rule.c = candidate.c.clone();
                         }
                         if let Some(condition) = &alt.c_fn {
+                            context.set_rule(&current_rule);
                             let result = self.catch_callback("alternate condition", src, || {
                                 condition(&mut current_rule, &mut context)
                             });
@@ -1138,6 +1335,24 @@ impl Parser {
                                     Self::phase_token(&current_rule),
                                 )
                             })?;
+                        }
+                        if alt_matches {
+                            if let Some(condition) = &alt.c_lex {
+                                context.set_rule(&current_rule);
+                                let result =
+                                    self.catch_callback("alternate lexer condition", src, || {
+                                        condition(&mut current_rule, &mut context, &mut lexer)
+                                    });
+                                alt_matches = result.map_err(|error| {
+                                    self.attach_error(
+                                        error,
+                                        &current_rule,
+                                        &stack,
+                                        alts,
+                                        Self::phase_token(&current_rule),
+                                    )
+                                })?;
+                            }
                         }
                     }
                     if alt_matches {
@@ -1179,6 +1394,7 @@ impl Parser {
                 // effective alternate's routing, state, action, or error
                 // fields before they are applied.
                 if let Some(modifier) = alt.h.clone() {
+                    context.set_rule(&current_rule);
                     let result = self.catch_callback("alternate modifier", src, || {
                         modifier(alt, &mut current_rule, &mut context)
                     });
@@ -1196,6 +1412,7 @@ impl Parser {
                 // Function-valued alternate errors are raised at the match
                 // site, before counters, actions, consumption, or routing.
                 if let Some(error_hook) = alt.e.clone() {
+                    context.set_rule(&current_rule);
                     let result = self.catch_callback("alternate error", src, || {
                         error_hook(&mut current_rule, &mut context)
                     });
@@ -1285,6 +1502,7 @@ impl Parser {
                 // the state updates above, matching the mature engine order.
                 let backtrack = match &alt.b_fn {
                     Some(backtrack) => {
+                        context.set_rule(&current_rule);
                         let result = self.catch_callback("alternate backtrack", src, || {
                             backtrack(&mut current_rule, &mut context)
                         });
@@ -1308,6 +1526,7 @@ impl Parser {
                 // not a post-action control channel.
                 let push_name = match &alt.p_fn {
                     Some(route) => {
+                        context.set_rule(&current_rule);
                         let result = self.catch_callback("alternate push", src, || {
                             route(&mut current_rule, &mut context)
                         });
@@ -1326,6 +1545,7 @@ impl Parser {
                 .filter(|name| !name.is_empty());
                 let replace_name = match &alt.r_fn {
                     Some(route) => {
+                        context.set_rule(&current_rule);
                         let result = self.catch_callback("alternate replace", src, || {
                             route(&mut current_rule, &mut context)
                         });
@@ -1344,7 +1564,22 @@ impl Parser {
                 .filter(|name| !name.is_empty());
 
                 // Run action
-                for act_name in &alt.a {
+                for binding in resolved_action_order(&alt.a, &alt.action_fns, &alt.action_order) {
+                    let ActionBinding::Named(act_name) = binding else {
+                        let ActionBinding::Callback(callback) = binding else {
+                            unreachable!()
+                        };
+                        self.run_context_callback(
+                            "alternate action",
+                            &callback,
+                            &mut current_rule,
+                            &mut context,
+                        )
+                        .map_err(|error| {
+                            self.attach_action_error(error, src, &current_rule, &stack, alts)
+                        })?;
+                        continue;
+                    };
                     match act_name.as_str() {
                         "@probeInit$" => {
                             current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
@@ -1408,10 +1643,10 @@ impl Parser {
                         }
                         _ => self
                             .run_action_with_config(
-                                act_name,
+                                &act_name,
                                 &mut current_rule,
                                 &mut context,
-                                alt.action_configs.get(act_name),
+                                alt.action_configs.get(&act_name),
                             )
                             .map_err(|error| {
                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
@@ -1776,7 +2011,8 @@ impl Parser {
             let error = self.attach_error(error, &current_rule, &stack, &[], None);
             if mode.recovering {
                 if mode.errors.last() != Some(&error) {
-                    mode.errors.push(error);
+                    mode.errors.push(error.clone());
+                    context.errs.push(error);
                 }
                 return Ok(res);
             }
@@ -1802,7 +2038,8 @@ impl Parser {
                 );
                 if mode.recovering {
                     if mode.errors.last() != Some(&error) {
-                        mode.errors.push(error);
+                        mode.errors.push(error.clone());
+                        context.errs.push(error);
                     }
                     return Ok(res);
                 }
@@ -1824,7 +2061,8 @@ impl Parser {
                 },
             );
             if mode.recovering {
-                mode.errors.push(error);
+                mode.errors.push(error.clone());
+                context.errs.push(error);
                 return Ok(res);
             }
             return Err(error);
@@ -1932,8 +2170,12 @@ fn absorb_lex_error(
                     bad: true,
                 });
                 recovered.skipped = recovered.skipped.saturating_add(1);
-                if recover.max_skip < recovered.skipped {
+                let skipped = recovered.skipped;
+                if recover.max_skip < skipped {
                     return false;
+                }
+                if let Some(context_previous) = context.errs.get_mut(index) {
+                    *context_previous = previous.clone();
                 }
                 context.bad_to = Some(end.max(context.bad_to.unwrap_or_default()));
                 return true;
@@ -1956,7 +2198,8 @@ fn absorb_lex_error(
         sync: None,
         bad: true,
     });
-    errors.push(recorded);
+    errors.push(recorded.clone());
+    context.errs.push(recorded);
     context.bad_error = Some(errors.len() - 1);
     context.bad_to = Some(end);
     context.recover_at = Some(context.v_abs);

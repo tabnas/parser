@@ -4,6 +4,7 @@ use crate::options::InfoOptions;
 use crate::rule::Rule;
 use crate::token::{TIN_ST, TIN_TX};
 use crate::value::{ListRef, MapRef, Text, Value};
+use crate::Context;
 use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -144,15 +145,16 @@ fn list_value(info: &InfoOptions, implicit: bool) -> Value {
     }
 }
 
-fn token_value(rule: &Rule, index: usize, info: &InfoOptions) -> Value {
-    let Some(token) = rule.o.get(index) else {
+fn token_value(rule: &mut Rule, context: &mut Context, index: usize, info: &InfoOptions) -> Value {
+    let Some(token) = rule.o.get(index).cloned() else {
         return Value::Undefined;
     };
+    let value = token.resolve_val(rule, context);
     if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
-        let string = match &token.val {
+        let string = match &value {
             Value::String(value) => value.clone(),
             Value::Text(value) => value.string.clone(),
-            _ => return token.val.clone(),
+            _ => return value,
         };
         let quote = if token.tin == TIN_ST {
             token
@@ -165,7 +167,7 @@ fn token_value(rule: &Rule, index: usize, info: &InfoOptions) -> Value {
         };
         Value::Text(Text { quote, string })
     } else {
-        token.val.clone()
+        value
     }
 }
 
@@ -194,12 +196,33 @@ fn list_push(node: &mut Value, value: Value) {
 /// This keeps the original public helper stable for embedders. Parser-owned
 /// execution uses [`run_builtin_action_with_info`] with its configured options.
 pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -> bool {
-    run_builtin_action_with_info(name, rule, config, &InfoOptions::default())
+    let options = crate::Options::default();
+    let mut context = Context::new(
+        options.rewind.history,
+        "",
+        Value::Undefined,
+        options,
+        crate::InstanceInfo::default(),
+    );
+    run_builtin_action_with_info(name, rule, &mut context, config, &InfoOptions::default())
+}
+
+/// Run a builtin against an explicit live parse context. Embedders that use
+/// lazy token values should prefer this over [`run_builtin_action`].
+pub fn run_builtin_action_with_context(
+    name: &str,
+    rule: &mut Rule,
+    context: &mut Context,
+    config: Option<&Value>,
+) -> bool {
+    let info = context.options.info.clone();
+    run_builtin_action_with_info(name, rule, context, config, &info)
 }
 
 pub(crate) fn run_builtin_action_with_info(
     name: &str,
     rule: &mut Rule,
+    context: &mut Context,
     config: Option<&Value>,
     info: &InfoOptions,
 ) -> bool {
@@ -261,7 +284,7 @@ pub(crate) fn run_builtin_action_with_info(
                 if !rule.child_node.is_undefined() {
                     rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
                 } else if rule.os() > 0 {
-                    rule.node = Rc::new(RefCell::new(token_value(rule, 0, info)));
+                    rule.node = Rc::new(RefCell::new(token_value(rule, context, 0, info)));
                 }
             }
         }
@@ -269,8 +292,9 @@ pub(crate) fn run_builtin_action_with_info(
             if !rule.child_node.is_undefined() {
                 rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
             } else {
-                let value = config_index(config, "from")
-                    .map_or(Value::Undefined, |index| token_value(rule, index, info));
+                let value = config_index(config, "from").map_or(Value::Undefined, |index| {
+                    token_value(rule, context, index, info)
+                });
                 rule.node = Rc::new(RefCell::new(value));
             }
         }

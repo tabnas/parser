@@ -3,6 +3,8 @@
 //! Cross-runtime utility primitives used by grammar and option handling.
 
 use serde_json::{Map, Value};
+use std::fmt;
+use std::sync::Arc;
 
 const DANGEROUS_KEYS: [&str; 3] = ["__proto__", "constructor", "prototype"];
 
@@ -93,14 +95,74 @@ pub fn str_value(value: &Value, max_len: i64) -> String {
         .collect()
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ListMods {
+/// Final arbitrary list transform used by `ListMods`. The callback receives
+/// the already delete/move-adjusted list. Returning `None` retains that list,
+/// including any in-place changes; returning `Some` replaces it.
+pub type ListModifier<T> = Arc<dyn Fn(&mut Vec<T>) -> Option<Vec<T>> + Send + Sync>;
+
+pub struct ListMods<T = Value> {
     pub delete: Vec<isize>,
     pub move_items: Vec<isize>,
+    pub custom: Option<ListModifier<T>>,
 }
 
+impl<T> ListMods<T> {
+    pub fn with_custom(
+        mut self,
+        custom: impl Fn(&mut Vec<T>) -> Option<Vec<T>> + Send + Sync + 'static,
+    ) -> Self {
+        self.custom = Some(Arc::new(custom));
+        self
+    }
+}
+
+impl<T> Default for ListMods<T> {
+    fn default() -> Self {
+        Self {
+            delete: Vec::new(),
+            move_items: Vec::new(),
+            custom: None,
+        }
+    }
+}
+
+impl<T> Clone for ListMods<T> {
+    fn clone(&self) -> Self {
+        Self {
+            delete: self.delete.clone(),
+            move_items: self.move_items.clone(),
+            custom: self.custom.clone(),
+        }
+    }
+}
+
+impl<T> fmt::Debug for ListMods<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ListMods")
+            .field("delete", &self.delete)
+            .field("move_items", &self.move_items)
+            .field("custom", &self.custom.as_ref().map(|_| "<function>"))
+            .finish()
+    }
+}
+
+impl<T> PartialEq for ListMods<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.delete == other.delete
+            && self.move_items == other.move_items
+            && match (&self.custom, &other.custom) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl<T> Eq for ListMods<T> {}
+
 /// Apply canonical delete-then-move list modifications.
-pub fn modlist<T>(list: Vec<T>, mods: Option<&ListMods>) -> Vec<T> {
+pub fn modlist<T>(list: Vec<T>, mods: Option<&ListMods<T>>) -> Vec<T> {
     let Some(mods) = mods else { return list };
     let mut list: Vec<Option<T>> = list.into_iter().map(Some).collect();
     for raw in &mods.delete {
@@ -123,7 +185,13 @@ pub fn modlist<T>(list: Vec<T>, mods: Option<&ListMods>) -> Vec<T> {
         let item = list.remove(from);
         list.insert(to, item);
     }
-    list.into_iter().flatten().collect()
+    let mut list: Vec<T> = list.into_iter().flatten().collect();
+    if let Some(custom) = &mods.custom {
+        if let Some(replacement) = custom(&mut list) {
+            list = replacement;
+        }
+    }
+    list
 }
 
 /// Substitute `{a.b.0}` paths from an object or array. Missing paths retain

@@ -20,6 +20,7 @@ pub struct Lexer<'a> {
     end_reached: bool,
     exclude_regex: Option<Regex>,
     want: Option<Vec<crate::Tin>>,
+    standalone: Option<(crate::Rule, crate::Context)>,
 }
 
 #[derive(Clone)]
@@ -66,6 +67,17 @@ impl<'a> Lexer<'a> {
                 .then_with(|| name_a.cmp(name_b))
         });
 
+        let standalone = Some((
+            crate::Rule::new("#NORULE", Value::Undefined),
+            crate::Context::new(
+                options.rewind.history,
+                src,
+                Value::Undefined,
+                options.clone(),
+                crate::InstanceInfo::default(),
+            ),
+        ));
+
         Lexer {
             src,
             chars,
@@ -79,6 +91,7 @@ impl<'a> Lexer<'a> {
             end_reached: false,
             exclude_regex,
             want: None,
+            standalone,
         }
     }
 
@@ -90,6 +103,55 @@ impl<'a> Lexer<'a> {
             ri: self.ri,
             ci: self.ci,
         }
+    }
+
+    fn state(&self) -> LexerState {
+        LexerState {
+            idx: self.idx,
+            ri: self.ri,
+            ci: self.ci,
+            err: self.err.clone(),
+            end_reached: self.end_reached,
+        }
+    }
+
+    /// Full immutable source supplied to this lexer.
+    pub fn source(&self) -> &str {
+        self.src
+    }
+
+    /// Source remaining at the live cursor.
+    pub fn remaining(&self) -> &str {
+        &self.src[self.byte_position()..]
+    }
+
+    /// Snapshot the live cursor for token construction.
+    pub fn point(&self) -> Point {
+        self.current_point()
+    }
+
+    /// Advance by Unicode scalar values. Returns false without moving when
+    /// the requested count extends beyond end-of-source.
+    pub fn advance_chars(&mut self, count: usize) -> bool {
+        if self.idx.saturating_add(count) > self.char_len {
+            return false;
+        }
+        for _ in 0..count {
+            self.advance();
+        }
+        true
+    }
+
+    /// Construct a token from a point captured before cursor advancement.
+    pub fn token(
+        &self,
+        name: impl Into<String>,
+        tin: crate::Tin,
+        value: Value,
+        source: impl Into<String>,
+        point: Point,
+    ) -> Token {
+        Token::new(name, tin, value, source, point)
     }
 
     fn byte_position(&self) -> usize {
@@ -143,9 +205,14 @@ impl<'a> Lexer<'a> {
             return CheckFlow::Continue;
         };
         let remaining = &self.src[self.byte_position()..];
-        match check.run(remaining) {
+        let result = check
+            .run_imperative(self)
+            .or_else(|| check.run(remaining))
+            .unwrap_or(LexCheckResult::Continue);
+        match result {
             LexCheckResult::Continue => CheckFlow::Continue,
             LexCheckResult::Skip => CheckFlow::Skip,
+            LexCheckResult::NativeToken(token) => CheckFlow::Token(token),
             LexCheckResult::Token(token)
                 if !token.source.is_empty() && remaining.starts_with(&token.source) =>
             {
@@ -177,6 +244,7 @@ impl<'a> Lexer<'a> {
         index: &mut usize,
         before: f64,
         point: Point,
+        plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
     ) -> Option<Token> {
         while let Some(matcher) = self
             .options
@@ -189,9 +257,28 @@ impl<'a> Lexer<'a> {
         {
             *index += 1;
             let remaining = &self.src[self.byte_position()..];
-            let Some(token) = (matcher.matcher)(remaining)
-                .filter(|token| !token.source.is_empty() && remaining.starts_with(&token.source))
-            else {
+            let saved = self.state();
+            let token = if let Some(callback) = matcher.imperative.as_ref() {
+                let Some((rule, context)) = plugin.as_mut() else {
+                    continue;
+                };
+                callback(self, rule, context)
+            } else {
+                matcher
+                    .matcher
+                    .as_ref()
+                    .and_then(|callback| callback(remaining))
+                    .filter(|token| {
+                        !token.source.is_empty() && remaining.starts_with(&token.source)
+                    })
+                    .map(|token| {
+                        Token::new(token.name, token.tin, token.value, token.source, point)
+                    })
+            };
+            let Some(mut token) = token else {
+                if self.want.is_some() {
+                    self.restore(saved);
+                }
                 continue;
             };
 
@@ -204,18 +291,16 @@ impl<'a> Lexer<'a> {
                 token.tin
             };
             if tin < 0 || !self.wants(tin) {
+                self.restore(saved);
                 continue;
             }
-            for _ in token.source.chars() {
-                self.advance();
+            if matcher.imperative.is_none() {
+                for _ in token.src.chars() {
+                    self.advance();
+                }
             }
-            return Some(Token::new(
-                token.name,
-                tin,
-                token.value,
-                token.source,
-                point,
-            ));
+            token.tin = tin;
+            return Some(token);
         }
         None
     }
@@ -283,8 +368,33 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub(crate) fn next_raw_token_uncaught(&mut self) -> Result<Token, TabnasError> {
-        self.next_raw(None)
+    /// Fetch one token for an imperative parser callback, preserving ignored
+    /// space/line/comment tokens just like TypeScript's public `lex.next`.
+    /// Replayed tokens produced by `Context::rewind` are served first.
+    pub fn next_raw_for_rule(
+        &mut self,
+        rule: &mut crate::Rule,
+        context: &mut crate::Context,
+    ) -> Result<Token, TabnasError> {
+        if let Some(token) = context.next_replay() {
+            Ok(token)
+        } else {
+            self.next_raw_with(None, Some((rule, context)))
+        }
+    }
+
+    /// Fetch the next non-ignored token for an imperative parser callback.
+    pub fn next_for_rule(
+        &mut self,
+        rule: &mut crate::Rule,
+        context: &mut crate::Context,
+    ) -> Result<Token, TabnasError> {
+        loop {
+            let token = self.next_raw_for_rule(rule, context)?;
+            if !self.options.is_ignored(token.tin) {
+                return Ok(token);
+            }
+        }
     }
 
     fn record_panic(
@@ -312,8 +422,10 @@ impl<'a> Lexer<'a> {
     pub(crate) fn next_rule_token(
         &mut self,
         expected_match_tins: &[crate::Tin],
+        rule: &mut crate::Rule,
+        context: &mut crate::Context,
     ) -> Result<Token, TabnasError> {
-        self.next_raw(Some(expected_match_tins))
+        self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
     }
 
     /// Clear a recoverable lexer fault. Compound string faults resume at the
@@ -342,24 +454,20 @@ impl<'a> Lexer<'a> {
         &mut self,
         from: &Token,
         wanted: &[crate::Tin],
+        rule: &mut crate::Rule,
+        context: &mut crate::Context,
     ) -> Option<(Token, LexerState)> {
         if from.src.is_empty() || from.pos > self.char_len || wanted.is_empty() {
             return None;
         }
-        let saved = LexerState {
-            idx: self.idx,
-            ri: self.ri,
-            ci: self.ci,
-            err: self.err.clone(),
-            end_reached: self.end_reached,
-        };
+        let saved = self.state();
         self.idx = from.pos;
         self.ri = from.ri;
         self.ci = from.ci;
         self.err = None;
         self.end_reached = false;
         self.want = Some(wanted.to_vec());
-        let recut = self.next_raw(None).ok();
+        let recut = self.next_raw_with(None, Some((rule, context))).ok();
         self.want = None;
         match recut.filter(|token| wanted.contains(&token.tin)) {
             Some(token) => Some((token, saved)),
@@ -383,7 +491,39 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
     ) -> Result<Token, TabnasError> {
-        let result = self.next_raw_inner(expected_match_tins);
+        let Some((mut rule, mut context)) = self.standalone.take() else {
+            return self.next_raw_with(expected_match_tins, None);
+        };
+        let result = self.next_raw_with(expected_match_tins, Some((&mut rule, &mut context)));
+        self.standalone = Some((rule, context));
+        result
+    }
+
+    fn modify_text_value(
+        &mut self,
+        mut value: Value,
+        plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
+    ) -> Value {
+        if self.options.text.modify.is_empty() {
+            return value;
+        }
+        let modifiers = self.options.text.modify.clone();
+        let options = self.options.clone();
+        let Some((rule, context)) = plugin.as_mut() else {
+            panic!("imperative text modifier requires an active lexer context");
+        };
+        for modifier in modifiers {
+            value = modifier.run(value, self, rule, context, &options);
+        }
+        value
+    }
+
+    fn next_raw_with(
+        &mut self,
+        expected_match_tins: Option<&[crate::Tin]>,
+        plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
+    ) -> Result<Token, TabnasError> {
+        let result = self.next_raw_inner(expected_match_tins, plugin);
         match result {
             Ok(token) => Ok(token),
             Err(mut error) => {
@@ -397,6 +537,7 @@ impl<'a> Lexer<'a> {
     fn next_raw_inner(
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
+        mut plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
     ) -> Result<Token, TabnasError> {
         if self.end_reached {
             return Ok(Token::new(
@@ -423,7 +564,9 @@ impl<'a> Lexer<'a> {
         let c = self.peek().unwrap();
         let mut custom_index = 0;
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 1_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 1_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -529,7 +672,9 @@ impl<'a> Lexer<'a> {
             return Ok(Token::new(name, tin, value, matched, pnt));
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 2_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 2_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -570,7 +715,9 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 3_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 3_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -607,7 +754,9 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 4_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 4_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -665,7 +814,9 @@ impl<'a> Lexer<'a> {
             return Err(err);
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 5_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 5_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -697,7 +848,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 6_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 6_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -717,7 +870,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 7_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 7_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -741,7 +896,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, 8_000_000.0, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, 8_000_000.0, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -775,6 +932,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
 
+            let mut output = None;
             if value_lex {
                 if let Some(definition) = self
                     .options
@@ -782,51 +940,44 @@ impl<'a> Lexer<'a> {
                     .definitions
                     .get(&src)
                     .filter(|definition| definition.matcher.is_none())
+                    .cloned()
                 {
-                    return Ok(Token::new(
+                    output = Some(Token::new(
                         "#VL",
                         TIN_VL,
                         definition
                             .val
                             .clone()
                             .unwrap_or_else(|| Value::String(src.clone())),
-                        src,
+                        src.clone(),
                         pnt,
                     ));
                 }
 
-                let mut definitions: Vec<_> = self
-                    .options
-                    .value
-                    .definitions
-                    .iter()
-                    .filter(|(_, definition)| definition.matcher.is_some())
-                    .map(|(name, definition)| (name.clone(), definition.clone()))
-                    .collect();
-                definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
-                for (_, definition) in definitions {
-                    let regex = definition.matcher.as_ref().expect("filtered matcher");
-                    let target = if definition.consume { &remaining } else { &src };
-                    let Some(captures) = regex.captures(target) else {
-                        continue;
-                    };
-                    let Some(found) = captures.get(0).filter(|found| found.start() == 0) else {
-                        continue;
-                    };
-                    if !definition.consume && found.end() != target.len() {
-                        continue;
-                    }
-                    let matched = found.as_str().to_string();
-                    if definition.consume {
-                        (self.idx, self.ri, self.ci) = start;
-                        for _ in matched.chars() {
-                            self.advance();
+                if output.is_none() {
+                    let mut definitions: Vec<_> = self
+                        .options
+                        .value
+                        .definitions
+                        .iter()
+                        .filter(|(_, definition)| definition.matcher.is_some())
+                        .map(|(name, definition)| (name.clone(), definition.clone()))
+                        .collect();
+                    definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+                    for (_, definition) in definitions {
+                        let regex = definition.matcher.as_ref().expect("filtered matcher");
+                        let target = if definition.consume { &remaining } else { &src };
+                        let Some(captures) = regex.captures(target) else {
+                            continue;
+                        };
+                        let Some(found) = captures.get(0).filter(|found| found.start() == 0) else {
+                            continue;
+                        };
+                        if !definition.consume && found.end() != target.len() {
+                            continue;
                         }
-                    }
-                    return Ok(Token::new(
-                        "#VL",
-                        TIN_VL,
-                        definition.transform.as_ref().map_or_else(
+                        let matched = found.as_str().to_string();
+                        let value = definition.transform.as_ref().map_or_else(
                             || {
                                 definition
                                     .val
@@ -843,25 +994,41 @@ impl<'a> Lexer<'a> {
                                     .collect::<Vec<_>>();
                                 transform(&groups)
                             },
-                        ),
-                        matched,
-                        pnt,
-                    ));
+                        );
+                        if definition.consume {
+                            (self.idx, self.ri, self.ci) = start;
+                            for _ in matched.chars() {
+                                self.advance();
+                            }
+                        }
+                        output = Some(Token::new("#VL", TIN_VL, value, matched, pnt));
+                        break;
+                    }
                 }
             }
 
-            if !text_lex || text_skipped {
+            if output.is_none() && (!text_lex || text_skipped) {
                 (self.idx, self.ri, self.ci) = start;
-            } else {
-                let mut value = Value::String(src.clone());
-                for modifier in &self.options.text.modify {
-                    value = modifier(value);
-                }
-                return Ok(Token::new("#TX", TIN_TX, value, src, pnt));
+            } else if output.is_none() {
+                output = Some(Token::new(
+                    "#TX",
+                    TIN_TX,
+                    Value::String(src.clone()),
+                    src,
+                    pnt,
+                ));
+            }
+
+            if let Some(mut token) = output {
+                let value = std::mem::replace(&mut token.val, Value::Undefined);
+                token.val = self.modify_text_value(value, &mut plugin);
+                return Ok(token);
             }
         }
 
-        if let Some(token) = self.run_custom_matchers(&mut custom_index, f64::INFINITY, pnt) {
+        if let Some(token) =
+            self.run_custom_matchers(&mut custom_index, f64::INFINITY, pnt, &mut plugin)
+        {
             return Ok(token);
         }
 
@@ -918,12 +1085,21 @@ impl<'a> Lexer<'a> {
                 .max_by_key(|suffix| suffix.len())
                 .cloned();
             let suffix = suffix.or_else(|| {
-                definition
-                    .suffix_matcher
-                    .as_ref()
-                    .and_then(|matcher| matcher.run(remainder))
-                    .filter(|suffix| !suffix.is_empty() && remainder.starts_with(suffix))
+                let matcher = definition.suffix_matcher.as_ref()?;
+                let effect = matcher.run(remainder);
+                if effect.is_some() {
+                    return effect;
+                }
+                let saved = self.state();
+                let wanted = self.want.clone();
+                let token = matcher.run_imperative(self);
+                self.restore(saved);
+                self.want = wanted;
+                token.map(|token| token.src)
             });
+            let remainder = &self.src[self.byte_position()..];
+            let suffix =
+                suffix.filter(|suffix| !suffix.is_empty() && remainder.starts_with(suffix));
             if let Some(suffix) = suffix {
                 for _ in suffix.chars() {
                     src.push(self.advance().expect("comment suffix must advance"));

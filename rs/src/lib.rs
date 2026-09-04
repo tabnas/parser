@@ -9,6 +9,7 @@ pub mod context;
 pub mod error;
 pub mod grammar;
 pub mod lexer;
+mod merge;
 pub mod options;
 pub mod parser;
 pub mod rule;
@@ -16,31 +17,44 @@ pub mod token;
 pub mod utility;
 pub mod value;
 
-pub use context::{ActionError, Context};
+pub use context::{ActionError, Context, ContextSeed, InstanceInfo};
 pub use error::{RecoveredAt, TabnasError};
-pub use grammar::{GrammarError, GrammarSpec};
+pub use grammar::{
+    GrammarError, GrammarGroups, GrammarSetting, GrammarSettingAlt, GrammarSettingRule, GrammarSpec,
+};
+pub use lexer::Lexer;
+pub use merge::MergeError;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
-    ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken,
-    InfoOptions, LexCheck, LexCheckResult, LexCheckToken, LexMatcher, LexMatcherCallback,
-    MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options,
-    ParseOptions, ParsePrepare, ParserOptions, ParserStart, RecoverOptions, ResultOptions,
-    RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTransform,
+    ContextParsePrepare, ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext,
+    FixedOptions, FixedToken, ImperativeCommentSuffixMatcher, ImperativeLexCheck,
+    ImperativeLexMatcher, ImperativeTextModifier, InfoOptions, LexCheck, LexCheckResult,
+    LexCheckToken, LexMatcher, LexMatcherCallback, LexMatcherFactory, ListOptions, MapMerge,
+    MapOptions, MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue,
+    Options, ParseOptions, ParsePrepare, ParsePrepareWithInstance, ParserOptions, ParserStart,
+    ParserStartWithInstance, RecoverOptions, ResultOptions, RewindOptions, SafeOptions,
+    SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTextModifier, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
-    AltBack, AltCondition, AltError, AltModifier, AltNext, AltSpec, CompareOp, Condition, Rule,
-    RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    ActionBinding, AltBack, AltCondition, AltConditionWithLexer, AltError, AltModifier, AltNext,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
 pub use token::{
-    Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
+    name_to_tin, tin_name, Point, Tin, Token, TokenValFunc, TIN_AA, TIN_BD, TIN_CA, TIN_CB, TIN_CL,
+    TIN_CM, TIN_CS, TIN_LN, TIN_MAX, TIN_NR, TIN_OB, TIN_OS, TIN_SP, TIN_ST, TIN_TX, TIN_UK,
     TIN_VL, TIN_ZZ,
 };
 pub use value::{ListRef, MapRef, Text, Value};
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub type Action = Arc<dyn Fn(&mut Rule) + Send + Sync>;
 pub type ContextAction =
@@ -50,9 +64,66 @@ pub type LexSubscriber = Arc<dyn Fn(&mut Token, &mut Rule, &mut Context) + Send 
 pub type RuleSubscriber = Arc<dyn Fn(&mut Rule, &mut Context) + Send + Sync>;
 pub type RuleDoneSubscriber = Arc<dyn Fn(&Rule, &Context, &RuleDone) + Send + Sync>;
 
+pub type PluginCallback = Arc<dyn Fn(&mut Tabnas, &Value) -> Result<(), PluginError> + Send + Sync>;
+
+/// Native Rust plugin descriptor. The explicit name replaces JavaScript's
+/// `Function.name` and provides a stable namespace for plugin options.
+#[derive(Clone)]
+pub struct Plugin {
+    pub name: String,
+    pub defaults: Value,
+    callback: PluginCallback,
+}
+
+impl Plugin {
+    pub fn new(
+        name: impl Into<String>,
+        callback: impl Fn(&mut Tabnas, &Value) -> Result<(), PluginError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            defaults: Value::Object(IndexMap::new()),
+            callback: Arc::new(callback),
+        }
+    }
+
+    pub fn with_defaults(mut self, defaults: Value) -> Self {
+        self.defaults = defaults;
+        self
+    }
+}
+
+impl fmt::Debug for Plugin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Plugin")
+            .field("name", &self.name)
+            .field("defaults", &self.defaults)
+            .field("callback", &"<function>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginError(pub String);
+
+impl fmt::Display for PluginError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PluginError {}
+
 #[derive(Clone)]
 pub struct Tabnas {
+    pub id: String,
+    /// Resolved configuration used by the lexer and parser.
     pub options: Options,
+    /// Accumulated option input before `config.modify` callbacks run. Keeping
+    /// this separate prevents non-idempotent modifiers from compounding on
+    /// each grammar overlay or derived instance.
+    pub(crate) raw_options: Options,
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
@@ -60,7 +131,10 @@ pub struct Tabnas {
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
+    pub plugins: Vec<Plugin>,
+    pub plugin_options: IndexMap<String, Value>,
     pub(crate) alt_conditions: HashMap<String, AltCondition>,
+    pub(crate) alt_lexer_conditions: HashMap<String, AltConditionWithLexer>,
     pub(crate) alt_modifiers: HashMap<String, AltModifier>,
     pub(crate) alt_errors: HashMap<String, AltError>,
     pub(crate) alt_pushes: HashMap<String, AltNext>,
@@ -75,9 +149,13 @@ pub struct Tabnas {
     pub(crate) parse_prepare_refs: HashMap<String, ParsePrepare>,
     pub(crate) budget_check_refs: HashMap<String, BudgetCheck>,
     pub(crate) lex_match_refs: HashMap<String, LexMatcherCallback>,
+    pub(crate) imperative_lex_match_refs: HashMap<String, ImperativeLexMatcher>,
+    pub(crate) lex_match_factory_refs: HashMap<String, LexMatcherFactory>,
     pub(crate) error_suffix_refs: HashMap<String, ErrorSuffixCallback>,
     pub(crate) config_modifier_refs: HashMap<String, ConfigModifier>,
     pub(crate) parser_start_refs: HashMap<String, ParserStart>,
+    pub(crate) parser_start_instance_refs: HashMap<String, ParserStartWithInstance>,
+    pub(crate) map_merge_refs: HashMap<String, MapMerge>,
 }
 
 impl Default for Tabnas {
@@ -88,38 +166,23 @@ impl Default for Tabnas {
 
 impl Tabnas {
     pub fn new() -> Self {
-        Tabnas {
-            options: Options::default(),
-            rules: IndexMap::new(),
-            actions: HashMap::new(),
-            context_actions: HashMap::new(),
-            token_subscribers: Vec::new(),
-            lex_subscribers: Vec::new(),
-            rule_subscribers: Vec::new(),
-            rule_done_subscribers: Vec::new(),
-            alt_conditions: HashMap::new(),
-            alt_modifiers: HashMap::new(),
-            alt_errors: HashMap::new(),
-            alt_pushes: HashMap::new(),
-            alt_replaces: HashMap::new(),
-            alt_backtracks: HashMap::new(),
-            match_token_refs: HashMap::new(),
-            value_transform_refs: HashMap::new(),
-            text_modifier_refs: HashMap::new(),
-            lex_check_refs: HashMap::new(),
-            comment_suffix_refs: HashMap::new(),
-            match_value_refs: HashMap::new(),
-            parse_prepare_refs: HashMap::new(),
-            budget_check_refs: HashMap::new(),
-            lex_match_refs: HashMap::new(),
-            error_suffix_refs: HashMap::new(),
-            config_modifier_refs: HashMap::new(),
-            parser_start_refs: HashMap::new(),
-        }
+        Self::with_options(Options::default())
     }
 
     pub fn with_options(options: Options) -> Self {
+        let sequence = NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
+        let id = format!(
+            "Tabnas/{sequence}{}",
+            if options.tag.is_empty() || options.tag == "-" {
+                String::new()
+            } else {
+                format!("/{}", options.tag)
+            }
+        );
+        let plugin_options = options.plugin.clone();
         Tabnas {
+            id,
+            raw_options: options.clone(),
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
@@ -128,7 +191,10 @@ impl Tabnas {
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
+            plugins: Vec::new(),
+            plugin_options,
             alt_conditions: HashMap::new(),
+            alt_lexer_conditions: HashMap::new(),
             alt_modifiers: HashMap::new(),
             alt_errors: HashMap::new(),
             alt_pushes: HashMap::new(),
@@ -143,9 +209,13 @@ impl Tabnas {
             parse_prepare_refs: HashMap::new(),
             budget_check_refs: HashMap::new(),
             lex_match_refs: HashMap::new(),
+            imperative_lex_match_refs: HashMap::new(),
+            lex_match_factory_refs: HashMap::new(),
             error_suffix_refs: HashMap::new(),
             config_modifier_refs: HashMap::new(),
             parser_start_refs: HashMap::new(),
+            parser_start_instance_refs: HashMap::new(),
+            map_merge_refs: HashMap::new(),
         }
     }
 
@@ -154,10 +224,204 @@ impl Tabnas {
         self
     }
 
+    /// Create or modify a rule in place, mirroring the imperative plugin
+    /// entry point in the TypeScript and Go engines.
+    pub fn define_rule(
+        &mut self,
+        name: impl Into<String>,
+        define: impl FnOnce(&mut RuleSpec),
+    ) -> &mut Self {
+        let name = name.into();
+        let spec = self
+            .rules
+            .entry(name.clone())
+            .or_insert_with(|| RuleSpec::new(name));
+        define(spec);
+        self
+    }
+
+    /// Remove a named rule. Removing a rule that is absent is a no-op.
+    pub fn remove_rule(&mut self, name: &str) -> Option<RuleSpec> {
+        self.rules.shift_remove(name)
+    }
+
+    /// Apply and retain a native plugin. Defaults, previously accumulated
+    /// options for the same plugin, and call-site options are deep-merged in
+    /// that order. Panics are contained and returned as `PluginError`.
+    pub fn use_plugin(
+        &mut self,
+        plugin: Plugin,
+        options: Option<Value>,
+    ) -> Result<&mut Self, PluginError> {
+        let name = plugin.name.to_lowercase();
+        if name.is_empty() {
+            return Err(PluginError(
+                "Tabnas::use_plugin: plugin name is empty".into(),
+            ));
+        }
+        let current = self
+            .plugin_options
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| Value::Object(IndexMap::new()));
+        let merged = merge_plugin_values(
+            merge_plugin_values(current, plugin.defaults.clone()),
+            options.unwrap_or(Value::Undefined),
+        );
+        self.plugin_options.insert(name.clone(), merged.clone());
+        self.options.plugin.insert(name.clone(), merged.clone());
+        self.raw_options.plugin.insert(name, merged.clone());
+        self.plugins.push(plugin.clone());
+        match catch_unwind(AssertUnwindSafe(|| (plugin.callback)(self, &merged))) {
+            Ok(Ok(())) => Ok(self),
+            Ok(Err(error)) => Err(error),
+            Err(payload) => Err(PluginError(format!(
+                "plugin {} panicked: {}",
+                plugin.name,
+                panic_message(payload)
+            ))),
+        }
+    }
+
+    /// Return the resolved option bag for a plugin name.
+    pub fn plugin_options(&self, name: &str) -> Option<&Value> {
+        self.plugin_options.get(&name.to_lowercase())
+    }
+
+    /// Deep-merge an option bag into the named plugin namespace.
+    pub fn set_plugin_options(&mut self, name: impl Into<String>, options: Value) -> &mut Self {
+        let name = name.into().to_lowercase();
+        let current = self
+            .plugin_options
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| Value::Object(IndexMap::new()));
+        let merged = merge_plugin_values(current, options);
+        self.plugin_options.insert(name.clone(), merged.clone());
+        self.options.plugin.insert(name.clone(), merged.clone());
+        self.raw_options.plugin.insert(name, merged);
+        self
+    }
+
+    /// Create a child parser from this instance's options and re-run its
+    /// installed plugins so option-conditional grammar is rebuilt.
+    pub fn derive(&self, modify: impl FnOnce(&mut Options)) -> Result<Self, PluginError> {
+        let mut raw_options = if self.options.config_modify.is_empty() {
+            // Direct typed option mutation is part of the native Rust API.
+            // With no modifier-created delta, the public tree is the source.
+            self.options.clone()
+        } else {
+            self.raw_options.clone()
+        };
+        modify(&mut raw_options);
+        let mut options = raw_options.clone();
+        options.refresh_configuration().map_err(PluginError)?;
+        let mut child = Self::with_options(options);
+        child.raw_options = raw_options;
+        child.plugin_options = self.plugin_options.clone();
+        child.inherit_function_references(self);
+        for plugin in &self.plugins {
+            let options = child
+                .plugin_options
+                .get(&plugin.name.to_lowercase())
+                .cloned();
+            child.use_plugin(plugin.clone(), options)?;
+        }
+        Ok(child)
+    }
+
+    fn inherit_function_references(&mut self, parent: &Self) {
+        // Rust binds serialized function names through an instance registry
+        // rather than a JavaScript function-valued `GrammarSpec.ref` object.
+        // A derived instance must retain that registry so later grammar
+        // overlays can resolve the same names. Re-run plugins may replace an
+        // entry with the same name, exactly as on the parent.
+        self.actions = parent.actions.clone();
+        self.context_actions = parent.context_actions.clone();
+        self.alt_conditions = parent.alt_conditions.clone();
+        self.alt_lexer_conditions = parent.alt_lexer_conditions.clone();
+        self.alt_modifiers = parent.alt_modifiers.clone();
+        self.alt_errors = parent.alt_errors.clone();
+        self.alt_pushes = parent.alt_pushes.clone();
+        self.alt_replaces = parent.alt_replaces.clone();
+        self.alt_backtracks = parent.alt_backtracks.clone();
+        self.match_token_refs = parent.match_token_refs.clone();
+        self.value_transform_refs = parent.value_transform_refs.clone();
+        self.text_modifier_refs = parent.text_modifier_refs.clone();
+        self.lex_check_refs = parent.lex_check_refs.clone();
+        self.comment_suffix_refs = parent.comment_suffix_refs.clone();
+        self.match_value_refs = parent.match_value_refs.clone();
+        self.parse_prepare_refs = parent.parse_prepare_refs.clone();
+        self.budget_check_refs = parent.budget_check_refs.clone();
+        self.lex_match_refs = parent.lex_match_refs.clone();
+        self.imperative_lex_match_refs = parent.imperative_lex_match_refs.clone();
+        self.lex_match_factory_refs = parent.lex_match_factory_refs.clone();
+        self.error_suffix_refs = parent.error_suffix_refs.clone();
+        self.config_modifier_refs = parent.config_modifier_refs.clone();
+        self.parser_start_refs = parent.parser_start_refs.clone();
+        self.parser_start_instance_refs = parent.parser_start_instance_refs.clone();
+        self.map_merge_refs = parent.map_merge_refs.clone();
+    }
+
+    /// Combine two tagged parser instances without modifying either source.
+    /// Options are conflict-checked against the shared defaults and rule
+    /// alternates are interleaved deterministically in a fresh token space.
+    pub fn merge(&self, other: &Self) -> Result<Self, MergeError> {
+        merge::merge(self, other)
+    }
+
+    /// Create a fresh standalone instance. The receiver's rules, plugins,
+    /// subscribers, callbacks, and custom token registrations are not copied.
+    pub fn empty(&self) -> Self {
+        Self::with_options(Options::empty())
+    }
+
+    /// `empty` with an explicit typed option set.
+    pub fn empty_with_options(&self, options: Options) -> Self {
+        Self::with_options(options)
+    }
+
     /// Resolve or allocate a named token identity for typed matcher effects
     /// and imperative rule construction.
     pub fn token(&mut self, name: impl Into<String>) -> Tin {
         self.options.register_token(name)
+    }
+
+    /// Return an independent snapshot of the resolved configuration.
+    pub fn config(&self) -> Options {
+        self.options.clone()
+    }
+
+    /// Installed plugins in application order.
+    pub fn installed_plugins(&self) -> Vec<Plugin> {
+        self.plugins.clone()
+    }
+
+    /// Rule specs in declaration order.
+    pub fn rule_specs(&self) -> Vec<&RuleSpec> {
+        self.rules.values().collect()
+    }
+
+    /// Rule names in declaration order.
+    pub fn rule_names(&self) -> Vec<String> {
+        self.rules.keys().cloned().collect()
+    }
+
+    pub fn token_set(&self, name: &str) -> Option<Vec<Tin>> {
+        self.options
+            .token_set
+            .get(name.trim_start_matches('#'))
+            .cloned()
+    }
+
+    /// Resolve the token claimed by one fixed source string.
+    pub fn fixed(&self, source: &str) -> Option<Tin> {
+        self.options
+            .fixed
+            .tokens
+            .values()
+            .find(|token| token.source == source)
+            .map(|token| token.tin)
     }
 
     pub fn action(
@@ -231,6 +495,22 @@ impl Tabnas {
         condition: impl Fn(&mut Rule, &mut Context) -> bool + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_conditions.insert(name.into(), Arc::new(condition));
+        self
+    }
+
+    /// Register a serialized alternate condition that can re-enter the live
+    /// lexer. Use `Lexer::next_raw_for_rule` when ignored tokens must remain
+    /// observable, matching the canonical TypeScript lexer callback surface.
+    pub fn alt_condition_with_lexer(
+        &mut self,
+        name: impl Into<String>,
+        condition: impl for<'source> Fn(&mut Rule, &mut Context, &mut Lexer<'source>) -> bool
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.alt_lexer_conditions
+            .insert(name.into(), Arc::new(condition));
         self
     }
 
@@ -333,7 +613,23 @@ impl Tabnas {
         modifier: impl Fn(Value) -> Value + Send + Sync + 'static,
     ) -> &mut Self {
         self.text_modifier_refs
-            .insert(name.into(), Arc::new(modifier));
+            .insert(name.into(), TextModifier::new(modifier));
+        self
+    }
+
+    /// Register a full canonical text modifier. It runs after the text/value
+    /// matcher has produced a token and receives live lexer, rule, context,
+    /// and resolved-option access.
+    pub fn imperative_text_modifier_ref(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl for<'source> Fn(Value, &mut Lexer<'source>, &mut Rule, &mut Context, &Options) -> Value
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.text_modifier_refs
+            .insert(name.into(), TextModifier::new_imperative(modifier));
         self
     }
 
@@ -349,6 +645,18 @@ impl Tabnas {
         self
     }
 
+    /// Register a canonical live-lexer preflight hook. It may inspect and
+    /// advance the cursor and return a token built by that lexer.
+    pub fn imperative_lex_check_ref(
+        &mut self,
+        name: impl Into<String>,
+        check: impl for<'source> Fn(&mut Lexer<'source>) -> LexCheckResult + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.lex_check_refs
+            .insert(name.into(), LexCheck::new_imperative(check));
+        self
+    }
+
     /// Register an effect-based custom matcher factory reference for a
     /// serialized `options.lex.match.<name>.make` entry.
     pub fn lex_match_ref(
@@ -357,6 +665,35 @@ impl Tabnas {
         matcher: impl Fn(&str) -> Option<LexCheckToken> + Send + Sync + 'static,
     ) -> &mut Self {
         self.lex_match_refs.insert(name.into(), Arc::new(matcher));
+        self
+    }
+
+    /// Register a full native lexer matcher for a serialized
+    /// `options.lex.match.<name>.make` reference. The matcher owns cursor
+    /// advancement and may inspect or modify the active rule and context.
+    pub fn imperative_lex_match_ref(
+        &mut self,
+        name: impl Into<String>,
+        matcher: impl for<'source> Fn(&mut Lexer<'source>, &mut Rule, &mut Context) -> Option<Token>
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.imperative_lex_match_refs
+            .insert(name.into(), Arc::new(matcher));
+        self
+    }
+
+    /// Register a setup-time matcher factory for a serialized
+    /// `options.lex.match.<name>.make` reference. It sees the fully resolved
+    /// options and returns the persistent matcher, or `None` to disable it.
+    pub fn lex_match_factory_ref(
+        &mut self,
+        name: impl Into<String>,
+        factory: impl Fn(&Options) -> Option<ImperativeLexMatcher> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.lex_match_factory_refs
+            .insert(name.into(), Arc::new(factory));
         self
     }
 
@@ -383,6 +720,19 @@ impl Tabnas {
         self
     }
 
+    /// Register the complete canonical configuration callback shape. The
+    /// first argument is the mutable resolved configuration; the second is
+    /// the immutable accumulated option input for this configure pass.
+    pub fn config_modifier_with_options_ref(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl Fn(&mut Options, &Options) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.config_modifier_refs
+            .insert(name.into(), ConfigModifier::with_options(modifier));
+        self
+    }
+
     /// Register a typed replacement parse entry point for a serialized
     /// `options.parser.start` function reference.
     pub fn parser_start_ref(
@@ -391,6 +741,29 @@ impl Tabnas {
         start: impl Fn(&str) -> Result<Value, Box<TabnasError>> + Send + Sync + 'static,
     ) -> &mut Self {
         self.parser_start_refs.insert(name.into(), Arc::new(start));
+        self
+    }
+
+    /// Register the mature parser-start shape, including the owning instance
+    /// and caller metadata.
+    pub fn parser_start_with_instance_ref(
+        &mut self,
+        name: impl Into<String>,
+        start: impl Fn(&str, &Tabnas, &Value) -> Result<Value, Box<TabnasError>> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.parser_start_instance_refs
+            .insert(name.into(), Arc::new(start));
+        self
+    }
+
+    /// Register a duplicate-map-value merger for a serialized
+    /// `options.map.merge` function reference.
+    pub fn map_merge_ref(
+        &mut self,
+        name: impl Into<String>,
+        merge: impl Fn(Value, Value, &mut Rule, &mut Context) -> Value + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.map_merge_refs.insert(name.into(), Arc::new(merge));
         self
     }
 
@@ -403,6 +776,19 @@ impl Tabnas {
     ) -> &mut Self {
         self.comment_suffix_refs
             .insert(name.into(), CommentSuffixMatcher::new(matcher));
+        self
+    }
+
+    /// Register a canonical live-lexer comment suffix probe. Cursor changes
+    /// made while probing are rolled back; only the returned token's non-empty
+    /// source prefix is consumed as the suffix.
+    pub fn imperative_comment_suffix_ref(
+        &mut self,
+        name: impl Into<String>,
+        matcher: impl for<'source> Fn(&mut Lexer<'source>) -> Option<Token> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.comment_suffix_refs
+            .insert(name.into(), CommentSuffixMatcher::new_imperative(matcher));
         self
     }
 
@@ -431,7 +817,23 @@ impl Tabnas {
         &mut self,
         prepare: impl Fn(&mut Context) + Send + Sync + 'static,
     ) -> &mut Self {
-        self.options.parse.prepare.push(Arc::new(prepare));
+        self.options
+            .parse
+            .prepare
+            .push(ParsePrepare::Context(Arc::new(prepare)));
+        self
+    }
+
+    /// Add a pre-parse hook with access to the owning parser and the exact
+    /// caller metadata supplied to this parse.
+    pub fn parse_prepare_with_instance(
+        &mut self,
+        prepare: impl Fn(&Tabnas, &mut Context, &Value) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.options
+            .parse
+            .prepare
+            .push(ParsePrepare::WithInstance(Arc::new(prepare)));
         self
     }
 
@@ -443,24 +845,74 @@ impl Tabnas {
         prepare: impl Fn(&mut Context) + Send + Sync + 'static,
     ) -> &mut Self {
         self.parse_prepare_refs
-            .insert(name.into(), Arc::new(prepare));
+            .insert(name.into(), ParsePrepare::Context(Arc::new(prepare)));
+        self
+    }
+
+    /// Register the complete canonical pre-parse callback shape for a
+    /// serialized `options.parse.prepare` function reference.
+    pub fn parse_prepare_with_instance_ref(
+        &mut self,
+        name: impl Into<String>,
+        prepare: impl Fn(&Tabnas, &mut Context, &Value) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.parse_prepare_refs
+            .insert(name.into(), ParsePrepare::WithInstance(Arc::new(prepare)));
         self
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
-        self.parser().parse(src)
+        self.parser().parse_for(self, src, Value::Undefined)
+    }
+
+    pub fn parse_with_meta(&self, src: &str, meta: Value) -> Result<Value, TabnasError> {
+        self.parser().parse_for(self, src, meta)
+    }
+
+    pub fn parse_with_context(
+        &self,
+        src: &str,
+        meta: Value,
+        parent: &ContextSeed,
+    ) -> Result<Value, TabnasError> {
+        self.parser()
+            .parse_for_with_context(self, src, meta, parent)
     }
 
     pub fn continuations(&self, src: &str) -> Continuations {
-        self.parser().continuations(src)
+        self.parser().continuations_for(self, src)
     }
 
     pub fn parse_recover(&self, src: &str) -> ParseRecovery {
-        self.parser().parse_recover(src)
+        self.parser().parse_recover_for(self, src, Value::Undefined)
+    }
+
+    pub fn parse_recover_with_meta(&self, src: &str, meta: Value) -> ParseRecovery {
+        self.parser().parse_recover_for(self, src, meta)
+    }
+
+    pub fn parse_recover_with_context(
+        &self,
+        src: &str,
+        meta: Value,
+        parent: &ContextSeed,
+    ) -> ParseRecovery {
+        self.parser()
+            .parse_recover_for_with_context(self, src, meta, parent)
     }
 
     fn parser(&self) -> Parser {
         let mut p = Parser::new(self.options.clone());
+        p.set_instance_info(InstanceInfo {
+            id: self.id.clone(),
+            tag: self.options.tag.clone(),
+            plugins: self
+                .plugins
+                .iter()
+                .map(|plugin| plugin.name.clone())
+                .collect(),
+            rule_names: self.rule_names(),
+        });
         for spec in self.rules.values() {
             p.add_rule(spec.clone());
         }
@@ -662,5 +1114,54 @@ impl Tabnas {
         tn.rule(elem);
 
         tn
+    }
+}
+
+impl fmt::Display for Tabnas {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.id)
+    }
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".into()
+    }
+}
+
+pub(crate) fn merge_plugin_values(base: Value, overlay: Value) -> Value {
+    const DANGEROUS: [&str; 3] = ["__proto__", "constructor", "prototype"];
+    match (base, overlay) {
+        (base, Value::Undefined) => base,
+        (Value::Object(mut base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                if DANGEROUS.contains(&key.as_str()) {
+                    continue;
+                }
+                let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
+                base.insert(key, merge_plugin_values(previous, value));
+            }
+            Value::Object(base)
+        }
+        (Value::Array(base), Value::Array(overlay)) => {
+            let length = base.len().max(overlay.len());
+            let mut base = base.into_iter();
+            let mut overlay = overlay.into_iter();
+            Value::Array(
+                (0..length)
+                    .map(|_| match (base.next(), overlay.next()) {
+                        (Some(base), Some(overlay)) => merge_plugin_values(base, overlay),
+                        (Some(base), None) => base,
+                        (None, Some(overlay)) => overlay,
+                        (None, None) => unreachable!("length comes from both iterators"),
+                    })
+                    .collect(),
+            )
+        }
+        (_, overlay) => overlay,
     }
 }

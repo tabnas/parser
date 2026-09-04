@@ -88,6 +88,7 @@ fn shared_modlist_fixture() {
                     .filter_map(Value::as_i64)
                     .map(|value| value as isize)
                     .collect(),
+                custom: None,
             })
         };
         let expected: Vec<Value> = serde_json::from_str(col(&columns, 2)).unwrap();

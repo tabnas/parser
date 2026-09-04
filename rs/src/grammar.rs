@@ -5,10 +5,10 @@
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
-    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    BudgetCheck, CommentSuffixMatcher, ConfigModifier, ErrorSuffixCallback, LexCheck,
-    LexMatcherCallback, MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value,
-    ValueTransform,
+    builtins::is_builtin_action, AltBack, AltCondition, AltConditionWithLexer, AltError,
+    AltModifier, AltNext, BudgetCheck, CommentSuffixMatcher, ConfigModifier, ErrorSuffixCallback,
+    ImperativeLexMatcher, LexCheck, LexMatcherCallback, LexMatcherFactory, MapMerge,
+    MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -19,6 +19,7 @@ use std::fmt;
 #[derive(Clone)]
 struct AltRefs {
     conditions: HashMap<String, AltCondition>,
+    lexer_conditions: HashMap<String, AltConditionWithLexer>,
     modifiers: HashMap<String, AltModifier>,
     errors: HashMap<String, AltError>,
     pushes: HashMap<String, AltNext>,
@@ -33,15 +34,20 @@ struct AltRefs {
     parse_prepares: HashMap<String, ParsePrepare>,
     budget_checks: HashMap<String, BudgetCheck>,
     lex_matches: HashMap<String, LexMatcherCallback>,
+    imperative_lex_matches: HashMap<String, ImperativeLexMatcher>,
+    lex_match_factories: HashMap<String, LexMatcherFactory>,
     error_suffixes: HashMap<String, ErrorSuffixCallback>,
     config_modifiers: HashMap<String, ConfigModifier>,
     parser_starts: HashMap<String, crate::ParserStart>,
+    parser_starts_with_instance: HashMap<String, crate::ParserStartWithInstance>,
+    map_merges: HashMap<String, MapMerge>,
 }
 
 impl From<&Tabnas> for AltRefs {
     fn from(tabnas: &Tabnas) -> Self {
         Self {
             conditions: tabnas.alt_conditions.clone(),
+            lexer_conditions: tabnas.alt_lexer_conditions.clone(),
             modifiers: tabnas.alt_modifiers.clone(),
             errors: tabnas.alt_errors.clone(),
             pushes: tabnas.alt_pushes.clone(),
@@ -56,9 +62,13 @@ impl From<&Tabnas> for AltRefs {
             parse_prepares: tabnas.parse_prepare_refs.clone(),
             budget_checks: tabnas.budget_check_refs.clone(),
             lex_matches: tabnas.lex_match_refs.clone(),
+            imperative_lex_matches: tabnas.imperative_lex_match_refs.clone(),
+            lex_match_factories: tabnas.lex_match_factory_refs.clone(),
             error_suffixes: tabnas.error_suffix_refs.clone(),
             config_modifiers: tabnas.config_modifier_refs.clone(),
             parser_starts: tabnas.parser_start_refs.clone(),
+            parser_starts_with_instance: tabnas.parser_start_instance_refs.clone(),
+            map_merges: tabnas.map_merge_refs.clone(),
         }
     }
 }
@@ -85,6 +95,81 @@ pub struct GrammarSpec {
     pub clear: bool,
     pub version: Option<u64>,
     pub meta: Option<IndexMap<String, JsonValue>>,
+}
+
+/// Group tags appended to every alternate while installing a grammar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrammarGroups {
+    Csv(String),
+    List(Vec<String>),
+}
+
+impl From<&str> for GrammarGroups {
+    fn from(value: &str) -> Self {
+        Self::Csv(value.into())
+    }
+}
+
+impl From<String> for GrammarGroups {
+    fn from(value: String) -> Self {
+        Self::Csv(value)
+    }
+}
+
+impl From<Vec<String>> for GrammarGroups {
+    fn from(value: Vec<String>) -> Self {
+        Self::List(value)
+    }
+}
+
+impl GrammarGroups {
+    fn normalized(&self) -> Vec<String> {
+        match self {
+            Self::Csv(value) => value.split(',').map(str::to_owned).collect(),
+            Self::List(value) => value.clone(),
+        }
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrammarSettingAlt {
+    pub g: Option<GrammarGroups>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrammarSettingRule {
+    pub alt: Option<GrammarSettingAlt>,
+}
+
+/// Optional settings applied across a grammar installation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrammarSetting {
+    pub rule: Option<GrammarSettingRule>,
+}
+
+impl GrammarSetting {
+    pub fn groups(groups: impl Into<GrammarGroups>) -> Self {
+        Self {
+            rule: Some(GrammarSettingRule {
+                alt: Some(GrammarSettingAlt {
+                    g: Some(groups.into()),
+                }),
+            }),
+        }
+    }
+
+    fn groups_ref(&self) -> Vec<String> {
+        self.rule
+            .as_ref()
+            .and_then(|rule| rule.alt.as_ref())
+            .and_then(|alt| alt.g.as_ref())
+            .map(GrammarGroups::normalized)
+            .unwrap_or_default()
+    }
 }
 
 impl GrammarSpec {
@@ -138,8 +223,20 @@ impl Tabnas {
     /// Installation is transactional: an invalid option, rule, reference, or
     /// builtin payload leaves the existing parser unchanged.
     pub fn grammar(&mut self, grammar: &GrammarSpec) -> Result<&mut Self, GrammarError> {
+        self.grammar_with_setting(grammar, &GrammarSetting::default())
+    }
+
+    /// Install a serialized grammar while appending the setting's group tags
+    /// to every open and close alternate. The source grammar remains intact.
+    pub fn grammar_with_setting(
+        &mut self,
+        grammar: &GrammarSpec,
+        setting: &GrammarSetting,
+    ) -> Result<&mut Self, GrammarError> {
         let mut staged = self.clone();
-        staged.install_grammar(grammar)?;
+        let mut grammar = grammar.clone();
+        append_setting_groups(&mut grammar.document, &setting.groups_ref())?;
+        staged.install_grammar(&grammar)?;
         *self = staged;
         Ok(self)
     }
@@ -147,12 +244,25 @@ impl Tabnas {
     fn install_grammar(&mut self, grammar: &GrammarSpec) -> Result<(), GrammarError> {
         let root = object(&grammar.document, "document")?;
         let refs = AltRefs::from(&*self);
+        if self.options.config_modify.is_empty() {
+            // Native Rust callers can mutate the public typed tree directly.
+            // With no modifier-produced delta, it is also the authoritative
+            // raw option source for the next overlay.
+            self.raw_options = self.options.clone();
+        }
         if grammar.clear {
             self.rules.clear();
             self.options.fixed.tokens.clear();
+            self.raw_options.fixed.tokens.clear();
         }
         if let Some(options) = root.get("options") {
-            apply_options(&mut self.options, object(options, "options")?, &refs)?;
+            apply_options(&mut self.raw_options, object(options, "options")?, &refs)?;
+            let mut resolved = self.raw_options.clone();
+            resolved
+                .refresh_configuration()
+                .map_err(|error| GrammarError(format!("Grammar: {error}")))?;
+            self.options = resolved;
+            self.plugin_options = self.options.plugin.clone();
         }
         if let Some(rules) = root.get("rule") {
             for (name, value) in object(rules, "rule")? {
@@ -189,6 +299,10 @@ impl Tabnas {
                 self.rules.insert(name.clone(), spec);
             }
         }
+        // Rule sequences may allocate tokens that were not named in the
+        // option document. They are instance identities, not modifier output,
+        // so carry them into the source tree for future configuration builds.
+        self.raw_options.tokens = self.options.tokens.clone();
         Ok(())
     }
 
@@ -196,6 +310,67 @@ impl Tabnas {
         let grammar = GrammarSpec::from_json(src)?;
         self.grammar(&grammar)
     }
+
+    pub fn grammar_json_with_setting(
+        &mut self,
+        src: &str,
+        setting: &GrammarSetting,
+    ) -> Result<&mut Self, GrammarError> {
+        let grammar = GrammarSpec::from_json(src)?;
+        self.grammar_with_setting(&grammar, setting)
+    }
+}
+
+fn append_setting_groups(document: &mut JsonValue, groups: &[String]) -> Result<(), GrammarError> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    let Some(rules) = document
+        .as_object_mut()
+        .and_then(|root| root.get_mut("rule"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return Ok(());
+    };
+    for rule in rules.values_mut().filter_map(JsonValue::as_object_mut) {
+        for phase in ["open", "close"] {
+            let Some(value) = rule.get_mut(phase) else {
+                continue;
+            };
+            let alts = if value.is_array() {
+                value.as_array_mut()
+            } else {
+                value
+                    .as_object_mut()
+                    .and_then(|wrapper| wrapper.get_mut("alts"))
+                    .and_then(JsonValue::as_array_mut)
+            };
+            let Some(alts) = alts else {
+                continue;
+            };
+            for alt in alts.iter_mut().filter_map(JsonValue::as_object_mut) {
+                let mut existing = match alt.remove("g") {
+                    None | Some(JsonValue::Null) => Vec::new(),
+                    Some(JsonValue::String(value)) => value.split(',').map(str::to_owned).collect(),
+                    Some(JsonValue::Array(values)) => values
+                        .into_iter()
+                        .filter_map(|value| value.as_str().map(str::to_owned))
+                        .collect(),
+                    Some(_) => {
+                        return Err(GrammarError(
+                            "Grammar: alternate g must be a string or array".into(),
+                        ));
+                    }
+                };
+                existing.extend(groups.iter().cloned());
+                alt.insert(
+                    "g".into(),
+                    JsonValue::Array(existing.into_iter().map(JsonValue::String).collect()),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn object<'a>(
@@ -234,6 +409,7 @@ fn apply_alt_list(
     let mods = inject.map(|inject| ListMods {
         delete: integer_list(inject.get("delete")),
         move_items: integer_list(inject.get("move")),
+        custom: None,
     });
     *target = modlist(std::mem::take(target), mods.as_ref());
     let parsed: Result<Vec<_>, _> = alts
@@ -365,6 +541,8 @@ fn parse_alt(
                 alt.c_ref = Some(reference.clone());
             } else if let Some(condition) = refs.conditions.get(reference) {
                 alt.c_fn = Some(condition.clone());
+            } else if let Some(condition) = refs.lexer_conditions.get(reference) {
+                alt.c_lex = Some(condition.clone());
             } else {
                 return Err(GrammarError(format!(
                     "Grammar: unknown condition function reference: {reference}"
@@ -735,6 +913,23 @@ fn apply_options(
 ) -> Result<(), GrammarError> {
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
+    }
+    if let Some(plugin) = map.get("plugin") {
+        for (name, value) in object(plugin, "options.plugin")? {
+            if value.is_null() || value == &JsonValue::Bool(false) {
+                options.plugin.shift_remove(&name.to_lowercase());
+                continue;
+            }
+            let name = name.to_lowercase();
+            let current = options
+                .plugin
+                .shift_remove(&name)
+                .unwrap_or_else(|| Value::Object(IndexMap::new()));
+            options.plugin.insert(
+                name,
+                crate::merge_plugin_values(current, Value::from_json(value)),
+            );
+        }
     }
     for (field, target) in [("error", &mut options.error), ("hint", &mut options.hint)] {
         if let Some(overrides) = map.get(field) {
@@ -1143,11 +1338,37 @@ fn apply_options(
         options.ender.retain(|ender| !ender.is_empty());
     }
     if let Some(map_options) = map.get("map") {
-        set_bool(
-            object(map_options, "options.map")?,
-            "extend",
-            &mut options.map.extend,
-        );
+        let map_options = object(map_options, "options.map")?;
+        set_bool(map_options, "extend", &mut options.map.extend);
+        set_bool(map_options, "child", &mut options.map.child);
+        set_bool(map_options, "ordered", &mut options.map.ordered);
+        if let Some(reference) = map_options.get("merge") {
+            options.map.merge = match reference {
+                JsonValue::Null | JsonValue::Bool(false) => None,
+                JsonValue::String(reference) => {
+                    Some(refs.map_merges.get(reference).cloned().ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: unknown map merge function reference: {reference}"
+                        ))
+                    })?)
+                }
+                _ => {
+                    return Err(GrammarError(
+                        "Grammar: options.map.merge must be a function reference or null".into(),
+                    ))
+                }
+            };
+        }
+    }
+    if let Some(list_options) = map.get("list") {
+        let list_options = object(list_options, "options.list")?;
+        set_bool(list_options, "property", &mut options.list.property);
+        set_bool(list_options, "pair", &mut options.list.pair);
+        set_bool(list_options, "child", &mut options.list.child);
+    }
+    if let Some(safe_options) = map.get("safe") {
+        let safe_options = object(safe_options, "options.safe")?;
+        set_bool(safe_options, "key", &mut options.safe.key);
     }
     if let Some(info) = map.get("info") {
         let info = object(info, "options.info")?;
@@ -1198,17 +1419,22 @@ fn apply_options(
                             "Grammar: options.lex.match.{name}.make must be a function reference"
                         ))
                     })?;
-                let matcher = refs.lex_matches.get(reference).cloned().ok_or_else(|| {
-                    GrammarError(format!(
+                let matcher = refs.lex_matches.get(reference).cloned();
+                let imperative = refs.imperative_lex_matches.get(reference).cloned();
+                let factory = refs.lex_match_factories.get(reference).cloned();
+                if matcher.is_none() && imperative.is_none() && factory.is_none() {
+                    return Err(GrammarError(format!(
                         "Grammar: unknown custom lexer matcher function reference: {reference}"
-                    ))
-                })?;
+                    )));
+                }
                 options.lex.matchers.insert(
                     name.clone(),
                     crate::LexMatcher {
                         name: name.clone(),
                         order,
                         matcher,
+                        imperative,
+                        factory,
                     },
                 );
             }
@@ -1419,21 +1645,29 @@ fn apply_options(
     if let Some(parser) = map.get("parser") {
         let parser = object(parser, "options.parser")?;
         if let Some(reference) = parser.get("start") {
-            options.parser.start = match reference {
-                JsonValue::Null | JsonValue::Bool(false) => None,
+            match reference {
+                JsonValue::Null | JsonValue::Bool(false) => {
+                    options.parser.start = None;
+                    options.parser.start_with_instance = None;
+                }
                 JsonValue::String(reference) => {
-                    Some(refs.parser_starts.get(reference).cloned().ok_or_else(|| {
-                        GrammarError(format!(
+                    options.parser.start = refs.parser_starts.get(reference).cloned();
+                    options.parser.start_with_instance =
+                        refs.parser_starts_with_instance.get(reference).cloned();
+                    if options.parser.start.is_none()
+                        && options.parser.start_with_instance.is_none()
+                    {
+                        return Err(GrammarError(format!(
                             "Grammar: unknown parser start function reference: {reference}"
-                        ))
-                    })?)
+                        )));
+                    }
                 }
                 _ => {
                     return Err(GrammarError(
                         "Grammar: options.parser.start must be a function reference or null".into(),
                     ))
                 }
-            };
+            }
         }
     }
     if let Some(fixed_options) = map.get("fixed") {
@@ -1658,15 +1892,6 @@ fn apply_options(
         }
     }
 
-    let modifiers: Vec<_> = options
-        .config_modify
-        .iter()
-        .map(|(name, modifier)| (name.clone(), modifier.clone()))
-        .collect();
-    for (name, modifier) in modifiers {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| modifier.run(options)))
-            .map_err(|_| GrammarError(format!("Grammar: config modifier {name} panicked")))?;
-    }
     Ok(())
 }
 

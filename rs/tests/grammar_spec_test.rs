@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use tabnas::grammar::{validate_grammar, BUILTIN_SCHEMA_VERSION};
-use tabnas::{GrammarSpec, Tabnas, Value};
+use tabnas::{GrammarSetting, GrammarSpec, Tabnas, Value};
 
 #[test]
 fn loads_ordered_serialized_grammar_and_start_rule() {
@@ -730,4 +730,38 @@ fn serialized_value_definitions_and_enders_reach_the_runtime() {
     assert!(Tabnas::new()
         .grammar_json(r#"{"options":{"ender":[1]}}"#)
         .is_err());
+}
+
+#[test]
+fn grammar_settings_append_groups_without_mutating_the_source_spec() {
+    let grammar = GrammarSpec::from_json(
+        r##"{
+          "rule":{
+            "top":{
+              "open":{"alts":[{"s":"#NR","g":"base"}]},
+              "close":[{"s":"#ZZ"}]
+            }
+          }
+        }"##,
+    )
+    .unwrap();
+
+    let mut first = Tabnas::new();
+    first
+        .grammar_with_setting(&grammar, &GrammarSetting::groups("extraa, extrab"))
+        .unwrap();
+    assert_eq!(first.rules["top"].open[0].g, "base,extraa,extrab");
+    assert_eq!(first.rules["top"].close[0].g, "extraa,extrab");
+
+    // Installing the same source again with a different setting proves the
+    // first installation did not annotate the caller-owned document.
+    let mut second = Tabnas::new();
+    second
+        .grammar_with_setting(
+            &grammar,
+            &GrammarSetting::groups(vec!["arraya".into(), "arrayb".into()]),
+        )
+        .unwrap();
+    assert_eq!(second.rules["top"].open[0].g, "base,arraya,arrayb");
+    assert_eq!(second.rules["top"].close[0].g, "arraya,arrayb");
 }

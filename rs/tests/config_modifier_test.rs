@@ -44,6 +44,66 @@ fn serialized_config_modifiers_run_in_declaration_order_and_reapply() {
 }
 
 #[test]
+fn config_modifiers_rebuild_from_raw_options_without_compounding() {
+    let mut parser = Tabnas::new();
+    parser.config_modifier_ref("@suffix", |options| options.tag.push('A'));
+    parser
+        .grammar_json(r#"{"options":{"tag":"base","config":{"modify":{"suffix":"@suffix"}}}}"#)
+        .unwrap();
+    assert_eq!(parser.options.tag, "baseA");
+
+    // An unrelated overlay performs a fresh configure. The previous
+    // modifier result is not itself input to the next configure.
+    parser
+        .grammar_json(r#"{"options":{"number":{"lex":false}}}"#)
+        .unwrap();
+    assert_eq!(parser.options.tag, "baseA");
+
+    let child = parser
+        .derive(|options| options.string.allow_control = true)
+        .unwrap();
+    assert_eq!(child.options.tag, "baseA");
+    assert!(child.options.string.allow_control);
+}
+
+#[test]
+fn complete_config_modifier_receives_stable_raw_options() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let callback_seen = seen.clone();
+    let mut parser = Tabnas::new();
+    parser.config_modifier_with_options_ref("@full", move |config, options| {
+        callback_seen
+            .lock()
+            .unwrap()
+            .push((config.tag.clone(), options.tag.clone()));
+        config.tag.push_str("-resolved");
+    });
+    parser
+        .grammar_json(r#"{"options":{"tag":"raw","config":{"modify":{"full":"@full"}}}}"#)
+        .unwrap();
+    parser
+        .grammar_json(r#"{"options":{"number":{"lex":false}}}"#)
+        .unwrap();
+
+    assert_eq!(parser.options.tag, "raw-resolved");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [("raw".into(), "raw".into()), ("raw".into(), "raw".into())]
+    );
+}
+
+#[test]
+fn derived_instances_retain_typed_function_reference_registries() {
+    let mut parent = Tabnas::new();
+    parent.config_modifier_ref("@child", |options| options.number.lex = false);
+    let mut child = parent.derive(|_| {}).unwrap();
+    child
+        .grammar_json(r#"{"options":{"config":{"modify":{"child":"@child"}}}}"#)
+        .unwrap();
+    assert!(!child.options.number.lex);
+}
+
+#[test]
 fn invalid_config_modifier_refs_fail_transactionally() {
     let mut parser = Tabnas::new();
     parser

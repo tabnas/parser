@@ -1,9 +1,15 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::error::TabnasError;
+use crate::options::Options;
+use crate::rule::{Rule, RuleSnapshot};
 use crate::token::Token;
+use crate::value::Value;
+use indexmap::IndexMap;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionError {
@@ -28,6 +34,26 @@ impl fmt::Display for ActionError {
 
 impl std::error::Error for ActionError {}
 
+/// Read-only identity and grammar summary for the owning parser instance.
+/// Callbacks that need to mutate grammar receive `&mut Tabnas` during plugin
+/// installation; parse-time callbacks use this stable per-parse snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstanceInfo {
+    pub id: String,
+    pub tag: String,
+    pub plugins: Vec<String>,
+    pub rule_names: Vec<String>,
+}
+
+/// Typed form of TypeScript's `parent_ctx` parse argument. Custom metadata
+/// and plugin state are deep-merged into the new Context, while errors and
+/// parser-owned cursor/rule fields always start fresh for each parse.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ContextSeed {
+    pub meta: Option<Value>,
+    pub u: IndexMap<String, Value>,
+}
+
 impl From<ActionError> for TabnasError {
     fn from(action_error: ActionError) -> Self {
         let mut error = TabnasError::new(action_error.code, "", "", 0, 1, 1);
@@ -46,6 +72,23 @@ impl From<ActionError> for TabnasError {
 pub struct Context {
     /// Zero-based rule-loop iteration currently being processed.
     pub iteration: usize,
+    /// Full source text for plugin callbacks and diagnostics.
+    pub source: String,
+    /// Caller-supplied per-parse metadata.
+    pub meta: Value,
+    /// Custom per-parse plugin data bag.
+    pub u: IndexMap<String, Value>,
+    /// Errors recorded so far during recovery.
+    pub errs: Vec<TabnasError>,
+    /// Resolved options for this parse. Each parse owns its snapshot, so
+    /// callbacks cannot mutate the shared parser configuration.
+    pub options: Options,
+    /// Owning instance identity, installed plugins, and grammar names.
+    pub instance: InstanceInfo,
+    /// Snapshot of the current rule and its ancestor stack. The live rule is
+    /// still supplied separately to callbacks so mutation remains explicit.
+    pub rule: Option<Rc<RuleSnapshot>>,
+    pub rule_stack: Vec<Rc<RuleSnapshot>>,
     /// Retained consumed-token history, oldest first.
     pub v: Vec<Token>,
     /// Absolute number of tokens consumed minus tokens rewound.
@@ -54,6 +97,7 @@ pub struct Context {
     pub t: Vec<Token>,
     replay: VecDeque<Token>,
     history_limit: Option<usize>,
+    root: Option<Rc<RefCell<Value>>>,
     pub(crate) recover_at: Option<usize>,
     pub(crate) recover_si: Option<usize>,
     pub(crate) bad_to: Option<usize>,
@@ -61,14 +105,29 @@ pub struct Context {
 }
 
 impl Context {
-    pub(crate) fn new(history_limit: Option<usize>) -> Self {
+    pub(crate) fn new(
+        history_limit: Option<usize>,
+        source: impl Into<String>,
+        meta: Value,
+        options: Options,
+        instance: InstanceInfo,
+    ) -> Self {
         Self {
             iteration: 0,
+            source: source.into(),
+            meta,
+            u: IndexMap::new(),
+            errs: Vec::new(),
+            options,
+            instance,
+            rule: None,
+            rule_stack: Vec::new(),
             v: Vec::new(),
             v_abs: 0,
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
             history_limit: history_limit.filter(|limit| *limit > 0),
+            root: None,
             recover_at: None,
             recover_si: None,
             bad_to: None,
@@ -89,6 +148,74 @@ impl Context {
     /// Token consumed immediately before `v1`.
     pub fn v2(&self) -> Option<&Token> {
         self.v.get(self.v.len().wrapping_sub(2))
+    }
+
+    pub fn t0(&self) -> Option<&Token> {
+        self.t.first()
+    }
+
+    pub fn t1(&self) -> Option<&Token> {
+        self.t.get(1)
+    }
+
+    pub fn set_t0(&mut self, token: Token) {
+        if self.t.is_empty() {
+            self.t.push(token);
+        } else {
+            self.t[0] = token;
+        }
+    }
+
+    pub fn set_t1(&mut self, token: Token) {
+        while self.t.len() < 2 {
+            self.t.push(Token::no_token());
+        }
+        self.t[1] = token;
+    }
+
+    pub fn set_v1(&mut self, token: Token) {
+        if let Some(last) = self.v.last_mut() {
+            *last = token;
+        } else {
+            self.v.push(token);
+        }
+    }
+
+    pub fn set_v2(&mut self, token: Token) {
+        match self.v.len() {
+            0 => self.v.push(token),
+            1 => self.v.insert(0, token),
+            length => self.v[length - 2] = token,
+        }
+    }
+
+    pub fn root(&self) -> Option<Value> {
+        self.root.as_ref().map(|root| root.borrow().clone())
+    }
+
+    pub(crate) fn set_root(&mut self, root: Rc<RefCell<Value>>) {
+        self.root = Some(root);
+    }
+
+    pub(crate) fn set_active(&mut self, rule: &Rule, stack: &[Rule]) {
+        self.set_rule(rule);
+        self.rule_stack = stack.iter().map(Rule::snapshot).collect();
+    }
+
+    pub(crate) fn set_rule(&mut self, rule: &Rule) {
+        self.rule = Some(rule.snapshot());
+    }
+
+    pub(crate) fn apply_seed(&mut self, seed: &ContextSeed) {
+        if let Some(meta) = &seed.meta {
+            self.meta = merge_seed_value(self.meta.clone(), meta.clone());
+        }
+        for (key, value) in &seed.u {
+            let previous = self.u.shift_remove(key).unwrap_or(Value::Undefined);
+            self.u
+                .insert(key.clone(), merge_seed_value(previous, value.clone()));
+        }
+        self.errs.clear();
     }
 
     /// Replay every token consumed since `mark`.
@@ -156,5 +283,19 @@ impl Context {
 
     pub(crate) fn restore_replay(&mut self, replay: VecDeque<Token>) {
         self.replay = replay;
+    }
+}
+
+fn merge_seed_value(base: Value, overlay: Value) -> Value {
+    match (base, overlay) {
+        (base, Value::Undefined) => base,
+        (Value::Object(mut base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
+                base.insert(key, merge_seed_value(previous, value));
+            }
+            Value::Object(base)
+        }
+        (_, overlay) => overlay,
     }
 }

@@ -38,7 +38,9 @@ wired when that serialized rule is installed.
 Function token matchers use `match_token_ref`. They receive the remaining
 source and return a non-empty owned source prefix plus its value. This
 effect-based interface supports eager and parser-slot-gated matchers without
-giving callbacks mutable access to the lexer cursor.
+giving callbacks mutable access to the lexer cursor. Native plugins that need
+the mature callback surface use `imperative_lex_match_ref`; those callbacks
+receive the live lexer, rule, and context and may construct native tokens.
 High-priority `options.match.value` entries support serialized regexps and
 typed `match_value_ref` callbacks. Regexp entries can bind their capture
 transform with `value_transform_ref`; function entries return the owned source
@@ -48,7 +50,8 @@ Regexp-backed value definitions can bind a named transformer with
 `value_transform_ref`. It receives the whole match followed by capture groups
 and returns the token value without direct cursor access.
 Unquoted-text modifier pipelines use `text_modifier_ref` and retain serialized
-declaration order.
+declaration order. `imperative_text_modifier_ref` exposes the live lexer, rule,
+context, and resolved options.
 Matcher-family `check` hooks use `lex_check_ref`; callbacks can continue,
 skip that matcher, or emit an owned non-empty prefix token.
 Priority-ordered custom lexer entries bind through `lex_match_ref` and are
@@ -70,9 +73,18 @@ and budget callbacks remain inactive until `checkEveryN` is non-zero.
 Load-time `options.config.modify` callbacks bind through
 `config_modifier_ref`, run in declaration order after option resolution, and
 are reapplied on later grammar option overlays until removed.
+`config_modifier_with_options_ref` additionally exposes the immutable raw
+option input for the configure pass. Raw options and resolved configuration are
+kept separate so non-idempotent modifiers do not compound during overlays or
+derivation.
 Replacement `options.parser.start` entry points bind through
 `parser_start_ref`; they bypass the rule engine like the TypeScript/Go option,
 and callback panics are returned as structured internal errors.
+Native plugins, grammar-wide group settings, plugin option bags, derived
+instances, `empty`, and commutative instance `merge` are also available as
+typed Rust APIs. Lazy token values, full pre-parse hooks, live lexer checks,
+function comment suffixes, and setup-time matcher factories preserve their
+canonical callback timing.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
@@ -104,18 +116,15 @@ both JSON and parser corpora. Additional compiler-consumer gates compare Rust
 against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
 and GBNF compilers.
 
-Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
-grammar loading supports static token/rule/action fields, rule removal,
-alternate injection, metadata, and schema-version gating. Function-valued
-callbacks that need direct lexer/rule re-entry and complete option overlays
-are not yet equivalent.
-Unsupported callback and matcher forms fail at install time instead of being
-silently ignored. See
-`../doc/rust-port-implementation-plan.md` for the architecture and gates for
-that work. The portable serialized contract has differential coverage; the
-imperative plugin surface remains deliberately outside the native v0.1 API, so
-do not present this crate as a drop-in replacement for arbitrary TypeScript or
-Go plugins.
+The portable serialized contract is differentially covered and the native
+imperative tier is now present, but the final drop-in parity audit is still in
+progress. In particular, the remaining review is checking the complete
+matched-alternate/next-rule argument surface of imperative callbacks and the
+debug/introspection convenience APIs. Unsupported serialized callback forms
+fail at install time instead of being silently ignored. See
+`../doc/rust-port-implementation-plan.md` for the original architecture and
+gates; the implementation has intentionally advanced beyond that document's
+v0.1 scope.
 
 ## Development
 

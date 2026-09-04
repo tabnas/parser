@@ -1,7 +1,12 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::value::Value;
+use crate::{Context, Rule};
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+
+type TokenValCallback = dyn Fn(&mut Rule, &mut Context) -> Value + Send + Sync;
 
 /// Tin is a token identification number.
 pub type Tin = i32;
@@ -93,6 +98,46 @@ impl Default for Point {
     }
 }
 
+/// Lazy token value callback, evaluated only when a parser action asks for
+/// the token's semantic value. This is the Rust counterpart of the canonical
+/// `TokenValFunc` `(rule, context) => value` extension point.
+#[derive(Clone)]
+pub struct TokenValFunc {
+    callback: Arc<TokenValCallback>,
+}
+
+impl TokenValFunc {
+    pub fn new(
+        callback: impl Fn(&mut Rule, &mut Context) -> Value + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    pub fn call(&self, rule: &mut Rule, context: &mut Context) -> Value {
+        (self.callback)(rule, context)
+    }
+
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.callback, &other.callback)
+    }
+}
+
+impl fmt::Debug for TokenValFunc {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TokenValFunc(<function>)")
+    }
+}
+
+impl PartialEq for TokenValFunc {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_callback(other)
+    }
+}
+
+impl Eq for TokenValFunc {}
+
 /// A single lexical token produced by the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
@@ -107,6 +152,9 @@ pub struct Token {
     pub err: String,
     pub why: String,
     pub use_data: HashMap<String, Value>,
+    /// Optional semantic value callback. `val` remains the eagerly produced
+    /// fallback and the value shown by raw token inspection.
+    pub val_fn: Option<TokenValFunc>,
 }
 
 impl Default for Token {
@@ -123,6 +171,7 @@ impl Default for Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            val_fn: None,
         }
     }
 }
@@ -147,6 +196,7 @@ impl Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            val_fn: None,
         }
     }
 
@@ -163,6 +213,7 @@ impl Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            val_fn: None,
         }
     }
 
@@ -173,5 +224,26 @@ impl Token {
     pub fn bad(&mut self, err: &str) -> &mut Self {
         self.err = err.to_string();
         self
+    }
+
+    /// Attach an already shared lazy value callback.
+    pub fn with_val_func(mut self, callback: TokenValFunc) -> Self {
+        self.val_fn = Some(callback);
+        self
+    }
+
+    /// Attach a lazy value callback without constructing a wrapper first.
+    pub fn with_lazy_value(
+        self,
+        callback: impl Fn(&mut Rule, &mut Context) -> Value + Send + Sync + 'static,
+    ) -> Self {
+        self.with_val_func(TokenValFunc::new(callback))
+    }
+
+    /// Resolve the semantic token value against the live parse state.
+    pub fn resolve_val(&self, rule: &mut Rule, context: &mut Context) -> Value {
+        self.val_fn
+            .as_ref()
+            .map_or_else(|| self.val.clone(), |callback| callback.call(rule, context))
     }
 }

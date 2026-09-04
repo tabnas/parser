@@ -1,3 +1,4 @@
+use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tabnas::{Tabnas, Value};
@@ -32,6 +33,37 @@ fn serialized_prepare_refs_run_by_name_before_each_parse() {
         .unwrap();
     parser.parse("3").unwrap();
     assert_eq!(*calls.lock().unwrap(), ["a", "z", "a", "z", "z"]);
+}
+
+#[test]
+fn complete_prepare_callback_receives_owner_context_and_input_meta() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let callback_seen = seen.clone();
+    let mut parser = Tabnas::new();
+    parser.parse_prepare_with_instance_ref("@full", move |owner, context, meta| {
+        callback_seen.lock().unwrap().push((
+            owner.id.clone(),
+            context.source.clone(),
+            context.meta.clone(),
+            meta.clone(),
+        ));
+        context.u.insert("prepared".into(), Value::Bool(true));
+    });
+    parser.grammar_json(NUMBER_GRAMMAR).unwrap();
+    parser
+        .grammar_json(r##"{"options":{"parse":{"prepare":{"full":"@full"}}}}"##)
+        .unwrap();
+
+    let id = parser.id.clone();
+    let meta = Value::from_json(&json!({"request": 7}));
+    assert_eq!(
+        parser.parse_with_meta("4", meta.clone()).unwrap(),
+        Value::Number(4.0)
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [(id, "4".into(), meta.clone(), meta)]
+    );
 }
 
 #[test]

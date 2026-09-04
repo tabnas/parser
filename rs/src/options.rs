@@ -8,21 +8,38 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::context::Context;
+use crate::lexer::Lexer;
+use crate::rule::Rule;
+use crate::token::Token;
+
+type ConfigModifierCallback = dyn Fn(&mut Options, &Options) + Send + Sync;
 
 #[derive(Clone)]
 pub struct ConfigModifier {
-    callback: Arc<dyn Fn(&mut Options) + Send + Sync>,
+    callback: Arc<ConfigModifierCallback>,
 }
 
 impl ConfigModifier {
     pub(crate) fn new(callback: impl Fn(&mut Options) + Send + Sync + 'static) -> Self {
         Self {
+            callback: Arc::new(move |config, _options| callback(config)),
+        }
+    }
+
+    pub(crate) fn with_options(
+        callback: impl Fn(&mut Options, &Options) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
             callback: Arc::new(callback),
         }
     }
 
-    pub(crate) fn run(&self, options: &mut Options) {
-        (self.callback)(options);
+    pub(crate) fn run(&self, config: &mut Options, options: &Options) {
+        (self.callback)(config, options);
+    }
+
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.callback, &other.callback)
     }
 }
 
@@ -182,34 +199,78 @@ pub enum LexCheckResult {
     Skip,
     /// Emit an owned token while consuming its non-empty source prefix.
     Token(Box<LexCheckToken>),
+    /// Return a token built by a live lexer callback. The callback owns all
+    /// cursor movement, matching the canonical `LexCheck(lex)` contract.
+    NativeToken(Box<Token>),
 }
 
 impl LexCheckResult {
     pub fn token(token: LexCheckToken) -> Self {
         Self::Token(Box::new(token))
     }
+
+    pub fn native_token(token: Token) -> Self {
+        Self::NativeToken(Box::new(token))
+    }
 }
+
+pub type ImperativeLexCheck =
+    Arc<dyn for<'source> Fn(&mut Lexer<'source>) -> LexCheckResult + Send + Sync>;
 
 #[derive(Clone)]
 pub struct LexCheck {
-    callback: Arc<dyn Fn(&str) -> LexCheckResult + Send + Sync>,
+    callback: Option<Arc<LexCheckEffect>>,
+    imperative: Option<ImperativeLexCheck>,
 }
+
+type LexCheckEffect = dyn Fn(&str) -> LexCheckResult + Send + Sync;
 
 impl LexCheck {
     pub(crate) fn new(callback: impl Fn(&str) -> LexCheckResult + Send + Sync + 'static) -> Self {
         Self {
-            callback: Arc::new(callback),
+            callback: Some(Arc::new(callback)),
+            imperative: None,
         }
     }
 
-    pub(crate) fn run(&self, source: &str) -> LexCheckResult {
-        (self.callback)(source)
+    pub(crate) fn new_imperative(
+        callback: impl for<'source> Fn(&mut Lexer<'source>) -> LexCheckResult + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            callback: None,
+            imperative: Some(Arc::new(callback)),
+        }
+    }
+
+    pub(crate) fn run(&self, source: &str) -> Option<LexCheckResult> {
+        self.callback.as_ref().map(|callback| callback(source))
+    }
+
+    pub(crate) fn run_imperative(&self, lexer: &mut Lexer<'_>) -> Option<LexCheckResult> {
+        self.imperative.as_ref().map(|callback| callback(lexer))
+    }
+
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        match (
+            &self.callback,
+            &self.imperative,
+            &other.callback,
+            &other.imperative,
+        ) {
+            (Some(left), None, Some(right), None) => Arc::ptr_eq(left, right),
+            (None, Some(left), None, Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
     }
 }
 
 impl fmt::Debug for LexCheck {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("LexCheck(<function>)")
+        formatter.write_str(if self.imperative.is_some() {
+            "LexCheck(<live lexer function>)"
+        } else {
+            "LexCheck(<effect function>)"
+        })
     }
 }
 
@@ -255,7 +316,83 @@ impl Default for FixedOptions {
     }
 }
 
-pub type TextModifier = Arc<dyn Fn(crate::Value) -> crate::Value + Send + Sync>;
+pub type ValueTextModifier = Arc<dyn Fn(crate::Value) -> crate::Value + Send + Sync>;
+pub type ImperativeTextModifier = Arc<
+    dyn for<'source> Fn(
+            crate::Value,
+            &mut Lexer<'source>,
+            &mut Rule,
+            &mut Context,
+            &Options,
+        ) -> crate::Value
+        + Send
+        + Sync,
+>;
+
+/// One unquoted-text modifier in declaration order. The value-only form is
+/// convenient for pure serialized hooks; the imperative form exposes the
+/// same live lexer/config state as the canonical `ValModifier` and also hands
+/// Rust callers explicit rule/context references instead of hiding them on
+/// the lexer object.
+#[derive(Clone)]
+pub enum TextModifier {
+    Value(ValueTextModifier),
+    Imperative(ImperativeTextModifier),
+}
+
+impl TextModifier {
+    pub(crate) fn new(
+        modifier: impl Fn(crate::Value) -> crate::Value + Send + Sync + 'static,
+    ) -> Self {
+        Self::Value(Arc::new(modifier))
+    }
+
+    pub(crate) fn new_imperative(
+        modifier: impl for<'source> Fn(
+                crate::Value,
+                &mut Lexer<'source>,
+                &mut Rule,
+                &mut Context,
+                &Options,
+            ) -> crate::Value
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        Self::Imperative(Arc::new(modifier))
+    }
+
+    pub(crate) fn run(
+        &self,
+        value: crate::Value,
+        lexer: &mut Lexer<'_>,
+        rule: &mut Rule,
+        context: &mut Context,
+        options: &Options,
+    ) -> crate::Value {
+        match self {
+            Self::Value(modifier) => modifier(value),
+            Self::Imperative(modifier) => modifier(value, lexer, rule, context, options),
+        }
+    }
+
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Value(left), Self::Value(right)) => Arc::ptr_eq(left, right),
+            (Self::Imperative(left), Self::Imperative(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for TextModifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Value(_) => "TextModifier::Value(<function>)",
+            Self::Imperative(_) => "TextModifier::Imperative(<function>)",
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct TextOptions {
@@ -414,26 +551,62 @@ pub struct CommentDef {
 
 #[derive(Clone)]
 pub struct CommentSuffixMatcher {
-    callback: Arc<CommentSuffixCallback>,
+    callback: Option<Arc<CommentSuffixCallback>>,
+    imperative: Option<ImperativeCommentSuffixMatcher>,
 }
 
 type CommentSuffixCallback = dyn Fn(&str) -> Option<String> + Send + Sync;
+pub type ImperativeCommentSuffixMatcher =
+    Arc<dyn for<'source> Fn(&mut Lexer<'source>) -> Option<Token> + Send + Sync>;
 
 impl CommentSuffixMatcher {
     pub(crate) fn new(callback: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
         Self {
-            callback: Arc::new(callback),
+            callback: Some(Arc::new(callback)),
+            imperative: None,
+        }
+    }
+
+    pub(crate) fn new_imperative(
+        callback: impl for<'source> Fn(&mut Lexer<'source>) -> Option<Token> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            callback: None,
+            imperative: Some(Arc::new(callback)),
         }
     }
 
     pub(crate) fn run(&self, source: &str) -> Option<String> {
-        (self.callback)(source)
+        self.callback.as_ref().and_then(|callback| callback(source))
+    }
+
+    pub(crate) fn run_imperative(&self, lexer: &mut Lexer<'_>) -> Option<Token> {
+        self.imperative
+            .as_ref()
+            .and_then(|callback| callback(lexer))
+    }
+
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        match (
+            &self.callback,
+            &self.imperative,
+            &other.callback,
+            &other.imperative,
+        ) {
+            (Some(left), None, Some(right), None) => Arc::ptr_eq(left, right),
+            (None, Some(left), None, Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
     }
 }
 
 impl fmt::Debug for CommentSuffixMatcher {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("CommentSuffixMatcher(<function>)")
+        formatter.write_str(if self.imperative.is_some() {
+            "CommentSuffixMatcher(<live lexer function>)"
+        } else {
+            "CommentSuffixMatcher(<effect function>)"
+        })
     }
 }
 
@@ -527,13 +700,68 @@ impl Default for CommentOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct SafeOptions {
+    pub key: bool,
+}
+
+impl Default for SafeOptions {
+    fn default() -> Self {
+        Self { key: true }
+    }
+}
+
+pub type MapMerge =
+    Arc<dyn Fn(crate::Value, crate::Value, &mut Rule, &mut Context) -> crate::Value + Send + Sync>;
+
+#[derive(Clone)]
 pub struct MapOptions {
     pub extend: bool,
+    pub merge: Option<MapMerge>,
+    pub child: bool,
+    /// Rust's `IndexMap` always retains insertion order. This flag is kept so
+    /// serialized option overlays and plugin code observe the canonical
+    /// option surface even though enabling it requires no representation
+    /// change here.
+    pub ordered: bool,
+}
+
+impl fmt::Debug for MapOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MapOptions")
+            .field("extend", &self.extend)
+            .field("merge", &self.merge.as_ref().map(|_| "<function>"))
+            .field("child", &self.child)
+            .field("ordered", &self.ordered)
+            .finish()
+    }
 }
 
 impl Default for MapOptions {
     fn default() -> Self {
-        MapOptions { extend: true }
+        MapOptions {
+            extend: true,
+            merge: None,
+            child: false,
+            ordered: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ListOptions {
+    pub property: bool,
+    pub pair: bool,
+    pub child: bool,
+}
+
+impl Default for ListOptions {
+    fn default() -> Self {
+        Self {
+            property: true,
+            pair: false,
+            child: false,
+        }
     }
 }
 
@@ -658,11 +886,25 @@ pub type MatchTokenCallback = Arc<dyn Fn(&str) -> Option<MatchTokenResult> + Sen
 /// remaining source.
 pub type LexMatcherCallback = Arc<dyn Fn(&str) -> Option<LexCheckToken> + Send + Sync>;
 
+/// Full native custom matcher. Unlike the serialized effect callback, this
+/// form can inspect and mutate the live rule/context and advance the lexer.
+pub type ImperativeLexMatcher = Arc<
+    dyn for<'source> Fn(&mut Lexer<'source>, &mut Rule, &mut Context) -> Option<Token>
+        + Send
+        + Sync,
+>;
+
+/// Setup-time matcher constructor. Rust has one resolved typed option tree,
+/// so it serves the roles of both canonical `cfg` and raw `opts` arguments.
+pub type LexMatcherFactory = Arc<dyn Fn(&Options) -> Option<ImperativeLexMatcher> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct LexMatcher {
     pub name: String,
     pub order: f64,
-    pub matcher: LexMatcherCallback,
+    pub matcher: Option<LexMatcherCallback>,
+    pub imperative: Option<ImperativeLexMatcher>,
+    pub factory: Option<LexMatcherFactory>,
 }
 
 impl fmt::Debug for LexMatcher {
@@ -671,7 +913,12 @@ impl fmt::Debug for LexMatcher {
             .debug_struct("LexMatcher")
             .field("name", &self.name)
             .field("order", &self.order)
-            .field("matcher", &"<function>")
+            .field("matcher", &self.matcher.as_ref().map(|_| "<function>"))
+            .field(
+                "imperative",
+                &self.imperative.as_ref().map(|_| "<function>"),
+            )
+            .field("factory", &self.factory.as_ref().map(|_| "<function>"))
             .finish()
     }
 }
@@ -746,14 +993,71 @@ impl Default for RecoverOptions {
     }
 }
 
-pub type ParsePrepare = Arc<dyn Fn(&mut Context) + Send + Sync>;
+pub type ContextParsePrepare = Arc<dyn Fn(&mut Context) + Send + Sync>;
+pub type ParsePrepareWithInstance =
+    Arc<dyn Fn(&crate::Tabnas, &mut Context, &crate::Value) + Send + Sync>;
+
+/// Pre-parse hook. The context-only form preserves the original Rust API;
+/// `WithInstance` exposes the owning parser and caller metadata carried by
+/// the canonical callback contract.
+#[derive(Clone)]
+pub enum ParsePrepare {
+    Context(ContextParsePrepare),
+    WithInstance(ParsePrepareWithInstance),
+}
+
+impl ParsePrepare {
+    pub(crate) fn same_callback(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Context(left), Self::Context(right)) => Arc::ptr_eq(left, right),
+            (Self::WithInstance(left), Self::WithInstance(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn run(
+        &self,
+        owner: Option<&crate::Tabnas>,
+        context: &mut Context,
+        meta: &crate::Value,
+    ) -> Result<(), &'static str> {
+        match self {
+            Self::Context(callback) => {
+                callback(context);
+                Ok(())
+            }
+            Self::WithInstance(callback) => {
+                let owner = owner.ok_or(
+                    "parse.prepare requires an owning Tabnas instance; call Tabnas::parse",
+                )?;
+                callback(owner, context, meta);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Debug for ParsePrepare {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Context(_) => formatter.write_str("ParsePrepare::Context(<function>)"),
+            Self::WithInstance(_) => formatter.write_str("ParsePrepare::WithInstance(<function>)"),
+        }
+    }
+}
 
 pub type ParserStart =
     Arc<dyn Fn(&str) -> Result<crate::Value, Box<crate::TabnasError>> + Send + Sync>;
+pub type ParserStartWithInstance = Arc<
+    dyn Fn(&str, &crate::Tabnas, &crate::Value) -> Result<crate::Value, Box<crate::TabnasError>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone, Default)]
 pub struct ParserOptions {
     pub start: Option<ParserStart>,
+    pub start_with_instance: Option<ParserStartWithInstance>,
 }
 
 impl fmt::Debug for ParserOptions {
@@ -761,6 +1065,10 @@ impl fmt::Debug for ParserOptions {
         formatter
             .debug_struct("ParserOptions")
             .field("start", &self.start.as_ref().map(|_| "<callback>"))
+            .field(
+                "start_with_instance",
+                &self.start_with_instance.as_ref().map(|_| "<callback>"),
+            )
             .finish()
     }
 }
@@ -787,6 +1095,7 @@ impl fmt::Debug for ParseOptions {
 
 #[derive(Debug, Clone)]
 pub struct Options {
+    pub safe: SafeOptions,
     pub fixed: FixedOptions,
     pub space: SpaceOptions,
     pub text: TextOptions,
@@ -797,6 +1106,7 @@ pub struct Options {
     pub value: ValueOptions,
     pub ender: Vec<String>,
     pub map: MapOptions,
+    pub list: ListOptions,
     pub info: InfoOptions,
     pub lex: LexOptions,
     pub rewind: RewindOptions,
@@ -804,6 +1114,8 @@ pub struct Options {
     pub result: ResultOptions,
     pub parse: ParseOptions,
     pub parser: ParserOptions,
+    /// Per-plugin accumulated option bags (`options.plugin`).
+    pub plugin: IndexMap<String, crate::Value>,
     pub token_set: HashMap<String, Vec<Tin>>,
     /// Named token identities without an attached built-in, fixed, or match
     /// producer. Serialized rule slots allocate these on first reference.
@@ -829,6 +1141,7 @@ impl Default for Options {
         token_set.insert("KEY".to_string(), vec![TIN_TX, TIN_NR, TIN_ST, TIN_VL]);
 
         Options {
+            safe: SafeOptions::default(),
             fixed: FixedOptions::default(),
             space: SpaceOptions::default(),
             text: TextOptions::default(),
@@ -839,6 +1152,7 @@ impl Default for Options {
             value: ValueOptions::default(),
             ender: Vec::new(),
             map: MapOptions::default(),
+            list: ListOptions::default(),
             info: InfoOptions::default(),
             lex: LexOptions::default(),
             rewind: RewindOptions::default(),
@@ -846,6 +1160,7 @@ impl Default for Options {
             result: ResultOptions::default(),
             parse: ParseOptions::default(),
             parser: ParserOptions::default(),
+            plugin: IndexMap::new(),
             token_set,
             tokens: IndexMap::new(),
             match_lex: true,
@@ -863,6 +1178,74 @@ impl Default for Options {
 }
 
 impl Options {
+    /// Rebuild the resolved configuration callbacks from this option tree.
+    /// Config modifiers run before matcher factories, matching canonical
+    /// `configure`: factories must observe the modifier's final values.
+    pub fn refresh_configuration(&mut self) -> Result<(), String> {
+        let raw_options = self.clone();
+        let modifiers: Vec<_> = self
+            .config_modify
+            .iter()
+            .map(|(name, modifier)| (name.clone(), modifier.clone()))
+            .collect();
+        for (name, modifier) in modifiers {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                modifier.run(self, &raw_options)
+            }))
+            .map_err(|_| format!("config modifier {name} panicked"))?;
+        }
+        self.refresh_lex_matchers()
+    }
+
+    /// Rebuild setup-time lexer matchers from the fully resolved option tree.
+    /// Factories run once per configuration/derivation, not once per parse.
+    pub fn refresh_lex_matchers(&mut self) -> Result<(), String> {
+        let factories: Vec<_> = self
+            .lex
+            .matchers
+            .iter()
+            .filter_map(|(name, matcher)| {
+                matcher
+                    .factory
+                    .as_ref()
+                    .map(|factory| (name.clone(), factory.clone()))
+            })
+            .collect();
+        for (name, factory) in factories {
+            let matcher = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(self)))
+                .map_err(|_| format!("lexer matcher factory {name} panicked"))?;
+            if let Some(entry) = self.lex.matchers.get_mut(&name) {
+                entry.imperative = matcher;
+            }
+        }
+        Ok(())
+    }
+
+    /// Baseline for `Tabnas::empty`: no standard token producers or token
+    /// sets. Structural and diagnostic fields retain typed values so plugins
+    /// can opt individual facilities back in without handling missing data.
+    pub fn empty() -> Self {
+        let mut options = Self::default();
+        options.fixed.lex = false;
+        options.fixed.tokens.clear();
+        options.space.lex = false;
+        options.text.lex = false;
+        options.number.lex = false;
+        options.string.lex = false;
+        options.line.lex = false;
+        options.comment.lex = false;
+        options.comment.definitions.clear();
+        options.value.lex = false;
+        options.value.definitions.clear();
+        options.match_lex = false;
+        options.match_tokens.clear();
+        options.match_values.clear();
+        options.lex.matchers.clear();
+        options.token_set.clear();
+        options.tokens.clear();
+        options
+    }
+
     pub fn is_ignored(&self, tin: Tin) -> bool {
         self.token_set
             .get("IGNORE")
