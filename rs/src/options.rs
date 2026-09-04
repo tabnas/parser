@@ -641,6 +641,7 @@ pub type ParsePrepare = Arc<dyn Fn(&mut Context) + Send + Sync>;
 #[derive(Clone, Default)]
 pub struct ParseOptions {
     pub prepare: Vec<ParsePrepare>,
+    pub named_prepare: IndexMap<String, ParsePrepare>,
     pub budget: BudgetOptions,
     pub recover: RecoverOptions,
 }
@@ -650,6 +651,7 @@ impl fmt::Debug for ParseOptions {
         formatter
             .debug_struct("ParseOptions")
             .field("prepare", &self.prepare.len())
+            .field("named_prepare", &self.named_prepare.len())
             .field("budget", &self.budget)
             .field("recover", &self.recover)
             .finish()

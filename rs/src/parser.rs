@@ -590,6 +590,9 @@ impl Parser {
         for prepare in &self.options.parse.prepare {
             prepare(&mut context);
         }
+        for prepare in self.options.parse.named_prepare.values() {
+            prepare(&mut context);
+        }
 
         if src.is_empty() {
             return if self.options.lex.empty {

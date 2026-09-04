@@ -6,8 +6,8 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    CommentSuffixMatcher, LexCheck, MatchTokenCallback, Tabnas, TextModifier, Value,
-    ValueTransform,
+    BudgetCheck, CommentSuffixMatcher, LexCheck, MatchTokenCallback, ParsePrepare, Tabnas,
+    TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -29,6 +29,8 @@ struct AltRefs {
     lex_checks: HashMap<String, LexCheck>,
     comment_suffixes: HashMap<String, CommentSuffixMatcher>,
     match_values: HashMap<String, MatchTokenCallback>,
+    parse_prepares: HashMap<String, ParsePrepare>,
+    budget_checks: HashMap<String, BudgetCheck>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -46,6 +48,8 @@ impl From<&Tabnas> for AltRefs {
             lex_checks: tabnas.lex_check_refs.clone(),
             comment_suffixes: tabnas.comment_suffix_refs.clone(),
             match_values: tabnas.match_value_refs.clone(),
+            parse_prepares: tabnas.parse_prepare_refs.clone(),
+            budget_checks: tabnas.budget_check_refs.clone(),
         }
     }
 }
@@ -1161,11 +1165,24 @@ fn apply_options(
         let parse = object(parse, "options.parse")?;
         if let Some(prepare) = parse.get("prepare") {
             let prepare = object(prepare, "options.parse.prepare")?;
-            if !prepare.is_empty() {
-                return Err(GrammarError(
-                    "Grammar: options.parse.prepare callbacks cannot be serialized".into(),
-                ));
+            for (name, reference) in prepare {
+                if reference.is_null() || reference == &JsonValue::Bool(false) {
+                    options.parse.named_prepare.shift_remove(name);
+                    continue;
+                }
+                let reference = reference.as_str().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: options.parse.prepare.{name} must be a function reference or null"
+                    ))
+                })?;
+                let callback = refs.parse_prepares.get(reference).cloned().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: unknown parse prepare function reference: {reference}"
+                    ))
+                })?;
+                options.parse.named_prepare.insert(name.clone(), callback);
             }
+            options.parse.named_prepare.sort_keys();
         }
         if let Some(budget) = parse.get("budget") {
             let budget = object(budget, "options.parse.budget")?;
@@ -1182,6 +1199,27 @@ fn apply_options(
                                 .into(),
                         )
                 })?;
+            }
+            if let Some(reference) = budget.get("onCheck").or_else(|| budget.get("on_check")) {
+                options.parse.budget.on_check = match reference {
+                    JsonValue::Null | JsonValue::Bool(false) => None,
+                    JsonValue::String(reference) => Some(
+                        refs.budget_checks
+                            .get(reference)
+                            .cloned()
+                            .ok_or_else(|| {
+                                GrammarError(format!(
+                                    "Grammar: unknown parse budget function reference: {reference}"
+                                ))
+                            })?,
+                    ),
+                    _ => {
+                        return Err(GrammarError(
+                            "Grammar: options.parse.budget.onCheck must be a function reference or null"
+                                .into(),
+                        ))
+                    }
+                };
             }
         }
         if let Some(recover) = parse.get("recover") {

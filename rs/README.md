@@ -53,6 +53,9 @@ consume only a validated owned source prefix.
 Serialized `error`, `hint`, `errmsg`, and `color` overlays configure both
 structured diagnostic text and human-readable error rendering, including
 source context, links, and internal suffix suppression or replacement.
+Named parse lifecycle hooks bind through `parse_prepare_ref` and
+`parse_budget_ref`; serialized prepare maps are deterministic by callback name
+and budget callbacks remain inactive until `checkEveryN` is non-zero.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default

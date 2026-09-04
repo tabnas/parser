@@ -71,6 +71,8 @@ pub struct Tabnas {
     pub(crate) lex_check_refs: HashMap<String, LexCheck>,
     pub(crate) comment_suffix_refs: HashMap<String, CommentSuffixMatcher>,
     pub(crate) match_value_refs: HashMap<String, MatchTokenCallback>,
+    pub(crate) parse_prepare_refs: HashMap<String, ParsePrepare>,
+    pub(crate) budget_check_refs: HashMap<String, BudgetCheck>,
 }
 
 impl Default for Tabnas {
@@ -102,6 +104,8 @@ impl Tabnas {
             lex_check_refs: HashMap::new(),
             comment_suffix_refs: HashMap::new(),
             match_value_refs: HashMap::new(),
+            parse_prepare_refs: HashMap::new(),
+            budget_check_refs: HashMap::new(),
         }
     }
 
@@ -127,6 +131,8 @@ impl Tabnas {
             lex_check_refs: HashMap::new(),
             comment_suffix_refs: HashMap::new(),
             match_value_refs: HashMap::new(),
+            parse_prepare_refs: HashMap::new(),
+            budget_check_refs: HashMap::new(),
         }
     }
 
@@ -334,11 +340,34 @@ impl Tabnas {
         self
     }
 
+    /// Register a typed function reference for serialized
+    /// `options.parse.budget.onCheck`.
+    pub fn parse_budget_ref(
+        &mut self,
+        name: impl Into<String>,
+        check: impl Fn(&Context) -> bool + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.budget_check_refs.insert(name.into(), Arc::new(check));
+        self
+    }
+
     pub fn parse_prepare(
         &mut self,
         prepare: impl Fn(&mut Context) + Send + Sync + 'static,
     ) -> &mut Self {
         self.options.parse.prepare.push(Arc::new(prepare));
+        self
+    }
+
+    /// Register a typed function reference for one named serialized
+    /// `options.parse.prepare` callback.
+    pub fn parse_prepare_ref(
+        &mut self,
+        name: impl Into<String>,
+        prepare: impl Fn(&mut Context) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.parse_prepare_refs
+            .insert(name.into(), Arc::new(prepare));
         self
     }
 
