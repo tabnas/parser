@@ -5,8 +5,9 @@
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
-    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext, LexCheck,
-    MatchTokenCallback, Tabnas, TextModifier, Value, ValueTransform,
+    builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
+    CommentSuffixMatcher, LexCheck, MatchTokenCallback, Tabnas, TextModifier, Value,
+    ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -26,6 +27,7 @@ struct AltRefs {
     value_transforms: HashMap<String, ValueTransform>,
     text_modifiers: HashMap<String, TextModifier>,
     lex_checks: HashMap<String, LexCheck>,
+    comment_suffixes: HashMap<String, CommentSuffixMatcher>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -41,6 +43,7 @@ impl From<&Tabnas> for AltRefs {
             value_transforms: tabnas.value_transform_refs.clone(),
             text_modifiers: tabnas.text_modifier_refs.clone(),
             lex_checks: tabnas.lex_check_refs.clone(),
+            comment_suffixes: tabnas.comment_suffix_refs.clone(),
         }
     }
 }
@@ -847,6 +850,7 @@ fn apply_options(
                             end: String::new(),
                             lex: false,
                             suffixes: Vec::new(),
+                            suffix_matcher: None,
                             eat_line: false,
                         });
                 set_bool(value, "line", &mut definition.line);
@@ -868,8 +872,16 @@ fn apply_options(
                     }
                 }
                 if let Some(suffix) = value.get("suffix") {
+                    definition.suffix_matcher = None;
                     definition.suffixes = match suffix {
                         JsonValue::Null => Vec::new(),
+                        JsonValue::String(reference)
+                            if refs.comment_suffixes.contains_key(reference) =>
+                        {
+                            definition.suffix_matcher =
+                                refs.comment_suffixes.get(reference).cloned();
+                            Vec::new()
+                        }
                         JsonValue::String(suffix) => {
                             if suffix.is_empty() {
                                 Vec::new()

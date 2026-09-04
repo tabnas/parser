@@ -252,6 +252,7 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
             end: String::new(),
             lex: true,
             suffixes: Vec::new(),
+            suffix_matcher: None,
             eat_line: false,
         },
     );
@@ -263,6 +264,7 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
             end: String::new(),
             lex: true,
             suffixes: vec!["!".into()],
+            suffix_matcher: None,
             eat_line: false,
         },
     );
@@ -280,6 +282,7 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
             end: String::new(),
             lex: true,
             suffixes: Vec::new(),
+            suffix_matcher: None,
             eat_line: true,
         },
     );
@@ -297,6 +300,7 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
             end: "*>".into(),
             lex: true,
             suffixes: vec!["END".into()],
+            suffix_matcher: None,
             eat_line: false,
         },
     );
@@ -320,6 +324,7 @@ fn strings_precede_overlapping_comments_unless_string_matching_abandons() {
             end: String::new(),
             lex: true,
             suffixes: Vec::new(),
+            suffix_matcher: None,
             eat_line: false,
         },
     );

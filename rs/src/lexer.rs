@@ -719,6 +719,13 @@ impl<'a> Lexer<'a> {
                 .filter(|suffix| !suffix.is_empty() && remainder.starts_with(*suffix))
                 .max_by_key(|suffix| suffix.len())
                 .cloned();
+            let suffix = suffix.or_else(|| {
+                definition
+                    .suffix_matcher
+                    .as_ref()
+                    .and_then(|matcher| matcher.run(remainder))
+                    .filter(|suffix| !suffix.is_empty() && remainder.starts_with(suffix))
+            });
             if let Some(suffix) = suffix {
                 for _ in suffix.chars() {
                     src.push(self.advance().expect("comment suffix must advance"));

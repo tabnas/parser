@@ -268,7 +268,33 @@ pub struct CommentDef {
     pub end: String,
     pub lex: bool,
     pub suffixes: Vec<String>,
+    pub suffix_matcher: Option<CommentSuffixMatcher>,
     pub eat_line: bool,
+}
+
+#[derive(Clone)]
+pub struct CommentSuffixMatcher {
+    callback: Arc<CommentSuffixCallback>,
+}
+
+type CommentSuffixCallback = dyn Fn(&str) -> Option<String> + Send + Sync;
+
+impl CommentSuffixMatcher {
+    pub(crate) fn new(callback: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    pub(crate) fn run(&self, source: &str) -> Option<String> {
+        (self.callback)(source)
+    }
+}
+
+impl fmt::Debug for CommentSuffixMatcher {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CommentSuffixMatcher(<function>)")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -347,6 +373,7 @@ impl Default for CommentOptions {
                     end: end.into(),
                     lex: true,
                     suffixes: Vec::new(),
+                    suffix_matcher: None,
                     eat_line: false,
                 },
             );

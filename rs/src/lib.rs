@@ -20,10 +20,11 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, InfoOptions, LexCheck,
-    LexCheckResult, LexCheckToken, MatchToken, MatchTokenCallback, MatchTokenMatcher,
-    MatchTokenResult, Options, ParseOptions, ParsePrepare, RecoverOptions, ResultOptions,
-    RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTransform,
+    BudgetCheck, BudgetOptions, CommentDef, CommentSuffixMatcher, FixedOptions, FixedToken,
+    InfoOptions, LexCheck, LexCheckResult, LexCheckToken, MatchToken, MatchTokenCallback,
+    MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare, RecoverOptions,
+    ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions,
+    ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -68,6 +69,7 @@ pub struct Tabnas {
     pub(crate) value_transform_refs: HashMap<String, ValueTransform>,
     pub(crate) text_modifier_refs: HashMap<String, TextModifier>,
     pub(crate) lex_check_refs: HashMap<String, LexCheck>,
+    pub(crate) comment_suffix_refs: HashMap<String, CommentSuffixMatcher>,
 }
 
 impl Default for Tabnas {
@@ -97,6 +99,7 @@ impl Tabnas {
             value_transform_refs: HashMap::new(),
             text_modifier_refs: HashMap::new(),
             lex_check_refs: HashMap::new(),
+            comment_suffix_refs: HashMap::new(),
         }
     }
 
@@ -120,6 +123,7 @@ impl Tabnas {
             value_transform_refs: HashMap::new(),
             text_modifier_refs: HashMap::new(),
             lex_check_refs: HashMap::new(),
+            comment_suffix_refs: HashMap::new(),
         }
     }
 
@@ -291,6 +295,18 @@ impl Tabnas {
     ) -> &mut Self {
         self.lex_check_refs
             .insert(name.into(), LexCheck::new(check));
+        self
+    }
+
+    /// Register an effect-based terminator probe for a serialized comment
+    /// definition's `suffix` option.
+    pub fn comment_suffix_ref(
+        &mut self,
+        name: impl Into<String>,
+        matcher: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.comment_suffix_refs
+            .insert(name.into(), CommentSuffixMatcher::new(matcher));
         self
     }
 
