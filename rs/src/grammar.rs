@@ -184,6 +184,7 @@ impl Tabnas {
                         &refs,
                     )?;
                 }
+                wire_state_actions(self, &mut spec);
                 validate_action_references(self, &spec)?;
                 self.rules.insert(name.clone(), spec);
             }
@@ -458,7 +459,58 @@ fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), Gr
             }
         }
     }
+    for (phase, actions) in [
+        ("bo", &spec.bo),
+        ("ao", &spec.ao),
+        ("bc", &spec.bc),
+        ("ac", &spec.ac),
+    ] {
+        for action in actions {
+            if !is_builtin_action(action)
+                && !tabnas.actions.contains_key(action)
+                && !tabnas.context_actions.contains_key(action)
+            {
+                return Err(GrammarError(format!(
+                    "Grammar: {}.{phase}: unknown state action function reference: {action}",
+                    spec.name
+                )));
+            }
+        }
+    }
     Ok(())
+}
+
+fn wire_state_actions(tabnas: &Tabnas, spec: &mut RuleSpec) {
+    let rule_name = spec.name.clone();
+    for (phase, actions) in [
+        ("bo", &mut spec.bo),
+        ("ao", &mut spec.ao),
+        ("bc", &mut spec.bc),
+        ("ac", &mut spec.ac),
+    ] {
+        let base = format!("@{rule_name}-{phase}");
+        let replacement = format!("{base}/replace");
+        if tabnas.context_actions.contains_key(&replacement) {
+            actions.clear();
+            actions.push(replacement);
+            continue;
+        }
+
+        let prepend = format!("{base}/prepend");
+        if tabnas.context_actions.contains_key(&prepend) && !actions.contains(&prepend) {
+            actions.insert(0, prepend);
+        }
+
+        let explicit_append = format!("{base}/append");
+        let append = tabnas
+            .context_actions
+            .contains_key(&explicit_append)
+            .then_some(explicit_append)
+            .or_else(|| tabnas.context_actions.contains_key(&base).then_some(base));
+        if let Some(append) = append.filter(|append| !actions.contains(append)) {
+            actions.push(append);
+        }
+    }
 }
 
 fn validate_builtin_config(action: &str, config: &Value, label: &str) -> Result<(), GrammarError> {

@@ -31,6 +31,9 @@ Typed registrations cover conditions (`c`), modifiers (`h`), errors (`e`),
 and dynamic push, replace, and backtrack fields (`p`, `r`, `b`). Modifiers use
 an explicit take-and-return contract, and missing or mistyped references fail
 transactionally during grammar installation.
+Reserved lifecycle references (`@rule-bo`, `-ao`, `-bc`, `-ac`, with
+`/prepend`, `/append`, and `/replace`) bind through `state_action_ref` and are
+wired when that serialized rule is installed.
 
 Function token matchers use `match_token_ref`. They receive the remaining
 source and return a non-empty owned source prefix plus its value. This

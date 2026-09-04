@@ -212,6 +212,18 @@ impl Tabnas {
         self
     }
 
+    /// Register a typed rule lifecycle reference such as `@top-bo`,
+    /// `@top-ao/prepend`, or `@top-bc/replace`. Serialized grammar loading
+    /// wires reserved names onto their matching rule phase.
+    pub fn state_action_ref(
+        &mut self,
+        name: impl Into<String>,
+        action: impl Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.context_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
     /// Register a typed function reference for a serialized alternate `c`.
     pub fn alt_condition(
         &mut self,
