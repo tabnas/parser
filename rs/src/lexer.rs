@@ -122,6 +122,24 @@ impl<'a> Lexer<'a> {
         self.next_raw()
     }
 
+    /// Clear a recoverable lexer fault. Compound string faults resume at the
+    /// next line boundary so the remainder of the broken string cannot be
+    /// mistaken for a new token stream.
+    pub(crate) fn recover_after_error(&mut self, to_line_end: bool) {
+        if to_line_end {
+            while let Some(character) = self.peek() {
+                self.advance();
+                if matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                    break;
+                }
+            }
+        }
+        self.err = None;
+        if self.idx < self.char_len {
+            self.end_reached = false;
+        }
+    }
+
     fn next_raw(&mut self) -> Result<Token, TabnasError> {
         if self.end_reached {
             return Ok(Token::new(

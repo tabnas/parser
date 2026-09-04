@@ -24,7 +24,8 @@ strict-JSON, lexer, diagnostic, utility, and divergence-register fixtures.
 Serialized grammars also support declarative conditions, group filters,
 load-bound builtin configuration, tree/value builtins, token and rule
 subscribers, public parse actions with bounded mark/rewind history, parse
-budgets, and path-aware continuation queries. Rust directly executes
+budgets, path-aware continuation queries, and opt-in panic-mode recovery with
+structured recovery diagnostics. Rust directly executes
 301 shared TSV rows; the fixture paths are not copied into the crate. The
 repository gate requires every non-exempt shared fixture to have a TypeScript,
 Go, and Rust runner, and the strict-JSON differential gate compares token
@@ -34,8 +35,8 @@ Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,
 alternate injection, metadata, and schema-version gating. Function-valued
 grammar conditions/modifiers, arbitrary matcher callbacks beyond serialized
-regexes, complete option overlays, recovery, and the remaining builtin surface
-are not yet equivalent.
+regexes, complete option overlays, and the remaining builtin surface are not
+yet equivalent.
 Unsupported dynamic grammar fields fail at install time instead of being
 silently ignored. See
 `../doc/rust-port-implementation-plan.md` for the architecture and gates for

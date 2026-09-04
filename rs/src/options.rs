@@ -207,9 +207,35 @@ impl fmt::Debug for BudgetOptions {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RecoverOptions {
+    pub enabled: bool,
+    pub sync_groups: Vec<String>,
+    pub sync_tokens: Vec<String>,
+    pub pop_until_valid: bool,
+    pub max_skip: usize,
+    pub max_recoveries: usize,
+    pub suppress: usize,
+}
+
+impl Default for RecoverOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sync_groups: vec!["close".into(), "comma".into(), "end".into()],
+            sync_tokens: Vec::new(),
+            pop_until_valid: true,
+            max_skip: 64,
+            max_recoveries: 32,
+            suppress: 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
     pub budget: BudgetOptions,
+    pub recover: RecoverOptions,
 }
 
 #[derive(Debug, Clone)]

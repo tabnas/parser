@@ -54,6 +54,10 @@ pub struct Context {
     pub t: Vec<Token>,
     replay: VecDeque<Token>,
     history_limit: Option<usize>,
+    pub(crate) recover_at: Option<usize>,
+    pub(crate) recover_si: Option<usize>,
+    pub(crate) bad_to: Option<usize>,
+    pub(crate) bad_error: Option<usize>,
 }
 
 impl Context {
@@ -65,6 +69,10 @@ impl Context {
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
             history_limit: history_limit.filter(|limit| *limit > 0),
+            recover_at: None,
+            recover_si: None,
+            bad_to: None,
+            bad_error: None,
         }
     }
 

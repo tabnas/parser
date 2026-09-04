@@ -591,7 +591,73 @@ fn apply_options(
                             "Grammar: options.parse.budget.checkEveryN must be a non-negative integer"
                                 .into(),
                         )
-                    })?;
+                })?;
+            }
+        }
+        if let Some(recover) = parse.get("recover") {
+            let recover = object(recover, "options.parse.recover")?;
+            set_bool(recover, "enabled", &mut options.parse.recover.enabled);
+            set_bool(
+                recover,
+                "popUntilValid",
+                &mut options.parse.recover.pop_until_valid,
+            );
+            if let Some(groups) = recover.get("syncGroups") {
+                options.parse.recover.sync_groups = match groups {
+                    JsonValue::Null => vec!["close".into(), "comma".into(), "end".into()],
+                    JsonValue::Array(groups) => groups
+                        .iter()
+                        .map(|group| {
+                            group.as_str().map(str::to_owned).ok_or_else(|| {
+                                GrammarError(
+                                    "Grammar: options.parse.recover.syncGroups entries must be strings"
+                                        .into(),
+                                )
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => {
+                        return Err(GrammarError(
+                            "Grammar: options.parse.recover.syncGroups must be an array or null"
+                                .into(),
+                        ))
+                    }
+                };
+            }
+            if let Some(tokens) = recover.get("syncTokens") {
+                options.parse.recover.sync_tokens = tokens
+                    .as_array()
+                    .ok_or_else(|| {
+                        GrammarError(
+                            "Grammar: options.parse.recover.syncTokens must be an array".into(),
+                        )
+                    })?
+                    .iter()
+                    .map(|token| {
+                        token.as_str().map(str::to_owned).ok_or_else(|| {
+                            GrammarError(
+                                "Grammar: options.parse.recover.syncTokens entries must be strings"
+                                    .into(),
+                            )
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+            }
+            for (name, target) in [
+                ("maxSkip", &mut options.parse.recover.max_skip),
+                ("maxRecoveries", &mut options.parse.recover.max_recoveries),
+                ("suppress", &mut options.parse.recover.suppress),
+            ] {
+                if let Some(value) = recover.get(name) {
+                    *target = value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or_else(|| {
+                            GrammarError(format!(
+                                "Grammar: options.parse.recover.{name} must be a non-negative integer"
+                            ))
+                        })?;
+                }
             }
         }
     }

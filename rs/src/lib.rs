@@ -17,13 +17,13 @@ pub mod utility;
 pub mod value;
 
 pub use context::{ActionError, Context};
-pub use error::TabnasError;
+pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, FixedOptions, FixedToken, MatchToken, Options, ParseOptions,
-    RewindOptions,
+    RecoverOptions, RewindOptions,
 };
-pub use parser::{Continuations, Parser};
+pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
@@ -163,6 +163,10 @@ impl Tabnas {
 
     pub fn continuations(&self, src: &str) -> Continuations {
         self.parser().continuations(src)
+    }
+
+    pub fn parse_recover(&self, src: &str) -> ParseRecovery {
+        self.parser().parse_recover(src)
     }
 
     fn parser(&self) -> Parser {

@@ -22,11 +22,25 @@ pub struct Continuations {
     pub tokens: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ParseRecovery {
+    pub value: Option<Value>,
+    pub errors: Vec<TabnasError>,
+    pub fatal: Option<TabnasError>,
+}
+
 #[derive(Default)]
 struct ContinuationCapture {
     at_end: BTreeSet<Tin>,
     have_end: bool,
     failure: Vec<Tin>,
+}
+
+struct ParseMode<'a> {
+    continuation: Option<&'a mut ContinuationCapture>,
+    recovering: bool,
+    errors: &'a mut Vec<TabnasError>,
+    partial: Option<Value>,
 }
 
 pub struct Parser {
@@ -173,8 +187,188 @@ impl Parser {
         }
     }
 
+    fn notify_forced_close(&self, rule: &Rule, context: &Context) {
+        if self.rule_done_subscribers.is_empty() {
+            return;
+        }
+        let done = RuleDone {
+            state: RuleState::Close,
+            alt: None,
+            forced: true,
+        };
+        for subscriber in &self.rule_done_subscribers {
+            subscriber(rule, context, &done);
+        }
+    }
+
+    fn attempt_recover(
+        &self,
+        mut error: TabnasError,
+        current_rule: &mut Rule,
+        stack: &mut Vec<Rule>,
+        context: &mut Context,
+        lexer: &mut Lexer,
+        mode: &mut ParseMode<'_>,
+    ) -> bool {
+        let recover = &self.options.parse.recover;
+        if mode.errors.len() >= recover.max_recoveries {
+            return false;
+        }
+
+        let suppressed = context
+            .recover_at
+            .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
+        let no_progress = context.recover_at == Some(context.v_abs);
+        let last_si = context.recover_si;
+        context.recover_at = Some(context.v_abs);
+
+        let sync = compute_sync_tins(current_rule, stack, &self.rules, &self.options);
+        let mut pending: std::collections::VecDeque<Token> = std::mem::take(&mut context.t).into();
+        let mut skipped = 0usize;
+
+        let candidate = loop {
+            let next = if let Some(token) = pending.pop_front() {
+                Some(token)
+            } else {
+                loop {
+                    match lexer.next_raw_token() {
+                        Ok(mut token) => {
+                            for subscriber in &self.lex_subscribers {
+                                subscriber(&mut token, current_rule, context);
+                            }
+                            if matches!(token.tin, TIN_SP | TIN_LN | TIN_CM) {
+                                continue;
+                            }
+                            for subscriber in &self.token_subscribers {
+                                subscriber(&token);
+                            }
+                            break Some(token);
+                        }
+                        Err(lex_error) => {
+                            let mut token = error_token(&lex_error);
+                            for subscriber in &self.lex_subscribers {
+                                subscriber(&mut token, current_rule, context);
+                            }
+                            lexer.recover_after_error(mid_construct(&lex_error.code));
+                            if skipped >= recover.max_skip {
+                                break None;
+                            }
+                            skipped += 1;
+                        }
+                    }
+                }
+            };
+            let Some(token) = next else {
+                return false;
+            };
+            if token.tin == TIN_ZZ
+                || (sync.contains(&token.tin)
+                    && !(no_progress && last_si.is_some_and(|si| token.pos <= si)))
+            {
+                break token;
+            }
+            if skipped >= recover.max_skip {
+                return false;
+            }
+            skipped += 1;
+        };
+
+        if candidate.tin == TIN_ZZ && no_progress && last_si.is_some_and(|si| candidate.pos <= si) {
+            return false;
+        }
+        context.recover_si = Some(candidate.pos);
+        error.recovered = Some(crate::RecoveredAt {
+            skipped,
+            sync: Some(candidate.tin),
+            bad: false,
+        });
+        if !suppressed {
+            mode.errors.push(error);
+        }
+
+        context.t.push(candidate.clone());
+        context.t.extend(pending);
+        context.bad_to = None;
+        context.bad_error = None;
+
+        if !recover.pop_until_valid {
+            if let Some(parent) = stack.pop() {
+                *current_rule = parent;
+                return true;
+            }
+            return false;
+        }
+
+        if accepts_close(current_rule, candidate.tin, &self.rules, &self.options) {
+            if current_rule.state == RuleState::Open {
+                current_rule.state = RuleState::Close;
+            } else {
+                current_rule.skip_befores = true;
+            }
+            return true;
+        }
+
+        self.notify_forced_close(current_rule, context);
+        while let Some(mut parent) = stack.pop() {
+            parent.child_node = current_rule.node.borrow().clone();
+            parent.child_rule = Some(current_rule.snapshot());
+            parent.next_rule = parent.child_rule.clone();
+            if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
+                *current_rule = parent;
+                return true;
+            }
+            self.notify_forced_close(&parent, context);
+            *current_rule = parent;
+        }
+        false
+    }
+
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
-        self.parse_inner(src, None)
+        let mut errors = Vec::new();
+        let recovering = self.options.parse.recover.enabled;
+        let mut mode = ParseMode {
+            continuation: None,
+            recovering,
+            errors: &mut errors,
+            partial: None,
+        };
+        let result = self.parse_inner(src, &mut mode);
+        match result {
+            Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
+            other => other,
+        }
+    }
+
+    pub fn parse_recover(&self, src: &str) -> ParseRecovery {
+        let mut errors = Vec::new();
+        let recovering = self.options.parse.recover.enabled;
+        let (result, partial) = {
+            let mut mode = ParseMode {
+                continuation: None,
+                recovering,
+                errors: &mut errors,
+                partial: None,
+            };
+            let result = self.parse_inner(src, &mut mode);
+            (result, mode.partial)
+        };
+        match result {
+            Ok(value) => ParseRecovery {
+                value: Some(value),
+                errors,
+                fatal: None,
+            },
+            Err(error) => {
+                if errors.last() != Some(&error) {
+                    errors.push(error.clone());
+                }
+                ParseRecovery {
+                    value: recovering.then_some(partial).flatten(),
+                    errors,
+                    fatal: (!recovering).then_some(error),
+                }
+            }
+        }
     }
 
     /// Return the token kinds that can legally follow `src` when it is
@@ -182,7 +376,16 @@ impl Parser {
     /// runtime conditions and counters may still reject a listed token.
     pub fn continuations(&self, src: &str) -> Continuations {
         let mut capture = ContinuationCapture::default();
-        let result = self.parse_inner(src, Some(&mut capture));
+        let mut errors = Vec::new();
+        let result = {
+            let mut mode = ParseMode {
+                continuation: Some(&mut capture),
+                recovering: false,
+                errors: &mut errors,
+                partial: None,
+            };
+            self.parse_inner(src, &mut mode)
+        };
         let mut tins = if result.is_ok() {
             if capture.have_end {
                 capture.at_end.insert(TIN_ZZ);
@@ -229,7 +432,7 @@ impl Parser {
         rule: &mut Rule,
         stack: &[Rule],
         count: usize,
-        mut capture: Option<&mut ContinuationCapture>,
+        mode: &mut ParseMode<'_>,
     ) -> Result<(), TabnasError> {
         while context.t.len() < count {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
@@ -243,7 +446,34 @@ impl Parser {
                 let mut token = match next {
                     Ok(token) => token,
                     Err(error) => {
-                        if let Some(capture) = capture.as_deref_mut() {
+                        let recovery_error = self
+                            .rules
+                            .get(&rule.name)
+                            .map(|spec| {
+                                let alts = if rule.state == RuleState::Open {
+                                    &spec.open
+                                } else {
+                                    &spec.close
+                                };
+                                self.attach_error(error.clone(), rule, stack, alts, None)
+                            })
+                            .unwrap_or_else(|| error.clone());
+                        if mode.recovering
+                            && absorb_lex_error(
+                                &recovery_error,
+                                context,
+                                &self.options,
+                                mode.errors,
+                            )
+                        {
+                            let mut token = error_token(&recovery_error);
+                            for subscriber in &self.lex_subscribers {
+                                subscriber(&mut token, rule, context);
+                            }
+                            lexer.recover_after_error(mid_construct(&recovery_error.code));
+                            continue;
+                        }
+                        if let Some(capture) = mode.continuation.as_deref_mut() {
                             capture.failure = continuation_tins(
                                 context,
                                 rule,
@@ -261,7 +491,7 @@ impl Parser {
                     subscriber(&mut token, rule, context);
                 }
                 if token.tin == TIN_ZZ {
-                    if let Some(capture) = capture.as_deref_mut() {
+                    if let Some(capture) = mode.continuation.as_deref_mut() {
                         capture.have_end = true;
                         capture.at_end.extend(continuation_tins(
                             context,
@@ -290,11 +520,7 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_inner(
-        &self,
-        src: &str,
-        mut capture: Option<&mut ContinuationCapture>,
-    ) -> Result<Value, TabnasError> {
+    fn parse_inner(&self, src: &str, mode: &mut ParseMode<'_>) -> Result<Value, TabnasError> {
         if src.is_empty() {
             return if self.options.lex.empty {
                 Ok(Value::Null)
@@ -316,6 +542,7 @@ impl Parser {
 
         let mut current_rule = Rule::new(start_name, Value::Undefined);
         current_rule.i = 0;
+        let root_node = current_rule.node.clone();
         let mut stack: Vec<Rule> = Vec::new();
         let mut next_rule_id = 1;
         #[allow(unused_assignments)]
@@ -337,6 +564,7 @@ impl Parser {
         let budget = &self.options.parse.budget;
 
         loop {
+            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
             iterations += 1;
             if iterations > max_iterations {
                 let pnt = context
@@ -387,17 +615,24 @@ impl Parser {
             for subscriber in &self.rule_subscribers {
                 subscriber(&mut current_rule, &mut context);
             }
+            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
 
-            // 1. Run before-actions
-            if is_open {
-                for bo_action in &spec.bo {
-                    self.run_action(bo_action, &mut current_rule, &mut context)?;
-                }
-            } else {
-                for bc_action in &spec.bc {
-                    self.run_action(bc_action, &mut current_rule, &mut context)?;
+            // 1. Run before-actions. Recovery can retry a failed close pass;
+            // its before-close actions have already run and must not replay.
+            let skip_befores = current_rule.skip_befores;
+            current_rule.skip_befores = false;
+            if !skip_befores {
+                if is_open {
+                    for bo_action in &spec.bo {
+                        self.run_action(bo_action, &mut current_rule, &mut context)?;
+                    }
+                } else {
+                    for bc_action in &spec.bc {
+                        self.run_action(bc_action, &mut current_rule, &mut context)?;
+                    }
                 }
             }
+            mode.partial = best_partial_value(&root_node, &current_rule, &stack);
 
             // 2. Select alternates
             let alts = if is_open { &spec.open } else { &spec.close };
@@ -418,7 +653,7 @@ impl Parser {
                         &mut current_rule,
                         &stack,
                         s_len,
-                        capture.as_deref_mut(),
+                        mode,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
@@ -520,7 +755,7 @@ impl Parser {
                                 &mut current_rule,
                                 &stack,
                                 1,
-                                capture.as_deref_mut(),
+                                mode,
                             ) {
                                 return Err(self.attach_error(
                                     error,
@@ -557,6 +792,7 @@ impl Parser {
                         )?,
                     }
                 }
+                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
 
                 // After-actions belong to the rule whose alternate matched.
                 // Running them after a push/pop mutates the child or parent.
@@ -652,6 +888,7 @@ impl Parser {
                     final_value = Some(value);
                     break;
                 }
+                mode.partial = best_partial_value(&root_node, &current_rule, &stack);
             } else {
                 // No alt matched
                 if is_open {
@@ -661,11 +898,11 @@ impl Parser {
                         &mut current_rule,
                         &stack,
                         1,
-                        capture.as_deref_mut(),
+                        mode,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
-                    if let Some(capture) = capture.as_deref_mut() {
+                    if let Some(capture) = mode.continuation.as_deref_mut() {
                         let base = failed_alt_tins(&context, alts, &self.options);
                         capture.failure = continuation_tins(
                             &context,
@@ -677,8 +914,8 @@ impl Parser {
                             Some(&base),
                         );
                     }
-                    let t0 = context.t.first();
-                    let (src_token, si, ri, ci) = if let Some(t) = t0 {
+                    let t0 = context.t.first().cloned();
+                    let (src_token, si, ri, ci) = if let Some(t) = t0.as_ref() {
                         (t.src.clone(), t.pos, t.ri, t.ci)
                     } else {
                         (String::new(), src.len(), 1, 1)
@@ -693,10 +930,24 @@ impl Parser {
                             g: Vec::new(),
                             p: String::new(),
                             r: String::new(),
-                            err: t0.cloned(),
+                            err: t0.clone(),
                         }),
                     );
-                    return Err(self.attach_error(error, &current_rule, &stack, alts, t0));
+                    let error = self.attach_error(error, &current_rule, &stack, alts, t0.as_ref());
+                    if mode.recovering
+                        && self.attempt_recover(
+                            error.clone(),
+                            &mut current_rule,
+                            &mut stack,
+                            &mut context,
+                            &mut lexer,
+                            mode,
+                        )
+                    {
+                        continue;
+                    }
+                    mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                    return Err(error);
                 } else {
                     // A rule without close alternatives closes implicitly. If
                     // alternatives were declared, a mismatch is a syntax
@@ -726,7 +977,7 @@ impl Parser {
                             &mut current_rule,
                             &stack,
                             1,
-                            capture.as_deref_mut(),
+                            mode,
                         ) {
                             return Err(self.attach_error(
                                 error,
@@ -736,7 +987,7 @@ impl Parser {
                                 None,
                             ));
                         }
-                        if let Some(capture) = capture.as_deref_mut() {
+                        if let Some(capture) = mode.continuation.as_deref_mut() {
                             let base = failed_alt_tins(&context, alts, &self.options);
                             capture.failure = continuation_tins(
                                 &context,
@@ -748,8 +999,8 @@ impl Parser {
                                 Some(&base),
                             );
                         }
-                        let token = context.t.first();
-                        let (source, pos, row, col) = token.map_or_else(
+                        let token = context.t.first().cloned();
+                        let (source, pos, row, col) = token.as_ref().map_or_else(
                             || (String::new(), src.chars().count(), 1, 1),
                             |value| (value.src.clone(), value.pos, value.ri, value.ci),
                         );
@@ -763,28 +1014,56 @@ impl Parser {
                                 g: Vec::new(),
                                 p: String::new(),
                                 r: String::new(),
-                                err: token.cloned(),
+                                err: token.clone(),
                             }),
                         );
-                        return Err(self.attach_error(error, &current_rule, &stack, alts, token));
+                        let error =
+                            self.attach_error(error, &current_rule, &stack, alts, token.as_ref());
+                        if mode.recovering
+                            && self.attempt_recover(
+                                error.clone(),
+                                &mut current_rule,
+                                &mut stack,
+                                &mut context,
+                                &mut lexer,
+                                mode,
+                            )
+                        {
+                            continue;
+                        }
+                        mode.partial = best_partial_value(&root_node, &current_rule, &stack);
+                        return Err(error);
                     }
                 }
             }
         }
 
-        // Post-loop check: ensure no unexpected trailing tokens
-        self.ensure_lookahead(
-            &mut lexer,
-            &mut context,
-            &mut current_rule,
-            &stack,
-            1,
-            capture,
-        )?;
+        let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
+        mode.partial = Some(res.clone());
+
+        // Post-loop check: ensure no unexpected trailing tokens. Recovery
+        // keeps the completed value and reports the trailing fault.
+        if let Err(error) =
+            self.ensure_lookahead(&mut lexer, &mut context, &mut current_rule, &stack, 1, mode)
+        {
+            let error = self.attach_error(error, &current_rule, &stack, &[], None);
+            if mode.recovering {
+                if mode.errors.last() != Some(&error) {
+                    mode.errors.push(error);
+                }
+                return Ok(res);
+            }
+            return Err(error);
+        }
         if let Some(t0) = context.t.first() {
             if t0.tin != TIN_ZZ {
-                let error = TabnasError::new("unexpected", &t0.src, src, t0.pos, t0.ri, t0.ci);
-                return Err(self.attach_error(
+                let code = if t0.tin == TIN_BD && !t0.why.is_empty() {
+                    t0.why.as_str()
+                } else {
+                    "unexpected"
+                };
+                let error = TabnasError::new(code, &t0.src, src, t0.pos, t0.ri, t0.ci);
+                let error = self.attach_error(
                     error,
                     &current_rule,
                     &stack,
@@ -793,13 +1072,110 @@ impl Parser {
                         ..Default::default()
                     }],
                     Some(t0),
-                ));
+                );
+                if mode.recovering {
+                    if mode.errors.last() != Some(&error) {
+                        mode.errors.push(error);
+                    }
+                    return Ok(res);
+                }
+                return Err(error);
             }
         }
-
-        let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
         Ok(res)
     }
+}
+
+fn best_partial_value(
+    root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
+    current_rule: &Rule,
+    stack: &[Rule],
+) -> Option<Value> {
+    let usable = |value: Value| (!matches!(value, Value::Undefined | Value::Null)).then_some(value);
+
+    usable(root_node.borrow().clone())
+        .or_else(|| {
+            stack
+                .iter()
+                .find_map(|rule| usable(rule.node.borrow().clone()))
+        })
+        .or_else(|| usable(current_rule.node.borrow().clone()))
+        .map(Value::unwrap_undefined)
+}
+
+fn error_token(error: &TabnasError) -> Token {
+    let mut token = Token::new(
+        "#BD",
+        TIN_BD,
+        Value::Undefined,
+        error.src.clone(),
+        crate::Point {
+            len: error.len,
+            si: error.pos,
+            pos: error.pos,
+            ri: error.row,
+            ci: error.col,
+        },
+    );
+    token.err = error.code.clone();
+    token.why = error.code.clone();
+    token
+}
+
+fn mid_construct(code: &str) -> bool {
+    matches!(code, "unprintable" | "invalid_unicode" | "invalid_ascii")
+}
+
+fn absorb_lex_error(
+    error: &TabnasError,
+    context: &mut Context,
+    options: &Options,
+    errors: &mut Vec<TabnasError>,
+) -> bool {
+    let recover = &options.parse.recover;
+    if errors.len() >= recover.max_recoveries {
+        return false;
+    }
+
+    let end = error.pos.saturating_add(error.len.max(1));
+    if context.bad_to.is_some_and(|bad_to| error.pos <= bad_to) {
+        if let Some(index) = context.bad_error {
+            if let Some(previous) = errors.get_mut(index) {
+                let recovered = previous.recovered.get_or_insert(crate::RecoveredAt {
+                    skipped: 0,
+                    sync: None,
+                    bad: true,
+                });
+                recovered.skipped = recovered.skipped.saturating_add(1);
+                if recover.max_skip < recovered.skipped {
+                    return false;
+                }
+                context.bad_to = Some(end.max(context.bad_to.unwrap_or_default()));
+                return true;
+            }
+        }
+    }
+
+    let suppressed = context
+        .recover_at
+        .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
+    if suppressed {
+        context.bad_error = None;
+        context.bad_to = Some(end);
+        return true;
+    }
+
+    let mut recorded = error.clone();
+    recorded.recovered = Some(crate::RecoveredAt {
+        skipped: 1,
+        sync: None,
+        bad: true,
+    });
+    errors.push(recorded);
+    context.bad_error = Some(errors.len() - 1);
+    context.bad_to = Some(end);
+    context.recover_at = Some(context.v_abs);
+    true
 }
 
 fn slot_matches(slot: &[Tin], tin: Tin) -> bool {
@@ -855,6 +1231,77 @@ fn has_empty_close(spec: &RuleSpec, options: &Options) -> bool {
     spec.close
         .iter()
         .any(|alt| groups_enabled(alt, options) && alt.s.is_empty())
+}
+
+fn alt_has_sync_group(alt: &AltSpec, sync_groups: &[String]) -> bool {
+    alt.g
+        .split(',')
+        .map(str::trim)
+        .any(|tag| sync_groups.iter().any(|wanted| wanted == tag))
+}
+
+fn add_close_tins(
+    rule: &Rule,
+    rules: &IndexMap<String, RuleSpec>,
+    options: &Options,
+    tagged_only: bool,
+    out: &mut BTreeSet<Tin>,
+) {
+    let Some(spec) = rules.get(&rule.name) else {
+        return;
+    };
+    for alt in &spec.close {
+        if !groups_enabled(alt, options)
+            || (tagged_only && !alt_has_sync_group(alt, &options.parse.recover.sync_groups))
+        {
+            continue;
+        }
+        if let Some(slot) = alt.s.first() {
+            out.extend(completion_tins(slot));
+        }
+    }
+}
+
+fn compute_sync_tins(
+    rule: &Rule,
+    stack: &[Rule],
+    rules: &IndexMap<String, RuleSpec>,
+    options: &Options,
+) -> BTreeSet<Tin> {
+    let mut out = BTreeSet::new();
+    add_close_tins(rule, rules, options, true, &mut out);
+    for parent in stack.iter().rev() {
+        add_close_tins(parent, rules, options, true, &mut out);
+    }
+    if out.is_empty() {
+        add_close_tins(rule, rules, options, false, &mut out);
+        for parent in stack.iter().rev() {
+            add_close_tins(parent, rules, options, false, &mut out);
+        }
+    }
+    for name in &options.parse.recover.sync_tokens {
+        if let Some(tin) = options.token(name) {
+            out.insert(tin);
+        }
+        if let Some(tins) = options.token_set.get(name.trim_start_matches('#')) {
+            out.extend(tins.iter().copied());
+        }
+    }
+    out
+}
+
+fn accepts_close(
+    rule: &Rule,
+    tin: Tin,
+    rules: &IndexMap<String, RuleSpec>,
+    options: &Options,
+) -> bool {
+    rules.get(&rule.name).is_some_and(|spec| {
+        spec.close.iter().any(|alt| {
+            groups_enabled(alt, options)
+                && (alt.s.is_empty() || alt.s.first().is_some_and(|slot| slot_matches(slot, tin)))
+        })
+    })
 }
 
 fn add_openers(

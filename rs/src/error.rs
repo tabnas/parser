@@ -12,6 +12,13 @@ pub struct ErrorToken {
     pub src: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredAt {
+    pub skipped: usize,
+    pub sync: Option<crate::token::Tin>,
+    pub bad: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabnasError {
     pub code: String,
@@ -29,6 +36,9 @@ pub struct TabnasError {
     pub token: ErrorToken,
     pub expected: Vec<String>,
     pub plugins: Vec<String>,
+    /// Recovery metadata is intentionally not part of the stable serialized
+    /// diagnostic schema, matching the canonical implementations.
+    pub recovered: Option<RecoveredAt>,
 }
 
 impl TabnasError {
@@ -66,6 +76,7 @@ impl TabnasError {
             },
             expected: Vec::new(),
             plugins: Vec::new(),
+            recovered: None,
         }
     }
 
