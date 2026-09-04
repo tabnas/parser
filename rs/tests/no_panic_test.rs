@@ -33,6 +33,9 @@ fn parse_callbacks_cannot_unwind_through_public_entry_points() {
     let error = parser.parse("1").unwrap_err();
     assert_eq!(error.code, "internal");
     assert!(error.src.contains("action exploded"));
+    assert_eq!(error.rule, "top");
+    assert_eq!(error.rule_stack, ["top"]);
+    assert_eq!(error.token.name, "#NR");
 
     let recovered = parser.parse_recover("1");
     assert!(recovered.value.is_none());

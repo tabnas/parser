@@ -52,6 +52,12 @@ struct RelexUndo {
     replay: VecDeque<Token>,
 }
 
+struct ActionSite<'a> {
+    source: &'a str,
+    stack: &'a [Rule],
+    alts: &'a [AltSpec],
+}
+
 pub struct Parser {
     pub options: Options,
     pub rules: IndexMap<String, RuleSpec>,
@@ -120,12 +126,31 @@ impl Parser {
         is_open: bool,
         rule: &mut Rule,
         context: &mut Context,
+        site: ActionSite<'_>,
     ) -> Result<(), TabnasError> {
         let actions = if is_open { &spec.ao } else { &spec.ac };
         for action in actions {
-            self.run_action(action, rule, context)?;
+            self.run_action(action, rule, context).map_err(|error| {
+                self.attach_action_error(error, site.source, rule, site.stack, site.alts)
+            })?;
         }
         Ok(())
+    }
+
+    fn attach_action_error(
+        &self,
+        mut error: TabnasError,
+        src: &str,
+        rule: &Rule,
+        stack: &[Rule],
+        alts: &[AltSpec],
+    ) -> TabnasError {
+        error.full_source = src.into();
+        let token = match rule.state {
+            RuleState::Open => rule.o0().or_else(|| rule.c0()),
+            RuleState::Close => rule.c0().or_else(|| rule.o0()),
+        };
+        self.attach_error(error, rule, stack, alts, token)
     }
 
     fn run_action_with_config(
@@ -139,25 +164,36 @@ impl Parser {
             return Ok(());
         }
         if let Some(action) = self.actions.get(name) {
-            action(rule);
-            return Ok(());
+            return match catch_unwind(AssertUnwindSafe(|| action(rule))) {
+                Ok(()) => Ok(()),
+                Err(payload) => Err(self.action_panic(payload, name, rule)),
+            };
         }
         if let Some(action) = self.context_actions.get(name) {
-            return action(rule, context).map_err(|action_error| {
-                let token = rule.o0().or_else(|| rule.c0());
-                let mut error = TabnasError::new(
-                    action_error.code,
-                    token.map_or("", |value| value.src.as_str()),
-                    "",
-                    token.map_or(0, |value| value.pos),
-                    token.map_or(1, |value| value.ri),
-                    token.map_or(1, |value| value.ci),
-                );
-                error.detail = action_error.detail;
-                error
-            });
+            return match catch_unwind(AssertUnwindSafe(|| action(rule, context))) {
+                Ok(result) => result.map_err(|action_error| {
+                    let token = match rule.state {
+                        RuleState::Open => rule.o0().or_else(|| rule.c0()),
+                        RuleState::Close => rule.c0().or_else(|| rule.o0()),
+                    };
+                    let mut error = TabnasError::new(
+                        action_error.code,
+                        token.map_or("", |value| value.src.as_str()),
+                        "",
+                        token.map_or(0, |value| value.pos),
+                        token.map_or(1, |value| value.ri),
+                        token.map_or(1, |value| value.ci),
+                    );
+                    error.detail = action_error.detail;
+                    error
+                }),
+                Err(payload) => Err(self.action_panic(payload, name, rule)),
+            };
         }
-        let token = rule.o0().or_else(|| rule.c0());
+        let token = match rule.state {
+            RuleState::Open => rule.o0().or_else(|| rule.c0()),
+            RuleState::Close => rule.c0().or_else(|| rule.o0()),
+        };
         let mut error = TabnasError::new(
             "unknown",
             name,
@@ -168,6 +204,27 @@ impl Parser {
         );
         error.detail = format!("unknown action: {name}");
         Err(error)
+    }
+
+    fn action_panic(
+        &self,
+        payload: Box<dyn std::any::Any + Send>,
+        name: &str,
+        rule: &Rule,
+    ) -> TabnasError {
+        let token = match rule.state {
+            RuleState::Open => rule.o0().or_else(|| rule.c0()),
+            RuleState::Close => rule.c0().or_else(|| rule.o0()),
+        };
+        TabnasError::from_panic(
+            payload,
+            &format!("action {name}"),
+            "",
+            token.map_or(0, |value| value.pos),
+            token.map_or(1, |value| value.ri),
+            token.map_or(1, |value| value.ci),
+            &self.options,
+        )
     }
 
     fn attach_error(
@@ -768,6 +825,7 @@ impl Parser {
             };
 
             let is_open = current_rule.state == RuleState::Open;
+            let alts = if is_open { &spec.open } else { &spec.close };
 
             for subscriber in &self.rule_subscribers {
                 subscriber(&mut current_rule, &mut context);
@@ -781,19 +839,23 @@ impl Parser {
             if !skip_befores {
                 if is_open {
                     for bo_action in &spec.bo {
-                        self.run_action(bo_action, &mut current_rule, &mut context)?;
+                        self.run_action(bo_action, &mut current_rule, &mut context)
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?;
                     }
                 } else {
                     for bc_action in &spec.bc {
-                        self.run_action(bc_action, &mut current_rule, &mut context)?;
+                        self.run_action(bc_action, &mut current_rule, &mut context)
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?;
                     }
                 }
             }
             update_partial(mode, &root_node, &current_rule, &stack);
 
             // 2. Select alternates
-            let alts = if is_open { &spec.open } else { &spec.close };
-
             let mut matched_alt_idx: Option<usize> = None;
             let mut matched_count = 0;
 
@@ -1067,12 +1129,16 @@ impl Parser {
                                 .k
                                 .insert("pd_phase".into(), Value::Number(phase));
                         }
-                        _ => self.run_action_with_config(
-                            act_name,
-                            &mut current_rule,
-                            &mut context,
-                            alt.action_configs.get(act_name),
-                        )?,
+                        _ => self
+                            .run_action_with_config(
+                                act_name,
+                                &mut current_rule,
+                                &mut context,
+                                alt.action_configs.get(act_name),
+                            )
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?,
                     }
                 }
                 update_partial(mode, &root_node, &current_rule, &stack);
@@ -1108,7 +1174,17 @@ impl Parser {
                     current_rule.next_rule_name = Some(push_name.clone());
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
-                    self.run_after_actions(&spec, is_open, &mut current_rule, &mut context)?;
+                    self.run_after_actions(
+                        &spec,
+                        is_open,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
@@ -1127,7 +1203,17 @@ impl Parser {
                     next.k = current_rule.k.clone();
                     current_rule.next_rule_name = Some(replace_name.clone());
                     current_rule.next_rule = Some(next.snapshot());
-                    self.run_after_actions(&spec, is_open, &mut current_rule, &mut context)?;
+                    self.run_after_actions(
+                        &spec,
+                        is_open,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
@@ -1137,15 +1223,35 @@ impl Parser {
                 } else if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
-                    self.run_after_actions(&spec, true, &mut current_rule, &mut context)?;
+                    self.run_after_actions(
+                        &spec,
+                        true,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     current_rule.state = RuleState::Close;
                     completed_rule = current_rule.clone();
                 } else {
                     // Close phase pop
+                    current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
+                    current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    self.run_after_actions(
+                        &spec,
+                        false,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     let parent = stack.pop();
-                    current_rule.next_rule_name = parent.as_ref().map(|rule| rule.name.clone());
-                    current_rule.next_rule = parent.as_ref().map(Rule::snapshot);
-                    self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);
@@ -1180,14 +1286,34 @@ impl Parser {
                 if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
-                    self.run_after_actions(&spec, true, &mut current_rule, &mut context)?;
+                    self.run_after_actions(
+                        &spec,
+                        true,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     current_rule.state = RuleState::Close;
                     completed_rule = current_rule.clone();
                 } else {
+                    current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
+                    current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    self.run_after_actions(
+                        &spec,
+                        false,
+                        &mut current_rule,
+                        &mut context,
+                        ActionSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    )?;
                     let parent = stack.pop();
-                    current_rule.next_rule_name = parent.as_ref().map(|rule| rule.name.clone());
-                    current_rule.next_rule = parent.as_ref().map(Rule::snapshot);
-                    self.run_after_actions(&spec, false, &mut current_rule, &mut context)?;
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);

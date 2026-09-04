@@ -83,7 +83,7 @@ fn prepend_append_replace_and_reinstallation_are_deterministic() {
 #[test]
 fn state_action_errors_abort_the_parse() {
     let mut parser = Tabnas::new();
-    parser.state_action_ref("@top-bo", |_, _| {
+    parser.state_action_ref("@top-ao", |_, _| {
         Err(ActionError::new("custom", "lifecycle failed"))
     });
     parser
@@ -99,4 +99,36 @@ fn state_action_errors_abort_the_parse() {
     let error = parser.parse("1").unwrap_err();
     assert_eq!(error.code, "custom");
     assert_eq!(error.detail, "lifecycle failed");
+    assert_eq!(error.full_source, "1");
+    assert_eq!(error.rule, "top");
+    assert_eq!(error.rule_stack, ["top"]);
+    assert_eq!(error.token.name, "#NR");
+    assert_eq!(error.token.src, "1");
+}
+
+#[test]
+fn action_errors_include_the_complete_nested_rule_stack() {
+    let mut parser = Tabnas::new();
+    parser.state_action_ref("@child-ac", |_, _| {
+        Err(ActionError::new("nested", "child failed"))
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{
+                "top":{"open":[{"s":"#NR","p":"child"}]},
+                "child":{"open":[{"s":"#NR"}]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    let error = parser.parse("1 2").unwrap_err();
+    assert_eq!(error.code, "nested", "{error:?}");
+    assert_eq!(error.rule, "child");
+    assert_eq!(error.rule_stack, ["top", "child"]);
+    assert_eq!(error.token.name, "#NR");
+    assert_eq!(error.pos, 2);
 }
