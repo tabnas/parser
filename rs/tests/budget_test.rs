@@ -22,6 +22,10 @@ fn parse_budget_checks_periodically_and_can_cancel() {
 
     let error = parser.parse(JSON_SOURCE).unwrap_err();
     assert_eq!(error.code, "cancel");
+    assert_eq!(error.full_source, JSON_SOURCE);
+    assert!(!error.rule.is_empty());
+    assert_eq!(error.rule_stack.last(), Some(&error.rule));
+    assert_ne!(error.token.name, "#BD");
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
