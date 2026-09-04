@@ -20,7 +20,7 @@ pub use context::{ActionError, Context};
 pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
-    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, MatchToken,
+    BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, InfoOptions, MatchToken,
     MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare,
     RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueDef, ValueOptions,
 };
@@ -33,7 +33,7 @@ pub use token::{
     Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
     TIN_VL, TIN_ZZ,
 };
-pub use value::Value;
+pub use value::{ListRef, MapRef, Text, Value};
 
 use indexmap::IndexMap;
 use std::collections::HashMap;

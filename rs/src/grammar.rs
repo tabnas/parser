@@ -907,6 +907,20 @@ fn apply_options(
             &mut options.map.extend,
         );
     }
+    if let Some(info) = map.get("info") {
+        let info = object(info, "options.info")?;
+        set_bool(info, "map", &mut options.info.map);
+        set_bool(info, "list", &mut options.info.list);
+        set_bool(info, "text", &mut options.info.text);
+        if let Some(marker) = info.get("marker") {
+            options.info.marker = marker
+                .as_str()
+                .ok_or_else(|| {
+                    GrammarError("Grammar: options.info.marker must be a string".into())
+                })?
+                .to_string();
+        }
+    }
     if let Some(lex) = map.get("lex") {
         let lex = object(lex, "options.lex")?;
         set_bool(lex, "empty", &mut options.lex.empty);

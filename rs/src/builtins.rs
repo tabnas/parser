@@ -1,7 +1,9 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
+use crate::options::InfoOptions;
 use crate::rule::Rule;
-use crate::value::Value;
+use crate::token::{TIN_ST, TIN_TX};
+use crate::value::{ListRef, MapRef, Text, Value};
 use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -117,7 +119,90 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
     append_kid(node, child);
 }
 
+fn map_value(info: &InfoOptions, implicit: bool) -> Value {
+    if info.map {
+        Value::MapRef(MapRef {
+            value: IndexMap::new(),
+            implicit,
+            meta: IndexMap::new(),
+        })
+    } else {
+        Value::Object(IndexMap::new())
+    }
+}
+
+fn list_value(info: &InfoOptions, implicit: bool) -> Value {
+    if info.list {
+        Value::ListRef(ListRef {
+            value: Vec::new(),
+            implicit,
+            child: None,
+            meta: IndexMap::new(),
+        })
+    } else {
+        Value::Array(Vec::new())
+    }
+}
+
+fn token_value(rule: &Rule, index: usize, info: &InfoOptions) -> Value {
+    let Some(token) = rule.o.get(index) else {
+        return Value::Undefined;
+    };
+    if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
+        let string = match &token.val {
+            Value::String(value) => value.clone(),
+            Value::Text(value) => value.string.clone(),
+            _ => return token.val.clone(),
+        };
+        let quote = if token.tin == TIN_ST {
+            token
+                .src
+                .chars()
+                .next()
+                .map_or_else(String::new, |ch| ch.to_string())
+        } else {
+            String::new()
+        };
+        Value::Text(Text { quote, string })
+    } else {
+        token.val.clone()
+    }
+}
+
+fn map_insert(node: &mut Value, key: String, value: Value) {
+    match node {
+        Value::Object(map) => {
+            map.insert(key, value);
+        }
+        Value::MapRef(map) => {
+            map.value.insert(key, value);
+        }
+        _ => {}
+    }
+}
+
+fn list_push(node: &mut Value, value: Value) {
+    match node {
+        Value::Array(array) => array.push(value),
+        Value::ListRef(list) => list.value.push(value),
+        _ => {}
+    }
+}
+
+/// Run a built-in with metadata wrappers disabled.
+///
+/// This keeps the original public helper stable for embedders. Parser-owned
+/// execution uses [`run_builtin_action_with_info`] with its configured options.
 pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -> bool {
+    run_builtin_action_with_info(name, rule, config, &InfoOptions::default())
+}
+
+pub(crate) fn run_builtin_action_with_info(
+    name: &str,
+    rule: &mut Rule,
+    config: Option<&Value>,
+    info: &InfoOptions,
+) -> bool {
     match name {
         "@node$" => {
             if config_bool(config, "init") {
@@ -176,9 +261,7 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
                 if !rule.child_node.is_undefined() {
                     rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
                 } else if rule.os() > 0 {
-                    if let Some(t0) = rule.o0() {
-                        rule.node = Rc::new(RefCell::new(t0.val.clone()));
-                    }
+                    rule.node = Rc::new(RefCell::new(token_value(rule, 0, info)));
                 }
             }
         }
@@ -187,16 +270,21 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
                 rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
             } else {
                 let value = config_index(config, "from")
-                    .and_then(|index| rule.o.get(index))
-                    .map_or(Value::Undefined, |token| token.val.clone());
+                    .map_or(Value::Undefined, |index| token_value(rule, index, info));
                 rule.node = Rc::new(RefCell::new(value));
             }
         }
         "@object$" => {
-            rule.node = Rc::new(RefCell::new(Value::Object(IndexMap::new())));
+            rule.node = Rc::new(RefCell::new(map_value(
+                info,
+                config_bool(config, "implicit"),
+            )));
         }
         "@array$" => {
-            rule.node = Rc::new(RefCell::new(Value::Array(Vec::new())));
+            rule.node = Rc::new(RefCell::new(list_value(
+                info,
+                config_bool(config, "implicit"),
+            )));
         }
         "@reset$" => {
             rule.node = Rc::new(RefCell::new(Value::Undefined));
@@ -226,23 +314,19 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
                 }
             };
             if let Some(Value::String(key)) = rule.u.get(&slot).cloned() {
-                if let Value::Object(map) = &mut *rule.node.borrow_mut() {
-                    map.insert(key, rule.child_node.clone());
-                }
+                map_insert(&mut rule.node.borrow_mut(), key, rule.child_node.clone());
             }
         }
         "@push$" => {
             if !rule.child_node.is_undefined() {
-                if let Value::Array(array) = &mut *rule.node.borrow_mut() {
-                    array.push(rule.child_node.clone());
-                }
+                list_push(&mut rule.node.borrow_mut(), rule.child_node.clone());
             }
         }
         "@map-bo" => {
-            rule.node = Rc::new(RefCell::new(Value::Object(IndexMap::new())));
+            rule.node = Rc::new(RefCell::new(map_value(info, false)));
         }
         "@list-bo" => {
-            rule.node = Rc::new(RefCell::new(Value::Array(Vec::new())));
+            rule.node = Rc::new(RefCell::new(list_value(info, false)));
         }
         "@pairkey" => {
             if let Some(t0) = rule.o0() {
@@ -256,16 +340,12 @@ pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -
         "@pair-bc" => {
             if let Some(Value::String(key)) = rule.u.get("key").cloned() {
                 let mut node = rule.node.borrow_mut();
-                if let Value::Object(ref mut map) = *node {
-                    map.insert(key, rule.child_node.clone());
-                }
+                map_insert(&mut node, key, rule.child_node.clone());
             }
         }
         "@elem-bc" if !rule.child_node.is_undefined() => {
             let mut node = rule.node.borrow_mut();
-            if let Value::Array(ref mut arr) = *node {
-                arr.push(rule.child_node.clone());
-            }
+            list_push(&mut node, rule.child_node.clone());
         }
         _ => return false,
     }

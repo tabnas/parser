@@ -55,7 +55,9 @@ structured recovery diagnostics. Opt-in negotiated lexing can re-cut contested
 source spans for scannerless serialized grammars, including rollback when a
 candidate alternate later fails. Typed named hooks cover alternate conditions,
 modifiers, errors, dynamic routing/backtracking, and effect-based token
-matchers. Rust directly executes every non-exempt shared TSV fixture; the
+matchers. Opt-in typed `MapRef`, `ListRef`, and `Text` results expose parse
+metadata while serializing to the same plain JSON shape as TypeScript. Rust
+directly executes every non-exempt shared TSV fixture; the
 fixture paths are not copied into the crate. The repository gate requires every
 non-exempt shared fixture to have a TypeScript, Go, and Rust runner, and the
 strict-JSON differential gate compares token streams over every data row in
@@ -64,8 +66,8 @@ both JSON and parser corpora.
 Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,
 alternate injection, metadata, and schema-version gating. Function-valued
-callbacks that need direct lexer/rule re-entry, complete option overlays, and
-info-bearing result wrappers are not yet equivalent.
+callbacks that need direct lexer/rule re-entry and complete option overlays
+are not yet equivalent.
 Unsupported callback and matcher forms fail at install time instead of being
 silently ignored. See
 `../doc/rust-port-implementation-plan.md` for the architecture and gates for

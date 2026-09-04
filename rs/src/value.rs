@@ -1,8 +1,95 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Text {
+    pub quote: String,
+    pub string: String,
+}
+
+impl Serialize for Text {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.string)
+    }
+}
+
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self {
+            quote: String::new(),
+            string: String::deserialize(deserializer)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapRef {
+    pub value: IndexMap<String, Value>,
+    pub implicit: bool,
+    pub meta: IndexMap<String, Value>,
+}
+
+impl Serialize for MapRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MapRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self {
+            value: IndexMap::deserialize(deserializer)?,
+            implicit: false,
+            meta: IndexMap::new(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListRef {
+    pub value: Vec<Value>,
+    pub implicit: bool,
+    pub child: Option<Box<Value>>,
+    pub meta: IndexMap<String, Value>,
+}
+
+impl Serialize for ListRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ListRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self {
+            value: Vec::deserialize(deserializer)?,
+            implicit: false,
+            child: None,
+            meta: IndexMap::new(),
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -14,6 +101,9 @@ pub enum Value {
     String(String),
     Array(Vec<Value>),
     Object(IndexMap<String, Value>),
+    Text(Text),
+    ListRef(ListRef),
+    MapRef(MapRef),
 }
 
 impl Value {
@@ -37,6 +127,34 @@ impl Value {
                     out.insert(k, v.unwrap_undefined());
                 }
                 Value::Object(out)
+            }
+            Value::Text(text) => Value::Text(text),
+            Value::ListRef(mut list) => {
+                list.value = list
+                    .value
+                    .into_iter()
+                    .map(Value::unwrap_undefined)
+                    .collect();
+                list.child = list.child.map(|value| Box::new(value.unwrap_undefined()));
+                list.meta = list
+                    .meta
+                    .into_iter()
+                    .map(|(key, value)| (key, value.unwrap_undefined()))
+                    .collect();
+                Value::ListRef(list)
+            }
+            Value::MapRef(mut map) => {
+                map.value = map
+                    .value
+                    .into_iter()
+                    .map(|(key, value)| (key, value.unwrap_undefined()))
+                    .collect();
+                map.meta = map
+                    .meta
+                    .into_iter()
+                    .map(|(key, value)| (key, value.unwrap_undefined()))
+                    .collect();
+                Value::MapRef(map)
             }
             other => other,
         }
@@ -62,6 +180,17 @@ impl Value {
                 let mut map = serde_json::Map::new();
                 for (k, v) in obj {
                     map.insert(k.clone(), v.to_json());
+                }
+                serde_json::Value::Object(map)
+            }
+            Value::Text(text) => serde_json::Value::String(text.string.clone()),
+            Value::ListRef(list) => {
+                serde_json::Value::Array(list.value.iter().map(Value::to_json).collect())
+            }
+            Value::MapRef(map_ref) => {
+                let mut map = serde_json::Map::new();
+                for (key, value) in &map_ref.value {
+                    map.insert(key.clone(), value.to_json());
                 }
                 serde_json::Value::Object(map)
             }
@@ -126,6 +255,9 @@ impl Value {
                 }
                 true
             }
+            (Value::Text(a), Value::Text(b)) => a == b,
+            (Value::ListRef(a), Value::ListRef(b)) => a == b,
+            (Value::MapRef(a), Value::MapRef(b)) => a == b,
             _ => false,
         }
     }
@@ -165,6 +297,9 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::Text(text) => write!(f, "\"{}\"", text.string),
+            Value::ListRef(list) => write!(f, "{}", Value::Array(list.value.clone())),
+            Value::MapRef(map) => write!(f, "{}", Value::Object(map.value.clone())),
         }
     }
 }

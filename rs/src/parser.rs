@@ -1,6 +1,6 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
-use crate::builtins::run_builtin_action;
+use crate::builtins::run_builtin_action_with_info;
 use crate::context::Context;
 use crate::error::TabnasError;
 use crate::lexer::{Lexer, LexerState};
@@ -134,7 +134,7 @@ impl Parser {
         context: &mut Context,
         config: Option<&Value>,
     ) -> Result<(), TabnasError> {
-        if run_builtin_action(name, rule, config) {
+        if run_builtin_action_with_info(name, rule, config, &self.options.info) {
             return Ok(());
         }
         if let Some(action) = self.actions.get(name) {

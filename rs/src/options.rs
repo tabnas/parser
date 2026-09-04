@@ -256,6 +256,29 @@ impl Default for MapOptions {
     }
 }
 
+/// Controls typed metadata carriers on native parse results.
+///
+/// The wrappers serialize as their underlying JSON values, matching the
+/// TypeScript implementation's non-enumerable metadata marker.
+#[derive(Debug, Clone)]
+pub struct InfoOptions {
+    pub map: bool,
+    pub list: bool,
+    pub text: bool,
+    pub marker: String,
+}
+
+impl Default for InfoOptions {
+    fn default() -> Self {
+        Self {
+            map: false,
+            list: false,
+            text: false,
+            marker: "__info__".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LexOptions {
     pub empty: bool,
@@ -429,6 +452,7 @@ pub struct Options {
     pub value: ValueOptions,
     pub ender: Vec<String>,
     pub map: MapOptions,
+    pub info: InfoOptions,
     pub lex: LexOptions,
     pub rewind: RewindOptions,
     pub rule: RuleOptions,
@@ -459,6 +483,7 @@ impl Default for Options {
             value: ValueOptions::default(),
             ender: Vec::new(),
             map: MapOptions::default(),
+            info: InfoOptions::default(),
             lex: LexOptions::default(),
             rewind: RewindOptions::default(),
             rule: RuleOptions::default(),
