@@ -430,10 +430,7 @@ impl Parser {
     }
 
     fn start_openers(&self) -> Vec<Tin> {
-        let start = self
-            .rules
-            .get(&self.options.rule.start)
-            .or_else(|| self.rules.values().next());
+        let start = self.rules.get(&self.options.rule.start);
         let mut out = BTreeSet::new();
         if let Some(spec) = start {
             for alt in &spec.open {
@@ -584,13 +581,10 @@ impl Parser {
 
         let mut lexer = Lexer::new(src, self.options.clone());
 
-        let start_name = if self.rules.contains_key(&self.options.rule.start) {
-            self.options.rule.start.as_str()
-        } else if let Some(first_key) = self.rules.keys().next() {
-            first_key.as_str()
-        } else {
-            return Ok(Value::Null);
-        };
+        let start_name = self.options.rule.start.as_str();
+        if !self.rules.contains_key(start_name) {
+            return Ok(Value::Undefined);
+        }
 
         let mut current_rule = Rule::new(start_name, Value::Undefined);
         current_rule.i = 0;
