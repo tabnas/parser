@@ -310,6 +310,39 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
 }
 
 #[test]
+fn strings_precede_overlapping_comments_unless_string_matching_abandons() {
+    let mut options = Options::default();
+    options.comment.definitions.insert(
+        "quote".into(),
+        CommentDef {
+            line: true,
+            start: "\"".into(),
+            end: String::new(),
+            lex: true,
+            suffixes: Vec::new(),
+            eat_line: false,
+        },
+    );
+
+    let token = Lexer::new(r#""text""#, options.clone())
+        .next_raw_token()
+        .unwrap();
+    assert_eq!(
+        (token.name.as_str(), token.src.as_str()),
+        ("#ST", r#""text""#)
+    );
+
+    options.string.abandon = true;
+    let token = Lexer::new(r#""unterminated"#, options)
+        .next_raw_token()
+        .unwrap();
+    assert_eq!(
+        (token.name.as_str(), token.src.as_str()),
+        ("#CM", r#""unterminated"#)
+    );
+}
+
+#[test]
 fn named_and_regex_values_and_text_enders_are_honored() {
     let mut exact = Options::default();
     exact.value.definitions.insert(
