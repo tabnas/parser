@@ -1,7 +1,7 @@
 # CI harnesses (staged for review)
 
 Everything in this folder is runnable locally today; nothing is wired
-into `.github/` yet. The two proposed workflows live in `workflows/` —
+into `.github/` yet. The proposed workflows live in `workflows/` —
 review them and move them to `.github/workflows/` to activate.
 
 Layout assumption (matches the existing build.yml convention): sibling
@@ -149,6 +149,16 @@ rows identical in TypeScript and Go; `json` — 119/119 data rows from the JSON
 corpus and 312/312 data rows from parser/test/spec identical in TypeScript,
 Go, and Rust.
 
+## rust/ — native-port gate
+
+- `run.sh` checks formatting, builds and tests every Rust target at the
+  locked dependency graph, runs strict Clippy, then executes both shared TSV
+  token-stream parity arms against TypeScript and Go.
+- `workflows/rust.yml` is its staged PR workflow. It tests the crate's declared
+  Rust 1.85 minimum and clones the strict-JSON grammar needed by the parity
+  dumper. Promote it under ADR-8 to make the existing local Rust gate required
+  on pull requests.
+
 This harness found three real engine divergences during bring-up, all
 fixed in the engine alongside it: TS lexed unquoted `__proto__` /
 `constructor` as value keywords via a prototype-chain leak in the
@@ -254,3 +264,5 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
   **Promote it only after the Phase 1 escape repairs land** (`#123`), or it
   opens red — see the status note above.
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
+- `rust.yml` — formatting, build, tests, strict Clippy, and the two
+  TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
