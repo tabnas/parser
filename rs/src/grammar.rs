@@ -35,6 +35,7 @@ struct AltRefs {
     lex_matches: HashMap<String, LexMatcherCallback>,
     error_suffixes: HashMap<String, ErrorSuffixCallback>,
     config_modifiers: HashMap<String, ConfigModifier>,
+    parser_starts: HashMap<String, crate::ParserStart>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -57,6 +58,7 @@ impl From<&Tabnas> for AltRefs {
             lex_matches: tabnas.lex_match_refs.clone(),
             error_suffixes: tabnas.error_suffix_refs.clone(),
             config_modifiers: tabnas.config_modifier_refs.clone(),
+            parser_starts: tabnas.parser_start_refs.clone(),
         }
     }
 }
@@ -1360,6 +1362,26 @@ fn apply_options(
                 .iter()
                 .map(Value::from_json)
                 .collect();
+        }
+    }
+    if let Some(parser) = map.get("parser") {
+        let parser = object(parser, "options.parser")?;
+        if let Some(reference) = parser.get("start") {
+            options.parser.start = match reference {
+                JsonValue::Null | JsonValue::Bool(false) => None,
+                JsonValue::String(reference) => {
+                    Some(refs.parser_starts.get(reference).cloned().ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: unknown parser start function reference: {reference}"
+                        ))
+                    })?)
+                }
+                _ => {
+                    return Err(GrammarError(
+                        "Grammar: options.parser.start must be a function reference or null".into(),
+                    ))
+                }
+            };
         }
     }
     if let Some(fixed_options) = map.get("fixed") {

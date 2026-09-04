@@ -24,8 +24,8 @@ pub use options::{
     ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken,
     InfoOptions, LexCheck, LexCheckResult, LexCheckToken, LexMatcher, LexMatcherCallback,
     MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options,
-    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
-    TextModifier, ValueDef, ValueOptions, ValueTransform,
+    ParseOptions, ParsePrepare, ParserOptions, ParserStart, RecoverOptions, ResultOptions,
+    RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -77,6 +77,7 @@ pub struct Tabnas {
     pub(crate) lex_match_refs: HashMap<String, LexMatcherCallback>,
     pub(crate) error_suffix_refs: HashMap<String, ErrorSuffixCallback>,
     pub(crate) config_modifier_refs: HashMap<String, ConfigModifier>,
+    pub(crate) parser_start_refs: HashMap<String, ParserStart>,
 }
 
 impl Default for Tabnas {
@@ -113,6 +114,7 @@ impl Tabnas {
             lex_match_refs: HashMap::new(),
             error_suffix_refs: HashMap::new(),
             config_modifier_refs: HashMap::new(),
+            parser_start_refs: HashMap::new(),
         }
     }
 
@@ -143,6 +145,7 @@ impl Tabnas {
             lex_match_refs: HashMap::new(),
             error_suffix_refs: HashMap::new(),
             config_modifier_refs: HashMap::new(),
+            parser_start_refs: HashMap::new(),
         }
     }
 
@@ -365,6 +368,17 @@ impl Tabnas {
     ) -> &mut Self {
         self.config_modifier_refs
             .insert(name.into(), ConfigModifier::new(modifier));
+        self
+    }
+
+    /// Register a typed replacement parse entry point for a serialized
+    /// `options.parser.start` function reference.
+    pub fn parser_start_ref(
+        &mut self,
+        name: impl Into<String>,
+        start: impl Fn(&str) -> Result<Value, Box<TabnasError>> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.parser_start_refs.insert(name.into(), Arc::new(start));
         self
     }
 

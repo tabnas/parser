@@ -15,6 +15,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuations {
@@ -357,6 +358,12 @@ impl Parser {
     }
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
+        if let Some(result) = self.run_parser_start(src) {
+            return result.map_err(|mut error| {
+                error.apply_options(&self.options);
+                error
+            });
+        }
         let mut errors = Vec::new();
         let recovering = self.options.parse.recover.enabled;
         let mut mode = ParseMode {
@@ -376,6 +383,23 @@ impl Parser {
     }
 
     pub fn parse_recover(&self, src: &str) -> ParseRecovery {
+        if let Some(result) = self.run_parser_start(src) {
+            return match result {
+                Ok(value) => ParseRecovery {
+                    value: Some(value),
+                    errors: Vec::new(),
+                    fatal: None,
+                },
+                Err(mut error) => {
+                    error.apply_options(&self.options);
+                    ParseRecovery {
+                        value: None,
+                        errors: Vec::new(),
+                        fatal: Some(error),
+                    }
+                }
+            };
+        }
         let mut errors = Vec::new();
         let recovering = self.options.parse.recover.enabled;
         let (result, partial) = {
@@ -411,6 +435,28 @@ impl Parser {
                 }
             }
         }
+    }
+
+    fn run_parser_start(&self, src: &str) -> Option<Result<Value, TabnasError>> {
+        let start = self.options.parser.start.as_ref()?;
+        Some(match catch_unwind(AssertUnwindSafe(|| start(src))) {
+            Ok(result) => result.map_err(|error| *error),
+            Err(payload) => {
+                let detail = payload
+                    .downcast_ref::<&str>()
+                    .map(|message| (*message).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".into());
+                Err(TabnasError::new(
+                    "internal",
+                    format!("parser.start: {detail}"),
+                    src,
+                    0,
+                    1,
+                    1,
+                ))
+            }
+        })
     }
 
     /// Return the token kinds that can legally follow `src` when it is

@@ -67,6 +67,9 @@ and budget callbacks remain inactive until `checkEveryN` is non-zero.
 Load-time `options.config.modify` callbacks bind through
 `config_modifier_ref`, run in declaration order after option resolution, and
 are reapplied on later grammar option overlays until removed.
+Replacement `options.parser.start` entry points bind through
+`parser_start_ref`; they bypass the rule engine like the TypeScript/Go option,
+and callback panics are returned as structured internal errors.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default

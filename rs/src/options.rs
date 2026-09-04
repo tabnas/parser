@@ -748,6 +748,23 @@ impl Default for RecoverOptions {
 
 pub type ParsePrepare = Arc<dyn Fn(&mut Context) + Send + Sync>;
 
+pub type ParserStart =
+    Arc<dyn Fn(&str) -> Result<crate::Value, Box<crate::TabnasError>> + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct ParserOptions {
+    pub start: Option<ParserStart>,
+}
+
+impl fmt::Debug for ParserOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ParserOptions")
+            .field("start", &self.start.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ParseOptions {
     pub prepare: Vec<ParsePrepare>,
@@ -786,6 +803,7 @@ pub struct Options {
     pub rule: RuleOptions,
     pub result: ResultOptions,
     pub parse: ParseOptions,
+    pub parser: ParserOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
     /// Named token identities without an attached built-in, fixed, or match
     /// producer. Serialized rule slots allocate these on first reference.
@@ -827,6 +845,7 @@ impl Default for Options {
             rule: RuleOptions::default(),
             result: ResultOptions::default(),
             parse: ParseOptions::default(),
+            parser: ParserOptions::default(),
             token_set,
             tokens: IndexMap::new(),
             match_lex: true,
