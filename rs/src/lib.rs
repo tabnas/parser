@@ -5,6 +5,7 @@
 pub const VERSION: &str = "0.9.0";
 
 pub mod builtins;
+pub mod context;
 pub mod error;
 pub mod grammar;
 pub mod lexer;
@@ -15,9 +16,10 @@ pub mod token;
 pub mod utility;
 pub mod value;
 
+pub use context::{ActionError, Context};
 pub use error::TabnasError;
 pub use grammar::{GrammarError, GrammarSpec};
-pub use options::{FixedOptions, FixedToken, MatchToken, Options};
+pub use options::{FixedOptions, FixedToken, MatchToken, Options, RewindOptions};
 pub use parser::Parser;
 pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 pub use token::{
@@ -31,6 +33,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type Action = Arc<dyn Fn(&mut Rule) + Send + Sync>;
+pub type ContextAction =
+    Arc<dyn Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync>;
 pub type TokenSubscriber = Arc<dyn Fn(&Token) + Send + Sync>;
 
 #[derive(Clone)]
@@ -38,6 +42,7 @@ pub struct Tabnas {
     pub options: Options,
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
+    pub context_actions: HashMap<String, ContextAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
 }
 
@@ -53,6 +58,7 @@ impl Tabnas {
             options: Options::default(),
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
         }
     }
@@ -62,6 +68,7 @@ impl Tabnas {
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
         }
     }
@@ -88,6 +95,15 @@ impl Tabnas {
         self
     }
 
+    pub fn action_with_context(
+        &mut self,
+        name: impl Into<String>,
+        action: impl Fn(&mut Rule, &mut Context) -> Result<(), ActionError> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.context_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         let mut p = Parser::new(self.options.clone());
         for spec in self.rules.values() {
@@ -95,6 +111,9 @@ impl Tabnas {
         }
         for (name, action) in &self.actions {
             p.add_action(name.clone(), action.clone());
+        }
+        for (name, action) in &self.context_actions {
+            p.add_context_action(name.clone(), action.clone());
         }
         for subscriber in &self.token_subscribers {
             p.add_token_subscriber(subscriber.clone());

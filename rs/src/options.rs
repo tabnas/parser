@@ -137,6 +137,19 @@ pub struct LexOptions {
     pub empty: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct RewindOptions {
+    /// Maximum retained consumed-token history. `None` and `Some(0)` are
+    /// unbounded, matching the serialized `null` / non-positive forms.
+    pub history: Option<usize>,
+}
+
+impl Default for RewindOptions {
+    fn default() -> Self {
+        Self { history: Some(64) }
+    }
+}
+
 impl Default for LexOptions {
     fn default() -> Self {
         LexOptions { empty: true }
@@ -180,6 +193,7 @@ pub struct Options {
     pub comment: CommentOptions,
     pub map: MapOptions,
     pub lex: LexOptions,
+    pub rewind: RewindOptions,
     pub rule: RuleOptions,
     pub token_set: HashMap<String, Vec<Tin>>,
     pub match_tokens: IndexMap<String, MatchToken>,
@@ -201,6 +215,7 @@ impl Default for Options {
             comment: CommentOptions::default(),
             map: MapOptions::default(),
             lex: LexOptions::default(),
+            rewind: RewindOptions::default(),
             rule: RuleOptions::default(),
             token_set,
             match_tokens: IndexMap::new(),

@@ -519,6 +519,32 @@ fn apply_options(
     if let Some(lex) = map.get("lex") {
         set_bool(object(lex, "options.lex")?, "empty", &mut options.lex.empty);
     }
+    if let Some(rewind) = map.get("rewind") {
+        let rewind = object(rewind, "options.rewind")?;
+        if let Some(history) = rewind.get("history") {
+            options.rewind.history = match history {
+                JsonValue::Null => None,
+                JsonValue::Number(number) => match number.as_i64() {
+                    Some(value) if value <= 0 => None,
+                    Some(value) => Some(usize::try_from(value).map_err(|_| {
+                        GrammarError(
+                            "Grammar: options.rewind.history is outside the supported range".into(),
+                        )
+                    })?),
+                    None => {
+                        return Err(GrammarError(
+                            "Grammar: options.rewind.history must be an integer or null".into(),
+                        ))
+                    }
+                },
+                _ => {
+                    return Err(GrammarError(
+                        "Grammar: options.rewind.history must be an integer or null".into(),
+                    ))
+                }
+            };
+        }
+    }
     if let Some(rule) = map.get("rule") {
         let rule = object(rule, "options.rule")?;
         if let Some(start) = rule.get("start").and_then(JsonValue::as_str) {

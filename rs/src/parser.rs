@@ -1,13 +1,14 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use crate::builtins::run_builtin_action;
+use crate::context::Context;
 use crate::error::TabnasError;
 use crate::lexer::Lexer;
 use crate::options::Options;
 use crate::rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 use crate::token::{Token, TIN_BD, TIN_ZZ};
 use crate::value::Value;
-use crate::{Action, TokenSubscriber};
+use crate::{Action, ContextAction, TokenSubscriber};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
@@ -15,6 +16,7 @@ pub struct Parser {
     pub options: Options,
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
+    pub context_actions: HashMap<String, ContextAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
 }
 
@@ -24,6 +26,7 @@ impl Parser {
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            context_actions: HashMap::new(),
             token_subscribers: Vec::new(),
         }
     }
@@ -36,18 +39,28 @@ impl Parser {
         self.actions.insert(name, action);
     }
 
+    pub fn add_context_action(&mut self, name: String, action: ContextAction) {
+        self.context_actions.insert(name, action);
+    }
+
     pub fn add_token_subscriber(&mut self, subscriber: TokenSubscriber) {
         self.token_subscribers.push(subscriber);
     }
 
-    fn run_action(&self, name: &str, rule: &mut Rule) -> Result<(), TabnasError> {
-        self.run_action_with_config(name, rule, None)
+    fn run_action(
+        &self,
+        name: &str,
+        rule: &mut Rule,
+        context: &mut Context,
+    ) -> Result<(), TabnasError> {
+        self.run_action_with_config(name, rule, context, None)
     }
 
     fn run_action_with_config(
         &self,
         name: &str,
         rule: &mut Rule,
+        context: &mut Context,
         config: Option<&Value>,
     ) -> Result<(), TabnasError> {
         if run_builtin_action(name, rule, config) {
@@ -56,6 +69,21 @@ impl Parser {
         if let Some(action) = self.actions.get(name) {
             action(rule);
             return Ok(());
+        }
+        if let Some(action) = self.context_actions.get(name) {
+            return action(rule, context).map_err(|action_error| {
+                let token = rule.o0().or_else(|| rule.c0());
+                let mut error = TabnasError::new(
+                    action_error.code,
+                    token.map_or("", |value| value.src.as_str()),
+                    "",
+                    token.map_or(0, |value| value.pos),
+                    token.map_or(1, |value| value.ri),
+                    token.map_or(1, |value| value.ci),
+                );
+                error.detail = action_error.detail;
+                error
+            });
         }
         let token = rule.o0().or_else(|| rule.c0());
         let mut error = TabnasError::new(
@@ -100,8 +128,7 @@ impl Parser {
         }
 
         let mut lexer = Lexer::new(src, self.options.clone());
-        let mut lookahead: Vec<Token> = Vec::with_capacity(8);
-        let mut history: Vec<Token> = Vec::new();
+        let mut context = Context::new(self.options.rewind.history);
 
         let start_name = if self.rules.contains_key(&self.options.rule.start) {
             self.options.rule.start.as_str()
@@ -119,17 +146,20 @@ impl Parser {
         let mut final_value = None;
 
         let mut ensure_lookahead =
-            |buf: &mut Vec<Token>, count: usize| -> Result<(), TabnasError> {
-                while buf.len() < count {
-                    if buf.last().is_some_and(|t| t.tin == TIN_ZZ) {
+            |context: &mut Context, count: usize| -> Result<(), TabnasError> {
+                while context.t.len() < count {
+                    if context.t.last().is_some_and(|t| t.tin == TIN_ZZ) {
                         break;
                     }
-                    let t = lexer.next_token()?;
+                    let t = match context.next_replay() {
+                        Some(token) => token,
+                        None => lexer.next_token()?,
+                    };
                     for subscriber in &self.token_subscribers {
                         subscriber(&t);
                     }
                     let is_zz = t.tin == TIN_ZZ;
-                    buf.push(t);
+                    context.t.push(t);
                     if is_zz {
                         break;
                     }
@@ -143,7 +173,8 @@ impl Parser {
         loop {
             iterations += 1;
             if iterations > max_iterations {
-                let pnt = lookahead
+                let pnt = context
+                    .t
                     .first()
                     .map(|t| (t.pos, t.ri, t.ci))
                     .unwrap_or((0, 1, 1));
@@ -153,7 +184,8 @@ impl Parser {
             let spec = match self.rules.get(&current_rule.name) {
                 Some(s) => s.clone(),
                 None => {
-                    let pnt = lookahead
+                    let pnt = context
+                        .t
                         .first()
                         .map(|t| (t.pos, t.ri, t.ci))
                         .unwrap_or((0, 1, 1));
@@ -173,11 +205,11 @@ impl Parser {
             // 1. Run before-actions
             if is_open {
                 for bo_action in &spec.bo {
-                    self.run_action(bo_action, &mut current_rule)?;
+                    self.run_action(bo_action, &mut current_rule, &mut context)?;
                 }
             } else {
                 for bc_action in &spec.bc {
-                    self.run_action(bc_action, &mut current_rule)?;
+                    self.run_action(bc_action, &mut current_rule, &mut context)?;
                 }
             }
 
@@ -194,16 +226,16 @@ impl Parser {
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
                 if s_len > 0 {
-                    if let Err(error) = ensure_lookahead(&mut lookahead, s_len) {
+                    if let Err(error) = ensure_lookahead(&mut context, s_len) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
 
                     for (pos, pos_tins) in alt.s.iter().enumerate() {
-                        if pos >= lookahead.len() {
+                        if pos >= context.t.len() {
                             alt_matches = false;
                             break;
                         }
-                        let t = &lookahead[pos];
+                        let t = &context.t[pos];
                         if pos_tins.is_empty() {
                             // Wildcard pos matches anything except BAD
                             if t.tin == TIN_BD {
@@ -229,7 +261,7 @@ impl Parser {
 
                 if alt_matches {
                     let mut candidate = current_rule.clone();
-                    let tokens: Vec<Token> = lookahead.iter().take(s_len).cloned().collect();
+                    let tokens: Vec<Token> = context.t.iter().take(s_len).cloned().collect();
                     if is_open {
                         candidate.o = tokens;
                     } else {
@@ -251,7 +283,7 @@ impl Parser {
 
                 // Copy matched tokens
                 let matched_tokens: Vec<Token> =
-                    lookahead.iter().take(matched_count).cloned().collect();
+                    context.t.iter().take(matched_count).cloned().collect();
                 if is_open {
                     current_rule.o = matched_tokens;
                 } else {
@@ -260,10 +292,7 @@ impl Parser {
 
                 // Calculate consumed tokens
                 let consumed = matched_count.saturating_sub(alt.b);
-                if consumed > 0 {
-                    let drain_len = consumed.min(lookahead.len());
-                    history.extend(lookahead.drain(0..drain_len));
-                }
+                context.record_consumed(consumed);
 
                 // Update counters n
                 for (k, v) in &alt.n {
@@ -291,7 +320,7 @@ impl Parser {
                             current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
                             current_rule
                                 .k
-                                .insert("pd_mark".into(), Value::Number(history.len() as f64));
+                                .insert("pd_mark".into(), Value::Number(context.mark() as f64));
                         }
                         "@probeDecide$" => {
                             let mark = current_rule.k.get("pd_mark").and_then(|value| {
@@ -301,14 +330,14 @@ impl Parser {
                                     None
                                 }
                             });
-                            let Some(mark) = mark.filter(|mark| *mark <= history.len()) else {
+                            let Some(mark) = mark.filter(|mark| *mark <= context.v_abs) else {
                                 let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
                                 error.detail =
                                     "@probeDecide$: phase-0 @probeInit$ did not record a valid mark"
                                         .into();
                                 return Err(error);
                             };
-                            if let Err(error) = ensure_lookahead(&mut lookahead, 1) {
+                            if let Err(error) = ensure_lookahead(&mut context, 1) {
                                 return Err(self.attach_error(
                                     error,
                                     &current_rule,
@@ -322,7 +351,8 @@ impl Parser {
                                     Value::String(name) => Some(name.as_str()),
                                     _ => None,
                                 });
-                            let phase = if lookahead
+                            let phase = if context
+                                .t
                                 .first()
                                 .is_some_and(|token| Some(token.name.as_str()) == disambiguator)
                             {
@@ -330,9 +360,7 @@ impl Parser {
                             } else {
                                 2.0
                             };
-                            let mut replay = history.split_off(mark);
-                            replay.append(&mut lookahead);
-                            lookahead = replay;
+                            context.rewind(mark)?;
                             current_rule
                                 .k
                                 .insert("pd_phase".into(), Value::Number(phase));
@@ -340,6 +368,7 @@ impl Parser {
                         _ => self.run_action_with_config(
                             act_name,
                             &mut current_rule,
+                            &mut context,
                             alt.action_configs.get(act_name),
                         )?,
                     }
@@ -349,11 +378,11 @@ impl Parser {
                 // Running them after a push/pop mutates the child or parent.
                 if is_open {
                     for ao_action in &spec.ao {
-                        self.run_action(ao_action, &mut current_rule)?;
+                        self.run_action(ao_action, &mut current_rule, &mut context)?;
                     }
                 } else {
                     for ac_action in &spec.ac {
-                        self.run_action(ac_action, &mut current_rule)?;
+                        self.run_action(ac_action, &mut current_rule, &mut context)?;
                     }
                 }
 
@@ -394,10 +423,10 @@ impl Parser {
             } else {
                 // No alt matched
                 if is_open {
-                    if let Err(error) = ensure_lookahead(&mut lookahead, 1) {
+                    if let Err(error) = ensure_lookahead(&mut context, 1) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
-                    let t0 = lookahead.first();
+                    let t0 = context.t.first();
                     let (src_token, si, ri, ci) = if let Some(t) = t0 {
                         (t.src.clone(), t.pos, t.ri, t.ci)
                     } else {
@@ -418,7 +447,7 @@ impl Parser {
                             break;
                         }
                     } else {
-                        if let Err(error) = ensure_lookahead(&mut lookahead, 1) {
+                        if let Err(error) = ensure_lookahead(&mut context, 1) {
                             return Err(self.attach_error(
                                 error,
                                 &current_rule,
@@ -427,7 +456,7 @@ impl Parser {
                                 None,
                             ));
                         }
-                        let token = lookahead.first();
+                        let token = context.t.first();
                         let (source, pos, row, col) = token.map_or_else(
                             || (String::new(), src.chars().count(), 1, 1),
                             |value| (value.src.clone(), value.pos, value.ri, value.ci),
@@ -440,8 +469,8 @@ impl Parser {
         }
 
         // Post-loop check: ensure no unexpected trailing tokens
-        ensure_lookahead(&mut lookahead, 1)?;
-        if let Some(t0) = lookahead.first() {
+        ensure_lookahead(&mut context, 1)?;
+        if let Some(t0) = context.t.first() {
             if t0.tin != TIN_ZZ {
                 let error = TabnasError::new("unexpected", &t0.src, src, t0.pos, t0.ri, t0.ci);
                 return Err(self.attach_error(

@@ -20,19 +20,23 @@ grammar: `Tabnas::new()` has no rules.
 Implemented: ordered grammar rules, open/close/push/replace transitions,
 inheritable `n` and `k` state, rule-local `u` state, named actions, built-in
 lexers, Unicode-scalar source positions, structured diagnostics, and the shared
-strict-JSON, lexer, diagnostic, utility, and divergence-register fixtures. Rust
-directly executes 301 shared TSV rows; the fixture paths are not copied into
-the crate. The repository gate requires every non-exempt shared fixture to have
-a TypeScript, Go, and Rust runner.
+strict-JSON, lexer, diagnostic, utility, and divergence-register fixtures.
+Serialized grammars also support declarative conditions, group filters,
+load-bound builtin configuration, tree/value builtins, token subscribers, and
+public parse actions with bounded mark/rewind history. Rust directly executes
+301 shared TSV rows; the fixture paths are not copied into the crate. The
+repository gate requires every non-exempt shared fixture to have a TypeScript,
+Go, and Rust runner, and the strict-JSON differential gate compares token
+streams over every data row in both JSON and parser corpora.
 
 Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,
-alternate injection, metadata, and schema-version gating. Dynamic grammar
-conditions/modifiers, arbitrary matcher callbacks beyond serialized regexes,
-complete option overlays,
-rewind/recovery, continuations, subscribers, parse budgets, and the full
-builtin library remain future work. Unsupported dynamic grammar fields fail at
-install time instead of being silently ignored. See
+alternate injection, metadata, and schema-version gating. Function-valued
+grammar conditions/modifiers, arbitrary matcher callbacks beyond serialized
+regexes, complete option overlays, recovery, continuations, rule subscribers,
+parse budgets, and the remaining builtin surface are not yet equivalent.
+Unsupported dynamic grammar fields fail at install time instead of being
+silently ignored. See
 `../doc/rust-port-implementation-plan.md` for the architecture and gates for
 that work. Do not present this crate as a drop-in replacement until those
 surfaces and the differential harness land.
