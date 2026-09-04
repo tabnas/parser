@@ -279,6 +279,33 @@ fn serialized_regex_tokens_lex_and_parse() {
 }
 
 #[test]
+fn current_bnf_compiler_wire_format_loads_and_runs() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{
+              "v":3,
+              "options":{
+                "rule":{"start":"top"},
+                "match":{"token":{"#DIGIT":"@/^[\\u0030-\\u0039]/"}}
+              },
+              "rule":{"top":{"open":[{
+                "s":"#DIGIT",
+                "a":"@node$",
+                "k":{"node$":{"init":true,"rule":"top","kind":"user","nterms":1}},
+                "g":"bnf"
+              }]}}
+            }"##,
+        )
+        .unwrap();
+    let expected = Value::from_json(&serde_json::json!({
+        "rule": "top", "src": "7", "kids": []
+    }));
+    assert!(parser.parse("7").unwrap().deep_equal(&expected));
+    assert!(parser.parse("x").is_err());
+}
+
+#[test]
 fn unsupported_javascript_regex_constructs_fail_at_installation() {
     for expression in ["@/^(?=x)x/", "@/^(a)\\1/"] {
         let mut parser = Tabnas::new();
