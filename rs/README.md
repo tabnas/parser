@@ -48,6 +48,9 @@ Unquoted-text modifier pipelines use `text_modifier_ref` and retain serialized
 declaration order.
 Matcher-family `check` hooks use `lex_check_ref`; callbacks can continue,
 skip that matcher, or emit an owned non-empty prefix token.
+Priority-ordered custom lexer entries bind through `lex_match_ref` and are
+interleaved with the eight built-in matcher bands. During negotiated lexing,
+unwanted custom token effects are discarded without moving the cursor.
 Function-form comment terminators use `comment_suffix_ref` and likewise
 consume only a validated owned source prefix.
 Serialized `error`, `hint`, `errmsg`, and `color` overlays configure both

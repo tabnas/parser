@@ -6,8 +6,8 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    BudgetCheck, CommentSuffixMatcher, LexCheck, MatchTokenCallback, ParsePrepare, Tabnas,
-    TextModifier, Value, ValueTransform,
+    BudgetCheck, CommentSuffixMatcher, LexCheck, LexMatcherCallback, MatchTokenCallback,
+    ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -31,6 +31,7 @@ struct AltRefs {
     match_values: HashMap<String, MatchTokenCallback>,
     parse_prepares: HashMap<String, ParsePrepare>,
     budget_checks: HashMap<String, BudgetCheck>,
+    lex_matches: HashMap<String, LexMatcherCallback>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -50,6 +51,7 @@ impl From<&Tabnas> for AltRefs {
             match_values: tabnas.match_value_refs.clone(),
             parse_prepares: tabnas.parse_prepare_refs.clone(),
             budget_checks: tabnas.budget_check_refs.clone(),
+            lex_matches: tabnas.lex_match_refs.clone(),
         }
     }
 }
@@ -1103,6 +1105,54 @@ fn apply_options(
         set_bool(lex, "relex", &mut options.lex.relex);
         if let Some(value) = lex.get("emptyResult") {
             options.lex.empty_result = Value::from_json(value);
+        }
+        if let Some(matchers) = lex.get("match") {
+            for (name, spec) in object(matchers, "options.lex.match")? {
+                if spec.is_null() || spec == &JsonValue::Bool(false) {
+                    options.lex.matchers.shift_remove(name);
+                    continue;
+                }
+                let spec = object(spec, &format!("options.lex.match.{name}"))?;
+                let order = spec
+                    .get("order")
+                    .and_then(JsonValue::as_f64)
+                    .filter(|order| order.is_finite())
+                    .ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: options.lex.match.{name}.order must be a finite number"
+                        ))
+                    })?;
+                if order < 0.0 {
+                    options.lex.matchers.shift_remove(name);
+                    continue;
+                }
+                let reference = spec
+                    .get("make")
+                    .and_then(JsonValue::as_str)
+                    .ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: options.lex.match.{name}.make must be a function reference"
+                        ))
+                    })?;
+                let matcher = refs.lex_matches.get(reference).cloned().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: unknown custom lexer matcher function reference: {reference}"
+                    ))
+                })?;
+                options.lex.matchers.insert(
+                    name.clone(),
+                    crate::LexMatcher {
+                        name: name.clone(),
+                        order,
+                        matcher,
+                    },
+                );
+            }
+            options.lex.matchers.sort_by(|name_a, left, name_b, right| {
+                left.order
+                    .total_cmp(&right.order)
+                    .then_with(|| name_a.cmp(name_b))
+            });
         }
     }
     if let Some(rewind) = map.get("rewind") {

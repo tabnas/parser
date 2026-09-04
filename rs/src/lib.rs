@@ -22,9 +22,10 @@ pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ErrMsgOptions,
     ErrorSuffix, FixedOptions, FixedToken, InfoOptions, LexCheck, LexCheckResult, LexCheckToken,
-    MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options,
-    ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
-    TextModifier, ValueDef, ValueOptions, ValueTransform,
+    LexMatcher, LexMatcherCallback, MatchToken, MatchTokenCallback, MatchTokenMatcher,
+    MatchTokenResult, MatchValue, Options, ParseOptions, ParsePrepare, RecoverOptions,
+    ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef, ValueOptions,
+    ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -73,6 +74,7 @@ pub struct Tabnas {
     pub(crate) match_value_refs: HashMap<String, MatchTokenCallback>,
     pub(crate) parse_prepare_refs: HashMap<String, ParsePrepare>,
     pub(crate) budget_check_refs: HashMap<String, BudgetCheck>,
+    pub(crate) lex_match_refs: HashMap<String, LexMatcherCallback>,
 }
 
 impl Default for Tabnas {
@@ -106,6 +108,7 @@ impl Tabnas {
             match_value_refs: HashMap::new(),
             parse_prepare_refs: HashMap::new(),
             budget_check_refs: HashMap::new(),
+            lex_match_refs: HashMap::new(),
         }
     }
 
@@ -133,6 +136,7 @@ impl Tabnas {
             match_value_refs: HashMap::new(),
             parse_prepare_refs: HashMap::new(),
             budget_check_refs: HashMap::new(),
+            lex_match_refs: HashMap::new(),
         }
     }
 
@@ -315,6 +319,17 @@ impl Tabnas {
     ) -> &mut Self {
         self.lex_check_refs
             .insert(name.into(), LexCheck::new(check));
+        self
+    }
+
+    /// Register an effect-based custom matcher factory reference for a
+    /// serialized `options.lex.match.<name>.make` entry.
+    pub fn lex_match_ref(
+        &mut self,
+        name: impl Into<String>,
+        matcher: impl Fn(&str) -> Option<LexCheckToken> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.lex_match_refs.insert(name.into(), Arc::new(matcher));
         self
     }
 

@@ -59,6 +59,11 @@ impl<'a> Lexer<'a> {
             .match_tokens
             .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
         options.match_values.sort_keys();
+        options.lex.matchers.sort_by(|name_a, left, name_b, right| {
+            left.order
+                .total_cmp(&right.order)
+                .then_with(|| name_a.cmp(name_b))
+        });
 
         Lexer {
             src,
@@ -156,6 +161,49 @@ impl<'a> Lexer<'a> {
             }
             LexCheckResult::Token(_) => CheckFlow::Skip,
         }
+    }
+
+    fn run_custom_matchers(
+        &mut self,
+        index: &mut usize,
+        before: f64,
+        point: Point,
+    ) -> Option<Token> {
+        while let Some(matcher) = self
+            .options
+            .lex
+            .matchers
+            .get_index(*index)
+            .map(|(_, matcher)| matcher)
+            .filter(|matcher| matcher.order < before)
+            .cloned()
+        {
+            *index += 1;
+            let remaining = &self.src[self.byte_position()..];
+            let Some(token) = (matcher.matcher)(remaining)
+                .filter(|token| !token.source.is_empty() && remaining.starts_with(&token.source))
+            else {
+                continue;
+            };
+
+            // TypeScript and Go run opaque custom matchers speculatively for
+            // a negotiated cut. An unwanted result rolls back locally so a
+            // later matcher can still satisfy the request.
+            if !self.wants(token.tin) {
+                continue;
+            }
+            for _ in token.source.chars() {
+                self.advance();
+            }
+            return Some(Token::new(
+                token.name,
+                token.tin,
+                token.value,
+                token.source,
+                point,
+            ));
+        }
+        None
     }
 
     fn is_text_delimiter_here(&self) -> bool {
@@ -328,8 +376,13 @@ impl<'a> Lexer<'a> {
 
         let pnt = self.current_point();
         let c = self.peek().unwrap();
+        let mut custom_index = 0;
 
-        // User-declared match tokens have the highest matcher priority.
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 1_000_000.0, pnt) {
+            return Ok(token);
+        }
+
+        // User-declared match tokens occupy the 1e6 matcher priority band.
         let match_skipped = if self.options.match_lex
             && (!self.options.match_values.is_empty()
                 || self
@@ -431,7 +484,11 @@ impl<'a> Lexer<'a> {
             return Ok(Token::new(name, tin, value, matched, pnt));
         }
 
-        // Fixed literals run after custom matchers and use longest-match wins.
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 2_000_000.0, pnt) {
+            return Ok(token);
+        }
+
+        // Fixed literals occupy the 2e6 band and use longest-match wins.
         let fixed_skipped = if self.options.fixed.lex {
             match self.run_check(self.options.fixed.check.clone(), pnt) {
                 CheckFlow::Continue => false,
@@ -468,6 +525,10 @@ impl<'a> Lexer<'a> {
             ));
         }
 
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 3_000_000.0, pnt) {
+            return Ok(token);
+        }
+
         // 1. Whitespace
         let space_skipped = if self.options.space.lex && self.wants(TIN_SP) {
             match self.run_check(self.options.space.check.clone(), pnt) {
@@ -499,6 +560,10 @@ impl<'a> Lexer<'a> {
                 src,
                 pnt,
             ));
+        }
+
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 4_000_000.0, pnt) {
+            return Ok(token);
         }
 
         // 2. Line ending
@@ -555,6 +620,10 @@ impl<'a> Lexer<'a> {
             return Err(err);
         }
 
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 5_000_000.0, pnt) {
+            return Ok(token);
+        }
+
         // 3. Quoted strings. These precede comments in the canonical matcher
         // order, so an overlapping quote/comment opener is a string unless
         // string matching explicitly abandons the malformed candidate.
@@ -583,6 +652,10 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 6_000_000.0, pnt) {
+            return Ok(token);
+        }
+
         // 4. Comments (longest opening marker wins; ties sort by name).
         let comment_skipped = if self.options.comment.lex && self.wants(TIN_CM) {
             match self.run_check(self.options.comment.check.clone(), pnt) {
@@ -597,6 +670,10 @@ impl<'a> Lexer<'a> {
             if let Some(token) = self.match_comment(pnt)? {
                 return Ok(token);
             }
+        }
+
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 7_000_000.0, pnt) {
+            return Ok(token);
         }
 
         // 5. Numbers
@@ -617,6 +694,10 @@ impl<'a> Lexer<'a> {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
+        }
+
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 8_000_000.0, pnt) {
+            return Ok(token);
         }
 
         // 6. Text and named/regex values share the same delimited run.
@@ -733,6 +814,10 @@ impl<'a> Lexer<'a> {
                 }
                 return Ok(Token::new("#TX", TIN_TX, value, src, pnt));
             }
+        }
+
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, f64::INFINITY, pnt) {
+            return Ok(token);
         }
 
         // 7. Unclaimed character -> Error: unexpected

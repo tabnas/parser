@@ -480,6 +480,7 @@ pub struct LexOptions {
     pub empty: bool,
     pub empty_result: crate::Value,
     pub relex: bool,
+    pub matchers: IndexMap<String, LexMatcher>,
 }
 
 #[derive(Debug, Clone)]
@@ -501,6 +502,7 @@ impl Default for LexOptions {
             empty: true,
             empty_result: crate::Value::Undefined,
             relex: false,
+            matchers: IndexMap::new(),
         }
     }
 }
@@ -565,6 +567,29 @@ impl MatchTokenResult {
 }
 
 pub type MatchTokenCallback = Arc<dyn Fn(&str) -> Option<MatchTokenResult> + Send + Sync>;
+
+/// Effect-based custom lexer matcher used by serialized `options.lex.match`
+/// entries. The returned token must consume a non-empty prefix of the
+/// remaining source.
+pub type LexMatcherCallback = Arc<dyn Fn(&str) -> Option<LexCheckToken> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct LexMatcher {
+    pub name: String,
+    pub order: f64,
+    pub matcher: LexMatcherCallback,
+}
+
+impl fmt::Debug for LexMatcher {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LexMatcher")
+            .field("name", &self.name)
+            .field("order", &self.order)
+            .field("matcher", &"<function>")
+            .finish()
+    }
+}
 
 #[derive(Clone)]
 pub enum MatchTokenMatcher {
