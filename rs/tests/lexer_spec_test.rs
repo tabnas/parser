@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tabnas::lexer::Lexer;
 use tabnas::options::Options;
-use tabnas::{CommentDef, Value, TIN_ZZ};
+use tabnas::{CommentDef, Value, ValueDef, TIN_ZZ};
 
 fn unescape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -294,4 +294,52 @@ fn configurable_comment_definitions_suffixes_and_eatline_are_honored() {
             .src,
         "<* body END"
     );
+}
+
+#[test]
+fn named_and_regex_values_and_text_enders_are_honored() {
+    let mut exact = Options::default();
+    exact.value.definitions.insert(
+        "yes".into(),
+        ValueDef {
+            val: Some(Value::Bool(true)),
+            matcher: None,
+            consume: false,
+        },
+    );
+    exact.value.definitions.insert(
+        "12".into(),
+        ValueDef {
+            val: Some(Value::String("dozen".into())),
+            matcher: None,
+            consume: false,
+        },
+    );
+    assert_eq!(lex("yes", exact.clone()).unwrap(), "#VL:true");
+    assert_eq!(lex("12", exact).unwrap(), "#VL:dozen");
+
+    let mut regex = Options::default();
+    regex.value.definitions.insert(
+        "at".into(),
+        ValueDef {
+            val: None,
+            matcher: Some(regex::Regex::new(r"^@[a-z]+").unwrap()),
+            consume: true,
+        },
+    );
+    let mut lexer = Lexer::new("@abc-rest,", regex);
+    let value = lexer.next_raw_token().unwrap();
+    let rest = lexer.next_raw_token().unwrap();
+    assert_eq!((value.name.as_str(), value.src.as_str()), ("#VL", "@abc"));
+    assert_eq!((rest.name.as_str(), rest.src.as_str()), ("#TX", "-rest"));
+
+    assert_eq!(lex("12abc", Options::default()).unwrap(), "#TX:12abc");
+
+    let ender = Options {
+        ender: vec!["END".into()],
+        ..Default::default()
+    };
+    let mut lexer = Lexer::new("abcEND", ender.clone());
+    assert_eq!(lexer.next_raw_token().unwrap().src, "abc");
+    assert_eq!(lex("abcEX", ender).unwrap(), "#TX:abcEX");
 }

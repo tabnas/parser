@@ -101,6 +101,36 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn is_text_delimiter_here(&self) -> bool {
+        let Some(ch) = self.peek() else {
+            return true;
+        };
+        let remaining = &self.src[self.byte_position()..];
+        (self.options.space.lex && self.options.space.chars.contains(ch))
+            || (self.options.fixed.lex
+                && self
+                    .options
+                    .fixed
+                    .tokens
+                    .values()
+                    .any(|token| !token.source.is_empty() && remaining.starts_with(&token.source)))
+            || (self.options.line.lex
+                && (self.options.line.chars.contains(ch)
+                    || self.options.line.fixed.contains(&ch)
+                    || matches!(ch, '\u{2028}' | '\u{2029}')))
+            || (self.options.comment.lex
+                && self.options.comment.definitions.values().any(|definition| {
+                    definition.lex
+                        && !definition.start.is_empty()
+                        && remaining.starts_with(&definition.start)
+                }))
+            || self
+                .options
+                .ender
+                .iter()
+                .any(|ender| !ender.is_empty() && remaining.starts_with(ender))
+    }
+
     /// Fetches the next non-IGNORE token (skipping spaces, lines, comments).
     pub fn next_token(&mut self) -> Result<Token, TabnasError> {
         if let Some(ref e) = self.err {
@@ -386,37 +416,95 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // 6. Keywords: true, false, null
-        if self.options.value.lex && (c == 't' || c == 'f' || c == 'n') {
-            if let Some(tkn) = self.match_keyword(pnt) {
-                return Ok(tkn);
-            }
-        }
-
-        // 7. Numbers
+        // 6. Numbers
         if self.options.number.lex && (c == '-' || c == '.' || c.is_ascii_digit()) {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
         }
 
-        // 8. Text (unquoted) if enabled
-        if self.options.text.lex && !is_text_delimiter(c, &self.options) {
+        // 7. Text and named/regex values share the same delimited run.
+        if (self.options.text.lex || self.options.value.lex) && !self.is_text_delimiter_here() {
+            let start = (self.idx, self.ri, self.ci);
+            let remaining = self.src[self.byte_position()..].to_string();
             let mut src = String::new();
             while let Some(ch) = self.peek() {
-                if is_text_delimiter(ch, &self.options) {
+                if self.is_text_delimiter_here() {
                     break;
                 }
                 src.push(ch);
                 self.advance();
             }
-            return Ok(Token::new(
-                "#TX",
-                TIN_TX,
-                Value::String(src.clone()),
-                src,
-                pnt,
-            ));
+
+            if self.options.value.lex {
+                if let Some(definition) = self
+                    .options
+                    .value
+                    .definitions
+                    .get(&src)
+                    .filter(|definition| definition.matcher.is_none())
+                {
+                    return Ok(Token::new(
+                        "#VL",
+                        TIN_VL,
+                        definition
+                            .val
+                            .clone()
+                            .unwrap_or_else(|| Value::String(src.clone())),
+                        src,
+                        pnt,
+                    ));
+                }
+
+                let mut definitions: Vec<_> = self
+                    .options
+                    .value
+                    .definitions
+                    .iter()
+                    .filter(|(_, definition)| definition.matcher.is_some())
+                    .map(|(name, definition)| (name.clone(), definition.clone()))
+                    .collect();
+                definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+                for (_, definition) in definitions {
+                    let regex = definition.matcher.as_ref().expect("filtered matcher");
+                    let target = if definition.consume { &remaining } else { &src };
+                    let Some(found) = regex.find(target).filter(|found| found.start() == 0) else {
+                        continue;
+                    };
+                    if !definition.consume && found.end() != target.len() {
+                        continue;
+                    }
+                    let matched = found.as_str().to_string();
+                    if definition.consume {
+                        (self.idx, self.ri, self.ci) = start;
+                        for _ in matched.chars() {
+                            self.advance();
+                        }
+                    }
+                    return Ok(Token::new(
+                        "#VL",
+                        TIN_VL,
+                        definition
+                            .val
+                            .clone()
+                            .unwrap_or_else(|| Value::String(matched.clone())),
+                        matched,
+                        pnt,
+                    ));
+                }
+            }
+
+            if !self.options.text.lex {
+                (self.idx, self.ri, self.ci) = start;
+            } else {
+                return Ok(Token::new(
+                    "#TX",
+                    TIN_TX,
+                    Value::String(src.clone()),
+                    src,
+                    pnt,
+                ));
+            }
         }
 
         // 9. Unclaimed character -> Error: unexpected
@@ -431,29 +519,6 @@ impl<'a> Lexer<'a> {
         );
         self.err = Some(err.clone());
         Err(err)
-    }
-
-    fn match_keyword(&mut self, pnt: Point) -> Option<Token> {
-        let remaining = &self.src[self.byte_position()..];
-        if remaining.starts_with("true") && !is_ident_char(self.peek_at(4)) {
-            for _ in 0..4 {
-                self.advance();
-            }
-            return Some(Token::new("#VL", TIN_VL, Value::Bool(true), "true", pnt));
-        }
-        if remaining.starts_with("false") && !is_ident_char(self.peek_at(5)) {
-            for _ in 0..5 {
-                self.advance();
-            }
-            return Some(Token::new("#VL", TIN_VL, Value::Bool(false), "false", pnt));
-        }
-        if remaining.starts_with("null") && !is_ident_char(self.peek_at(4)) {
-            for _ in 0..4 {
-                self.advance();
-            }
-            return Some(Token::new("#VL", TIN_VL, Value::Null, "null", pnt));
-        }
-        None
     }
 
     fn match_number(&mut self, pnt: Point) -> Result<Option<Token>, TabnasError> {
@@ -508,6 +573,32 @@ impl<'a> Lexer<'a> {
                             .map(|value| value as f64)
                             .ok();
                         if let Some(mut value) = value {
+                            if !self.is_text_delimiter_here() {
+                                self.idx = start_idx;
+                                self.ri = pnt.ri;
+                                self.ci = pnt.ci;
+                                return Ok(None);
+                            }
+                            if self.options.value.lex {
+                                if let Some(definition) = self
+                                    .options
+                                    .value
+                                    .definitions
+                                    .get(&src)
+                                    .filter(|definition| definition.matcher.is_none())
+                                {
+                                    return Ok(Some(Token::new(
+                                        "#VL",
+                                        TIN_VL,
+                                        definition
+                                            .val
+                                            .clone()
+                                            .unwrap_or_else(|| Value::String(src.clone())),
+                                        src,
+                                        pnt,
+                                    )));
+                                }
+                            }
                             if src.starts_with('-') {
                                 value = -value;
                             }
@@ -628,6 +719,34 @@ impl<'a> Lexer<'a> {
                 self.ri = pnt.ri;
                 self.ci = pnt.ci;
                 return Ok(None);
+            }
+        }
+
+        if !self.is_text_delimiter_here() {
+            self.idx = start_idx;
+            self.ri = pnt.ri;
+            self.ci = pnt.ci;
+            return Ok(None);
+        }
+
+        if self.options.value.lex {
+            if let Some(definition) = self
+                .options
+                .value
+                .definitions
+                .get(&src)
+                .filter(|definition| definition.matcher.is_none())
+            {
+                return Ok(Some(Token::new(
+                    "#VL",
+                    TIN_VL,
+                    definition
+                        .val
+                        .clone()
+                        .unwrap_or_else(|| Value::String(src.clone())),
+                    src,
+                    pnt,
+                )));
             }
         }
 
@@ -971,28 +1090,4 @@ impl<'a> Lexer<'a> {
             }
         }
     }
-}
-
-fn is_ident_char(ch: Option<char>) -> bool {
-    matches!(ch, Some(c) if c.is_alphanumeric() || c == '_' || c == '$')
-}
-
-fn is_text_delimiter(ch: char, options: &Options) -> bool {
-    (options.space.lex && options.space.chars.contains(ch))
-        || (options.fixed.lex
-            && options
-                .fixed
-                .tokens
-                .values()
-                .any(|token| token.source.starts_with(ch)))
-        || (options.line.lex
-            && (options.line.chars.contains(ch)
-                || options.line.fixed.contains(&ch)
-                || matches!(ch, '\u{2028}' | '\u{2029}')))
-        || (options.comment.lex
-            && options
-                .comment
-                .definitions
-                .values()
-                .any(|definition| definition.lex && definition.start.starts_with(ch)))
 }

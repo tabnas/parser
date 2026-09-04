@@ -659,11 +659,73 @@ fn apply_options(
         }
     }
     if let Some(value) = map.get("value") {
-        set_bool(
-            object(value, "options.value")?,
-            "lex",
-            &mut options.value.lex,
-        );
+        let value = object(value, "options.value")?;
+        set_bool(value, "lex", &mut options.value.lex);
+        if let Some(definitions) = value.get("def") {
+            for (name, value) in object(definitions, "options.value.def")? {
+                if value.is_null() || value == &JsonValue::Bool(false) {
+                    options.value.definitions.shift_remove(name);
+                    continue;
+                }
+                let value = object(value, &format!("options.value.def.{name}"))?;
+                let val = value
+                    .get("val")
+                    .filter(|value| !value.is_null())
+                    .map(Value::from_json);
+                let matcher = value
+                    .get("match")
+                    .map(|matcher| {
+                        let source = matcher.as_str().ok_or_else(|| {
+                            GrammarError(format!(
+                                "Grammar: options.value.def.{name}.match must be a serialized regex"
+                            ))
+                        })?;
+                        compile_serialized_regex(
+                            source,
+                            &format!("options.value.def.{name}.match"),
+                            true,
+                        )
+                        .map(|(regex, _)| regex)
+                    })
+                    .transpose()?;
+                let consume = match value.get("consume") {
+                    Some(consume) => consume.as_bool().ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: options.value.def.{name}.consume must be a boolean"
+                        ))
+                    })?,
+                    None => false,
+                };
+                options.value.definitions.insert(
+                    name.clone(),
+                    crate::ValueDef {
+                        val,
+                        matcher,
+                        consume,
+                    },
+                );
+            }
+        }
+    }
+    if let Some(ender) = map.get("ender") {
+        options.ender = match ender {
+            JsonValue::Null => Vec::new(),
+            JsonValue::String(ender) => vec![ender.clone()],
+            JsonValue::Array(enders) => enders
+                .iter()
+                .map(|ender| {
+                    ender.as_str().map(str::to_owned).ok_or_else(|| {
+                        GrammarError("Grammar: options.ender entries must be strings".into())
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            _ => {
+                return Err(GrammarError(
+                    "Grammar: options.ender must be a string, array, or null".into(),
+                ))
+            }
+        };
+        options.ender.retain(|ender| !ender.is_empty());
     }
     if let Some(map_options) = map.get("map") {
         set_bool(
@@ -915,33 +977,8 @@ fn apply_options(
                         "Grammar: options.match.token.{name} must be a serialized regex"
                     ))
                 })?;
-                let (pattern, flags, eager) = serialized_regex(source).ok_or_else(|| {
-                    GrammarError(format!(
-                        "Grammar: options.match.token.{name} must use @/pattern/flags"
-                    ))
-                })?;
-                if flags.contains('v')
-                    || flags
-                        .chars()
-                        .any(|flag| !matches!(flag, 'i' | 'm' | 's' | 'u' | 'g' | 'y' | 'd'))
-                {
-                    return Err(GrammarError(format!(
-                        "Grammar: unsupported regex flags: {flags}"
-                    )));
-                }
-                let mut builder = RegexBuilder::new(pattern);
-                builder
-                    .case_insensitive(flags.contains('i'))
-                    .multi_line(flags.contains('m'))
-                    .dot_matches_new_line(flags.contains('s'));
-                let regex = builder.build().map_err(|error| {
-                    GrammarError(format!("Grammar: invalid regex for {name}: {error}"))
-                })?;
-                if regex.is_match("") {
-                    return Err(GrammarError(format!(
-                        "Grammar: regex for {name} must not match empty input"
-                    )));
-                }
+                let (regex, eager) =
+                    compile_serialized_regex(source, &format!("options.match.token.{name}"), true)?;
                 let tin = options
                     .match_tokens
                     .get(&name)
@@ -1002,6 +1039,38 @@ fn serialized_regex(source: &str) -> Option<(&str, &str, bool)> {
         .or_else(|| source.strip_prefix("@/").map(|body| (body, false)))?;
     let slash = body.rfind('/')?;
     Some((&body[..slash], &body[slash + 1..], eager))
+}
+
+fn compile_serialized_regex(
+    source: &str,
+    label: &str,
+    reject_empty: bool,
+) -> Result<(regex::Regex, bool), GrammarError> {
+    let (pattern, flags, eager) = serialized_regex(source)
+        .ok_or_else(|| GrammarError(format!("Grammar: {label} must use @/pattern/flags")))?;
+    if flags.contains('v')
+        || flags
+            .chars()
+            .any(|flag| !matches!(flag, 'i' | 'm' | 's' | 'u' | 'g' | 'y' | 'd'))
+    {
+        return Err(GrammarError(format!(
+            "Grammar: unsupported regex flags: {flags}"
+        )));
+    }
+    let mut builder = RegexBuilder::new(pattern);
+    builder
+        .case_insensitive(flags.contains('i'))
+        .multi_line(flags.contains('m'))
+        .dot_matches_new_line(flags.contains('s'));
+    let regex = builder
+        .build()
+        .map_err(|error| GrammarError(format!("Grammar: invalid regex for {label}: {error}")))?;
+    if reject_empty && regex.is_match("") {
+        return Err(GrammarError(format!(
+            "Grammar: regex for {label} must not match empty input"
+        )));
+    }
+    Ok((regex, eager))
 }
 
 pub fn validate_grammar(rules: &IndexMap<String, RuleSpec>) -> Vec<String> {

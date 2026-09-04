@@ -22,7 +22,7 @@ pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, MatchToken, Options,
     ParseOptions, ParsePrepare, RecoverOptions, ResultOptions, RewindOptions, SpaceOptions,
-    ValueOptions,
+    ValueDef, ValueOptions,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{

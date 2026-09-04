@@ -182,13 +182,39 @@ pub struct CommentOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct ValueDef {
+    pub val: Option<crate::Value>,
+    pub matcher: Option<Regex>,
+    pub consume: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ValueOptions {
     pub lex: bool,
+    pub definitions: IndexMap<String, ValueDef>,
 }
 
 impl Default for ValueOptions {
     fn default() -> Self {
-        Self { lex: true }
+        let mut definitions = IndexMap::new();
+        for (source, value) in [
+            ("true", crate::Value::Bool(true)),
+            ("false", crate::Value::Bool(false)),
+            ("null", crate::Value::Null),
+        ] {
+            definitions.insert(
+                source.into(),
+                ValueDef {
+                    val: Some(value),
+                    matcher: None,
+                    consume: false,
+                },
+            );
+        }
+        Self {
+            lex: true,
+            definitions,
+        }
     }
 }
 
@@ -365,6 +391,7 @@ pub struct Options {
     pub line: LineOptions,
     pub comment: CommentOptions,
     pub value: ValueOptions,
+    pub ender: Vec<String>,
     pub map: MapOptions,
     pub lex: LexOptions,
     pub rewind: RewindOptions,
@@ -392,6 +419,7 @@ impl Default for Options {
             line: LineOptions::default(),
             comment: CommentOptions::default(),
             value: ValueOptions::default(),
+            ender: Vec::new(),
             map: MapOptions::default(),
             lex: LexOptions::default(),
             rewind: RewindOptions::default(),

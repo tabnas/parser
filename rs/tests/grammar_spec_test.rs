@@ -567,3 +567,24 @@ fn serialized_comment_definitions_reach_the_runtime() {
         .grammar_json(r#"{"options":{"comment":{"def":{"x":{"suffix":[1]}}}}}"#)
         .is_err());
 }
+
+#[test]
+fn serialized_value_definitions_and_enders_reach_the_runtime() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"value":{"def":{"kay":{"match":"@/^k$/i","val":"KAY"},"raw":{"match":"@/^r$/","val":null},"true":null}},"ender":["END"]},"rule":{"top":{"open":[{"s":"#VL","a":"@value$"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(parser.parse("k").unwrap(), Value::String("KAY".into()));
+    assert_eq!(parser.parse("r").unwrap(), Value::String("r".into()));
+    assert!(parser.parse("true").is_err());
+    assert_eq!(parser.options.ender, ["END"]);
+
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"value":{"def":{"x":{"match":"nope"}}}}}"#)
+        .is_err());
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"ender":[1]}}"#)
+        .is_err());
+}
