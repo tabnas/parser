@@ -2264,12 +2264,10 @@ fn ordered(left: &Value, right: &Value) -> Option<i8> {
         } else {
             0
         }),
-        (Value::String(left), Value::String(right)) => Some(if left < right {
-            -1
-        } else if left > right {
-            1
-        } else {
-            0
+        (Value::String(left), Value::String(right)) => Some(match left.cmp(right) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
         }),
         _ => None,
     }
