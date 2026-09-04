@@ -131,6 +131,62 @@ fn declarative_conditions_gate_alternates_and_counters() {
 }
 
 #[test]
+fn declarative_conditions_resolve_nested_values_tokens_and_rule_graph() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+    parser.action("@seed-node", |rule| {
+        *rule.node.borrow_mut() = Value::from_json(&serde_json::json!({"kind": "root"}));
+    });
+    for name in ["@opened", "@parent", "@child", "@prev"] {
+        let calls = calls.clone();
+        parser.action(name, move |_| calls.lock().unwrap().push(name));
+    }
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"},"fixed":{"token":{"#TA":"a","#TB":"b"}}},
+              "rule":{
+                "top":{
+                  "open":[{
+                    "s":"#TA",
+                    "c":{"o.0.src":"a","o0.src":"a","spec.name":"top","need":0},
+                    "u":{"mode":{"kind":"strict"}},
+                    "a":["@seed-node","@opened"],
+                    "p":"child"
+                  }],
+                  "close":[{
+                    "c":{
+                      "u.mode.kind":"strict",
+                      "node.kind":"root",
+                      "child.name":"child",
+                      "child.parent.name":"top",
+                      "next.name":"child",
+                      "next.node.kind":"root"
+                    },
+                    "a":"@child",
+                    "r":"next"
+                  }]
+                },
+                "child":{
+                  "open":[{"s":"#TB","c":{"parent.name":"top"},"a":"@parent"}]
+                },
+                "next":{
+                  "open":[{"s":"#ZZ","c":{"prev.name":"top"},"a":"@prev"}]
+                }
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("ab").unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        ["@opened", "@parent", "@child", "@prev"]
+    );
+}
+
+#[test]
 fn condition_validation_and_group_filters_fail_closed() {
     for (document, message) in [
         (

@@ -6,7 +6,7 @@ use crate::error::TabnasError;
 use crate::lexer::Lexer;
 use crate::options::Options;
 use crate::rule::{
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSpec, RuleState,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
 };
 use crate::token::{Token, TIN_BD, TIN_CM, TIN_LN, TIN_SP, TIN_ZZ};
 use crate::value::Value;
@@ -350,7 +350,7 @@ impl Parser {
                         candidate.c = tokens;
                     }
                     if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
-                        || !conditions_match(&alt.c, &candidate)
+                        || !conditions_match(&alt.c, &candidate, &stack)
                     {
                         continue;
                     }
@@ -495,6 +495,10 @@ impl Parser {
                     child.parent_node = Some(current_rule.node.clone());
                     child.n = current_rule.n.clone();
                     child.k = current_rule.k.clone();
+                    child.parent_rule = Some(current_rule.snapshot());
+                    current_rule.next_rule_name = Some(push_name.clone());
+                    current_rule.child_rule = Some(child.snapshot());
+                    current_rule.next_rule = current_rule.child_rule.clone();
                     completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
@@ -507,18 +511,26 @@ impl Parser {
                     next_rule_id += 1;
                     next.d = current_rule.d;
                     next.parent_node = current_rule.parent_node.clone();
+                    next.parent_rule = current_rule.parent_rule.clone();
                     next.n = current_rule.n.clone();
                     next.k = current_rule.k.clone();
+                    current_rule.next_rule_name = Some(replace_name.clone());
+                    current_rule.next_rule = Some(next.snapshot());
+                    next.prev_rule = Some(current_rule.snapshot());
                     completed_rule = current_rule;
                     current_rule = next;
                 } else if is_open {
                     current_rule.state = RuleState::Close;
+                    current_rule.next_rule_name = Some(current_rule.name.clone());
                     completed_rule = current_rule.clone();
                 } else {
                     // Close phase pop
+                    current_rule.next_rule_name = stack.last().map(|parent| parent.name.clone());
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = stack.pop() {
                         parent.child_node = current_rule.node.borrow().clone();
+                        parent.child_rule = Some(current_rule.snapshot());
+                        parent.next_rule = parent.child_rule.clone();
                         current_rule = parent;
                     } else {
                         // Root rule popped! Done.
@@ -570,10 +582,14 @@ impl Parser {
                     // alternatives were declared, a mismatch is a syntax
                     // error at this rule rather than permission to pop it.
                     if alts.is_empty() {
+                        current_rule.next_rule_name =
+                            stack.last().map(|parent| parent.name.clone());
                         let completed_rule = current_rule.clone();
                         let mut completed_value = None;
                         if let Some(mut parent) = stack.pop() {
                             parent.child_node = current_rule.node.borrow().clone();
+                            parent.child_rule = Some(current_rule.snapshot());
+                            parent.next_rule = parent.child_rule.clone();
                             current_rule = parent;
                         } else {
                             completed_value = Some(current_rule.node.borrow().clone());
@@ -679,16 +695,12 @@ fn builtin_condition_matches(reference: Option<&str>, rule: &Rule) -> bool {
     }
 }
 
-fn conditions_match(conditions: &[Condition], rule: &Rule) -> bool {
+fn conditions_match(conditions: &[Condition], rule: &Rule, ancestors: &[Rule]) -> bool {
     conditions.iter().all(|condition| {
-        let resolved = resolve_condition_path(rule, &condition.path);
+        let resolved = resolve_condition_path(rule, ancestors, &condition.path);
         if condition.op == CompareOp::Exist {
-            let exists = condition_exists(rule, &condition.path);
-            let wanted = match condition.value {
-                Value::Bool(value) => value,
-                Value::Number(value) => value != 0.0,
-                _ => true,
-            };
+            let exists = condition_exists(rule, ancestors, &condition.path);
+            let wanted = matches!(condition.value, Value::Bool(true));
             return exists == wanted;
         }
         let Some(actual) = resolved else {
@@ -726,21 +738,43 @@ fn ordered(left: &Value, right: &Value) -> Option<i8> {
     }
 }
 
-fn condition_exists(rule: &Rule, path: &[String]) -> bool {
+fn condition_exists(rule: &Rule, ancestors: &[Rule], path: &[String]) -> bool {
     if path.first().map(String::as_str) == Some("n") && path.len() == 2 {
         rule.n.contains_key(&path[1])
+    } else if path.first().map(String::as_str) == Some("parent") {
+        ancestors
+            .split_last()
+            .is_some_and(|(parent, parent_ancestors)| {
+                condition_exists(parent, parent_ancestors, &path[1..])
+            })
+    } else if path.first().map(String::as_str) == Some("child") {
+        rule.child_rule
+            .as_deref()
+            .is_some_and(|child| snapshot_condition_exists(child, &path[1..]))
+    } else if path.first().map(String::as_str) == Some("prev") {
+        rule.prev_rule
+            .as_deref()
+            .is_some_and(|prev| snapshot_condition_exists(prev, &path[1..]))
+    } else if path.first().map(String::as_str) == Some("next") {
+        if let Some(next) = rule.next_rule.as_deref() {
+            snapshot_condition_exists(next, &path[1..])
+        } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+            condition_exists(rule, ancestors, &path[1..])
+        } else {
+            false
+        }
     } else {
-        resolve_condition_path(rule, path).is_some()
+        resolve_condition_path(rule, ancestors, path).is_some()
     }
 }
 
-fn resolve_condition_path(rule: &Rule, path: &[String]) -> Option<Value> {
+fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> Option<Value> {
     let root = path.first()?.as_str();
     let rest = &path[1..];
     match root {
         "n" if rest.len() == 1 => Some(Value::Number(*rule.n.get(&rest[0]).unwrap_or(&0) as f64)),
-        "u" if rest.len() == 1 => rule.u.get(&rest[0]).cloned(),
-        "k" if rest.len() == 1 => rule.k.get(&rest[0]).cloned(),
+        "u" => map_path(&rule.u, rest),
+        "k" => map_path(&rule.k, rest),
         "d" if rest.is_empty() => Some(Value::Number(rule.d as f64)),
         "i" if rest.is_empty() => Some(Value::Number(rule.i as f64)),
         "name" if rest.is_empty() => Some(Value::String(rule.name.clone())),
@@ -751,31 +785,148 @@ fn resolve_condition_path(rule: &Rule, path: &[String]) -> Option<Value> {
             }
             .into(),
         )),
-        "node" if rest.is_empty() => Some(rule.node.borrow().clone()),
+        "node" => value_path(rule.node.borrow().clone(), rest),
+        "need" if rest.is_empty() => Some(Value::Number(rule.need as f64)),
         "oN" if rest.is_empty() => Some(Value::Number(rule.o.len() as f64)),
         "cN" if rest.is_empty() => Some(Value::Number(rule.c.len() as f64)),
+        "o" => token_list_path(&rule.o, rest),
+        "c" => token_list_path(&rule.c, rest),
         "o0" => token_path(rule.o.first(), rest),
         "o1" => token_path(rule.o.get(1), rest),
         "c0" => token_path(rule.c.first(), rest),
         "c1" => token_path(rule.c.get(1), rest),
+        "parent" => {
+            let (parent, parent_ancestors) = ancestors.split_last()?;
+            resolve_condition_path(parent, parent_ancestors, rest)
+        }
+        "child" => resolve_snapshot_path(rule.child_rule.as_deref()?, rest),
+        "prev" => resolve_snapshot_path(rule.prev_rule.as_deref()?, rest),
+        "next" => {
+            if let Some(next) = rule.next_rule.as_deref() {
+                resolve_snapshot_path(next, rest)
+            } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+                resolve_condition_path(rule, ancestors, rest)
+            } else {
+                None
+            }
+        }
+        "spec" if rest == ["name"] => Some(Value::String(rule.name.clone())),
         _ => None,
     }
+}
+
+fn snapshot_condition_exists(rule: &RuleSnapshot, path: &[String]) -> bool {
+    if path.first().map(String::as_str) == Some("n") && path.len() == 2 {
+        rule.n.contains_key(&path[1])
+    } else if path.first().map(String::as_str) == Some("parent") {
+        rule.parent_rule
+            .as_deref()
+            .is_some_and(|parent| snapshot_condition_exists(parent, &path[1..]))
+    } else if path.first().map(String::as_str) == Some("child") {
+        rule.child_rule
+            .as_deref()
+            .is_some_and(|child| snapshot_condition_exists(child, &path[1..]))
+    } else if path.first().map(String::as_str) == Some("prev") {
+        rule.prev_rule
+            .as_deref()
+            .is_some_and(|prev| snapshot_condition_exists(prev, &path[1..]))
+    } else if path.first().map(String::as_str) == Some("next") {
+        if let Some(next) = rule.next_rule.as_deref() {
+            snapshot_condition_exists(next, &path[1..])
+        } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+            snapshot_condition_exists(rule, &path[1..])
+        } else {
+            false
+        }
+    } else {
+        resolve_snapshot_path(rule, path).is_some()
+    }
+}
+
+fn resolve_snapshot_path(rule: &RuleSnapshot, path: &[String]) -> Option<Value> {
+    let root = path.first()?.as_str();
+    let rest = &path[1..];
+    match root {
+        "n" if rest.len() == 1 => Some(Value::Number(*rule.n.get(&rest[0]).unwrap_or(&0) as f64)),
+        "u" => map_path(&rule.u, rest),
+        "k" => map_path(&rule.k, rest),
+        "d" if rest.is_empty() => Some(Value::Number(rule.d as f64)),
+        "i" if rest.is_empty() => Some(Value::Number(rule.i as f64)),
+        "name" if rest.is_empty() => Some(Value::String(rule.name.clone())),
+        "state" if rest.is_empty() => Some(Value::String(
+            match rule.state {
+                RuleState::Open => "o",
+                RuleState::Close => "c",
+            }
+            .into(),
+        )),
+        "node" => value_path(rule.node.borrow().clone(), rest),
+        "need" if rest.is_empty() => Some(Value::Number(rule.need as f64)),
+        "oN" if rest.is_empty() => Some(Value::Number(rule.o.len() as f64)),
+        "cN" if rest.is_empty() => Some(Value::Number(rule.c.len() as f64)),
+        "o" => token_list_path(&rule.o, rest),
+        "c" => token_list_path(&rule.c, rest),
+        "o0" => token_path(rule.o.first(), rest),
+        "o1" => token_path(rule.o.get(1), rest),
+        "c0" => token_path(rule.c.first(), rest),
+        "c1" => token_path(rule.c.get(1), rest),
+        "parent" => resolve_snapshot_path(rule.parent_rule.as_deref()?, rest),
+        "child" => resolve_snapshot_path(rule.child_rule.as_deref()?, rest),
+        "prev" => resolve_snapshot_path(rule.prev_rule.as_deref()?, rest),
+        "next" => {
+            if let Some(next) = rule.next_rule.as_deref() {
+                resolve_snapshot_path(next, rest)
+            } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+                resolve_snapshot_path(rule, rest)
+            } else {
+                None
+            }
+        }
+        "spec" if rest == ["name"] => Some(Value::String(rule.name.clone())),
+        _ => None,
+    }
+}
+
+fn map_path(map: &HashMap<String, Value>, path: &[String]) -> Option<Value> {
+    let (name, rest) = path.split_first()?;
+    value_path(map.get(name)?.clone(), rest)
+}
+
+fn value_path(mut value: Value, path: &[String]) -> Option<Value> {
+    for part in path {
+        value = match value {
+            Value::Object(map) => map.get(part)?.clone(),
+            Value::Array(items) => items.get(part.parse::<usize>().ok()?)?.clone(),
+            _ => return None,
+        };
+    }
+    Some(value)
+}
+
+fn token_list_path(tokens: &[Token], path: &[String]) -> Option<Value> {
+    let (index, rest) = path.split_first()?;
+    token_path(tokens.get(index.parse::<usize>().ok()?), rest)
 }
 
 fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
     let token = token?;
     if path.is_empty() {
-        return Some(token.val.clone());
+        let mut value = IndexMap::new();
+        value.insert("tin".into(), Value::Number(token.tin as f64));
+        value.insert("name".into(), Value::String(token.name.clone()));
+        value.insert("src".into(), Value::String(token.src.clone()));
+        value.insert("val".into(), token.val.clone());
+        value.insert("why".into(), Value::String(token.why.clone()));
+        return Some(Value::Object(value));
     }
-    if path.len() != 1 {
-        return None;
-    }
-    match path[0].as_str() {
-        "tin" => Some(Value::Number(token.tin as f64)),
-        "name" => Some(Value::String(token.name.clone())),
-        "src" => Some(Value::String(token.src.clone())),
-        "val" => Some(token.val.clone()),
-        "why" => Some(Value::String(token.why.clone())),
-        _ => None,
-    }
+    let (field, rest) = path.split_first()?;
+    let value = match field.as_str() {
+        "tin" => Value::Number(token.tin as f64),
+        "name" => Value::String(token.name.clone()),
+        "src" => Value::String(token.src.clone()),
+        "val" => token.val.clone(),
+        "why" => Value::String(token.why.clone()),
+        _ => return None,
+    };
+    value_path(value, rest)
 }

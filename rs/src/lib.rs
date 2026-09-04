@@ -24,7 +24,9 @@ pub use options::{
     RewindOptions,
 };
 pub use parser::Parser;
-pub use rule::{AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSpec, RuleState};
+pub use rule::{
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+};
 pub use token::{
     Point, Tin, Token, TIN_CA, TIN_CB, TIN_CL, TIN_CS, TIN_NR, TIN_OB, TIN_OS, TIN_ST, TIN_TX,
     TIN_VL, TIN_ZZ,
