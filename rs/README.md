@@ -93,13 +93,16 @@ source spans for scannerless serialized grammars, including rollback when a
 candidate alternate later fails. Typed named hooks cover alternate conditions,
 modifiers, errors, dynamic routing/backtracking, and effect-based token
 matchers. Callback panics become structured `internal` diagnostics at public
-parser and lexer boundaries. Opt-in typed `MapRef`, `ListRef`, and `Text`
+parser and lexer boundaries, retaining the active rule, complete rule stack,
+token, and source position when a parse context exists. Opt-in typed `MapRef`, `ListRef`, and `Text`
 results expose parse metadata while serializing to the same plain JSON shape as TypeScript. Rust
 directly executes every non-exempt shared TSV fixture; the
 fixture paths are not copied into the crate. The repository gate requires every
 non-exempt shared fixture to have a TypeScript, Go, and Rust runner, and the
 strict-JSON differential gate compares token streams over every data row in
-both JSON and parser corpora.
+both JSON and parser corpora. Additional compiler-consumer gates compare Rust
+against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
+and GBNF compilers.
 
 Not yet equivalent to the mature TypeScript/Go engines. Ordered serialized
 grammar loading supports static token/rule/action fields, rule removal,
@@ -109,8 +112,10 @@ are not yet equivalent.
 Unsupported callback and matcher forms fail at install time instead of being
 silently ignored. See
 `../doc/rust-port-implementation-plan.md` for the architecture and gates for
-that work. Do not present this crate as a drop-in replacement until those
-surfaces and the differential harness land.
+that work. The portable serialized contract has differential coverage; the
+imperative plugin surface remains deliberately outside the native v0.1 API, so
+do not present this crate as a drop-in replacement for arbitrary TypeScript or
+Go plugins.
 
 ## Development
 
@@ -119,3 +124,7 @@ cargo build --all-targets
 cargo test --all-targets
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+The crate declares Rust 1.85 as its minimum supported toolchain. From the
+repository root, `./ci/rust/run.sh` also runs the shared cross-runtime and
+compiler-consumer parity gates.
