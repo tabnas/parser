@@ -83,8 +83,8 @@ impl Parser {
         let mut lexer = Lexer::new(src, self.options.clone());
         let mut lookahead: Vec<Token> = Vec::with_capacity(8);
 
-        let start_name = if self.rules.contains_key("val") {
-            "val"
+        let start_name = if self.rules.contains_key(&self.options.rule.start) {
+            self.options.rule.start.as_str()
         } else if let Some(first_key) = self.rules.keys().next() {
             first_key.as_str()
         } else {
@@ -250,7 +250,7 @@ impl Parser {
                 }
 
                 // Run action
-                if let Some(ref act_name) = alt.a {
+                for act_name in &alt.a {
                     self.run_action(act_name, &mut current_rule)?;
                 }
 

@@ -106,6 +106,7 @@ impl Default for LexOptions {
 pub struct RuleOptions {
     pub finish: bool,
     pub include: String,
+    pub start: String,
 }
 
 impl Default for RuleOptions {
@@ -113,6 +114,7 @@ impl Default for RuleOptions {
         RuleOptions {
             finish: true,
             include: String::new(),
+            start: "val".to_string(),
         }
     }
 }

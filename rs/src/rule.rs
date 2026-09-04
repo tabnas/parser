@@ -18,7 +18,7 @@ pub struct AltSpec {
     pub p: Option<String>,
     pub r: Option<String>,
     pub b: usize,
-    pub a: Option<String>,
+    pub a: Vec<String>,
     pub n: HashMap<String, i32>,
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,

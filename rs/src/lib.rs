@@ -6,6 +6,7 @@ pub const VERSION: &str = "0.9.0";
 
 pub mod builtins;
 pub mod error;
+pub mod grammar;
 pub mod lexer;
 pub mod options;
 pub mod parser;
@@ -14,6 +15,7 @@ pub mod token;
 pub mod value;
 
 pub use error::TabnasError;
+pub use grammar::{GrammarError, GrammarSpec};
 pub use options::Options;
 pub use parser::Parser;
 pub use rule::{AltSpec, Rule, RuleSpec, RuleState};
@@ -209,7 +211,7 @@ impl Tabnas {
             s: vec![vec![TIN_ST], vec![TIN_CL]],
             p: Some("val".to_string()),
             u: u_pair,
-            a: Some("@pairkey".to_string()),
+            a: vec!["@pairkey".to_string()],
             g: "map,pair,key,json".to_string(),
             ..Default::default()
         });
