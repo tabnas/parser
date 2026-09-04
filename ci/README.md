@@ -115,13 +115,15 @@ and report the pair.
 
 ## parity/ — cross-runtime token-stream parity
 
-Both lexers must emit identical consumed-token streams for identical
+All available lexers must emit identical consumed-token streams for identical
 input; the value-level TSV suites cannot see token-boundary or position
-drift. `tokdump.js` and `gotokdump/` dump one flat record per consumed
-token via the public lex-subscriber API; `run-parity.sh [grammar]
-[spec-dir] [unescape|raw]` feeds every input column of every TSV
-fixture through both and diffs (one process per runtime; per-file
-sections).
+drift. `tokdump.js`, `gotokdump/`, and Rust's `parity_tokdump` dump one flat
+record per consumed token via the public lex-subscriber API;
+`run-parity.sh [grammar] [spec-dir] [unescape|raw]` feeds every input column
+of every TSV fixture through them and diffs the streams (one process per
+runtime; per-file sections). The function-free strict-JSON arm runs all three
+runtimes; jsonic remains TypeScript/Go until it has a serialized grammar
+artifact Rust can load.
 
 Comparison contract (each normalization is documented in the dumpers):
 
@@ -142,7 +144,9 @@ Comparison contract (each normalization is documented in the dumpers):
   convention (parser/jsonic corpora escape `\n`; json's is raw).
 
 Status at time of writing: `jsonic` over parser/test/spec — 1158/1158
-identical; `json` over json/ts/test/spec — 84/84 identical.
+identical in TypeScript and Go; `json` — 127/127 inputs from the JSON corpus
+and 448/448 extracted inputs from parser/test/spec identical in TypeScript,
+Go, and Rust.
 
 This harness found three real engine divergences during bring-up, all
 fixed in the engine alongside it: TS lexed unquoted `__proto__` /

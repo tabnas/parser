@@ -35,6 +35,9 @@ fn test_parse_nested_containers() {
 fn test_parse_errors() {
     let tn = Tabnas::make_json();
 
+    let err = tn.parse("").unwrap_err();
+    assert_eq!(err.code, "unexpected");
+
     // Unterminated string
     let err = tn.parse("\"unclosed").unwrap_err();
     assert_eq!(err.code, "unterminated_string");
@@ -100,4 +103,23 @@ fn unknown_actions_fail_loudly() {
 #[test]
 fn value_equality_preserves_signed_zero() {
     assert!(!Value::Number(-0.0).deep_equal(&Value::Number(0.0)));
+}
+
+#[test]
+fn token_subscribers_observe_the_filtered_parser_stream() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut tn = Tabnas::make_json();
+    let subscriber_seen = seen.clone();
+    tn.subscribe_tokens(move |token| {
+        subscriber_seen
+            .lock()
+            .expect("subscriber log lock")
+            .push(token.name.clone());
+    });
+
+    tn.parse("[1, 2]").unwrap();
+    assert_eq!(
+        *seen.lock().expect("subscriber log lock"),
+        ["#OS", "#NR", "#CA", "#NR", "#CS", "#ZZ", "#ZZ"]
+    );
 }

@@ -31,12 +31,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type Action = Arc<dyn Fn(&mut Rule) + Send + Sync>;
+pub type TokenSubscriber = Arc<dyn Fn(&Token) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Tabnas {
     pub options: Options,
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
+    pub token_subscribers: Vec<TokenSubscriber>,
 }
 
 impl Default for Tabnas {
@@ -51,6 +53,7 @@ impl Tabnas {
             options: Options::default(),
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            token_subscribers: Vec::new(),
         }
     }
 
@@ -59,6 +62,7 @@ impl Tabnas {
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            token_subscribers: Vec::new(),
         }
     }
 
@@ -76,6 +80,14 @@ impl Tabnas {
         self
     }
 
+    pub fn subscribe_tokens(
+        &mut self,
+        subscriber: impl Fn(&Token) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.token_subscribers.push(Arc::new(subscriber));
+        self
+    }
+
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         let mut p = Parser::new(self.options.clone());
         for spec in self.rules.values() {
@@ -83,6 +95,9 @@ impl Tabnas {
         }
         for (name, action) in &self.actions {
             p.add_action(name.clone(), action.clone());
+        }
+        for subscriber in &self.token_subscribers {
+            p.add_token_subscriber(subscriber.clone());
         }
         p.parse(src)
     }
@@ -101,7 +116,9 @@ impl Tabnas {
         opts.number.oct = false;
         opts.number.bin = false;
         opts.number.sep = None;
-        opts.number.exclude = Some("^00+".to_string());
+        // The core number matcher is intentionally lenient; reject the two
+        // prefixes it accepts that can never begin a strict JSON number.
+        opts.number.exclude = Some(r"^(?:\.|0\d)".to_string());
 
         opts.string.chars = "\"".to_string();
         opts.string.multi_chars = "".to_string();

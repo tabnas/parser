@@ -7,7 +7,7 @@ use crate::options::Options;
 use crate::rule::{AltSpec, CompareOp, Condition, Rule, RuleSpec, RuleState};
 use crate::token::{Token, TIN_BD, TIN_ZZ};
 use crate::value::Value;
-use crate::Action;
+use crate::{Action, TokenSubscriber};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
@@ -15,6 +15,7 @@ pub struct Parser {
     pub options: Options,
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
+    pub token_subscribers: Vec<TokenSubscriber>,
 }
 
 impl Parser {
@@ -23,6 +24,7 @@ impl Parser {
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
+            token_subscribers: Vec::new(),
         }
     }
 
@@ -32,6 +34,10 @@ impl Parser {
 
     pub fn add_action(&mut self, name: String, action: Action) {
         self.actions.insert(name, action);
+    }
+
+    pub fn add_token_subscriber(&mut self, subscriber: TokenSubscriber) {
+        self.token_subscribers.push(subscriber);
     }
 
     fn run_action(&self, name: &str, rule: &mut Rule) -> Result<(), TabnasError> {
@@ -77,7 +83,11 @@ impl Parser {
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         if src.is_empty() {
-            return Ok(Value::Null);
+            return if self.options.lex.empty {
+                Ok(Value::Null)
+            } else {
+                Err(TabnasError::new("unexpected", "", src, 0, 1, 1))
+            };
         }
 
         let mut lexer = Lexer::new(src, self.options.clone());
@@ -106,6 +116,9 @@ impl Parser {
                         break;
                     }
                     let t = lexer.next_token()?;
+                    for subscriber in &self.token_subscribers {
+                        subscriber(&t);
+                    }
                     let is_zz = t.tin == TIN_ZZ;
                     buf.push(t);
                     if is_zz {
