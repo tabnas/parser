@@ -31,7 +31,7 @@ pub(crate) struct LexerState {
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(src: &'a str, options: Options) -> Self {
+    pub fn new(src: &'a str, mut options: Options) -> Self {
         let mut chars = Vec::new();
         let mut byte_indices = Vec::new();
         for (b_idx, c) in src.char_indices() {
@@ -45,6 +45,13 @@ impl<'a> Lexer<'a> {
         } else {
             None
         };
+
+        // TypeScript evaluates serialized token matchers in tin order. Keep
+        // that order deterministic even when callers assembled Options by
+        // mutating the public map directly.
+        options
+            .match_tokens
+            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
 
         Lexer {
             src,
@@ -159,7 +166,7 @@ impl<'a> Lexer<'a> {
         }
 
         loop {
-            let tkn = self.next_raw()?;
+            let tkn = self.next_raw(None)?;
             // Check if ignore token
             if self.options.is_ignored(tkn.tin) {
                 continue;
@@ -170,7 +177,17 @@ impl<'a> Lexer<'a> {
 
     /// Fetch the next token without discarding whitespace, line, or comment tokens.
     pub fn next_raw_token(&mut self) -> Result<Token, TabnasError> {
-        self.next_raw()
+        self.next_raw(None)
+    }
+
+    /// Fetch a raw token while restricting non-eager custom token matchers to
+    /// the exact tins accepted at the parser slot being filled. Builtin and
+    /// fixed-token matchers are unaffected by this gate.
+    pub(crate) fn next_rule_token(
+        &mut self,
+        expected_match_tins: &[crate::Tin],
+    ) -> Result<Token, TabnasError> {
+        self.next_raw(Some(expected_match_tins))
     }
 
     /// Clear a recoverable lexer fault. Compound string faults resume at the
@@ -216,7 +233,7 @@ impl<'a> Lexer<'a> {
         self.err = None;
         self.end_reached = false;
         self.want = Some(wanted.to_vec());
-        let recut = self.next_raw().ok();
+        let recut = self.next_raw(None).ok();
         self.want = None;
         match recut.filter(|token| wanted.contains(&token.tin)) {
             Some(token) => Some((token, saved)),
@@ -236,7 +253,10 @@ impl<'a> Lexer<'a> {
         self.want = None;
     }
 
-    fn next_raw(&mut self) -> Result<Token, TabnasError> {
+    fn next_raw(
+        &mut self,
+        expected_match_tins: Option<&[crate::Tin]>,
+    ) -> Result<Token, TabnasError> {
         if self.end_reached {
             return Ok(Token::new(
                 "#ZZ",
@@ -266,6 +286,12 @@ impl<'a> Lexer<'a> {
         let custom = self.options.match_lex.then(|| {
             self.options.match_tokens.values().find_map(|matcher| {
                 if !self.wants(matcher.tin) {
+                    return None;
+                }
+                if self.want.is_none()
+                    && !matcher.eager
+                    && expected_match_tins.is_some_and(|expected| !expected.contains(&matcher.tin))
+                {
                     return None;
                 }
                 matcher.regex.find(remaining).and_then(|found| {

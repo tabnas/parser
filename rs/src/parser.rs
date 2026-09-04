@@ -447,6 +447,24 @@ impl Parser {
         out.into_iter().collect()
     }
 
+    fn expected_match_tins(&self, rule: &Rule, slot: usize) -> Vec<Tin> {
+        let Some(spec) = self.rules.get(&rule.name) else {
+            return Vec::new();
+        };
+        let alts = if rule.state == RuleState::Open {
+            &spec.open
+        } else {
+            &spec.close
+        };
+        let mut expected = BTreeSet::new();
+        for alt in alts {
+            if let Some(tins) = alt.s.get(slot) {
+                expected.extend(tins.iter().copied());
+            }
+        }
+        expected.into_iter().collect()
+    }
+
     fn ensure_lookahead(
         &self,
         lexer: &mut Lexer,
@@ -460,10 +478,11 @@ impl Parser {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
                 break;
             }
+            let expected_match_tins = self.expected_match_tins(rule, context.t.len());
             let token = loop {
                 let next = match context.next_replay() {
                     Some(token) => Ok(token),
-                    None => lexer.next_raw_token(),
+                    None => lexer.next_rule_token(&expected_match_tins),
                 };
                 let mut token = match next {
                     Ok(token) => token,
