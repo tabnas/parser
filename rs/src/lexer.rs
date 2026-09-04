@@ -690,7 +690,7 @@ impl<'a> Lexer<'a> {
                         }
                         'u' => {
                             // Unicode escape: \uXXXX or \u{X...}
-                            if self.peek() == Some('{') {
+                            if self.peek() == Some('{') && !self.options.string.escape_strict {
                                 raw_src.push(self.advance().unwrap()); // '{'
                                 let mut hex = String::new();
                                 let mut closed = false;
@@ -843,7 +843,7 @@ impl<'a> Lexer<'a> {
                                 }
                             }
                         }
-                        'x' => {
+                        'x' if !self.options.string.escape_strict => {
                             let mut hex = String::new();
                             for _ in 0..2 {
                                 if let Some(h) = self.peek() {
@@ -874,7 +874,7 @@ impl<'a> Lexer<'a> {
                         other => {
                             if !self.options.string.allow_unknown {
                                 let err = TabnasError::new(
-                                    "invalid_ascii",
+                                    "unexpected",
                                     format!("\\{}", other),
                                     self.src,
                                     esc_point.pos - 1,

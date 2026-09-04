@@ -247,6 +247,16 @@ fn explicitly_empty_string_chars_are_not_treated_as_unset() {
 }
 
 #[test]
+fn serialized_strict_escape_option_reaches_the_lexer() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(r#"{"options":{"string":{"allowUnknown":false,"escapeStrict":true}}}"#)
+        .unwrap();
+    let mut lexer = tabnas::lexer::Lexer::new(r#""\x41""#, parser.options);
+    assert_eq!(lexer.next_raw_token().unwrap_err().code, "unexpected");
+}
+
+#[test]
 fn serialized_fixed_tokens_rebind_remove_and_clear() {
     let mut parser = Tabnas::new();
     parser
@@ -300,5 +310,100 @@ fn shared_probe_grammar_fixture_executes_in_rust() {
         let mut parser = Tabnas::new();
         parser.grammar_json(source).unwrap();
         assert_eq!(parser.parse(input).is_ok(), accepted, "input {input:?}");
+    }
+}
+
+#[test]
+fn serialized_tree_builtins_bind_config_at_load() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{
+                "open":[{"a":"@node$","p":"leaf","k":{"node$":{"init":true,"rule":"top","kind":"user"}}}],
+                "close":[{"a":"@capture$","k":{"capture$":{"rule":"top","kind":"user"}}}]
+              },
+              "leaf":{"open":[{"s":"#TX","a":"@node$","k":{"node$":{"init":true,"rule":"leaf","kind":"user","nterms":1}}}]}
+            }}"##,
+        )
+        .unwrap();
+
+    assert!(!parser.rules["top"].open[0].k.contains_key("node$"));
+    assert!(parser.rules["top"].open[0]
+        .action_configs
+        .contains_key("@node$"));
+    let expected = Value::from_json(&serde_json::json!({
+        "rule": "top",
+        "src": "abc",
+        "kids": [{"rule": "leaf", "src": "abc", "kids": []}]
+    }));
+    assert!(parser.parse("abc").unwrap().deep_equal(&expected));
+}
+
+#[test]
+fn serialized_bubble_and_fold_builtins_preserve_tree_shape() {
+    let mut bubble = Tabnas::new();
+    bubble
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{"open":[{"p":"leaf"}],"close":[{"a":"@bubble$"}]},
+              "leaf":{"open":[{"s":"#NR","a":"@value$"}]}
+            }}"##,
+        )
+        .unwrap();
+    assert_eq!(bubble.parse("7").unwrap(), Value::Number(7.0));
+
+    let mut fold = Tabnas::new();
+    fold.grammar_json(
+        r##"{"clear":true,"options":{"rule":{"start":"top"},"fixed":{"token":{"#CA":","}}},"rule":{
+          "top":{
+            "open":[{"a":"@node$","p":"item","k":{"node$":{"init":true,"rule":"top","kind":"user"}}}],
+            "close":[{}]
+          },
+          "item":{
+            "open":[{"s":"#TX","a":"@node$","k":{"node$":{"init":true,"rule":"item","kind":"user","nterms":1}}}],
+            "close":[
+              {"s":"#CA","r":"item","a":"@fold$","k":{"fold$":{"cN":1}}},
+              {"a":"@fold$"}
+            ]
+          }
+        }}"##,
+    ).unwrap();
+    let expected = Value::from_json(&serde_json::json!({
+        "rule": "top",
+        "src": "a,b",
+        "kids": [
+            {"rule": "item", "src": "a", "kids": []},
+            {"rule": "item", "src": "b", "kids": []}
+        ]
+    }));
+    let actual = fold.parse("a,b").unwrap();
+    assert!(actual.deep_equal(&expected), "actual: {actual}");
+}
+
+#[test]
+fn builtin_config_is_scoped_to_its_declaring_alternate() {
+    for parent_runs in [false, true] {
+        let action = if parent_runs {
+            ",\"a\":\"@value$\"".to_string()
+        } else {
+            String::new()
+        };
+        let source = format!(
+            r##"{{"clear":true,"options":{{"rule":{{"start":"top"}}}},"rule":{{
+              "top":{{
+                "open":[{{"s":"#NR #NR","k":{{"value$":{{"from":1}}}},"p":"leaf"{action}}}],
+                "close":[{{"a":"@value$"}}]
+              }},
+              "leaf":{{"open":[{{"s":"#NR #NR","a":"@value$"}}],"close":[{{}}]}}
+            }}}}"##
+        );
+        let mut parser = Tabnas::new();
+        parser.grammar_json(&source).unwrap();
+        assert_eq!(
+            parser.parse("1 2 3 4").unwrap(),
+            Value::Number(3.0),
+            "parent_runs={parent_runs}"
+        );
     }
 }

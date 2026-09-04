@@ -79,6 +79,7 @@ pub struct StringOptions {
     pub chars: String,
     pub multi_chars: String,
     pub allow_unknown: bool,
+    pub escape_strict: bool,
     pub allow_control: bool,
 }
 
@@ -88,6 +89,7 @@ impl Default for StringOptions {
             chars: "\"'`".to_string(),
             multi_chars: "".to_string(),
             allow_unknown: true,
+            escape_strict: false,
             allow_control: false,
         }
     }

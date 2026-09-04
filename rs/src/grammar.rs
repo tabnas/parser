@@ -287,6 +287,24 @@ fn parse_alt(
     alt.n = number_map(map.get("n"), label)?;
     alt.u = value_map(map.get("u"), label)?;
     alt.k = value_map(map.get("k"), label)?;
+    for action in &alt.a {
+        if matches!(
+            action.as_str(),
+            "@node$"
+                | "@capture$"
+                | "@fold$"
+                | "@object$"
+                | "@array$"
+                | "@key$"
+                | "@setval$"
+                | "@value$"
+        ) {
+            let key = action.trim_start_matches('@');
+            if let Some(config) = alt.k.remove(key) {
+                alt.action_configs.insert(action.clone(), config);
+            }
+        }
+    }
     alt.g = match map.get("g") {
         None => String::new(),
         Some(JsonValue::String(tags)) => tags.clone(),
@@ -461,6 +479,13 @@ fn apply_options(
             .and_then(JsonValue::as_bool)
         {
             options.string.allow_unknown = value;
+        }
+        if let Some(value) = string
+            .get("escapeStrict")
+            .or_else(|| string.get("escape_strict"))
+            .and_then(JsonValue::as_bool)
+        {
+            options.string.escape_strict = value;
         }
         if let Some(value) = string
             .get("allowControl")

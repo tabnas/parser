@@ -123,6 +123,7 @@ impl Tabnas {
         opts.string.chars = "\"".to_string();
         opts.string.multi_chars = "".to_string();
         opts.string.allow_unknown = false;
+        opts.string.escape_strict = true;
 
         let mut tn = Tabnas::with_options(opts);
 

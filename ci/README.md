@@ -140,12 +140,13 @@ Comparison contract (each normalization is documented in the dumpers):
   error path differs three documented ways (TS delivers #BD then
   throws / Go substitutes #ZZ; wind-down re-delivery; TS's
   trailing-content probe delivers one extra token).
-- The TSV input column is unescaped per the corpus's own loader
-  convention (parser/jsonic corpora escape `\n`; json's is raw).
+- The TSV input column is decoded with the shared fixture codec
+  (`\n`, `\r`, `\t`, and `\\`) for every tabnas corpus; comments and
+  headers are excluded exactly as the shared loader excludes them.
 
-Status at time of writing: `jsonic` over parser/test/spec — 1158/1158
-identical in TypeScript and Go; `json` — 127/127 inputs from the JSON corpus
-and 448/448 extracted inputs from parser/test/spec identical in TypeScript,
+Status at time of writing: `jsonic` over parser/test/spec — 312/312 data
+rows identical in TypeScript and Go; `json` — 119/119 data rows from the JSON
+corpus and 312/312 data rows from parser/test/spec identical in TypeScript,
 Go, and Rust.
 
 This harness found three real engine divergences during bring-up, all

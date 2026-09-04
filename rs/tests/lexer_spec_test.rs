@@ -73,6 +73,23 @@ fn string_control_fixture() {
 }
 
 #[test]
+fn strict_escape_option_matches_json_escape_surface() {
+    let mut options = Options::default();
+    options.string.allow_unknown = false;
+    options.string.escape_strict = true;
+
+    for (source, expected) in [
+        (r#""\x41""#, "ERROR:unexpected"),
+        (r#""\u{41}""#, "ERROR:invalid_unicode"),
+        (r#""\q""#, "ERROR:unexpected"),
+        (r#""\u0041""#, "#ST:A"),
+    ] {
+        let actual = lex(source, options.clone()).unwrap_or_else(|code| format!("ERROR:{code}"));
+        assert_eq!(actual, expected, "source {source:?}");
+    }
+}
+
+#[test]
 fn text_line_terminator_fixture() {
     for row in rows("lex-text-line-terminator.tsv") {
         let mut options = Options::default();

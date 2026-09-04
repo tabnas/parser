@@ -41,7 +41,16 @@ impl Parser {
     }
 
     fn run_action(&self, name: &str, rule: &mut Rule) -> Result<(), TabnasError> {
-        if run_builtin_action(name, rule) {
+        self.run_action_with_config(name, rule, None)
+    }
+
+    fn run_action_with_config(
+        &self,
+        name: &str,
+        rule: &mut Rule,
+        config: Option<&Value>,
+    ) -> Result<(), TabnasError> {
+        if run_builtin_action(name, rule, config) {
             return Ok(());
         }
         if let Some(action) = self.actions.get(name) {
@@ -328,7 +337,11 @@ impl Parser {
                                 .k
                                 .insert("pd_phase".into(), Value::Number(phase));
                         }
-                        _ => self.run_action(act_name, &mut current_rule)?,
+                        _ => self.run_action_with_config(
+                            act_name,
+                            &mut current_rule,
+                            alt.action_configs.get(act_name),
+                        )?,
                     }
                 }
 
@@ -351,6 +364,7 @@ impl Parser {
                     child.i = next_rule_id;
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
+                    child.parent_node = Some(current_rule.node.clone());
                     child.n = current_rule.n.clone();
                     child.k = current_rule.k.clone();
                     stack.push(current_rule);
@@ -360,6 +374,7 @@ impl Parser {
                     next.i = next_rule_id;
                     next_rule_id += 1;
                     next.d = current_rule.d;
+                    next.parent_node = current_rule.parent_node.clone();
                     next.n = current_rule.n.clone();
                     next.k = current_rule.k.clone();
                     current_rule = next;
