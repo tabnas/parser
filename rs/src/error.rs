@@ -463,14 +463,18 @@ fn interpolation_vars(render: &ErrorRender<'_>) -> HashMap<String, String> {
     vars.insert("pos".into(), render.pos.to_string());
     vars.insert("row".into(), render.row.to_string());
     vars.insert("col".into(), render.col.to_string());
-    vars.insert(
-        "rulename".into(),
-        if render.code == "unknown_rule" && render.rule.is_empty() {
-            render.src.into()
-        } else {
-            render.rule.into()
-        },
-    );
+    let unknown_rule_name = render
+        .details
+        .get("rulename")
+        .map(injection_value)
+        .unwrap_or_else(|| {
+            if render.code == "unknown_rule" && render.rule.is_empty() {
+                render.src.into()
+            } else {
+                render.rule.into()
+            }
+        });
+    vars.insert("rulename".into(), unknown_rule_name);
     for (key, value) in render.details {
         vars.insert(key.clone(), injection_value(value));
     }

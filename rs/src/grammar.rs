@@ -5,10 +5,12 @@
 use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
-    builtins::is_builtin_action, AltBack, AltCondition, AltConditionWithLexer, AltError,
-    AltModifier, AltNext, BudgetCheck, CommentSuffixMatcher, ConfigModifier, ErrorSuffixCallback,
-    ImperativeLexMatcher, LexCheck, LexMatcherCallback, LexMatcherFactory, MapMerge,
-    MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value, ValueTransform,
+    builtins::is_builtin_action, AltBack, AltBackWithMatch, AltCondition, AltConditionWithLexer,
+    AltConditionWithLexerAndMatch, AltConditionWithMatch, AltError, AltErrorWithMatch, AltModifier,
+    AltModifierWithMatch, AltNext, AltNextWithMatch, BudgetCheck, CommentSuffixMatcher,
+    ConfigModifier, ErrorSuffixCallback, ImperativeLexMatcher, LexCheck, LexMatcherCallback,
+    LexMatcherFactory, MapMerge, MatchTokenCallback, ParsePrepare, Tabnas, TextModifier, Value,
+    ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -19,12 +21,19 @@ use std::fmt;
 #[derive(Clone)]
 struct AltRefs {
     conditions: HashMap<String, AltCondition>,
+    match_conditions: HashMap<String, AltConditionWithMatch>,
     lexer_conditions: HashMap<String, AltConditionWithLexer>,
+    lexer_match_conditions: HashMap<String, AltConditionWithLexerAndMatch>,
     modifiers: HashMap<String, AltModifier>,
+    match_modifiers: HashMap<String, AltModifierWithMatch>,
     errors: HashMap<String, AltError>,
+    match_errors: HashMap<String, AltErrorWithMatch>,
     pushes: HashMap<String, AltNext>,
+    match_pushes: HashMap<String, AltNextWithMatch>,
     replaces: HashMap<String, AltNext>,
+    match_replaces: HashMap<String, AltNextWithMatch>,
     backtracks: HashMap<String, AltBack>,
+    match_backtracks: HashMap<String, AltBackWithMatch>,
     match_tokens: HashMap<String, (MatchTokenCallback, bool)>,
     value_transforms: HashMap<String, ValueTransform>,
     text_modifiers: HashMap<String, TextModifier>,
@@ -40,6 +49,7 @@ struct AltRefs {
     config_modifiers: HashMap<String, ConfigModifier>,
     parser_starts: HashMap<String, crate::ParserStart>,
     parser_starts_with_instance: HashMap<String, crate::ParserStartWithInstance>,
+    parser_starts_with_context: HashMap<String, crate::ParserStartWithContext>,
     map_merges: HashMap<String, MapMerge>,
 }
 
@@ -47,12 +57,19 @@ impl From<&Tabnas> for AltRefs {
     fn from(tabnas: &Tabnas) -> Self {
         Self {
             conditions: tabnas.alt_conditions.clone(),
+            match_conditions: tabnas.alt_match_conditions.clone(),
             lexer_conditions: tabnas.alt_lexer_conditions.clone(),
+            lexer_match_conditions: tabnas.alt_lexer_match_conditions.clone(),
             modifiers: tabnas.alt_modifiers.clone(),
+            match_modifiers: tabnas.alt_match_modifiers.clone(),
             errors: tabnas.alt_errors.clone(),
+            match_errors: tabnas.alt_match_errors.clone(),
             pushes: tabnas.alt_pushes.clone(),
+            match_pushes: tabnas.alt_match_pushes.clone(),
             replaces: tabnas.alt_replaces.clone(),
+            match_replaces: tabnas.alt_match_replaces.clone(),
             backtracks: tabnas.alt_backtracks.clone(),
+            match_backtracks: tabnas.alt_match_backtracks.clone(),
             match_tokens: tabnas.match_token_refs.clone(),
             value_transforms: tabnas.value_transform_refs.clone(),
             text_modifiers: tabnas.text_modifier_refs.clone(),
@@ -68,6 +85,7 @@ impl From<&Tabnas> for AltRefs {
             config_modifiers: tabnas.config_modifier_refs.clone(),
             parser_starts: tabnas.parser_start_refs.clone(),
             parser_starts_with_instance: tabnas.parser_start_instance_refs.clone(),
+            parser_starts_with_context: tabnas.parser_start_context_refs.clone(),
             map_merges: tabnas.map_merge_refs.clone(),
         }
     }
@@ -303,6 +321,7 @@ impl Tabnas {
         // option document. They are instance identities, not modifier output,
         // so carry them into the source tree for future configuration builds.
         self.raw_options.tokens = self.options.tokens.clone();
+        self.emit_debug_config();
         Ok(())
     }
 
@@ -485,11 +504,15 @@ fn parse_alt(
     match map.get("b") {
         None | Some(JsonValue::Null) | Some(JsonValue::Bool(false)) => {}
         Some(JsonValue::String(reference)) if reference.starts_with('@') => {
-            alt.b_fn = Some(refs.backtracks.get(reference).cloned().ok_or_else(|| {
-                GrammarError(format!(
-                    "Grammar: unknown backtrack function reference: {reference}"
-                ))
-            })?);
+            if let Some(backtrack) = refs.match_backtracks.get(reference) {
+                alt.b_match = Some(backtrack.clone());
+            } else {
+                alt.b_fn = Some(refs.backtracks.get(reference).cloned().ok_or_else(|| {
+                    GrammarError(format!(
+                        "Grammar: unknown backtrack function reference: {reference}"
+                    ))
+                })?);
+            }
         }
         Some(value) => {
             alt.b = value.as_u64().map(|v| v as usize).ok_or_else(|| {
@@ -500,19 +523,27 @@ fn parse_alt(
     alt.p = string_field(map, "p", label)?;
     alt.r = string_field(map, "r", label)?;
     if let Some(reference) = alt.p.as_deref().filter(|value| value.starts_with('@')) {
-        alt.p_fn = Some(refs.pushes.get(reference).cloned().ok_or_else(|| {
-            GrammarError(format!(
-                "Grammar: unknown push function reference: {reference}"
-            ))
-        })?);
+        if let Some(route) = refs.match_pushes.get(reference) {
+            alt.p_match = Some(route.clone());
+        } else {
+            alt.p_fn = Some(refs.pushes.get(reference).cloned().ok_or_else(|| {
+                GrammarError(format!(
+                    "Grammar: unknown push function reference: {reference}"
+                ))
+            })?);
+        }
         alt.p = None;
     }
     if let Some(reference) = alt.r.as_deref().filter(|value| value.starts_with('@')) {
-        alt.r_fn = Some(refs.replaces.get(reference).cloned().ok_or_else(|| {
-            GrammarError(format!(
-                "Grammar: unknown replace function reference: {reference}"
-            ))
-        })?);
+        if let Some(route) = refs.match_replaces.get(reference) {
+            alt.r_match = Some(route.clone());
+        } else {
+            alt.r_fn = Some(refs.replaces.get(reference).cloned().ok_or_else(|| {
+                GrammarError(format!(
+                    "Grammar: unknown replace function reference: {reference}"
+                ))
+            })?);
+        }
         alt.r = None;
     }
     alt.a = match map.get("a") {
@@ -541,6 +572,10 @@ fn parse_alt(
                 alt.c_ref = Some(reference.clone());
             } else if let Some(condition) = refs.conditions.get(reference) {
                 alt.c_fn = Some(condition.clone());
+            } else if let Some(condition) = refs.lexer_match_conditions.get(reference) {
+                alt.c_lex_match = Some(condition.clone());
+            } else if let Some(condition) = refs.match_conditions.get(reference) {
+                alt.c_match = Some(condition.clone());
             } else if let Some(condition) = refs.lexer_conditions.get(reference) {
                 alt.c_lex = Some(condition.clone());
             } else {
@@ -552,18 +587,26 @@ fn parse_alt(
         value => alt.c = parse_conditions(value, label)?,
     }
     if let Some(reference) = optional_ref_field(map, "h", label)? {
-        alt.h = Some(refs.modifiers.get(&reference).cloned().ok_or_else(|| {
-            GrammarError(format!(
-                "Grammar: unknown modifier function reference: {reference}"
-            ))
-        })?);
+        if let Some(modifier) = refs.match_modifiers.get(&reference) {
+            alt.h_match = Some(modifier.clone());
+        } else {
+            alt.h = Some(refs.modifiers.get(&reference).cloned().ok_or_else(|| {
+                GrammarError(format!(
+                    "Grammar: unknown modifier function reference: {reference}"
+                ))
+            })?);
+        }
     }
     if let Some(reference) = optional_ref_field(map, "e", label)? {
-        alt.e = Some(refs.errors.get(&reference).cloned().ok_or_else(|| {
-            GrammarError(format!(
-                "Grammar: unknown error function reference: {reference}"
-            ))
-        })?);
+        if let Some(error) = refs.match_errors.get(&reference) {
+            alt.e_match = Some(error.clone());
+        } else {
+            alt.e = Some(refs.errors.get(&reference).cloned().ok_or_else(|| {
+                GrammarError(format!(
+                    "Grammar: unknown error function reference: {reference}"
+                ))
+            })?);
+        }
     }
     alt.n = number_map(map.get("n"), label)?;
     alt.u = value_map(map.get("u"), label)?;
@@ -628,6 +671,7 @@ fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), Gr
                 if !is_builtin_action(action)
                     && !tabnas.actions.contains_key(action)
                     && !tabnas.context_actions.contains_key(action)
+                    && !tabnas.matched_actions.contains_key(action)
                 {
                     return Err(GrammarError(format!(
                         "Grammar: {}.{state} alt[{index}]: unknown action function reference: {action}",
@@ -647,6 +691,7 @@ fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), Gr
             if !is_builtin_action(action)
                 && !tabnas.actions.contains_key(action)
                 && !tabnas.context_actions.contains_key(action)
+                && !tabnas.state_actions.contains_key(action)
             {
                 return Err(GrammarError(format!(
                     "Grammar: {}.{phase}: unknown state action function reference: {action}",
@@ -659,6 +704,9 @@ fn validate_action_references(tabnas: &Tabnas, spec: &RuleSpec) -> Result<(), Gr
 }
 
 fn wire_state_actions(tabnas: &Tabnas, spec: &mut RuleSpec) {
+    let has_action = |name: &str| {
+        tabnas.context_actions.contains_key(name) || tabnas.state_actions.contains_key(name)
+    };
     let rule_name = spec.name.clone();
     for (phase, actions) in [
         ("bo", &mut spec.bo),
@@ -668,23 +716,21 @@ fn wire_state_actions(tabnas: &Tabnas, spec: &mut RuleSpec) {
     ] {
         let base = format!("@{rule_name}-{phase}");
         let replacement = format!("{base}/replace");
-        if tabnas.context_actions.contains_key(&replacement) {
+        if has_action(&replacement) {
             actions.clear();
             actions.push(replacement);
             continue;
         }
 
         let prepend = format!("{base}/prepend");
-        if tabnas.context_actions.contains_key(&prepend) && !actions.contains(&prepend) {
+        if has_action(&prepend) && !actions.contains(&prepend) {
             actions.insert(0, prepend);
         }
 
         let explicit_append = format!("{base}/append");
-        let append = tabnas
-            .context_actions
-            .contains_key(&explicit_append)
+        let append = has_action(&explicit_append)
             .then_some(explicit_append)
-            .or_else(|| tabnas.context_actions.contains_key(&base).then_some(base));
+            .or_else(|| has_action(&base).then_some(base));
         if let Some(append) = append.filter(|append| !actions.contains(append)) {
             actions.push(append);
         }
@@ -1642,6 +1688,23 @@ fn apply_options(
                 .collect();
         }
     }
+    if let Some(debug) = map.get("debug") {
+        let debug = object(debug, "options.debug")?;
+        if let Some(maxlen) = debug.get("maxlen") {
+            options.debug.maxlen = maxlen
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    GrammarError(
+                        "Grammar: options.debug.maxlen must be a non-negative integer".into(),
+                    )
+                })?;
+        }
+        if let Some(print) = debug.get("print") {
+            let print = object(print, "options.debug.print")?;
+            set_bool(print, "config", &mut options.debug.print.config);
+        }
+    }
     if let Some(parser) = map.get("parser") {
         let parser = object(parser, "options.parser")?;
         if let Some(reference) = parser.get("start") {
@@ -1649,13 +1712,17 @@ fn apply_options(
                 JsonValue::Null | JsonValue::Bool(false) => {
                     options.parser.start = None;
                     options.parser.start_with_instance = None;
+                    options.parser.start_with_context = None;
                 }
                 JsonValue::String(reference) => {
                     options.parser.start = refs.parser_starts.get(reference).cloned();
                     options.parser.start_with_instance =
                         refs.parser_starts_with_instance.get(reference).cloned();
+                    options.parser.start_with_context =
+                        refs.parser_starts_with_context.get(reference).cloned();
                     if options.parser.start.is_none()
                         && options.parser.start_with_instance.is_none()
+                        && options.parser.start_with_context.is_none()
                     {
                         return Err(GrammarError(format!(
                             "Grammar: unknown parser start function reference: {reference}"

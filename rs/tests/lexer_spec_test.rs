@@ -118,8 +118,12 @@ fn token_offsets_are_bytes_and_diagnostic_positions_are_scalars() {
     let second = lexer.next_token().expect("second text token");
     let third = lexer.next_token().expect("value token");
     assert_eq!((first.si, first.pos, first.ci), (0, 0, 1));
+    assert_eq!(first.len, 2);
     assert_eq!((second.si, second.pos, second.ci), (3, 2, 3));
+    assert_eq!(second.len, 1);
     assert_eq!((third.si, third.pos, third.ci), (5, 4, 5));
+    assert_eq!(third.len, 4);
+    assert_eq!(lexer.point().len, "é a true".len());
 }
 
 #[test]

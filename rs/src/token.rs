@@ -79,7 +79,7 @@ pub fn name_to_tin(name: &str) -> Option<Tin> {
 /// Cursor position within the source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Point {
-    pub len: usize,
+    pub len: usize, // Total UTF-8 byte length of the source.
     pub si: usize,  // 0-based UTF-8 byte position used for source slicing
     pub pos: usize, // 0-based Unicode-scalar position used by diagnostics
     pub ri: usize,  // 1-based row
@@ -95,6 +95,16 @@ impl Default for Point {
             ri: 1,
             ci: 1,
         }
+    }
+}
+
+impl fmt::Display for Point {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Point[{}/{},{},{}]",
+            self.si, self.len, self.ri, self.ci
+        )
     }
 }
 
@@ -145,6 +155,8 @@ pub struct Token {
     pub tin: Tin,
     pub val: Value,
     pub src: String,
+    /// UTF-8 byte length of `src`, paired with the byte offset `si`.
+    pub len: usize,
     pub si: usize,
     pub pos: usize,
     pub ri: usize,
@@ -152,6 +164,9 @@ pub struct Token {
     pub err: String,
     pub why: String,
     pub use_data: HashMap<String, Value>,
+    /// Optional ignored trivia associated with this token. Negotiated
+    /// re-lexing carries it to the replacement token.
+    pub ignored: Option<Box<Token>>,
     /// Optional semantic value callback. `val` remains the eagerly produced
     /// fallback and the value shown by raw token inspection.
     pub val_fn: Option<TokenValFunc>,
@@ -164,6 +179,7 @@ impl Default for Token {
             tin: -1,
             val: Value::Undefined,
             src: String::new(),
+            len: 0,
             si: 0,
             pos: 0,
             ri: 1,
@@ -171,6 +187,7 @@ impl Default for Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            ignored: None,
             val_fn: None,
         }
     }
@@ -184,11 +201,14 @@ impl Token {
         src: impl Into<String>,
         pnt: Point,
     ) -> Self {
+        let src = src.into();
+        let len = src.len();
         Token {
             name: name.into(),
             tin,
             val,
-            src: src.into(),
+            src,
+            len,
             si: pnt.si,
             pos: pnt.pos,
             ri: pnt.ri,
@@ -196,16 +216,20 @@ impl Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            ignored: None,
             val_fn: None,
         }
     }
 
     pub fn no_token() -> Self {
         Token {
-            name: "#NOTOKEN".to_string(),
+            // The canonical sentinel has no public token name; identity is
+            // carried by tin -1 rather than a synthetic grammar token.
+            name: String::new(),
             tin: -1,
             val: Value::Undefined,
             src: String::new(),
+            len: 0,
             si: 0,
             pos: 0,
             ri: 1,
@@ -213,6 +237,7 @@ impl Token {
             err: String::new(),
             why: String::new(),
             use_data: HashMap::new(),
+            ignored: None,
             val_fn: None,
         }
     }
@@ -223,6 +248,22 @@ impl Token {
 
     pub fn bad(&mut self, err: &str) -> &mut Self {
         self.err = err.to_string();
+        self
+    }
+
+    /// Mark this token bad and deep-merge plugin diagnostic details into its
+    /// existing `use_data` bag. This is the typed Rust form of
+    /// `token.bad(code, details)`.
+    pub fn bad_with_details(
+        &mut self,
+        err: &str,
+        details: impl IntoIterator<Item = (String, Value)>,
+    ) -> &mut Self {
+        self.err = err.to_string();
+        for (key, value) in details {
+            let previous = self.use_data.remove(&key).unwrap_or(Value::Undefined);
+            self.use_data.insert(key, merge_detail(previous, value));
+        }
         self
     }
 
@@ -246,4 +287,126 @@ impl Token {
             .as_ref()
             .map_or_else(|| self.val.clone(), |callback| callback.call(rule, context))
     }
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Token[{}={} {}",
+            self.name,
+            self.tin,
+            snip(&self.src, 5)
+        )?;
+        if !self.val.is_undefined() && !matches!(self.name.as_str(), "#ST" | "#TX") {
+            write!(formatter, "={}", snip(&value_text(&self.val), 5))?;
+        }
+        write!(formatter, " {},{},{}", self.si, self.ri, self.ci)?;
+        if !self.use_data.is_empty() {
+            let mut entries = self.use_data.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(key, _)| *key);
+            let details = entries
+                .into_iter()
+                .map(|(key, value)| format!("{key}:{}", detail_json(value)))
+                .collect::<Vec<_>>()
+                .join(",");
+            write!(
+                formatter,
+                " {}",
+                snip(&format!("{{{details}}}").replace('"', ""), 22)
+            )?;
+        }
+        if !self.err.is_empty() {
+            write!(formatter, " {}", self.err)?;
+        }
+        if !self.why.is_empty() {
+            write!(formatter, " {}", snip(&self.why, 22))?;
+        }
+        formatter.write_str("]")
+    }
+}
+
+fn merge_detail(base: Value, overlay: Value) -> Value {
+    match (base, overlay) {
+        (base, Value::Undefined) => base,
+        (Value::Object(mut base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
+                base.insert(key, merge_detail(previous, value));
+            }
+            Value::Object(base)
+        }
+        (Value::Array(mut base), Value::Array(overlay)) => {
+            if base.len() < overlay.len() {
+                base.resize(overlay.len(), Value::Undefined);
+            }
+            for (index, value) in overlay.into_iter().enumerate() {
+                let previous = std::mem::replace(&mut base[index], Value::Undefined);
+                base[index] = merge_detail(previous, value);
+            }
+            Value::Array(base)
+        }
+        (_, overlay) => overlay,
+    }
+}
+
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::Undefined => String::new(),
+        Value::Null => "null".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => Value::Number(*value).to_string(),
+        Value::String(value) | Value::Text(crate::Text { string: value, .. }) => value.clone(),
+        Value::Array(values) => values.iter().map(value_text).collect::<Vec<_>>().join(","),
+        Value::ListRef(list) => list
+            .value
+            .iter()
+            .map(value_text)
+            .collect::<Vec<_>>()
+            .join(","),
+        Value::Object(_) | Value::MapRef(_) => "[object Object]".into(),
+    }
+}
+
+fn detail_json(value: &Value) -> String {
+    match value {
+        Value::Undefined | Value::Null => "null".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => Value::Number(*value).to_string(),
+        Value::String(value) | Value::Text(crate::Text { string: value, .. }) => {
+            serde_json::to_string(value).unwrap_or_default()
+        }
+        Value::Array(values) => format!(
+            "[{}]",
+            values.iter().map(detail_json).collect::<Vec<_>>().join(",")
+        ),
+        Value::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                // JSON.stringify omits undefined-valued object properties
+                // (while array slots below render as null).
+                .filter(|(_, value)| !value.is_undefined())
+                .map(|(key, value)| format!(
+                    "{}:{}",
+                    serde_json::to_string(key).unwrap_or_default(),
+                    detail_json(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::ListRef(list) => detail_json(&Value::Array(list.value.clone())),
+        Value::MapRef(map) => detail_json(&Value::Object(map.value.clone())),
+    }
+}
+
+fn snip(value: &str, max_len: usize) -> String {
+    value
+        .chars()
+        .take(max_len)
+        .map(|character| match character {
+            '\r' | '\n' | '\t' => '.',
+            character => character,
+        })
+        .collect()
 }

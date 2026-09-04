@@ -40,6 +40,7 @@ impl std::error::Error for ActionError {}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstanceInfo {
     pub id: String,
+    pub parent_id: Option<String>,
     pub tag: String,
     pub plugins: Vec<String>,
     pub rule_names: Vec<String>,

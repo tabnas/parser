@@ -1,7 +1,9 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
 use std::sync::{Arc, Mutex};
-use tabnas::{AltSpec, ContextSeed, Options, Plugin, RuleSpec, Tabnas, Value, TIN_NR};
+use tabnas::{
+    AltSpec, ContextSeed, Options, Plugin, Point, Rule, RuleSpec, Tabnas, Token, Value, TIN_NR,
+};
 
 #[test]
 fn instance_introspection_is_ordered_and_independent() {
@@ -26,6 +28,180 @@ fn instance_introspection_is_ordered_and_independent() {
     let mut config = tabnas.config();
     config.rule.maxmul = 99;
     assert_ne!(99, tabnas.options.rule.maxmul);
+
+    let description = tabnas.describe();
+    assert!(description.contains("=== Tabnas Instance ==="));
+    assert!(description.contains("first: open=0 close=0"));
+    assert!(description.contains("--- Plugins: 1 ---"));
+    assert!(description.contains("RuleStart: val"));
+}
+
+#[test]
+fn debug_trace_uses_the_configured_formatter_and_reports_lex_and_rule_events() {
+    let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut parser = Tabnas::make_json();
+    parser.options.debug.maxlen = 3;
+    let captured = lines.clone();
+    parser.enable_trace_with(move |line| captured.lock().unwrap().push(line.into()));
+
+    assert_eq!(Value::Number(1234.0), parser.parse("1234").unwrap());
+    let lines = lines.lock().unwrap();
+    assert!(lines.iter().any(|line| line.starts_with("[lex] #NR")));
+    assert!(lines.iter().any(|line| line.starts_with("[rule] val")));
+    assert!(lines.iter().any(|line| line.contains("val=123...")));
+}
+
+#[test]
+fn debug_options_load_from_serialized_grammar() {
+    let output = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut options = Options::default();
+    let captured = output.clone();
+    options.debug.output = Some(Arc::new(move |line| {
+        captured.lock().unwrap().push(line.into());
+    }));
+    let mut parser = Tabnas::with_options(options);
+    parser
+        .grammar_json(r#"{"options":{"debug":{"maxlen":7,"print":{"config":true}}}}"#)
+        .unwrap();
+    assert_eq!(7, parser.options.debug.maxlen);
+    assert!(parser.options.debug.print.config);
+    assert!(output
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| line.contains("maxlen: 7")));
+
+    parser.options.debug.maxlen = 6;
+    assert_eq!(
+        "\"a\\\"bc...",
+        parser
+            .options
+            .debug
+            .format_source(&Value::String("a\"bcdef".into()))
+    );
+    assert_eq!("", parser.options.debug.format_source(&Value::Null));
+}
+
+#[test]
+fn core_runtime_values_have_stable_human_readable_forms() {
+    let point = Point {
+        len: 3,
+        si: 1,
+        pos: 1,
+        ri: 2,
+        ci: 4,
+    };
+    assert_eq!(point.to_string(), "Point[1/3,2,4]");
+    let no_token = Token::no_token();
+    assert_eq!(no_token.name, "");
+    assert!(no_token.is_no_token());
+
+    let mut token = Token::new("#NR", TIN_NR, Value::Number(1.0), "1", point);
+    token.bad_with_details(
+        "unexpected",
+        [
+            ("x".into(), Value::Number(1.0)),
+            (
+                "nested".into(),
+                Value::Object([("a".into(), Value::Number(1.0))].into_iter().collect()),
+            ),
+        ],
+    );
+    token.bad_with_details(
+        "unexpected",
+        [(
+            "nested".into(),
+            Value::Object([("b".into(), Value::Number(2.0))].into_iter().collect()),
+        )],
+    );
+    assert_eq!(
+        token.use_data["nested"],
+        Value::Object(
+            [
+                ("a".into(), Value::Number(1.0)),
+                ("b".into(), Value::Number(2.0)),
+            ]
+            .into_iter()
+            .collect()
+        )
+    );
+    assert_eq!(
+        token.to_string(),
+        "Token[#NR=8 1=1 1,2,4 {nested:{a:1,b:2},x:1} unexpected]"
+    );
+
+    let mut rule = Rule::new("value", Value::Null);
+    rule.i = 7;
+    assert_eq!(rule.to_string(), "[Rule value~7]");
+}
+
+#[test]
+fn decorations_are_named_and_inherited_by_value() {
+    let mut parent = Tabnas::new();
+    parent.decorate("answer", Value::Number(42.0));
+    assert_eq!(parent.decoration("answer"), Some(&Value::Number(42.0)));
+    assert!(parent.decoration::<Value>("missing").is_none());
+
+    let mut child = parent.derive(|_| {}).unwrap();
+    assert_eq!(child.decoration("answer"), Some(&Value::Number(42.0)));
+    child.decorate("answer", Value::Number(7.0));
+    assert_eq!(parent.decoration("answer"), Some(&Value::Number(42.0)));
+}
+
+#[test]
+fn decorations_support_native_values_and_expose_parent_identity() {
+    let mut parent = Tabnas::new();
+    parent.decorate("labels", vec!["one".to_string(), "two".to_string()]);
+    parent.decorate_opaque(
+        "callable",
+        Arc::new(|value: i32| value + 1) as Arc<dyn Fn(i32) -> i32 + Send + Sync>,
+    );
+
+    let mut child = parent.derive(|_| {}).unwrap();
+    assert_eq!(child.parent_id.as_deref(), Some(parent.id.as_str()));
+    assert_eq!(
+        child.decoration::<Vec<String>>("labels").unwrap(),
+        &["one".to_string(), "two".to_string()]
+    );
+    let callable = child
+        .decoration::<Arc<dyn Fn(i32) -> i32 + Send + Sync>>("callable")
+        .unwrap();
+    assert_eq!(callable(4), 5);
+
+    let seen_parent = Arc::new(Mutex::new(None));
+    let capture = seen_parent.clone();
+    child.parse_prepare(move |context| {
+        *capture.lock().unwrap() = context.instance.parent_id.clone();
+    });
+    child.parse("1").unwrap();
+    assert_eq!(
+        seen_parent.lock().unwrap().as_deref(),
+        Some(parent.id.as_str())
+    );
+}
+
+#[test]
+fn native_token_and_rule_definer_helpers_expose_the_complete_instance_view() {
+    let mut tabnas = Tabnas::new();
+    let custom = tabnas.token_with_source("#CUSTOM", "!");
+    assert_eq!(tabnas.fixed("!"), Some(custom));
+    assert_eq!(tabnas.fixed_source(custom), Some("!"));
+    assert_eq!(tabnas.token_name(custom), "#CUSTOM");
+    tabnas.set_token_set("#CUSTOMS", vec![custom]);
+    assert_eq!(tabnas.token_set("CUSTOMS"), Some(vec![custom]));
+
+    tabnas.define_rule_with_parser("top", |rule, parser| {
+        assert_eq!(parser.options.token("#CUSTOM"), Some(custom));
+        assert!(parser.rules.contains_key("top"));
+        rule.open.push(AltSpec {
+            s: vec![vec![custom]],
+            ..Default::default()
+        });
+    });
+    tabnas
+        .set_options(|options| options.rule.start = "top".into())
+        .unwrap();
+    assert!(tabnas.parse("!").is_ok());
 }
 
 #[test]

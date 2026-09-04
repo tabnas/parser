@@ -2,7 +2,9 @@
 
 use crate::error::TabnasError;
 use crate::options::{LexCheck, LexCheckResult, MatchTokenMatcher, Options};
-use crate::token::{Point, Token, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ};
+use crate::token::{
+    Point, Token, TIN_BD, TIN_CM, TIN_LN, TIN_NR, TIN_SP, TIN_ST, TIN_TX, TIN_VL, TIN_ZZ,
+};
 use crate::value::Value;
 use regex::Regex;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -30,6 +32,14 @@ pub(crate) struct LexerState {
     ci: usize,
     err: Option<TabnasError>,
     end_reached: bool,
+}
+
+/// Opaque snapshot returned by [`Lexer::relex_for_rule`]. Pass it to
+/// [`Lexer::unrelex`] if the caller later rejects the committed recut.
+#[derive(Clone)]
+pub struct RelexCheckpoint {
+    state: LexerState,
+    replay: std::collections::VecDeque<Token>,
 }
 
 enum CheckFlow {
@@ -97,7 +107,7 @@ impl<'a> Lexer<'a> {
 
     fn current_point(&self) -> Point {
         Point {
-            len: self.char_len,
+            len: self.src.len(),
             si: self.byte_position(),
             pos: self.idx,
             ri: self.ri,
@@ -123,6 +133,17 @@ impl<'a> Lexer<'a> {
     /// Source remaining at the live cursor.
     pub fn remaining(&self) -> &str {
         &self.src[self.byte_position()..]
+    }
+
+    /// Return at most `max_chars` Unicode scalar values from the live cursor.
+    /// This is the Rust counterpart of the public `lex.fwd`/`Lex.Fwd` helper.
+    pub fn forward(&self, max_chars: usize) -> &str {
+        let remaining = self.remaining();
+        let end = remaining
+            .char_indices()
+            .nth(max_chars)
+            .map_or(remaining.len(), |(index, _)| index);
+        &remaining[..end]
     }
 
     /// Snapshot the live cursor for token construction.
@@ -152,6 +173,54 @@ impl<'a> Lexer<'a> {
         point: Point,
     ) -> Token {
         Token::new(name, tin, value, source, point)
+    }
+
+    /// Resolve or allocate a token identity in this lexer's configuration.
+    pub fn token_tin(&mut self, name: impl Into<String>) -> crate::Tin {
+        self.options.register_token(name)
+    }
+
+    /// Resolve a token identity back to its configured name.
+    pub fn token_name(&self, tin: crate::Tin) -> String {
+        self.options.token_name(tin)
+    }
+
+    /// Construct a bad token at the current cursor.
+    pub fn bad(&self, why: impl Into<String>) -> Token {
+        let point = self.current_point();
+        let source = self
+            .peek()
+            .map_or_else(String::new, |character| character.to_string());
+        let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
+        token.err = why.into();
+        token.why = token.err.clone();
+        token
+    }
+
+    /// Construct a bad token whose displayed source is a scalar-indexed span.
+    /// As in TypeScript, the diagnostic point remains the live cursor.
+    pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
+        let point = self.current_point();
+        let source = if start <= end && end <= self.char_len {
+            let start_byte = self
+                .byte_indices
+                .get(start)
+                .copied()
+                .unwrap_or(self.src.len());
+            let end_byte = self
+                .byte_indices
+                .get(end)
+                .copied()
+                .unwrap_or(self.src.len());
+            self.src[start_byte..end_byte].to_string()
+        } else {
+            self.peek()
+                .map_or_else(String::new, |character| character.to_string())
+        };
+        let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
+        token.err = why.into();
+        token.why = token.err.clone();
+        token
     }
 
     fn byte_position(&self) -> usize {
@@ -397,6 +466,26 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Public negotiated-relex entry point for native parser callbacks.
+    /// A successful recut commits the lexer cursor and returns an opaque undo
+    /// checkpoint; a failed recut restores all lexer state before returning.
+    pub fn relex_for_rule(
+        &mut self,
+        from: &Token,
+        wanted: &[crate::Tin],
+        rule: &mut crate::Rule,
+        context: &mut crate::Context,
+    ) -> Option<(Token, RelexCheckpoint)> {
+        self.relex(from, wanted, rule, context)
+    }
+
+    /// Undo a committed [`Lexer::relex_for_rule`] operation, including the
+    /// pending tokens hidden while the replacement cut was negotiated.
+    pub fn unrelex(&mut self, checkpoint: RelexCheckpoint, context: &mut crate::Context) {
+        self.restore(checkpoint.state);
+        context.restore_replay(checkpoint.replay);
+    }
+
     fn record_panic(
         &mut self,
         payload: Box<dyn std::any::Any + Send>,
@@ -456,11 +545,15 @@ impl<'a> Lexer<'a> {
         wanted: &[crate::Tin],
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Option<(Token, LexerState)> {
+    ) -> Option<(Token, RelexCheckpoint)> {
         if from.src.is_empty() || from.pos > self.char_len || wanted.is_empty() {
             return None;
         }
         let saved = self.state();
+        // TypeScript temporarily replaces the lexer's pending-token queue
+        // with an empty queue for a negotiated cut. Rust keeps that queue on
+        // Context, so hide it explicitly and preserve it in the checkpoint.
+        let replay = context.take_replay();
         self.idx = from.pos;
         self.ri = from.ri;
         self.ci = from.ci;
@@ -470,9 +563,21 @@ impl<'a> Lexer<'a> {
         let recut = self.next_raw_with(None, Some((rule, context))).ok();
         self.want = None;
         match recut.filter(|token| wanted.contains(&token.tin)) {
-            Some(token) => Some((token, saved)),
+            Some(mut token) => {
+                token.ignored = from.ignored.clone();
+                Some((
+                    token,
+                    RelexCheckpoint {
+                        state: saved,
+                        replay,
+                    },
+                ))
+            }
             None => {
                 self.restore(saved);
+                // Discard any speculative replay generated by an imperative
+                // matcher and restore the queue that preceded the attempt.
+                context.restore_replay(replay);
                 None
             }
         }

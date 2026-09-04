@@ -3,19 +3,21 @@
 use crate::builtins::run_builtin_action_with_info;
 use crate::context::{Context, ContextSeed, InstanceInfo};
 use crate::error::TabnasError;
-use crate::lexer::{Lexer, LexerState};
+use crate::lexer::{Lexer, RelexCheckpoint};
 use crate::options::Options;
 use crate::rule::{
-    resolved_action_order, ActionBinding, AltSpec, CompareOp, Condition, Rule, RuleDone,
-    RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    resolved_action_order, resolved_alt_action_order, ActionBinding, AltActionBinding, AltMatch,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    StateAction,
 };
 use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_ZZ};
 use crate::value::Value;
 use crate::{
-    Action, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber, TokenSubscriber,
+    Action, AltAction, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber,
+    TokenSubscriber,
 };
 use indexmap::IndexMap;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,9 +50,8 @@ struct ParseMode<'a> {
 struct RelexUndo {
     position: usize,
     token: Token,
-    lexer: LexerState,
+    checkpoint: RelexCheckpoint,
     tokens: Vec<Token>,
-    replay: VecDeque<Token>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,6 +66,8 @@ pub struct Parser {
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
+    pub matched_actions: HashMap<String, AltAction>,
+    pub state_actions: HashMap<String, StateAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
@@ -79,6 +82,8 @@ impl Parser {
             rules: IndexMap::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
+            matched_actions: HashMap::new(),
+            state_actions: HashMap::new(),
             token_subscribers: Vec::new(),
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
@@ -97,6 +102,14 @@ impl Parser {
 
     pub fn add_context_action(&mut self, name: String, action: ContextAction) {
         self.context_actions.insert(name, action);
+    }
+
+    pub fn add_matched_action(&mut self, name: String, action: AltAction) {
+        self.matched_actions.insert(name, action);
+    }
+
+    pub fn add_state_action(&mut self, name: String, action: StateAction) {
+        self.state_actions.insert(name, action);
     }
 
     pub fn add_token_subscriber(&mut self, subscriber: TokenSubscriber) {
@@ -136,21 +149,77 @@ impl Parser {
         context: &mut Context,
         site: ParseSite<'_>,
     ) -> Result<(), TabnasError> {
-        let (actions, callbacks, order) = if is_open {
-            (&spec.ao, &spec.ao_fns, &spec.ao_order)
+        if (is_open && !rule.ao) || (!is_open && !rule.ac) {
+            return Ok(());
+        }
+        let (actions, callbacks, states, order) = if is_open {
+            (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
         } else {
-            (&spec.ac, &spec.ac_fns, &spec.ac_order)
+            (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
         };
-        for binding in resolved_action_order(actions, callbacks, order) {
-            let result = match binding {
-                ActionBinding::Named(action) => self.run_action(&action, rule, context),
+        let next = rule.next_rule.clone();
+        let mut output = None;
+        for binding in resolved_action_order(actions, callbacks, states, order) {
+            output = match binding {
+                ActionBinding::Named(action) => {
+                    if let Some(callback) = self.state_actions.get(&action) {
+                        self.run_state_callback(
+                            "named lifecycle after action",
+                            callback,
+                            rule,
+                            context,
+                            next.as_deref(),
+                            output,
+                        )
+                        .map_err(|error| {
+                            self.attach_action_error(
+                                error,
+                                site.source,
+                                rule,
+                                site.stack,
+                                site.alts,
+                            )
+                        })?
+                    } else {
+                        self.run_action(&action, rule, context).map_err(|error| {
+                            self.attach_action_error(
+                                error,
+                                site.source,
+                                rule,
+                                site.stack,
+                                site.alts,
+                            )
+                        })?;
+                        None
+                    }
+                }
                 ActionBinding::Callback(callback) => {
                     self.run_context_callback("lifecycle after action", &callback, rule, context)
+                        .map_err(|error| {
+                            self.attach_action_error(
+                                error,
+                                site.source,
+                                rule,
+                                site.stack,
+                                site.alts,
+                            )
+                        })?;
+                    None
                 }
+                ActionBinding::State(callback) => self
+                    .run_state_callback(
+                        "lifecycle after action",
+                        &callback,
+                        rule,
+                        context,
+                        next.as_deref(),
+                        output,
+                    )
+                    .map_err(|error| {
+                        self.attach_action_error(error, site.source, rule, site.stack, site.alts)
+                    })?,
             };
-            result.map_err(|error| {
-                self.attach_action_error(error, site.source, rule, site.stack, site.alts)
-            })?;
+            output = self.check_lifecycle_output(output, rule, site)?;
         }
         Ok(())
     }
@@ -182,6 +251,61 @@ impl Parser {
             }),
             Err(payload) => Err(self.action_panic(payload, label, rule)),
         }
+    }
+
+    fn run_state_callback(
+        &self,
+        label: &str,
+        callback: &StateAction,
+        rule: &mut Rule,
+        context: &mut Context,
+        next: Option<&RuleSnapshot>,
+        out: Option<Token>,
+    ) -> Result<Option<Token>, TabnasError> {
+        context.set_rule(rule);
+        match catch_unwind(AssertUnwindSafe(|| callback(rule, context, next, out))) {
+            Ok(result) => result.map_err(|action_error| {
+                let token = match rule.state {
+                    RuleState::Open => rule.o0().or_else(|| rule.c0()),
+                    RuleState::Close => rule.c0().or_else(|| rule.o0()),
+                };
+                let mut error = TabnasError::new(
+                    action_error.code,
+                    token.map_or("", |value| value.src.as_str()),
+                    "",
+                    token.map_or(0, |value| value.pos),
+                    token.map_or(1, |value| value.ri),
+                    token.map_or(1, |value| value.ci),
+                );
+                error.detail = action_error.detail;
+                error
+            }),
+            Err(payload) => Err(self.action_panic(payload, label, rule)),
+        }
+    }
+
+    fn check_lifecycle_output(
+        &self,
+        output: Option<Token>,
+        rule: &Rule,
+        site: ParseSite<'_>,
+    ) -> Result<Option<Token>, TabnasError> {
+        let Some(token) = output.as_ref().filter(|token| !token.err.is_empty()) else {
+            return Ok(output);
+        };
+        Err(self.raised_token_error(token, rule, site))
+    }
+
+    fn raised_token_error(&self, token: &Token, rule: &Rule, site: ParseSite<'_>) -> TabnasError {
+        let error = TabnasError::new(
+            raised_error_code(token),
+            token.src.clone(),
+            site.source,
+            token.pos,
+            token.ri,
+            token.ci,
+        );
+        self.attach_error(error, rule, site.stack, site.alts, Some(token))
     }
 
     fn attach_action_error(
@@ -575,6 +699,86 @@ impl Parser {
         Ok(false)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn recover_error_pass(
+        &self,
+        error: TabnasError,
+        state: RuleState,
+        mut alt: Option<RuleDoneAlt>,
+        fallback_error_token: bool,
+        src: &str,
+        current_rule: &mut Rule,
+        stack: &mut Vec<Rule>,
+        context: &mut Context,
+        lexer: &mut Lexer,
+        mode: &mut ParseMode<'_>,
+    ) -> Result<(), TabnasError> {
+        // TypeScript's RuleSpec.bad performs recovery inside the rule pass;
+        // the ordinary ruleDone event is dispatched only after that pass
+        // returns. Preserve that ordering so any synthesized forced-close
+        // events precede this final attempted-pass event.
+        let event_rule = current_rule.clone();
+        let recovered = mode.recovering
+            && self.attempt_recover(error.clone(), current_rule, stack, context, lexer, mode)?;
+        if !recovered && fallback_error_token {
+            if let Some(alt) = alt.as_mut().filter(|alt| alt.err.is_none()) {
+                let tin = self.options.token(&error.token.name).unwrap_or(TIN_BD);
+                let mut token = Token::new(
+                    error.token.name.clone(),
+                    tin,
+                    Value::Undefined,
+                    error.token.src.clone(),
+                    crate::Point {
+                        len: error.len,
+                        si: error.pos,
+                        pos: error.pos,
+                        ri: error.row,
+                        ci: error.col,
+                    },
+                );
+                token.bad(&error.code);
+                alt.err = Some(token);
+            }
+        }
+        self.notify_rule_done(&event_rule, context, state, alt, src, stack)?;
+        if recovered {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recover_after_actions(
+        &self,
+        result: Result<(), TabnasError>,
+        state: RuleState,
+        alt: Option<RuleDoneAlt>,
+        src: &str,
+        current_rule: &mut Rule,
+        stack: &mut Vec<Rule>,
+        context: &mut Context,
+        lexer: &mut Lexer,
+        mode: &mut ParseMode<'_>,
+    ) -> Result<bool, TabnasError> {
+        let Err(error) = result else {
+            return Ok(false);
+        };
+        self.recover_error_pass(
+            error,
+            state,
+            alt,
+            true,
+            src,
+            current_rule,
+            stack,
+            context,
+            lexer,
+            mode,
+        )?;
+        Ok(true)
+    }
+
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         self.parse_with_meta(src, Value::Undefined)
     }
@@ -629,7 +833,7 @@ impl Parser {
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
     ) -> Result<Value, TabnasError> {
-        if let Some(result) = self.run_parser_start(src, &meta, owner) {
+        if let Some(result) = self.run_parser_start(src, &meta, owner, parent) {
             return result.map_err(|mut error| {
                 self.decorate_error(&mut error);
                 error
@@ -720,7 +924,7 @@ impl Parser {
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
     ) -> ParseRecovery {
-        if let Some(result) = self.run_parser_start(src, &meta, owner) {
+        if let Some(result) = self.run_parser_start(src, &meta, owner, parent) {
             return match result {
                 Ok(value) => ParseRecovery {
                     value: Some(value),
@@ -781,8 +985,18 @@ impl Parser {
         src: &str,
         meta: &Value,
         owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
     ) -> Option<Result<Value, TabnasError>> {
-        let result = if let Some(start) = self.options.parser.start_with_instance.as_ref() {
+        let result = if let Some(start) = self.options.parser.start_with_context.as_ref() {
+            let Some(owner) = owner else {
+                let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
+                error.detail =
+                    "parser.start requires an owning Tabnas instance; call Tabnas::parse".into();
+                self.decorate_error(&mut error);
+                return Some(Err(error));
+            };
+            catch_unwind(AssertUnwindSafe(|| start(src, owner, meta, parent)))
+        } else if let Some(start) = self.options.parser.start_with_instance.as_ref() {
             let Some(owner) = owner else {
                 let mut error = TabnasError::new("internal", "", src, 0, 1, 1);
                 error.detail =
@@ -1092,6 +1306,11 @@ impl Parser {
         }
 
         let mut current_rule = Rule::new(start_name, Value::Undefined);
+        current_rule.bind_spec(
+            self.rules
+                .get(start_name)
+                .expect("start rule existence was checked before construction"),
+        );
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
@@ -1115,7 +1334,7 @@ impl Parser {
             .max(100);
         let budget = &self.options.parse.budget;
 
-        loop {
+        'parse: loop {
             context.set_active(&current_rule, &stack);
             update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
@@ -1196,32 +1415,124 @@ impl Parser {
             // its before-close actions have already run and must not replay.
             let skip_befores = current_rule.skip_befores;
             current_rule.skip_befores = false;
-            if !skip_befores {
-                let (actions, callbacks, order, label) = if is_open {
-                    (&spec.bo, &spec.bo_fns, &spec.bo_order, "before-open action")
+            let before_enabled = if is_open {
+                current_rule.bo
+            } else {
+                current_rule.bc
+            };
+            if !skip_befores && before_enabled {
+                let (actions, callbacks, states, order, label) = if is_open {
+                    (
+                        &spec.bo,
+                        &spec.bo_fns,
+                        &spec.bo_state_fns,
+                        &spec.bo_order,
+                        "before-open action",
+                    )
                 } else {
                     (
                         &spec.bc,
                         &spec.bc_fns,
+                        &spec.bc_state_fns,
                         &spec.bc_order,
                         "before-close action",
                     )
                 };
-                for binding in resolved_action_order(actions, callbacks, order) {
-                    let result = match binding {
+                let next = is_open.then(|| current_rule.snapshot());
+                let site = ParseSite {
+                    source: src,
+                    stack: &stack,
+                    alts,
+                };
+                let mut output = None;
+                let mut lifecycle_error = None;
+                for binding in resolved_action_order(actions, callbacks, states, order) {
+                    output = match binding {
                         ActionBinding::Named(action) => {
-                            self.run_action(&action, &mut current_rule, &mut context)
+                            if let Some(callback) = self.state_actions.get(&action) {
+                                self.run_state_callback(
+                                    label,
+                                    callback,
+                                    &mut current_rule,
+                                    &mut context,
+                                    next.as_deref(),
+                                    output,
+                                )
+                                .map_err(|error| {
+                                    self.attach_action_error(
+                                        error,
+                                        src,
+                                        &current_rule,
+                                        &stack,
+                                        alts,
+                                    )
+                                })?
+                            } else {
+                                self.run_action(&action, &mut current_rule, &mut context)
+                                    .map_err(|error| {
+                                        self.attach_action_error(
+                                            error,
+                                            src,
+                                            &current_rule,
+                                            &stack,
+                                            alts,
+                                        )
+                                    })?;
+                                None
+                            }
                         }
-                        ActionBinding::Callback(callback) => self.run_context_callback(
-                            label,
-                            &callback,
-                            &mut current_rule,
-                            &mut context,
-                        ),
+                        ActionBinding::Callback(callback) => {
+                            self.run_context_callback(
+                                label,
+                                &callback,
+                                &mut current_rule,
+                                &mut context,
+                            )
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?;
+                            None
+                        }
+                        ActionBinding::State(callback) => self
+                            .run_state_callback(
+                                label,
+                                &callback,
+                                &mut current_rule,
+                                &mut context,
+                                next.as_deref(),
+                                output,
+                            )
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?,
                     };
-                    result.map_err(|error| {
-                        self.attach_action_error(error, src, &current_rule, &stack, alts)
-                    })?;
+                    match self.check_lifecycle_output(output, &current_rule, site) {
+                        Ok(next_output) => output = next_output,
+                        Err(error) => {
+                            lifecycle_error = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if let Some(error) = lifecycle_error {
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    self.recover_error_pass(
+                        error,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        None,
+                        false,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    continue 'parse;
                 }
             }
             update_partial(mode, &root_node, &current_rule, &stack);
@@ -1229,6 +1540,7 @@ impl Parser {
             // 2. Select alternates
             let mut matched_alt_idx: Option<usize> = None;
             let mut matched_count = 0;
+            let mut matched_seed = AltMatch::default();
 
             for (idx, alt) in alts.iter().enumerate() {
                 if !groups_enabled(alt, &self.options) {
@@ -1236,6 +1548,7 @@ impl Parser {
                 }
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
+                let mut candidate_match = AltMatch::default();
                 let mut relex_undo: Option<RelexUndo> = None;
                 for (pos, pos_tins) in alt.s.iter().enumerate() {
                     if let Err(error) = self.ensure_lookahead(
@@ -1270,7 +1583,7 @@ impl Parser {
                         } else {
                             None
                         };
-                        let Some((mut recut, lexer_state)) = recut else {
+                        let Some((mut recut, checkpoint)) = recut else {
                             alt_matches = false;
                             break;
                         };
@@ -1283,18 +1596,16 @@ impl Parser {
                             })?;
                         }
                         if !pos_tins.contains(&recut.tin) {
-                            lexer.restore(lexer_state);
+                            lexer.unrelex(checkpoint, &mut context);
                             alt_matches = false;
                             break;
                         }
-                        let replay = context.take_replay();
                         if relex_undo.is_none() {
                             relex_undo = Some(RelexUndo {
                                 position: pos,
                                 token,
-                                lexer: lexer_state,
+                                checkpoint,
                                 tokens: context.t.clone(),
-                                replay,
                             });
                         }
                         context.t[pos] = recut;
@@ -1337,6 +1648,54 @@ impl Parser {
                             })?;
                         }
                         if alt_matches {
+                            if let Some(condition) = &alt.c_match {
+                                context.set_rule(&current_rule);
+                                let result =
+                                    self.catch_callback("matched alternate condition", src, || {
+                                        condition(
+                                            &mut current_rule,
+                                            &mut context,
+                                            &mut candidate_match,
+                                        )
+                                    });
+                                alt_matches = result.map_err(|error| {
+                                    self.attach_error(
+                                        error,
+                                        &current_rule,
+                                        &stack,
+                                        alts,
+                                        Self::phase_token(&current_rule),
+                                    )
+                                })?;
+                            }
+                        }
+                        if alt_matches {
+                            if let Some(condition) = &alt.c_lex_match {
+                                context.set_rule(&current_rule);
+                                let result = self.catch_callback(
+                                    "matched alternate lexer condition",
+                                    src,
+                                    || {
+                                        condition(
+                                            &mut current_rule,
+                                            &mut context,
+                                            &mut candidate_match,
+                                            &mut lexer,
+                                        )
+                                    },
+                                );
+                                alt_matches = result.map_err(|error| {
+                                    self.attach_error(
+                                        error,
+                                        &current_rule,
+                                        &stack,
+                                        alts,
+                                        Self::phase_token(&current_rule),
+                                    )
+                                })?;
+                            }
+                        }
+                        if alt_matches {
                             if let Some(condition) = &alt.c_lex {
                                 context.set_rule(&current_rule);
                                 let result =
@@ -1358,13 +1717,13 @@ impl Parser {
                     if alt_matches {
                         matched_alt_idx = Some(idx);
                         matched_count = s_len;
+                        matched_seed = candidate_match;
                         break;
                     }
                 }
                 if let Some(undo) = relex_undo {
-                    lexer.restore(undo.lexer);
+                    lexer.unrelex(undo.checkpoint, &mut context);
                     context.t = undo.tokens;
-                    context.restore_replay(undo.replay);
                     for subscriber in &self.lex_subscribers {
                         let mut restored = undo.token.clone();
                         let result = self.catch_callback("lex subscriber", src, || {
@@ -1390,9 +1749,10 @@ impl Parser {
                     current_rule.c = matched_tokens;
                 }
 
-                // A modifier runs after matching and may replace any of the
-                // effective alternate's routing, state, action, or error
-                // fields before they are applied.
+                // Compatibility modifier for the original two-argument Rust
+                // callback tier. It rewrites the source spec before dynamic
+                // fields are resolved. The full `h_match` callback below runs
+                // at the canonical point over the resolved AltMatch.
                 if let Some(modifier) = alt.h.clone() {
                     context.set_rule(&current_rule);
                     let result = self.catch_callback("alternate modifier", src, || {
@@ -1409,14 +1769,48 @@ impl Parser {
                     })?;
                 }
 
-                // Function-valued alternate errors are raised at the match
-                // site, before counters, actions, consumption, or routing.
+                let mut matched = matched_seed;
+                matched.h = alt.h_match.clone();
+                if !alt.n.is_empty() {
+                    matched.n = alt.n.clone();
+                }
+                if !alt.u.is_empty() {
+                    matched.u = alt.u.clone();
+                }
+                if !alt.k.is_empty() {
+                    matched.k = alt.k.clone();
+                }
+                if !alt.g.is_empty() {
+                    matched.g = alt
+                        .g
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|group| !group.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                }
+                let actions = resolved_alt_action_order(
+                    &alt.a,
+                    &alt.action_fns,
+                    &alt.matched_action_fns,
+                    &alt.action_order,
+                );
+                if !actions.is_empty() {
+                    matched.actions = actions;
+                }
+                if !alt.action_configs.is_empty() {
+                    matched.action_configs = alt.action_configs.clone();
+                }
+
+                // Canonical parse-alternate resolution order is error, push,
+                // replace, backtrack. Each callback observes the same live
+                // AltMatch record, before counters/user state are applied.
                 if let Some(error_hook) = alt.e.clone() {
                     context.set_rule(&current_rule);
                     let result = self.catch_callback("alternate error", src, || {
                         error_hook(&mut current_rule, &mut context)
                     });
-                    let raised = result.map_err(|error| {
+                    matched.e = result.map_err(|error| {
                         self.attach_error(
                             error,
                             &current_rule,
@@ -1425,62 +1819,192 @@ impl Parser {
                             Self::phase_token(&current_rule),
                         )
                     })?;
-                    if let Some(token) = raised {
-                        let code = raised_error_code(&token);
-                        let error = TabnasError::new(
-                            code,
-                            token.src.clone(),
-                            src,
-                            token.pos,
-                            token.ri,
-                            token.ci,
-                        );
-                        let done_alt = RuleDoneAlt {
-                            b: alt.b,
-                            g: alt
-                                .g
-                                .split(',')
-                                .map(str::trim)
-                                .filter(|group| !group.is_empty())
-                                .map(str::to_owned)
-                                .collect(),
-                            p: alt.p.clone().unwrap_or_default(),
-                            r: alt.r.clone().unwrap_or_default(),
-                            err: Some(token.clone()),
-                        };
-                        self.notify_rule_done(
+                }
+                if let Some(error_hook) = alt.e_match.clone() {
+                    context.set_rule(&current_rule);
+                    let result = self.catch_callback("matched alternate error", src, || {
+                        error_hook(&mut current_rule, &mut context, &mut matched)
+                    });
+                    matched.e = result.map_err(|error| {
+                        self.attach_error(
+                            error,
                             &current_rule,
-                            &context,
-                            if is_open {
-                                RuleState::Open
-                            } else {
-                                RuleState::Close
-                            },
-                            Some(done_alt),
-                            src,
                             &stack,
-                        )?;
-                        let error =
-                            self.attach_error(error, &current_rule, &stack, alts, Some(&token));
-                        if mode.recovering
-                            && self.attempt_recover(
-                                error.clone(),
-                                &mut current_rule,
-                                &mut stack,
-                                &mut context,
-                                &mut lexer,
-                                mode,
-                            )?
-                        {
-                            continue;
-                        }
-                        update_partial(mode, &root_node, &current_rule, &stack);
-                        return Err(error);
+                            alts,
+                            Self::phase_token(&current_rule),
+                        )
+                    })?;
+                }
+                if let Some(route) = &alt.p_fn {
+                    context.set_rule(&current_rule);
+                    matched.p = self
+                        .catch_callback("alternate push", src, || {
+                            route(&mut current_rule, &mut context)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .filter(|name| !name.is_empty());
+                }
+                if let Some(route) = &alt.p_match {
+                    context.set_rule(&current_rule);
+                    matched.p = self
+                        .catch_callback("matched alternate push", src, || {
+                            route(&mut current_rule, &mut context, &mut matched)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .filter(|name| !name.is_empty());
+                } else if alt.p_fn.is_none() {
+                    if let Some(route) = alt.p.clone() {
+                        matched.p = (!route.is_empty()).then_some(route);
                     }
+                }
+                if let Some(route) = &alt.r_fn {
+                    context.set_rule(&current_rule);
+                    matched.r = self
+                        .catch_callback("alternate replace", src, || {
+                            route(&mut current_rule, &mut context)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .filter(|name| !name.is_empty());
+                }
+                if let Some(route) = &alt.r_match {
+                    context.set_rule(&current_rule);
+                    matched.r = self
+                        .catch_callback("matched alternate replace", src, || {
+                            route(&mut current_rule, &mut context, &mut matched)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .filter(|name| !name.is_empty());
+                } else if alt.r_fn.is_none() {
+                    if let Some(route) = alt.r.clone() {
+                        matched.r = (!route.is_empty()).then_some(route);
+                    }
+                }
+                if let Some(backtrack) = &alt.b_fn {
+                    context.set_rule(&current_rule);
+                    matched.b = self
+                        .catch_callback("alternate backtrack", src, || {
+                            backtrack(&mut current_rule, &mut context)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?;
+                }
+                if let Some(backtrack) = &alt.b_match {
+                    context.set_rule(&current_rule);
+                    matched.b = self
+                        .catch_callback("matched alternate backtrack", src, || {
+                            backtrack(&mut current_rule, &mut context, &mut matched)
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?;
+                } else if alt.b_fn.is_none() && alt.b != 0 {
+                    matched.b = alt.b;
+                }
+
+                if let Some(modifier) = alt.h_match.clone() {
+                    context.set_rule(&current_rule);
+                    let next = is_open.then(|| current_rule.snapshot());
+                    matched = self
+                        .catch_callback("matched alternate modifier", src, || {
+                            modifier(matched, &mut current_rule, &mut context, next.as_deref())
+                        })
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?;
+                }
+
+                // Function-valued alternate errors are raised at the match
+                // site, before counters, actions, consumption, or routing.
+                if let Some(token) = matched.e.clone() {
+                    let code = raised_error_code(&token);
+                    let error = TabnasError::new(
+                        code,
+                        token.src.clone(),
+                        src,
+                        token.pos,
+                        token.ri,
+                        token.ci,
+                    );
+                    let done_alt = RuleDoneAlt {
+                        b: matched.b,
+                        g: matched.g.clone(),
+                        p: matched.p.clone().unwrap_or_default(),
+                        r: matched.r.clone().unwrap_or_default(),
+                        err: Some(token.clone()),
+                    };
+                    let error = self.attach_error(error, &current_rule, &stack, alts, Some(&token));
+                    self.recover_error_pass(
+                        error,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        Some(done_alt),
+                        false,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    continue;
                 }
 
                 // Update counters n
-                for (k, v) in &alt.n {
+                for (k, v) in &matched.n {
                     if *v == 0 {
                         current_rule.n.insert(k.clone(), 0);
                     } else {
@@ -1489,97 +2013,112 @@ impl Parser {
                 }
 
                 // Update user props u
-                for (k, v) in &alt.u {
+                for (k, v) in &matched.u {
                     current_rule.u.insert(k.clone(), v.clone());
                 }
 
                 // Update keep props k
-                for (k, v) in &alt.k {
+                for (k, v) in &matched.k {
                     current_rule.k.insert(k.clone(), v.clone());
                 }
 
-                // Calculate consumed tokens. Dynamic backtracking observes
-                // the state updates above, matching the mature engine order.
-                let backtrack = match &alt.b_fn {
-                    Some(backtrack) => {
-                        context.set_rule(&current_rule);
-                        let result = self.catch_callback("alternate backtrack", src, || {
-                            backtrack(&mut current_rule, &mut context)
-                        });
-                        result.map_err(|error| {
-                            self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                Self::phase_token(&current_rule),
-                            )
-                        })?
-                    }
-                    None => alt.b,
-                };
+                let backtrack = matched.b;
                 let consumed = matched_count.saturating_sub(backtrack);
                 context.record_consumed(consumed);
 
-                // Resolve dynamic routing before the action. The action may
-                // mutate rule data, but routing is an input to this match,
-                // not a post-action control channel.
-                let push_name = match &alt.p_fn {
-                    Some(route) => {
-                        context.set_rule(&current_rule);
-                        let result = self.catch_callback("alternate push", src, || {
-                            route(&mut current_rule, &mut context)
-                        });
-                        result.map_err(|error| {
-                            self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                Self::phase_token(&current_rule),
+                // Run action. A bad token returned by a canonical action is
+                // raised through the same recovery path as alt.e and
+                // lifecycle actions; later actions must not run.
+                let mut matched_action_error = None;
+                let mut matched_action_token = None;
+                for binding in matched.actions.clone() {
+                    let act_name = match binding {
+                        AltActionBinding::Context(callback) => {
+                            self.run_context_callback(
+                                "alternate action",
+                                &callback,
+                                &mut current_rule,
+                                &mut context,
                             )
-                        })?
-                    }
-                    None => alt.p.clone(),
-                }
-                .filter(|name| !name.is_empty());
-                let replace_name = match &alt.r_fn {
-                    Some(route) => {
-                        context.set_rule(&current_rule);
-                        let result = self.catch_callback("alternate replace", src, || {
-                            route(&mut current_rule, &mut context)
-                        });
-                        result.map_err(|error| {
-                            self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                Self::phase_token(&current_rule),
-                            )
-                        })?
-                    }
-                    None => alt.r.clone(),
-                }
-                .filter(|name| !name.is_empty());
-
-                // Run action
-                for binding in resolved_action_order(&alt.a, &alt.action_fns, &alt.action_order) {
-                    let ActionBinding::Named(act_name) = binding else {
-                        let ActionBinding::Callback(callback) = binding else {
-                            unreachable!()
-                        };
-                        self.run_context_callback(
-                            "alternate action",
-                            &callback,
-                            &mut current_rule,
-                            &mut context,
-                        )
-                        .map_err(|error| {
-                            self.attach_action_error(error, src, &current_rule, &stack, alts)
-                        })?;
-                        continue;
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?;
+                            continue;
+                        }
+                        AltActionBinding::Matched(callback) => {
+                            context.set_rule(&current_rule);
+                            let result = self
+                                .catch_callback("matched alternate action", src, || {
+                                    callback(&mut current_rule, &mut context, &mut matched)
+                                })
+                                .map_err(|error| {
+                                    self.attach_action_error(
+                                        error,
+                                        src,
+                                        &current_rule,
+                                        &stack,
+                                        alts,
+                                    )
+                                })?;
+                            let token = result.map_err(|action_error| {
+                                self.attach_action_error(
+                                    action_error.into(),
+                                    src,
+                                    &current_rule,
+                                    &stack,
+                                    alts,
+                                )
+                            })?;
+                            if let Some(token) = token.filter(|token| !token.err.is_empty()) {
+                                matched_action_error = Some(self.raised_token_error(
+                                    &token,
+                                    &current_rule,
+                                    ParseSite {
+                                        source: src,
+                                        stack: &stack,
+                                        alts,
+                                    },
+                                ));
+                                matched_action_token = Some(token);
+                                break;
+                            }
+                            continue;
+                        }
+                        AltActionBinding::Named(name) => name,
                     };
+                    if let Some(callback) = self.matched_actions.get(&act_name) {
+                        context.set_rule(&current_rule);
+                        let result = self
+                            .catch_callback("named matched alternate action", src, || {
+                                callback(&mut current_rule, &mut context, &mut matched)
+                            })
+                            .map_err(|error| {
+                                self.attach_action_error(error, src, &current_rule, &stack, alts)
+                            })?;
+                        let token = result.map_err(|action_error| {
+                            self.attach_action_error(
+                                action_error.into(),
+                                src,
+                                &current_rule,
+                                &stack,
+                                alts,
+                            )
+                        })?;
+                        if let Some(token) = token.filter(|token| !token.err.is_empty()) {
+                            matched_action_error = Some(self.raised_token_error(
+                                &token,
+                                &current_rule,
+                                ParseSite {
+                                    source: src,
+                                    stack: &stack,
+                                    alts,
+                                },
+                            ));
+                            matched_action_token = Some(token);
+                            break;
+                        }
+                        continue;
+                    }
                     match act_name.as_str() {
                         "@probeInit$" => {
                             current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
@@ -1646,28 +2185,100 @@ impl Parser {
                                 &act_name,
                                 &mut current_rule,
                                 &mut context,
-                                alt.action_configs.get(&act_name),
+                                matched.action_configs.get(&act_name),
                             )
                             .map_err(|error| {
                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
                             })?,
                     }
                 }
+                if let Some(error) = matched_action_error {
+                    let recovered_alt = Some(RuleDoneAlt {
+                        b: matched.b,
+                        g: matched.g.clone(),
+                        p: matched.p.clone().unwrap_or_default(),
+                        r: matched.r.clone().unwrap_or_default(),
+                        err: None,
+                    });
+                    self.recover_error_pass(
+                        error,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        recovered_alt,
+                        matched_action_token.is_some(),
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    continue 'parse;
+                }
                 update_partial(mode, &root_node, &current_rule, &stack);
 
+                // The canonical action receives the live match record. Its
+                // post-action p/r writes are a supported routing channel, so
+                // resolve the transition only after the action sequence.
+                let push_name = matched.p.clone();
+                let replace_name = matched.r.clone();
                 let done_alt = Some(RuleDoneAlt {
-                    b: backtrack,
-                    g: alt
-                        .g
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|group| !group.is_empty())
-                        .map(str::to_owned)
-                        .collect(),
+                    b: matched.b,
+                    g: matched.g.clone(),
                     p: push_name.clone().unwrap_or_default(),
                     r: replace_name.clone().unwrap_or_default(),
                     err: None,
                 });
+
+                // Callback routes and action mutations cannot be validated at
+                // grammar-install time. Reject an unknown destination at the
+                // canonical point: after the matched action, but before any
+                // lifecycle after-action or transition.
+                let unknown_route = push_name
+                    .as_ref()
+                    .or(replace_name.as_ref())
+                    .filter(|name| !self.rules.contains_key(name.as_str()));
+                if let Some(name) = unknown_route {
+                    let mut token = Self::phase_token(&current_rule)
+                        .cloned()
+                        .or_else(|| context.t.first().cloned())
+                        .unwrap_or_else(Token::no_token);
+                    token.bad("unknown_rule");
+                    token
+                        .use_data
+                        .insert("rulename".into(), Value::String(name.clone()));
+                    let error = self.raised_token_error(
+                        &token,
+                        &current_rule,
+                        ParseSite {
+                            source: src,
+                            stack: &stack,
+                            alts,
+                        },
+                    );
+                    self.recover_error_pass(
+                        error,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt,
+                        false,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    continue 'parse;
+                }
 
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
@@ -1676,6 +2287,9 @@ impl Parser {
                 let mut completed_value = None;
                 if let Some(ref push_name) = push_name {
                     let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
+                    if let Some(child_spec) = self.rules.get(push_name) {
+                        child.bind_spec(child_spec);
+                    }
                     child.i = next_rule_id;
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
@@ -1686,7 +2300,7 @@ impl Parser {
                     current_rule.next_rule_name = Some(push_name.clone());
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         is_open,
                         &mut current_rule,
@@ -1696,7 +2310,25 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt.clone(),
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
@@ -1706,6 +2338,9 @@ impl Parser {
                     current_rule = child;
                 } else if let Some(ref replace_name) = replace_name {
                     let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
+                    if let Some(next_spec) = self.rules.get(replace_name) {
+                        next.bind_spec(next_spec);
+                    }
                     next.i = next_rule_id;
                     next_rule_id += 1;
                     next.d = current_rule.d;
@@ -1715,7 +2350,7 @@ impl Parser {
                     next.k = current_rule.k.clone();
                     current_rule.next_rule_name = Some(replace_name.clone());
                     current_rule.next_rule = Some(next.snapshot());
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         is_open,
                         &mut current_rule,
@@ -1725,7 +2360,25 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt.clone(),
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
@@ -1735,7 +2388,7 @@ impl Parser {
                 } else if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         true,
                         &mut current_rule,
@@ -1745,14 +2398,28 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        RuleState::Open,
+                        done_alt.clone(),
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     current_rule.state = RuleState::Close;
                     completed_rule = current_rule.clone();
                 } else {
                     // Close phase pop
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         false,
                         &mut current_rule,
@@ -1762,7 +2429,21 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        RuleState::Close,
+                        done_alt.clone(),
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     let parent = stack.pop();
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
@@ -1800,7 +2481,7 @@ impl Parser {
                 if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         true,
                         &mut current_rule,
@@ -1810,13 +2491,27 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        RuleState::Open,
+                        None,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     current_rule.state = RuleState::Close;
                     completed_rule = current_rule.clone();
                 } else {
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
-                    self.run_after_actions(
+                    let after = self.run_after_actions(
                         &spec,
                         false,
                         &mut current_rule,
@@ -1826,7 +2521,21 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
-                    )?;
+                    );
+                    update_partial(mode, &root_node, &current_rule, &stack);
+                    if self.recover_after_actions(
+                        after,
+                        RuleState::Close,
+                        None,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )? {
+                        continue 'parse;
+                    }
                     let parent = stack.pop();
                     completed_rule = current_rule.clone();
                     if let Some(mut parent) = parent {
@@ -1892,35 +2601,27 @@ impl Parser {
                     };
                     let code = t0.as_ref().map_or("unexpected", deferred_error_code);
                     let error = TabnasError::new(code, src_token, src, si, ri, ci);
-                    self.notify_rule_done(
-                        &current_rule,
-                        &context,
-                        RuleState::Open,
-                        (!alts.is_empty()).then(|| RuleDoneAlt {
-                            b: 0,
-                            g: Vec::new(),
-                            p: String::new(),
-                            r: String::new(),
-                            err: t0.clone(),
-                        }),
-                        src,
-                        &stack,
-                    )?;
+                    let done_alt = (!alts.is_empty()).then(|| RuleDoneAlt {
+                        b: 0,
+                        g: Vec::new(),
+                        p: String::new(),
+                        r: String::new(),
+                        err: t0.clone(),
+                    });
                     let error = self.attach_error(error, &current_rule, &stack, alts, t0.as_ref());
-                    if mode.recovering
-                        && self.attempt_recover(
-                            error.clone(),
-                            &mut current_rule,
-                            &mut stack,
-                            &mut context,
-                            &mut lexer,
-                            mode,
-                        )?
-                    {
-                        continue;
-                    }
-                    update_partial(mode, &root_node, &current_rule, &stack);
-                    return Err(error);
+                    self.recover_error_pass(
+                        error,
+                        RuleState::Open,
+                        done_alt,
+                        false,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    continue;
                 } else {
                     if let Err(error) = self.ensure_lookahead(
                         &mut lexer,
@@ -1955,36 +2656,28 @@ impl Parser {
                     );
                     let code = token.as_ref().map_or("unexpected", deferred_error_code);
                     let error = TabnasError::new(code, source, src, pos, row, col);
-                    self.notify_rule_done(
-                        &current_rule,
-                        &context,
-                        RuleState::Close,
-                        Some(RuleDoneAlt {
-                            b: 0,
-                            g: Vec::new(),
-                            p: String::new(),
-                            r: String::new(),
-                            err: token.clone(),
-                        }),
-                        src,
-                        &stack,
-                    )?;
+                    let done_alt = Some(RuleDoneAlt {
+                        b: 0,
+                        g: Vec::new(),
+                        p: String::new(),
+                        r: String::new(),
+                        err: token.clone(),
+                    });
                     let error =
                         self.attach_error(error, &current_rule, &stack, alts, token.as_ref());
-                    if mode.recovering
-                        && self.attempt_recover(
-                            error.clone(),
-                            &mut current_rule,
-                            &mut stack,
-                            &mut context,
-                            &mut lexer,
-                            mode,
-                        )?
-                    {
-                        continue;
-                    }
-                    update_partial(mode, &root_node, &current_rule, &stack);
-                    return Err(error);
+                    self.recover_error_pass(
+                        error,
+                        RuleState::Close,
+                        done_alt,
+                        false,
+                        src,
+                        &mut current_rule,
+                        &mut stack,
+                        &mut context,
+                        &mut lexer,
+                        mode,
+                    )?;
+                    continue;
                 }
             }
         }

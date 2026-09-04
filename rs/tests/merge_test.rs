@@ -337,3 +337,72 @@ fn empty_is_fresh_and_has_no_standard_token_producers() {
     assert_eq!("empty", configured.options.tag);
     assert!(configured.rules.is_empty());
 }
+
+#[test]
+fn merge_unions_compatible_decorations_and_rejects_conflicts() {
+    let mut left = fixed_grammar("A", "#AT", "@", "@");
+    left.decorate("left", Value::Number(1.0));
+    left.decorate("shared", Value::String("same".into()));
+    let mut right = fixed_grammar("B", "#BT", "!", "!");
+    right.decorate("right", Value::Number(2.0));
+    right.decorate("shared", Value::String("same".into()));
+
+    let merged = left.merge(&right).unwrap();
+    assert_eq!(merged.decoration("left"), Some(&Value::Number(1.0)));
+    assert_eq!(merged.decoration("right"), Some(&Value::Number(2.0)));
+
+    right.decorate("shared", Value::String("different".into()));
+    assert!(left
+        .merge(&right)
+        .err()
+        .unwrap()
+        .0
+        .contains("decoration.shared"));
+}
+
+#[test]
+fn matched_and_state_action_refs_are_namespaced_across_merge() {
+    fn callback_grammar(tag: &str, source: &str, result: &'static str) -> Tabnas {
+        let mut parser = Tabnas::with_options(Options {
+            tag: tag.into(),
+            ..Default::default()
+        });
+        let tin = parser.token_with_source(format!("#{tag}T"), source);
+        let action_group = format!("g{}", tag.to_lowercase());
+        parser.action_with_match_ref("@set", move |rule, _context, matched| {
+            assert_eq!(matched.g, [action_group.as_str()]);
+            *rule.node.borrow_mut() = Value::String(result.into());
+            Ok(None)
+        });
+        parser.state_action_with_next_ref("@val-bo", |_rule, _context, next, out| {
+            assert_eq!(next.map(|rule| rule.name.as_str()), Some("val"));
+            assert!(out.is_none());
+            Ok(None)
+        });
+        parser
+            .grammar_json(&format!(
+                r##"{{
+                  "options":{{"rule":{{"start":"val"}}}},
+                  "rule":{{"val":{{"open":[{{"s":"#{tag}T","a":"@set","g":"{}"}}]}}}}
+                }}"##,
+                format_args!("g{}", tag.to_lowercase())
+            ))
+            .unwrap();
+        assert_eq!(parser.options.token(&format!("#{tag}T")), Some(tin));
+        parser
+    }
+
+    let left = callback_grammar("A", "a", "left");
+    let right = callback_grammar("B", "b", "right");
+    for merged in [left.merge(&right).unwrap(), right.merge(&left).unwrap()] {
+        assert!(merged.matched_actions.contains_key("@A:set"));
+        assert!(merged.matched_actions.contains_key("@B:set"));
+        assert!(merged.state_actions.contains_key("@A:val-bo"));
+        assert!(merged.state_actions.contains_key("@B:val-bo"));
+        assert_eq!(merged.parse("a").unwrap(), Value::String("left".into()));
+        assert_eq!(merged.parse("b").unwrap(), Value::String("right".into()));
+        let child = merged.derive(|_| {}).unwrap();
+        assert_eq!(child.parse("a").unwrap(), Value::String("left".into()));
+        assert_eq!(child.parse("b").unwrap(), Value::String("right".into()));
+    }
+}

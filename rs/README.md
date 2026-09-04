@@ -31,6 +31,9 @@ Typed registrations cover conditions (`c`), modifiers (`h`), errors (`e`),
 and dynamic push, replace, and backtrack fields (`p`, `r`, `b`). Modifiers use
 an explicit take-and-return contract, and missing or mistyped references fail
 transactionally during grammar installation.
+The complete condition tier receives the shared live `AltMatch` and lexer in
+one callback, so plugins can perform canonical arbitrary-depth lookahead
+without losing match-state mutations.
 Reserved lifecycle references (`@rule-bo`, `-ao`, `-bc`, `-ac`, with
 `/prepend`, `/append`, and `/replace`) bind through `state_action_ref` and are
 wired when that serialized rule is installed.
@@ -77,9 +80,10 @@ are reapplied on later grammar option overlays until removed.
 option input for the configure pass. Raw options and resolved configuration are
 kept separate so non-idempotent modifiers do not compound during overlays or
 derivation.
-Replacement `options.parser.start` entry points bind through
-`parser_start_ref`; they bypass the rule engine like the TypeScript/Go option,
-and callback panics are returned as structured internal errors.
+Replacement `options.parser.start` entry points bind through typed simple,
+instance-aware, and parent-context-aware registrations; they bypass the rule
+engine like the TypeScript/Go option, and callback panics are returned as
+structured internal errors.
 Native plugins, grammar-wide group settings, plugin option bags, derived
 instances, `empty`, and commutative instance `merge` are also available as
 typed Rust APIs. Lazy token values, full pre-parse hooks, live lexer checks,
@@ -90,7 +94,7 @@ The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
 grammar: `Tabnas::new()` has no rules.
 
-## Current scope
+## Parity status
 
 Implemented: ordered grammar rules, open/close/push/replace transitions,
 inheritable `n` and `k` state, rule-local `u` state, named actions, built-in
@@ -103,12 +107,18 @@ budgets, path-aware continuation queries, and opt-in panic-mode recovery with
 structured recovery diagnostics. Opt-in negotiated lexing can re-cut contested
 source spans for scannerless serialized grammars, including rollback when a
 candidate alternate later fails. Typed named hooks cover alternate conditions,
-modifiers, errors, dynamic routing/backtracking, and effect-based token
-matchers. Callback panics become structured `internal` diagnostics at public
-parser and lexer boundaries, retaining the active rule, complete rule stack,
-token, and source position when a parse context exists. Opt-in typed `MapRef`, `ListRef`, and `Text`
-results expose parse metadata while serializing to the same plain JSON shape as TypeScript. Rust
-directly executes every non-exempt shared TSV fixture; the
+modifiers, errors, dynamic routing/backtracking, lifecycle state, and
+effect-based or fully imperative token matchers. The live native surface
+includes the resolved `AltMatch`, next-rule snapshots, live lexer access,
+rule-spec inspection, per-rule lifecycle gates, parent-context seeding, token
+detail bags, ignored trivia, negotiated re-lex checkpoints, and ordered
+subscriber events. Callback panics become structured `internal` diagnostics at
+public parser and lexer boundaries, retaining the active rule, complete rule
+stack, token, and source position when a parse context exists. Debug
+configuration, stable value formatting, instance descriptions, and opt-in
+lexer/rule tracing are built in. Opt-in typed `MapRef`, `ListRef`, and `Text`
+results expose parse metadata while serializing to the same plain JSON shape as
+TypeScript. Rust directly executes every non-exempt shared TSV fixture; the
 fixture paths are not copied into the crate. The repository gate requires every
 non-exempt shared fixture to have a TypeScript, Go, and Rust runner, and the
 strict-JSON differential gate compares token streams over every data row in
@@ -116,12 +126,14 @@ both JSON and parser corpora. Additional compiler-consumer gates compare Rust
 against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
 and GBNF compilers.
 
-The portable serialized contract is differentially covered and the native
-imperative tier is now present, but the final drop-in parity audit is still in
-progress. In particular, the remaining review is checking the complete
-matched-alternate/next-rule argument surface of imperative callbacks and the
-debug/introspection convenience APIs. Unsupported serialized callback forms
-fail at install time instead of being silently ignored. See
+The portable serialized contract and native imperative tier have completed
+their TypeScript/Go surface audit. Rust ownership is expressed explicitly:
+grammar and next-rule views are immutable snapshots, live mutation is limited
+to the `&mut Rule`, `&mut Context`, `&mut Lexer`, and `&mut AltMatch` arguments
+supplied to a callback, and JavaScript function references are registered as
+typed Rust callbacks before loading serialized JSON. Unsupported or mistyped
+serialized callback forms fail at install time instead of being silently
+ignored. See
 `../doc/rust-port-implementation-plan.md` for the original architecture and
 gates; the implementation has intentionally advanced beyond that document's
 v0.1 scope.

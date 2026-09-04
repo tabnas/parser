@@ -11,8 +11,9 @@ use crate::options::{
     MatchValue, TextModifier, ValueDef,
 };
 use crate::{
-    Action, ActionBinding, AltSpec, ContextAction, LexSubscriber, Options, Plugin, PluginError,
-    RuleDoneSubscriber, RuleSpec, RuleSubscriber, Tabnas, TokenSubscriber, Value,
+    Action, ActionBinding, AltActionBinding, AltSpec, ContextAction, LexSubscriber, Options,
+    Plugin, PluginError, RuleDoneSubscriber, RuleSpec, RuleSubscriber, Tabnas, TokenSubscriber,
+    Value,
 };
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap};
@@ -878,6 +879,41 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
         "parser.start",
         &eq_option_arc,
     )?;
+    out.parser.start_with_context = pick(
+        &left.parser.start_with_context,
+        &right.parser.start_with_context,
+        &default.parser.start_with_context,
+        "parser.start",
+        &eq_option_arc,
+    )?;
+    out.debug.maxlen = pick(
+        &left.debug.maxlen,
+        &right.debug.maxlen,
+        &default.debug.maxlen,
+        "debug.maxlen",
+        &PartialEq::eq,
+    )?;
+    out.debug.print.config = pick(
+        &left.debug.print.config,
+        &right.debug.print.config,
+        &default.debug.print.config,
+        "debug.print.config",
+        &PartialEq::eq,
+    )?;
+    out.debug.print.source = pick(
+        &left.debug.print.source,
+        &right.debug.print.source,
+        &default.debug.print.source,
+        "debug.print.src",
+        &eq_option_arc,
+    )?;
+    out.debug.output = pick(
+        &left.debug.output,
+        &right.debug.output,
+        &default.debug.output,
+        "debug.get_console",
+        &eq_option_arc,
+    )?;
 
     out.match_lex = pick(
         &left.match_lex,
@@ -1080,6 +1116,8 @@ fn merge_token_space(
 enum ActionIdentity {
     Simple(usize),
     Context(usize),
+    Matched(usize),
+    State(usize),
     Builtin(String),
     Missing(String),
 }
@@ -1095,6 +1133,10 @@ fn action_identity(tabnas: &Tabnas, name: &str) -> ActionIdentity {
         ActionIdentity::Simple(erased_ptr(action))
     } else if let Some(action) = tabnas.context_actions.get(name) {
         ActionIdentity::Context(erased_ptr(action))
+    } else if let Some(action) = tabnas.matched_actions.get(name) {
+        ActionIdentity::Matched(erased_ptr(action))
+    } else if let Some(action) = tabnas.state_actions.get(name) {
+        ActionIdentity::State(erased_ptr(action))
     } else {
         ActionIdentity::Missing(name.to_string())
     }
@@ -1140,13 +1182,18 @@ fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
         })
         .collect();
     let mut cloned = alt.clone();
-    let ordered_actions =
-        crate::rule::resolved_action_order(&alt.a, &alt.action_fns, &alt.action_order);
+    let ordered_actions = crate::rule::resolved_alt_action_order(
+        &alt.a,
+        &alt.action_fns,
+        &alt.matched_action_fns,
+        &alt.action_order,
+    );
     let action_identity = ordered_actions
         .iter()
         .map(|binding| match binding {
-            ActionBinding::Named(name) => action_identity(tabnas, name),
-            ActionBinding::Callback(callback) => ActionIdentity::Context(erased_ptr(callback)),
+            AltActionBinding::Named(name) => action_identity(tabnas, name),
+            AltActionBinding::Context(callback) => ActionIdentity::Context(erased_ptr(callback)),
+            AltActionBinding::Matched(callback) => ActionIdentity::Matched(erased_ptr(callback)),
         })
         .collect();
     cloned.a = alt.a.iter().map(|name| rename_ref(name, tag)).collect();
@@ -1159,8 +1206,9 @@ fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
     cloned.action_order = ordered_actions
         .into_iter()
         .map(|binding| match binding {
-            ActionBinding::Named(name) => ActionBinding::Named(rename_ref(&name, tag)),
-            ActionBinding::Callback(callback) => ActionBinding::Callback(callback),
+            AltActionBinding::Named(name) => AltActionBinding::Named(rename_ref(&name, tag)),
+            AltActionBinding::Context(callback) => AltActionBinding::Context(callback),
+            AltActionBinding::Matched(callback) => AltActionBinding::Matched(callback),
         })
         .collect();
     cloned.s.clear();
@@ -1169,16 +1217,26 @@ fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
         slots,
         keys,
         complexity: [
-            usize::from(!alt.c.is_empty() || alt.c_fn.is_some() || alt.c_lex.is_some()),
-            usize::from(alt.e.is_some()),
-            usize::from(alt.h.is_some()),
-            usize::from(alt.b != 0 || alt.b_fn.is_some()),
+            usize::from(
+                !alt.c.is_empty()
+                    || alt.c_fn.is_some()
+                    || alt.c_match.is_some()
+                    || alt.c_lex.is_some()
+                    || alt.c_lex_match.is_some(),
+            ),
+            usize::from(alt.e.is_some() || alt.e_match.is_some()),
+            usize::from(alt.h.is_some() || alt.h_match.is_some()),
+            usize::from(alt.b != 0 || alt.b_fn.is_some() || alt.b_match.is_some()),
             alt.n.len(),
-            usize::from(!alt.a.is_empty() || !alt.action_fns.is_empty()),
+            usize::from(
+                !alt.a.is_empty()
+                    || !alt.action_fns.is_empty()
+                    || !alt.matched_action_fns.is_empty(),
+            ),
             usize::from(!alt.u.is_empty()),
             usize::from(!alt.k.is_empty()),
-            usize::from(alt.p.is_some() || alt.p_fn.is_some()),
-            usize::from(alt.r.is_some() || alt.r_fn.is_some()),
+            usize::from(alt.p.is_some() || alt.p_fn.is_some() || alt.p_match.is_some()),
+            usize::from(alt.r.is_some() || alt.r_fn.is_some() || alt.r_match.is_some()),
         ],
         group: alt.g.clone(),
         tag: tag.to_string(),
@@ -1228,17 +1286,25 @@ fn identical_alts(left: &PortableAlt, right: &PortableAlt) -> bool {
         && left.group == right.group
         && left.action_identity == right.action_identity
         && eq_arc_vec(&left_alt.action_fns, &right_alt.action_fns)
+        && eq_arc_vec(&left_alt.matched_action_fns, &right_alt.matched_action_fns)
         && eq_conditions(&left_alt.c, &right_alt.c)
         && eq_option_arc(&left_alt.c_fn, &right_alt.c_fn)
+        && eq_option_arc(&left_alt.c_match, &right_alt.c_match)
         && eq_option_arc(&left_alt.c_lex, &right_alt.c_lex)
+        && eq_option_arc(&left_alt.c_lex_match, &right_alt.c_lex_match)
         && eq_option_arc(&left_alt.h, &right_alt.h)
+        && eq_option_arc(&left_alt.h_match, &right_alt.h_match)
         && eq_option_arc(&left_alt.e, &right_alt.e)
+        && eq_option_arc(&left_alt.e_match, &right_alt.e_match)
         && left_alt.b == right_alt.b
         && eq_option_arc(&left_alt.b_fn, &right_alt.b_fn)
+        && eq_option_arc(&left_alt.b_match, &right_alt.b_match)
         && left_alt.p == right_alt.p
         && eq_option_arc(&left_alt.p_fn, &right_alt.p_fn)
+        && eq_option_arc(&left_alt.p_match, &right_alt.p_match)
         && left_alt.r == right_alt.r
         && eq_option_arc(&left_alt.r_fn, &right_alt.r_fn)
+        && eq_option_arc(&left_alt.r_match, &right_alt.r_match)
         && left_alt.n == right_alt.n
         && eq_value_hash(&left_alt.u, &right_alt.u)
         && eq_value_hash(&left_alt.k, &right_alt.k)
@@ -1287,6 +1353,10 @@ struct MergedRule {
     ao_fns: Vec<ContextAction>,
     bc_fns: Vec<ContextAction>,
     ac_fns: Vec<ContextAction>,
+    bo_state_fns: Vec<crate::StateAction>,
+    ao_state_fns: Vec<crate::StateAction>,
+    bc_state_fns: Vec<crate::StateAction>,
+    ac_state_fns: Vec<crate::StateAction>,
     bo_order: Vec<ActionBinding>,
     ao_order: Vec<ActionBinding>,
     bc_order: Vec<ActionBinding>,
@@ -1324,6 +1394,10 @@ impl MergedRule {
             ao_fns: self.ao_fns.clone(),
             bc_fns: self.bc_fns.clone(),
             ac_fns: self.ac_fns.clone(),
+            bo_state_fns: self.bo_state_fns.clone(),
+            ao_state_fns: self.ao_state_fns.clone(),
+            bc_state_fns: self.bc_state_fns.clone(),
+            ac_state_fns: self.ac_state_fns.clone(),
             bo_order: self.bo_order.clone(),
             ao_order: self.ao_order.clone(),
             bc_order: self.bc_order.clone(),
@@ -1336,6 +1410,7 @@ struct PhaseSource<'a> {
     tabnas: &'a Tabnas,
     named: &'a [String],
     callbacks: &'a [ContextAction],
+    states: &'a [crate::StateAction],
     order: &'a [ActionBinding],
     tag: &'a str,
 }
@@ -1343,15 +1418,21 @@ struct PhaseSource<'a> {
 fn merge_phase(
     left: PhaseSource<'_>,
     right: PhaseSource<'_>,
-) -> (Vec<String>, Vec<ContextAction>, Vec<ActionBinding>) {
+) -> (
+    Vec<String>,
+    Vec<ContextAction>,
+    Vec<crate::StateAction>,
+    Vec<ActionBinding>,
+) {
     fn portable(
         tabnas: &Tabnas,
         named: &[String],
         callbacks: &[ContextAction],
+        states: &[crate::StateAction],
         order: &[ActionBinding],
         tag: &str,
     ) -> Vec<(ActionBinding, ActionIdentity)> {
-        crate::rule::resolved_action_order(named, callbacks, order)
+        crate::rule::resolved_action_order(named, callbacks, states, order)
             .into_iter()
             .map(|binding| match binding {
                 ActionBinding::Named(name) => (
@@ -1362,6 +1443,10 @@ fn merge_phase(
                     let identity = ActionIdentity::Context(erased_ptr(&callback));
                     (ActionBinding::Callback(callback), identity)
                 }
+                ActionBinding::State(callback) => {
+                    let identity = ActionIdentity::State(erased_ptr(&callback));
+                    (ActionBinding::State(callback), identity)
+                }
             })
             .collect()
     }
@@ -1370,6 +1455,7 @@ fn merge_phase(
         left.tabnas,
         left.named,
         left.callbacks,
+        left.states,
         left.order,
         left.tag,
     );
@@ -1377,6 +1463,7 @@ fn merge_phase(
         right.tabnas,
         right.named,
         right.callbacks,
+        right.states,
         right.order,
         right.tag,
     ) {
@@ -1393,6 +1480,7 @@ fn merge_phase(
         .filter_map(|binding| match binding {
             ActionBinding::Named(name) => Some(name.clone()),
             ActionBinding::Callback(_) => None,
+            ActionBinding::State(_) => None,
         })
         .collect();
     let callbacks = order
@@ -1400,9 +1488,17 @@ fn merge_phase(
         .filter_map(|binding| match binding {
             ActionBinding::Named(_) => None,
             ActionBinding::Callback(callback) => Some(callback.clone()),
+            ActionBinding::State(_) => None,
         })
         .collect();
-    (named, callbacks, order)
+    let states = order
+        .iter()
+        .filter_map(|binding| match binding {
+            ActionBinding::State(callback) => Some(callback.clone()),
+            ActionBinding::Named(_) | ActionBinding::Callback(_) => None,
+        })
+        .collect();
+    (named, callbacks, states, order)
 }
 
 fn merged_rules(left: &Tabnas, left_tag: &str, right: &Tabnas, right_tag: &str) -> Vec<MergedRule> {
@@ -1419,6 +1515,7 @@ fn merged_rules(left: &Tabnas, left_tag: &str, right: &Tabnas, right_tag: &str) 
             let right_rule = right.rules.get(&name);
             let empty_named = Vec::new();
             let empty_callbacks = Vec::new();
+            let empty_states = Vec::new();
             let empty_order = Vec::new();
             let left_open = left_rule
                 .map(|rule| {
@@ -1455,12 +1552,14 @@ fn merged_rules(left: &Tabnas, left_tag: &str, right: &Tabnas, right_tag: &str) 
             let phase =
                 |select_named: fn(&RuleSpec) -> &Vec<String>,
                  select_callbacks: fn(&RuleSpec) -> &Vec<ContextAction>,
+                 select_states: fn(&RuleSpec) -> &Vec<crate::StateAction>,
                  select_order: fn(&RuleSpec) -> &Vec<ActionBinding>| {
                     merge_phase(
                         PhaseSource {
                             tabnas: left,
                             named: left_rule.map(select_named).unwrap_or(&empty_named),
                             callbacks: left_rule.map(select_callbacks).unwrap_or(&empty_callbacks),
+                            states: left_rule.map(select_states).unwrap_or(&empty_states),
                             order: left_rule.map(select_order).unwrap_or(&empty_order),
                             tag: left_tag,
                         },
@@ -1468,19 +1567,36 @@ fn merged_rules(left: &Tabnas, left_tag: &str, right: &Tabnas, right_tag: &str) 
                             tabnas: right,
                             named: right_rule.map(select_named).unwrap_or(&empty_named),
                             callbacks: right_rule.map(select_callbacks).unwrap_or(&empty_callbacks),
+                            states: right_rule.map(select_states).unwrap_or(&empty_states),
                             order: right_rule.map(select_order).unwrap_or(&empty_order),
                             tag: right_tag,
                         },
                     )
                 };
-            let (bo, bo_fns, bo_order) =
-                phase(|rule| &rule.bo, |rule| &rule.bo_fns, |rule| &rule.bo_order);
-            let (ao, ao_fns, ao_order) =
-                phase(|rule| &rule.ao, |rule| &rule.ao_fns, |rule| &rule.ao_order);
-            let (bc, bc_fns, bc_order) =
-                phase(|rule| &rule.bc, |rule| &rule.bc_fns, |rule| &rule.bc_order);
-            let (ac, ac_fns, ac_order) =
-                phase(|rule| &rule.ac, |rule| &rule.ac_fns, |rule| &rule.ac_order);
+            let (bo, bo_fns, bo_state_fns, bo_order) = phase(
+                |rule| &rule.bo,
+                |rule| &rule.bo_fns,
+                |rule| &rule.bo_state_fns,
+                |rule| &rule.bo_order,
+            );
+            let (ao, ao_fns, ao_state_fns, ao_order) = phase(
+                |rule| &rule.ao,
+                |rule| &rule.ao_fns,
+                |rule| &rule.ao_state_fns,
+                |rule| &rule.ao_order,
+            );
+            let (bc, bc_fns, bc_state_fns, bc_order) = phase(
+                |rule| &rule.bc,
+                |rule| &rule.bc_fns,
+                |rule| &rule.bc_state_fns,
+                |rule| &rule.bc_order,
+            );
+            let (ac, ac_fns, ac_state_fns, ac_order) = phase(
+                |rule| &rule.ac,
+                |rule| &rule.ac_fns,
+                |rule| &rule.ac_state_fns,
+                |rule| &rule.ac_order,
+            );
             MergedRule {
                 name,
                 open: interleave(left_open, right_open),
@@ -1493,6 +1609,10 @@ fn merged_rules(left: &Tabnas, left_tag: &str, right: &Tabnas, right_tag: &str) 
                 ao_fns,
                 bc_fns,
                 ac_fns,
+                bo_state_fns,
+                ao_state_fns,
+                bc_state_fns,
+                ac_state_fns,
                 bo_order,
                 ao_order,
                 bc_order,
@@ -1525,17 +1645,26 @@ struct MergedInstall {
     rules: Vec<MergedRule>,
     actions: HashMap<String, Action>,
     context_actions: HashMap<String, ContextAction>,
+    matched_actions: HashMap<String, crate::AltAction>,
+    state_actions: HashMap<String, crate::StateAction>,
     token_subscribers: Vec<TokenSubscriber>,
     lex_subscribers: Vec<LexSubscriber>,
     rule_subscribers: Vec<RuleSubscriber>,
     rule_done_subscribers: Vec<RuleDoneSubscriber>,
     alt_conditions: HashMap<String, crate::AltCondition>,
+    alt_match_conditions: HashMap<String, crate::AltConditionWithMatch>,
     alt_lexer_conditions: HashMap<String, crate::AltConditionWithLexer>,
+    alt_lexer_match_conditions: HashMap<String, crate::AltConditionWithLexerAndMatch>,
     alt_modifiers: HashMap<String, crate::AltModifier>,
+    alt_match_modifiers: HashMap<String, crate::AltModifierWithMatch>,
     alt_errors: HashMap<String, crate::AltError>,
+    alt_match_errors: HashMap<String, crate::AltErrorWithMatch>,
     alt_pushes: HashMap<String, crate::AltNext>,
+    alt_match_pushes: HashMap<String, crate::AltNextWithMatch>,
     alt_replaces: HashMap<String, crate::AltNext>,
+    alt_match_replaces: HashMap<String, crate::AltNextWithMatch>,
     alt_backtracks: HashMap<String, crate::AltBack>,
+    alt_match_backtracks: HashMap<String, crate::AltBackWithMatch>,
     match_token_refs: HashMap<String, (crate::MatchTokenCallback, bool)>,
     value_transform_refs: HashMap<String, crate::ValueTransform>,
     text_modifier_refs: HashMap<String, crate::TextModifier>,
@@ -1551,6 +1680,7 @@ struct MergedInstall {
     config_modifier_refs: HashMap<String, crate::ConfigModifier>,
     parser_start_refs: HashMap<String, crate::ParserStart>,
     parser_start_instance_refs: HashMap<String, crate::ParserStartWithInstance>,
+    parser_start_context_refs: HashMap<String, crate::ParserStartWithContext>,
     map_merge_refs: HashMap<String, crate::MapMerge>,
 }
 
@@ -1566,17 +1696,26 @@ impl MergedInstall {
             .collect();
         tabnas.actions = self.actions.clone();
         tabnas.context_actions = self.context_actions.clone();
+        tabnas.matched_actions = self.matched_actions.clone();
+        tabnas.state_actions = self.state_actions.clone();
         tabnas.token_subscribers = self.token_subscribers.clone();
         tabnas.lex_subscribers = self.lex_subscribers.clone();
         tabnas.rule_subscribers = self.rule_subscribers.clone();
         tabnas.rule_done_subscribers = self.rule_done_subscribers.clone();
         tabnas.alt_conditions = self.alt_conditions.clone();
+        tabnas.alt_match_conditions = self.alt_match_conditions.clone();
         tabnas.alt_lexer_conditions = self.alt_lexer_conditions.clone();
+        tabnas.alt_lexer_match_conditions = self.alt_lexer_match_conditions.clone();
         tabnas.alt_modifiers = self.alt_modifiers.clone();
+        tabnas.alt_match_modifiers = self.alt_match_modifiers.clone();
         tabnas.alt_errors = self.alt_errors.clone();
+        tabnas.alt_match_errors = self.alt_match_errors.clone();
         tabnas.alt_pushes = self.alt_pushes.clone();
+        tabnas.alt_match_pushes = self.alt_match_pushes.clone();
         tabnas.alt_replaces = self.alt_replaces.clone();
+        tabnas.alt_match_replaces = self.alt_match_replaces.clone();
         tabnas.alt_backtracks = self.alt_backtracks.clone();
+        tabnas.alt_match_backtracks = self.alt_match_backtracks.clone();
         tabnas.match_token_refs = self.match_token_refs.clone();
         tabnas.value_transform_refs = self.value_transform_refs.clone();
         tabnas.text_modifier_refs = self.text_modifier_refs.clone();
@@ -1592,6 +1731,7 @@ impl MergedInstall {
         tabnas.config_modifier_refs = self.config_modifier_refs.clone();
         tabnas.parser_start_refs = self.parser_start_refs.clone();
         tabnas.parser_start_instance_refs = self.parser_start_instance_refs.clone();
+        tabnas.parser_start_context_refs = self.parser_start_context_refs.clone();
         tabnas.map_merge_refs = self.map_merge_refs.clone();
     }
 }
@@ -1616,6 +1756,23 @@ fn merge_plugin_value(left: &Value, right: &Value, path: &str) -> Result<Value, 
         _ if left.deep_equal(right) => Ok(left.clone()),
         _ => Err(conflict(path)),
     }
+}
+
+fn merge_decorations(
+    left: &IndexMap<String, crate::Decoration>,
+    right: &IndexMap<String, crate::Decoration>,
+) -> Result<IndexMap<String, crate::Decoration>, MergeError> {
+    let mut out = left.clone();
+    for (name, value) in right {
+        if let Some(previous) = out.get(name) {
+            if !previous.equivalent(value) {
+                return Err(conflict(&format!("decoration.{name}")));
+            }
+        } else {
+            out.insert(name.clone(), value.clone());
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError> {
@@ -1653,6 +1810,7 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
     let Value::Object(plugin_options) = plugin_options else {
         unreachable!()
     };
+    let decorations = merge_decorations(&left.decorations, &right.decorations)?;
 
     let install = MergedInstall {
         rules: merged_rules(left, left_tag, right, right_tag),
@@ -1661,6 +1819,18 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
             &left.context_actions,
             left_tag,
             &right.context_actions,
+            right_tag,
+        ),
+        matched_actions: combine_prefixed(
+            &left.matched_actions,
+            left_tag,
+            &right.matched_actions,
+            right_tag,
+        ),
+        state_actions: combine_prefixed(
+            &left.state_actions,
+            left_tag,
+            &right.state_actions,
             right_tag,
         ),
         token_subscribers: append_callbacks(&left.token_subscribers, &right.token_subscribers),
@@ -1676,10 +1846,22 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
             &right.alt_conditions,
             right_tag,
         ),
+        alt_match_conditions: combine_prefixed(
+            &left.alt_match_conditions,
+            left_tag,
+            &right.alt_match_conditions,
+            right_tag,
+        ),
         alt_lexer_conditions: combine_prefixed(
             &left.alt_lexer_conditions,
             left_tag,
             &right.alt_lexer_conditions,
+            right_tag,
+        ),
+        alt_lexer_match_conditions: combine_prefixed(
+            &left.alt_lexer_match_conditions,
+            left_tag,
+            &right.alt_lexer_match_conditions,
             right_tag,
         ),
         alt_modifiers: combine_prefixed(
@@ -1688,18 +1870,48 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
             &right.alt_modifiers,
             right_tag,
         ),
+        alt_match_modifiers: combine_prefixed(
+            &left.alt_match_modifiers,
+            left_tag,
+            &right.alt_match_modifiers,
+            right_tag,
+        ),
         alt_errors: combine_prefixed(&left.alt_errors, left_tag, &right.alt_errors, right_tag),
+        alt_match_errors: combine_prefixed(
+            &left.alt_match_errors,
+            left_tag,
+            &right.alt_match_errors,
+            right_tag,
+        ),
         alt_pushes: combine_prefixed(&left.alt_pushes, left_tag, &right.alt_pushes, right_tag),
+        alt_match_pushes: combine_prefixed(
+            &left.alt_match_pushes,
+            left_tag,
+            &right.alt_match_pushes,
+            right_tag,
+        ),
         alt_replaces: combine_prefixed(
             &left.alt_replaces,
             left_tag,
             &right.alt_replaces,
             right_tag,
         ),
+        alt_match_replaces: combine_prefixed(
+            &left.alt_match_replaces,
+            left_tag,
+            &right.alt_match_replaces,
+            right_tag,
+        ),
         alt_backtracks: combine_prefixed(
             &left.alt_backtracks,
             left_tag,
             &right.alt_backtracks,
+            right_tag,
+        ),
+        alt_match_backtracks: combine_prefixed(
+            &left.alt_match_backtracks,
+            left_tag,
+            &right.alt_match_backtracks,
             right_tag,
         ),
         match_token_refs: combine_prefixed(
@@ -1792,6 +2004,12 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
             &right.parser_start_instance_refs,
             right_tag,
         ),
+        parser_start_context_refs: combine_prefixed(
+            &left.parser_start_context_refs,
+            left_tag,
+            &right.parser_start_context_refs,
+            right_tag,
+        ),
         map_merge_refs: combine_prefixed(
             &left.map_merge_refs,
             left_tag,
@@ -1802,6 +2020,7 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
 
     let mut out = Tabnas::with_options(options);
     out.plugin_options = plugin_options;
+    out.decorations = decorations;
     let install_callback = install.clone();
     out.use_plugin(
         Plugin::new("merged", move |tabnas, _| {

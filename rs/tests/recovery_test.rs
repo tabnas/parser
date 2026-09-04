@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use tabnas::{RecoverOptions, Tabnas, Value};
 
 fn recovering() -> Tabnas {
@@ -157,6 +160,36 @@ fn recovery_metadata_and_forced_close_events_are_exposed() {
 }
 
 #[test]
+fn forced_close_events_precede_the_recovered_pass_completion() {
+    let mut parser = recovering();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = events.clone();
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        seen.lock().unwrap().push((
+            rule.name.clone(),
+            done.forced,
+            done.alt.as_ref().is_some_and(|alt| alt.err.is_some()),
+        ));
+    });
+
+    let result = parser.parse_recover(r#"{"a":[1,2}"#);
+    assert!(!result.errors.is_empty());
+    let events = events.lock().unwrap();
+    let first_forced = events
+        .iter()
+        .position(|(_, forced, _)| *forced)
+        .expect("recovery must force-close a nested rule");
+    let recovered_pass = events
+        .iter()
+        .enumerate()
+        .skip(first_forced + 1)
+        .find(|(_, (_, forced, error))| !forced && *error)
+        .map(|(index, _)| index)
+        .expect("the recovered failing pass must still emit ruleDone");
+    assert!(first_forced < recovered_pass);
+}
+
+#[test]
 fn retrying_a_failed_close_does_not_repeat_before_close_actions() {
     let result = recovering().parse_recover("[1 :]");
     assert!(!result.errors.is_empty());
@@ -257,4 +290,120 @@ fn recovery_reports_trailing_content_and_keeps_the_completed_value() {
         ["unterminated_string"]
     );
     assert_eq!(bad.value, Some(Value::Number(1.0)));
+}
+
+#[test]
+fn matched_action_error_tokens_recover_and_stop_the_action_chain() {
+    let mut parser = Tabnas::new();
+    let later_calls = Arc::new(AtomicUsize::new(0));
+    let done_errors = Arc::new(Mutex::new(Vec::new()));
+
+    parser.action_with_match_ref("@boom", |_rule, context, _matched| {
+        let mut token = context.t0().cloned().unwrap_or_default();
+        token.bad("boom_code");
+        Ok(Some(token))
+    });
+    let calls = later_calls.clone();
+    parser.action("@later", move |_rule| {
+        calls.fetch_add(1, Ordering::SeqCst);
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{"top":{
+                "open":[{"s":"#NR","a":["@boom","@later"]}],
+                "close":[{"s":"#ZZ"}]
+              }}
+            }"##,
+        )
+        .unwrap();
+    parser.options.parse.recover.enabled = true;
+    let seen_done_errors = done_errors.clone();
+    parser.subscribe_rule_done(move |_rule, _context, done| {
+        seen_done_errors.lock().unwrap().push(
+            done.alt
+                .as_ref()
+                .is_some_and(|alternate| alternate.err.is_some()),
+        );
+    });
+
+    let recovered = parser.parse_recover("42");
+    assert!(recovered.fatal.is_none(), "fatal: {:?}", recovered.fatal);
+    assert_eq!(
+        recovered
+            .errors
+            .iter()
+            .map(|error| error.code.as_str())
+            .collect::<Vec<_>>(),
+        ["boom_code"]
+    );
+    assert!(recovered.errors[0].recovered.is_some());
+    assert_eq!(later_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        Some(&false),
+        done_errors.lock().unwrap().first(),
+        "a recovered action-token error is not the alternate's own e field"
+    );
+}
+
+#[test]
+fn lifecycle_error_tokens_recover_in_every_rule_phase() {
+    for phase in ["bo", "ao", "bc", "ac"] {
+        let mut parser = Tabnas::new();
+        let raised = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let did_raise = raised.clone();
+        let phase_calls = calls.clone();
+        parser.state_action_with_next_ref(
+            format!("@top-{phase}"),
+            move |rule, context, _next, _out| {
+                phase_calls.fetch_add(1, Ordering::SeqCst);
+                if did_raise.swap(true, Ordering::SeqCst) {
+                    return Ok(None);
+                }
+                let mut token = context
+                    .t0()
+                    .or_else(|| rule.o0())
+                    .or_else(|| rule.c0())
+                    .cloned()
+                    .unwrap_or_default();
+                token.bad("phase_code");
+                Ok(Some(token))
+            },
+        );
+        parser
+            .grammar_json(
+                r##"{
+                  "clear":true,
+                  "options":{"rule":{"start":"top"}},
+                  "rule":{"top":{
+                    "open":[{"s":"#NR"}],
+                    "close":[{"s":"#ZZ"}]
+                  }}
+                }"##,
+            )
+            .unwrap();
+        parser.options.parse.recover.enabled = true;
+
+        let recovered = parser.parse_recover("42");
+        assert!(
+            recovered.fatal.is_none(),
+            "{phase}: fatal: {:?}",
+            recovered.fatal
+        );
+        assert_eq!(
+            recovered
+                .errors
+                .iter()
+                .map(|error| error.code.as_str())
+                .collect::<Vec<_>>(),
+            ["phase_code"],
+            "{phase}"
+        );
+        assert!(recovered.errors[0].recovered.is_some(), "{phase}");
+        let expected_calls = if phase == "ac" { 2 } else { 1 };
+        assert_eq!(calls.load(Ordering::SeqCst), expected_calls, "{phase}");
+    }
 }

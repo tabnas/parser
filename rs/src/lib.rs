@@ -22,23 +22,27 @@ pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{
     GrammarError, GrammarGroups, GrammarSetting, GrammarSettingAlt, GrammarSettingRule, GrammarSpec,
 };
-pub use lexer::Lexer;
+pub use lexer::{Lexer, RelexCheckpoint};
 pub use merge::MergeError;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
-    ContextParsePrepare, ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext,
-    FixedOptions, FixedToken, ImperativeCommentSuffixMatcher, ImperativeLexCheck,
-    ImperativeLexMatcher, ImperativeTextModifier, InfoOptions, LexCheck, LexCheckResult,
-    LexCheckToken, LexMatcher, LexMatcherCallback, LexMatcherFactory, ListOptions, MapMerge,
-    MapOptions, MatchToken, MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue,
-    Options, ParseOptions, ParsePrepare, ParsePrepareWithInstance, ParserOptions, ParserStart,
+    ContextParsePrepare, DebugOptions, DebugOutput, DebugPrintOptions, DebugSourceFormatter,
+    ErrMsgOptions, ErrorSuffix, ErrorSuffixCallback, ErrorSuffixContext, FixedOptions, FixedToken,
+    ImperativeCommentSuffixMatcher, ImperativeLexCheck, ImperativeLexMatcher,
+    ImperativeTextModifier, InfoOptions, LexCheck, LexCheckResult, LexCheckToken, LexMatcher,
+    LexMatcherCallback, LexMatcherFactory, ListOptions, MapMerge, MapOptions, MatchToken,
+    MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, MatchValue, Options, ParseOptions,
+    ParsePrepare, ParsePrepareWithInstance, ParserOptions, ParserStart, ParserStartWithContext,
     ParserStartWithInstance, RecoverOptions, ResultOptions, RewindOptions, SafeOptions,
     SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTextModifier, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
-    ActionBinding, AltBack, AltCondition, AltConditionWithLexer, AltError, AltModifier, AltNext,
+    ActionBinding, AltAction, AltActionBinding, AltBack, AltBackWithMatch, AltCondition,
+    AltConditionWithLexer, AltConditionWithLexerAndMatch, AltConditionWithMatch, AltError,
+    AltErrorWithMatch, AltMatch, AltModifier, AltModifierWithMatch, AltNext, AltNextWithMatch,
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
+    StateAction,
 };
 pub use token::{
     name_to_tin, tin_name, Point, Tin, Token, TokenValFunc, TIN_AA, TIN_BD, TIN_CA, TIN_CB, TIN_CL,
@@ -48,6 +52,7 @@ pub use token::{
 pub use value::{ListRef, MapRef, Text, Value};
 
 use indexmap::IndexMap;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -55,6 +60,83 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+type DecorationValue = dyn Any + Send + Sync;
+type DecorationEquality = dyn Fn(&DecorationValue) -> bool + Send + Sync;
+
+/// A type-erased value attached to a parser instance by a native plugin.
+///
+/// Equality-aware decorations created with [`Decoration::new`] can be
+/// compared when instances merge. Opaque decorations compare by shared
+/// allocation identity, which permits closures and other native handles to
+/// be inherited without pretending they have value equality.
+#[derive(Clone)]
+pub struct Decoration {
+    value: Arc<DecorationValue>,
+    equals: Arc<DecorationEquality>,
+    type_name: &'static str,
+}
+
+impl Decoration {
+    pub fn new<T>(value: T) -> Self
+    where
+        T: Any + PartialEq + Send + Sync,
+    {
+        let value = Arc::new(value);
+        let comparable = value.clone();
+        Self {
+            value,
+            equals: Arc::new(move |other| {
+                other
+                    .downcast_ref::<T>()
+                    .is_some_and(|other| comparable.as_ref() == other)
+            }),
+            type_name: std::any::type_name::<T>(),
+        }
+    }
+
+    pub fn opaque<T>(value: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        let value = Arc::new(value);
+        let identity = value.clone();
+        Self {
+            value,
+            equals: Arc::new(move |other| {
+                other
+                    .downcast_ref::<T>()
+                    .is_some_and(|other| std::ptr::eq(identity.as_ref(), other))
+            }),
+            type_name: std::any::type_name::<T>(),
+        }
+    }
+
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.value.downcast_ref()
+    }
+
+    pub fn is<T: Any>(&self) -> bool {
+        self.value.is::<T>()
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
+    pub(crate) fn equivalent(&self, other: &Self) -> bool {
+        self.type_name == other.type_name && (self.equals)(other.value.as_ref())
+    }
+}
+
+impl fmt::Debug for Decoration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Decoration")
+            .field("type_name", &self.type_name)
+            .finish_non_exhaustive()
+    }
+}
 
 pub type Action = Arc<dyn Fn(&mut Rule) + Send + Sync>;
 pub type ContextAction =
@@ -118,6 +200,8 @@ impl std::error::Error for PluginError {}
 #[derive(Clone)]
 pub struct Tabnas {
     pub id: String,
+    /// Identifier of the instance this parser was derived from.
+    pub parent_id: Option<String>,
     /// Resolved configuration used by the lexer and parser.
     pub options: Options,
     /// Accumulated option input before `config.modify` callbacks run. Keeping
@@ -127,19 +211,30 @@ pub struct Tabnas {
     pub rules: IndexMap<String, RuleSpec>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
+    pub matched_actions: HashMap<String, AltAction>,
+    pub state_actions: HashMap<String, StateAction>,
     pub token_subscribers: Vec<TokenSubscriber>,
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
     pub plugins: Vec<Plugin>,
     pub plugin_options: IndexMap<String, Value>,
+    /// Plugin-attached named values carried to derived instances.
+    pub decorations: IndexMap<String, Decoration>,
     pub(crate) alt_conditions: HashMap<String, AltCondition>,
+    pub(crate) alt_match_conditions: HashMap<String, AltConditionWithMatch>,
     pub(crate) alt_lexer_conditions: HashMap<String, AltConditionWithLexer>,
+    pub(crate) alt_lexer_match_conditions: HashMap<String, AltConditionWithLexerAndMatch>,
     pub(crate) alt_modifiers: HashMap<String, AltModifier>,
+    pub(crate) alt_match_modifiers: HashMap<String, AltModifierWithMatch>,
     pub(crate) alt_errors: HashMap<String, AltError>,
+    pub(crate) alt_match_errors: HashMap<String, AltErrorWithMatch>,
     pub(crate) alt_pushes: HashMap<String, AltNext>,
+    pub(crate) alt_match_pushes: HashMap<String, AltNextWithMatch>,
     pub(crate) alt_replaces: HashMap<String, AltNext>,
+    pub(crate) alt_match_replaces: HashMap<String, AltNextWithMatch>,
     pub(crate) alt_backtracks: HashMap<String, AltBack>,
+    pub(crate) alt_match_backtracks: HashMap<String, AltBackWithMatch>,
     pub(crate) match_token_refs: HashMap<String, (MatchTokenCallback, bool)>,
     pub(crate) value_transform_refs: HashMap<String, ValueTransform>,
     pub(crate) text_modifier_refs: HashMap<String, TextModifier>,
@@ -155,6 +250,7 @@ pub struct Tabnas {
     pub(crate) config_modifier_refs: HashMap<String, ConfigModifier>,
     pub(crate) parser_start_refs: HashMap<String, ParserStart>,
     pub(crate) parser_start_instance_refs: HashMap<String, ParserStartWithInstance>,
+    pub(crate) parser_start_context_refs: HashMap<String, ParserStartWithContext>,
     pub(crate) map_merge_refs: HashMap<String, MapMerge>,
 }
 
@@ -180,26 +276,37 @@ impl Tabnas {
             }
         );
         let plugin_options = options.plugin.clone();
-        Tabnas {
+        let tabnas = Tabnas {
             id,
+            parent_id: None,
             raw_options: options.clone(),
             options,
             rules: IndexMap::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
+            matched_actions: HashMap::new(),
+            state_actions: HashMap::new(),
             token_subscribers: Vec::new(),
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
             plugins: Vec::new(),
             plugin_options,
+            decorations: IndexMap::new(),
             alt_conditions: HashMap::new(),
+            alt_match_conditions: HashMap::new(),
             alt_lexer_conditions: HashMap::new(),
+            alt_lexer_match_conditions: HashMap::new(),
             alt_modifiers: HashMap::new(),
+            alt_match_modifiers: HashMap::new(),
             alt_errors: HashMap::new(),
+            alt_match_errors: HashMap::new(),
             alt_pushes: HashMap::new(),
+            alt_match_pushes: HashMap::new(),
             alt_replaces: HashMap::new(),
+            alt_match_replaces: HashMap::new(),
             alt_backtracks: HashMap::new(),
+            alt_match_backtracks: HashMap::new(),
             match_token_refs: HashMap::new(),
             value_transform_refs: HashMap::new(),
             text_modifier_refs: HashMap::new(),
@@ -215,8 +322,11 @@ impl Tabnas {
             config_modifier_refs: HashMap::new(),
             parser_start_refs: HashMap::new(),
             parser_start_instance_refs: HashMap::new(),
+            parser_start_context_refs: HashMap::new(),
             map_merge_refs: HashMap::new(),
-        }
+        };
+        tabnas.emit_debug_config();
+        tabnas
     }
 
     pub fn rule(&mut self, spec: RuleSpec) -> &mut Self {
@@ -237,6 +347,27 @@ impl Tabnas {
             .entry(name.clone())
             .or_insert_with(|| RuleSpec::new(name));
         define(spec);
+        self
+    }
+
+    /// Create or modify a rule with a read-only parser snapshot. This is the
+    /// Rust spelling of the canonical `RuleDefiner(rs, parser)` callback and
+    /// gives a definer access to resolved options, tokens, and peer rules.
+    pub fn define_rule_with_parser(
+        &mut self,
+        name: impl Into<String>,
+        define: impl FnOnce(&mut RuleSpec, &Parser),
+    ) -> &mut Self {
+        let name = name.into();
+        self.rules
+            .entry(name.clone())
+            .or_insert_with(|| RuleSpec::new(name.clone()));
+        let parser = self.parser();
+        let spec = self
+            .rules
+            .get_mut(&name)
+            .expect("rule was inserted before its parser view was built");
+        define(spec, &parser);
         self
     }
 
@@ -317,8 +448,10 @@ impl Tabnas {
         let mut options = raw_options.clone();
         options.refresh_configuration().map_err(PluginError)?;
         let mut child = Self::with_options(options);
+        child.parent_id = Some(self.id.clone());
         child.raw_options = raw_options;
         child.plugin_options = self.plugin_options.clone();
+        child.decorations = self.decorations.clone();
         child.inherit_function_references(self);
         for plugin in &self.plugins {
             let options = child
@@ -338,13 +471,22 @@ impl Tabnas {
         // entry with the same name, exactly as on the parent.
         self.actions = parent.actions.clone();
         self.context_actions = parent.context_actions.clone();
+        self.matched_actions = parent.matched_actions.clone();
+        self.state_actions = parent.state_actions.clone();
         self.alt_conditions = parent.alt_conditions.clone();
+        self.alt_match_conditions = parent.alt_match_conditions.clone();
         self.alt_lexer_conditions = parent.alt_lexer_conditions.clone();
+        self.alt_lexer_match_conditions = parent.alt_lexer_match_conditions.clone();
         self.alt_modifiers = parent.alt_modifiers.clone();
+        self.alt_match_modifiers = parent.alt_match_modifiers.clone();
         self.alt_errors = parent.alt_errors.clone();
+        self.alt_match_errors = parent.alt_match_errors.clone();
         self.alt_pushes = parent.alt_pushes.clone();
+        self.alt_match_pushes = parent.alt_match_pushes.clone();
         self.alt_replaces = parent.alt_replaces.clone();
+        self.alt_match_replaces = parent.alt_match_replaces.clone();
         self.alt_backtracks = parent.alt_backtracks.clone();
+        self.alt_match_backtracks = parent.alt_match_backtracks.clone();
         self.match_token_refs = parent.match_token_refs.clone();
         self.value_transform_refs = parent.value_transform_refs.clone();
         self.text_modifier_refs = parent.text_modifier_refs.clone();
@@ -360,6 +502,7 @@ impl Tabnas {
         self.config_modifier_refs = parent.config_modifier_refs.clone();
         self.parser_start_refs = parent.parser_start_refs.clone();
         self.parser_start_instance_refs = parent.parser_start_instance_refs.clone();
+        self.parser_start_context_refs = parent.parser_start_context_refs.clone();
         self.map_merge_refs = parent.map_merge_refs.clone();
     }
 
@@ -384,7 +527,33 @@ impl Tabnas {
     /// Resolve or allocate a named token identity for typed matcher effects
     /// and imperative rule construction.
     pub fn token(&mut self, name: impl Into<String>) -> Tin {
-        self.options.register_token(name)
+        let name = name.into();
+        let tin = self.options.register_token(name.clone());
+        self.raw_options.register_token(name);
+        tin
+    }
+
+    /// Resolve or allocate a token and bind it to a fixed source literal.
+    pub fn token_with_source(&mut self, name: impl Into<String>, source: impl Into<String>) -> Tin {
+        let name = name.into();
+        let name = if name.starts_with('#') {
+            name
+        } else {
+            format!("#{name}")
+        };
+        let source = source.into();
+        let tin = self.token(name.clone());
+        let token = FixedToken {
+            name: name.clone(),
+            tin,
+            source,
+        };
+        self.options
+            .fixed
+            .tokens
+            .insert(name.clone(), token.clone());
+        self.raw_options.fixed.tokens.insert(name, token);
+        tin
     }
 
     /// Return an independent snapshot of the resolved configuration.
@@ -392,9 +561,216 @@ impl Tabnas {
         self.options.clone()
     }
 
+    /// Human-readable, deterministic description of this instance's public
+    /// grammar and lexer configuration. This carries the intentional
+    /// introspection helper provided by the mature Go runtime.
+    pub fn describe(&self) -> String {
+        use std::collections::BTreeSet;
+        use std::fmt::Write as _;
+
+        let mut output = String::from("=== Tabnas Instance ===\n");
+        let _ = writeln!(output, "Id: {}", self.id);
+        let _ = writeln!(output, "Tag: {}", self.options.tag);
+
+        output.push_str("\n--- Tokens ---\n");
+        let mut token_names = BTreeSet::new();
+        token_names.extend(self.options.tokens.keys().cloned());
+        token_names.extend(self.options.fixed.tokens.keys().cloned());
+        token_names.extend(self.options.match_tokens.keys().cloned());
+        for name in token_names {
+            if let Some(tin) = self.options.token(&name) {
+                let _ = writeln!(output, "  {name} = {tin}");
+            }
+        }
+
+        output.push_str("\n--- Fixed Tokens ---\n");
+        let mut fixed = self.options.fixed.tokens.values().collect::<Vec<_>>();
+        fixed.sort_by(|left, right| {
+            left.source
+                .cmp(&right.source)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        for token in fixed {
+            let _ = writeln!(
+                output,
+                "  {:?} -> {} ({})",
+                token.source, token.name, token.tin
+            );
+        }
+
+        output.push_str("\n--- Rules ---\n");
+        for (name, rule) in &self.rules {
+            let _ = writeln!(
+                output,
+                "  {name}: open={} close={} bo={} ao={} bc={} ac={}",
+                rule.open.len(),
+                rule.close.len(),
+                rule.bo.len() + rule.bo_fns.len() + rule.bo_state_fns.len(),
+                rule.ao.len() + rule.ao_fns.len() + rule.ao_state_fns.len(),
+                rule.bc.len() + rule.bc_fns.len() + rule.bc_state_fns.len(),
+                rule.ac.len() + rule.ac_fns.len() + rule.ac_state_fns.len(),
+            );
+        }
+
+        if !self.options.lex.matchers.is_empty() {
+            output.push_str("\n--- Custom Matchers ---\n");
+            for (name, matcher) in &self.options.lex.matchers {
+                let _ = writeln!(output, "  {name} (priority={})", matcher.order);
+            }
+        }
+
+        let _ = writeln!(output, "\n--- Plugins: {} ---", self.plugins.len());
+        for plugin in &self.plugins {
+            let _ = writeln!(output, "  {}", plugin.name);
+        }
+        output.push_str("\n--- Subscriptions ---\n");
+        let _ = writeln!(
+            output,
+            "  Token subscribers: {}",
+            self.token_subscribers.len()
+        );
+        let _ = writeln!(output, "  Lex subscribers: {}", self.lex_subscribers.len());
+        let _ = writeln!(
+            output,
+            "  Rule subscribers: {}",
+            self.rule_subscribers.len()
+        );
+        let _ = writeln!(
+            output,
+            "  RuleDone subscribers: {}",
+            self.rule_done_subscribers.len()
+        );
+
+        output.push_str("\n--- Config ---\n");
+        let _ = writeln!(output, "  FixedLex: {}", self.options.fixed.lex);
+        let _ = writeln!(output, "  SpaceLex: {}", self.options.space.lex);
+        let _ = writeln!(output, "  LineLex: {}", self.options.line.lex);
+        let _ = writeln!(output, "  TextLex: {}", self.options.text.lex);
+        let _ = writeln!(output, "  NumberLex: {}", self.options.number.lex);
+        let _ = writeln!(output, "  CommentLex: {}", self.options.comment.lex);
+        let _ = writeln!(output, "  StringLex: {}", self.options.string.lex);
+        let _ = writeln!(output, "  ValueLex: {}", self.options.value.lex);
+        let _ = writeln!(output, "  MapExtend: {}", self.options.map.extend);
+        let _ = writeln!(output, "  ListProperty: {}", self.options.list.property);
+        let _ = writeln!(output, "  SafeKey: {}", self.options.safe.key);
+        let _ = writeln!(output, "  FinishRule: {}", self.options.rule.finish);
+        let _ = writeln!(output, "  RuleStart: {}", self.options.rule.start);
+        output
+    }
+
+    /// Install the lightweight lexer/rule trace provided by the mature Go
+    /// runtime. The sink receives one complete line per event; use
+    /// `enable_trace` to write those lines to the configured debug output.
+    pub fn enable_trace_with(&mut self, sink: impl Fn(&str) + Send + Sync + 'static) -> &mut Self {
+        let sink = Arc::new(sink);
+        let lex_sink = sink.clone();
+        self.subscribe_lex(move |token, _, context| {
+            lex_sink(&format!(
+                "[lex] {} tin={} src={:?} val={} at {}:{}",
+                token.name,
+                token.tin,
+                token.src,
+                context.options.debug.format_source(&token.val),
+                token.ri,
+                token.ci
+            ));
+        });
+        self.subscribe_rules(move |rule, context| {
+            sink(&format!(
+                "[rule] {} state={:?} node={} ki={}",
+                rule.name,
+                rule.state,
+                context.options.debug.format_source(&rule.node.borrow()),
+                context.iteration
+            ));
+        });
+        self
+    }
+
+    pub fn enable_trace(&mut self) -> &mut Self {
+        self.subscribe_lex(|token, _, context| {
+            context.options.debug.write(&format!(
+                "[lex] {} tin={} src={:?} val={} at {}:{}",
+                token.name,
+                token.tin,
+                token.src,
+                context.options.debug.format_source(&token.val),
+                token.ri,
+                token.ci
+            ));
+        });
+        self.subscribe_rules(|rule, context| {
+            context.options.debug.write(&format!(
+                "[rule] {} state={:?} node={} ki={}",
+                rule.name,
+                rule.state,
+                context.options.debug.format_source(&rule.node.borrow()),
+                context.iteration
+            ));
+        });
+        self
+    }
+
+    pub(crate) fn emit_debug_config(&self) {
+        if self.options.debug.print.config {
+            self.options.debug.write(&format!("{:#?}", self.options));
+        }
+    }
+
+    /// Mutate the accumulated typed options and rebuild resolved
+    /// configuration without discarding installed grammar rules.
+    pub fn set_options(
+        &mut self,
+        modify: impl FnOnce(&mut Options),
+    ) -> Result<&mut Self, PluginError> {
+        let mut raw_options = if self.options.config_modify.is_empty() {
+            self.options.clone()
+        } else {
+            self.raw_options.clone()
+        };
+        modify(&mut raw_options);
+        let mut resolved = raw_options.clone();
+        resolved.refresh_configuration().map_err(PluginError)?;
+        self.raw_options = raw_options;
+        self.options = resolved;
+        self.plugin_options = self.options.plugin.clone();
+        self.emit_debug_config();
+        Ok(self)
+    }
+
     /// Installed plugins in application order.
     pub fn installed_plugins(&self) -> Vec<Plugin> {
         self.plugins.clone()
+    }
+
+    /// Attach an equality-comparable native value to this instance.
+    pub fn decorate<T>(&mut self, name: impl Into<String>, value: T) -> &mut Self
+    where
+        T: Any + PartialEq + Send + Sync,
+    {
+        self.decorations.insert(name.into(), Decoration::new(value));
+        self
+    }
+
+    /// Attach a native value without requiring `PartialEq`. Opaque values
+    /// compare by identity when instances are merged.
+    pub fn decorate_opaque<T>(&mut self, name: impl Into<String>, value: T) -> &mut Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.decorations
+            .insert(name.into(), Decoration::opaque(value));
+        self
+    }
+
+    pub fn decoration<T: Any>(&self, name: &str) -> Option<&T> {
+        self.decorations
+            .get(name)
+            .and_then(Decoration::downcast_ref)
+    }
+
+    pub fn decoration_entry(&self, name: &str) -> Option<&Decoration> {
+        self.decorations.get(name)
     }
 
     /// Rule specs in declaration order.
@@ -414,6 +790,14 @@ impl Tabnas {
             .cloned()
     }
 
+    pub fn set_token_set(&mut self, name: impl Into<String>, tins: Vec<Tin>) -> &mut Self {
+        let name = name.into();
+        let name = name.trim_start_matches('#').to_owned();
+        self.options.token_set.insert(name.clone(), tins.clone());
+        self.raw_options.token_set.insert(name, tins);
+        self
+    }
+
     /// Resolve the token claimed by one fixed source string.
     pub fn fixed(&self, source: &str) -> Option<Tin> {
         self.options
@@ -422,6 +806,20 @@ impl Tabnas {
             .values()
             .find(|token| token.source == source)
             .map(|token| token.tin)
+    }
+
+    /// Resolve the source literal associated with a fixed token identity.
+    pub fn fixed_source(&self, tin: Tin) -> Option<&str> {
+        self.options
+            .fixed
+            .tokens
+            .values()
+            .find(|token| token.tin == tin)
+            .map(|token| token.source.as_str())
+    }
+
+    pub fn token_name(&self, tin: Tin) -> String {
+        self.options.token_name(tin)
     }
 
     pub fn action(
@@ -476,6 +874,20 @@ impl Tabnas {
         self
     }
 
+    /// Register a named alternate action with the canonical matched-alt
+    /// argument and token-error return channel.
+    pub fn action_with_match_ref(
+        &mut self,
+        name: impl Into<String>,
+        action: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> Result<Option<Token>, ActionError>
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.matched_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
     /// Register a typed rule lifecycle reference such as `@top-bo`,
     /// `@top-ao/prepend`, or `@top-bc/replace`. Serialized grammar loading
     /// wires reserved names onto their matching rule phase.
@@ -488,6 +900,25 @@ impl Tabnas {
         self
     }
 
+    /// Register a lifecycle reference with canonical `next` and chained
+    /// output-token arguments.
+    pub fn state_action_with_next_ref(
+        &mut self,
+        name: impl Into<String>,
+        action: impl Fn(
+                &mut Rule,
+                &mut Context,
+                Option<&RuleSnapshot>,
+                Option<Token>,
+            ) -> Result<Option<Token>, ActionError>
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.state_actions.insert(name.into(), Arc::new(action));
+        self
+    }
+
     /// Register a typed function reference for a serialized alternate `c`.
     pub fn alt_condition(
         &mut self,
@@ -495,6 +926,18 @@ impl Tabnas {
         condition: impl Fn(&mut Rule, &mut Context) -> bool + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_conditions.insert(name.into(), Arc::new(condition));
+        self
+    }
+
+    /// Register the canonical alternate condition shape, including the live
+    /// effective match record.
+    pub fn alt_condition_with_match(
+        &mut self,
+        name: impl Into<String>,
+        condition: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> bool + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_match_conditions
+            .insert(name.into(), Arc::new(condition));
         self
     }
 
@@ -514,6 +957,21 @@ impl Tabnas {
         self
     }
 
+    /// Register the complete canonical alternate-condition surface, with the
+    /// shared live match record and controlled access to the active lexer.
+    pub fn alt_condition_with_lexer_and_match(
+        &mut self,
+        name: impl Into<String>,
+        condition: impl for<'source> Fn(&mut Rule, &mut Context, &mut AltMatch, &mut Lexer<'source>) -> bool
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.alt_lexer_match_conditions
+            .insert(name.into(), Arc::new(condition));
+        self
+    }
+
     /// Register a typed function reference for a serialized alternate `h`.
     pub fn alt_modifier(
         &mut self,
@@ -521,6 +979,19 @@ impl Tabnas {
         modifier: impl Fn(AltSpec, &mut Rule, &mut Context) -> AltSpec + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_modifiers.insert(name.into(), Arc::new(modifier));
+        self
+    }
+
+    pub fn alt_modifier_with_match(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl Fn(AltMatch, &mut Rule, &mut Context, Option<&RuleSnapshot>) -> AltMatch
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.alt_match_modifiers
+            .insert(name.into(), Arc::new(modifier));
         self
     }
 
@@ -534,6 +1005,15 @@ impl Tabnas {
         self
     }
 
+    pub fn alt_error_with_match(
+        &mut self,
+        name: impl Into<String>,
+        error: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> Option<Token> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_match_errors.insert(name.into(), Arc::new(error));
+        self
+    }
+
     /// Register a typed function reference for a serialized alternate `p`.
     pub fn alt_push(
         &mut self,
@@ -541,6 +1021,15 @@ impl Tabnas {
         route: impl Fn(&mut Rule, &mut Context) -> Option<String> + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_pushes.insert(name.into(), Arc::new(route));
+        self
+    }
+
+    pub fn alt_push_with_match(
+        &mut self,
+        name: impl Into<String>,
+        route: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> Option<String> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_match_pushes.insert(name.into(), Arc::new(route));
         self
     }
 
@@ -554,6 +1043,15 @@ impl Tabnas {
         self
     }
 
+    pub fn alt_replace_with_match(
+        &mut self,
+        name: impl Into<String>,
+        route: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> Option<String> + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_match_replaces.insert(name.into(), Arc::new(route));
+        self
+    }
+
     /// Register a typed function reference for a serialized alternate `b`.
     pub fn alt_backtrack(
         &mut self,
@@ -561,6 +1059,16 @@ impl Tabnas {
         backtrack: impl Fn(&mut Rule, &mut Context) -> usize + Send + Sync + 'static,
     ) -> &mut Self {
         self.alt_backtracks.insert(name.into(), Arc::new(backtrack));
+        self
+    }
+
+    pub fn alt_backtrack_with_match(
+        &mut self,
+        name: impl Into<String>,
+        backtrack: impl Fn(&mut Rule, &mut Context, &mut AltMatch) -> usize + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.alt_match_backtracks
+            .insert(name.into(), Arc::new(backtrack));
         self
     }
 
@@ -756,6 +1264,21 @@ impl Tabnas {
         self
     }
 
+    /// Register the complete canonical parser-start shape, including the
+    /// optional parent-context seed supplied to `parse_with_context`.
+    pub fn parser_start_with_context_ref(
+        &mut self,
+        name: impl Into<String>,
+        start: impl Fn(&str, &Tabnas, &Value, Option<&ContextSeed>) -> Result<Value, Box<TabnasError>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> &mut Self {
+        self.parser_start_context_refs
+            .insert(name.into(), Arc::new(start));
+        self
+    }
+
     /// Register a duplicate-map-value merger for a serialized
     /// `options.map.merge` function reference.
     pub fn map_merge_ref(
@@ -905,6 +1428,7 @@ impl Tabnas {
         let mut p = Parser::new(self.options.clone());
         p.set_instance_info(InstanceInfo {
             id: self.id.clone(),
+            parent_id: self.parent_id.clone(),
             tag: self.options.tag.clone(),
             plugins: self
                 .plugins
@@ -921,6 +1445,12 @@ impl Tabnas {
         }
         for (name, action) in &self.context_actions {
             p.add_context_action(name.clone(), action.clone());
+        }
+        for (name, action) in &self.matched_actions {
+            p.add_matched_action(name.clone(), action.clone());
+        }
+        for (name, action) in &self.state_actions {
+            p.add_state_action(name.clone(), action.clone());
         }
         for subscriber in &self.token_subscribers {
             p.add_token_subscriber(subscriber.clone());

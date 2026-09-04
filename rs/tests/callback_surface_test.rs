@@ -2,7 +2,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tabnas::utility::{modlist, ListMods};
-use tabnas::{AltSpec, ImperativeLexMatcher, LexCheckResult, RuleSpec, Tabnas, Value};
+use tabnas::{AltSpec, ImperativeLexMatcher, LexCheckResult, RuleSpec, Tabnas, Token, Value};
 
 #[test]
 fn lazy_token_values_receive_and_mutate_the_live_rule_and_context() {
@@ -165,6 +165,51 @@ fn live_lexer_checks_can_advance_and_return_native_tokens() {
 }
 
 #[test]
+fn canonical_conditions_receive_the_live_match_and_lexer_together() {
+    let mut parser = Tabnas::new();
+    parser.alt_condition_with_lexer_and_match("@inspect-both", |rule, context, matched, lexer| {
+        assert_eq!(rule.o0().map(|token| token.src.as_str()), Some("1"));
+        assert_eq!(context.source, "1");
+        assert_eq!(lexer.remaining(), "");
+        matched
+            .u
+            .insert("condition".into(), Value::String("seen".into()));
+        true
+    });
+    parser.action_with_match_ref("@verify", |rule, _context, matched| {
+        assert_eq!(matched.u.get("condition"), rule.u.get("condition"));
+        *rule.node.borrow_mut() = matched.u["condition"].clone();
+        Ok(None)
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{"top":{"open":[{
+                "s":"#NR", "c":"@inspect-both", "a":"@verify"
+              }]}}
+            }"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse("1").unwrap(), Value::String("seen".into()));
+    let mut child = parser.derive(|_| {}).unwrap();
+    child
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{"top":{"open":[{
+                "s":"#NR", "c":"@inspect-both", "a":"@verify"
+              }]}}
+            }"##,
+        )
+        .unwrap();
+    assert_eq!(child.parse("1").unwrap(), Value::String("seen".into()));
+}
+
+#[test]
 fn matcher_factories_see_final_options_and_persist_across_parses() {
     let builds = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -225,6 +270,62 @@ fn matcher_factories_see_final_options_and_persist_across_parses() {
     assert_eq!(builds.load(Ordering::SeqCst), 2);
     assert_eq!(*seen_options.lock().unwrap(), ["~", "~"]);
     assert!(child.options.lex.matchers["factory"].imperative.is_none());
+}
+
+#[test]
+fn live_lexer_helpers_support_inspection_bad_tokens_and_relex_rollback() {
+    let mut parser = Tabnas::new();
+    let fixed = parser.token_with_source("#FIXED_A", "a");
+    parser.alt_condition_with_lexer("@inspect", move |rule, context, lexer| {
+        assert_eq!(lexer.forward(1), "");
+        assert_eq!(lexer.forward(99), "");
+
+        let extra = lexer.token_tin("#EXTRA");
+        assert_eq!(lexer.token_name(extra), "#EXTRA");
+        let bad = lexer.bad_span("probe", 0, 1);
+        assert_eq!(bad.src, "a");
+        assert_eq!(bad.err, "probe");
+
+        let mut original = rule.o0().expect("matched token").clone();
+        original.ignored = Some(Box::new(Token::new(
+            "#SP",
+            tabnas::TIN_SP,
+            Value::Undefined,
+            " ",
+            tabnas::Point {
+                len: 1,
+                si: 0,
+                pos: 0,
+                ri: 1,
+                ci: 1,
+            },
+        )));
+        let (recut, checkpoint) = lexer
+            .relex_for_rule(&original, &[fixed], rule, context)
+            .expect("the fixed matcher can claim the same span");
+        assert_eq!(recut.tin, fixed);
+        assert_eq!(recut.src, "a");
+        assert_eq!(
+            recut.ignored.as_ref().map(|token| token.src.as_str()),
+            Some(" ")
+        );
+        lexer.unrelex(checkpoint, context);
+        assert_eq!(lexer.point().pos, 1);
+        true
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "options":{
+                "rule":{"start":"top"},
+                "match":{"token":{"#MATCH_A":"@/^a/"}}
+              },
+              "rule":{"top":{"open":[{"s":"#MATCH_A","c":"@inspect"}]}}
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("a").unwrap();
 }
 
 #[test]

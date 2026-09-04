@@ -104,6 +104,24 @@ fn derived_instances_retain_typed_function_reference_registries() {
 }
 
 #[test]
+fn set_options_reconfigures_without_dropping_rules_or_compounding_modifiers() {
+    let mut parser = Tabnas::new();
+    parser.config_modifier_ref("@suffix", |options| options.tag.push('A'));
+    parser
+        .grammar_json(
+            r#"{"options":{"tag":"base","config":{"modify":{"suffix":"@suffix"}}},"rule":{"kept":{"open":[]}}}"#,
+        )
+        .unwrap();
+
+    parser
+        .set_options(|options| options.number.lex = false)
+        .unwrap();
+    assert_eq!(parser.options.tag, "baseA");
+    assert!(!parser.options.number.lex);
+    assert!(parser.rules.contains_key("kept"));
+}
+
+#[test]
 fn invalid_config_modifier_refs_fail_transactionally() {
     let mut parser = Tabnas::new();
     parser

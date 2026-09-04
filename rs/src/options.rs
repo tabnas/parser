@@ -1053,11 +1053,103 @@ pub type ParserStartWithInstance = Arc<
         + Send
         + Sync,
 >;
+pub type ParserStartWithContext = Arc<
+    dyn Fn(
+            &str,
+            &crate::Tabnas,
+            &crate::Value,
+            Option<&crate::ContextSeed>,
+        ) -> Result<crate::Value, Box<crate::TabnasError>>
+        + Send
+        + Sync,
+>;
+
+pub type DebugOutput = Arc<dyn Fn(&str) + Send + Sync>;
+pub type DebugSourceFormatter = Arc<dyn Fn(&crate::Value) -> String + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct DebugPrintOptions {
+    pub config: bool,
+    pub source: Option<DebugSourceFormatter>,
+}
+
+impl fmt::Debug for DebugPrintOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DebugPrintOptions")
+            .field("config", &self.config)
+            .field("source", &self.source.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct DebugOptions {
+    /// Maximum Unicode-scalar length of values rendered by the default
+    /// source formatter.
+    pub maxlen: usize,
+    pub print: DebugPrintOptions,
+    /// Rust equivalent of TypeScript's console provider. `None` writes trace
+    /// and configuration output to stderr.
+    pub output: Option<DebugOutput>,
+}
+
+impl Default for DebugOptions {
+    fn default() -> Self {
+        Self {
+            maxlen: 99,
+            print: DebugPrintOptions::default(),
+            output: None,
+        }
+    }
+}
+
+impl fmt::Debug for DebugOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DebugOptions")
+            .field("maxlen", &self.maxlen)
+            .field("print", &self.print)
+            .field("output", &self.output.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
+}
+
+impl DebugOptions {
+    pub fn format_source(&self, value: &crate::Value) -> String {
+        if let Some(formatter) = &self.print.source {
+            return formatter(value);
+        }
+        let rendered = match value {
+            crate::Value::Undefined | crate::Value::Null => String::new(),
+            value => serde_json::to_string(&value.to_json()).unwrap_or_else(|_| value.to_string()),
+        };
+        let mut chars = rendered.chars();
+        let prefix = chars.by_ref().take(self.maxlen).collect::<String>();
+        if chars.next().is_some() {
+            format!("{prefix}...")
+        } else {
+            prefix
+        }
+    }
+
+    pub fn write(&self, message: &str) {
+        if let Some(output) = &self.output {
+            // Debugging must not make construction or parsing less reliable.
+            // Parse-time trace sinks are also protected by the subscriber
+            // boundary, but configuration printing runs during setup.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output(message)));
+        } else {
+            eprintln!("{message}");
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct ParserOptions {
     pub start: Option<ParserStart>,
     pub start_with_instance: Option<ParserStartWithInstance>,
+    pub start_with_context: Option<ParserStartWithContext>,
 }
 
 impl fmt::Debug for ParserOptions {
@@ -1068,6 +1160,10 @@ impl fmt::Debug for ParserOptions {
             .field(
                 "start_with_instance",
                 &self.start_with_instance.as_ref().map(|_| "<callback>"),
+            )
+            .field(
+                "start_with_context",
+                &self.start_with_context.as_ref().map(|_| "<callback>"),
             )
             .finish()
     }
@@ -1114,6 +1210,7 @@ pub struct Options {
     pub result: ResultOptions,
     pub parse: ParseOptions,
     pub parser: ParserOptions,
+    pub debug: DebugOptions,
     /// Per-plugin accumulated option bags (`options.plugin`).
     pub plugin: IndexMap<String, crate::Value>,
     pub token_set: HashMap<String, Vec<Tin>>,
@@ -1160,6 +1257,7 @@ impl Default for Options {
             result: ResultOptions::default(),
             parse: ParseOptions::default(),
             parser: ParserOptions::default(),
+            debug: DebugOptions::default(),
             plugin: IndexMap::new(),
             token_set,
             tokens: IndexMap::new(),
