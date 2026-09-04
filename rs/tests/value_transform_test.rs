@@ -1,4 +1,4 @@
-use tabnas::{Tabnas, Value};
+use tabnas::{lexer::Lexer, Tabnas, Value};
 
 fn value_grammar(value: &str) -> String {
     format!(
@@ -38,6 +38,37 @@ fn optional_unmatched_capture_is_an_empty_string() {
     parser.grammar_json(&grammar).unwrap();
 
     assert_eq!(parser.parse("alpha").unwrap(), Value::String(String::new()));
+}
+
+#[test]
+fn consuming_value_transform_advances_only_over_its_match() {
+    let mut parser = Tabnas::new();
+    parser.value_transform_ref("@tag", |groups| Value::String(groups[1].clone()));
+    parser
+        .grammar_json(
+            r##"{
+              "options":{
+                "rule":{"start":"top"},
+                "value":{"def":{"tag":{
+                  "match":"@/^@([a-z]+)/","val":"@tag","consume":true
+                }}}
+              },
+              "rule":{"top":{"open":[{
+                "s":"#VL #TX #CA","a":"@value$","k":{"value$":{"from":0}}
+              }]}}
+            }"##,
+        )
+        .unwrap();
+
+    let mut lexer = Lexer::new("@alpha-tail,", parser.options.clone());
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#VL");
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");
+    assert_eq!(lexer.next_raw_token().unwrap().name, "#CA");
+
+    assert_eq!(
+        parser.parse("@alpha-tail,").unwrap(),
+        Value::String("alpha".into())
+    );
 }
 
 #[test]

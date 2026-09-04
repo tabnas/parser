@@ -40,6 +40,8 @@ giving callbacks mutable access to the lexer cursor.
 Regexp-backed value definitions can bind a named transformer with
 `value_transform_ref`. It receives the whole match followed by capture groups
 and returns the token value without direct cursor access.
+Unquoted-text modifier pipelines use `text_modifier_ref` and retain serialized
+declaration order.
 
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default

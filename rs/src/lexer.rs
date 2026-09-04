@@ -621,13 +621,11 @@ impl<'a> Lexer<'a> {
             if !text_lex {
                 (self.idx, self.ri, self.ci) = start;
             } else {
-                return Ok(Token::new(
-                    "#TX",
-                    TIN_TX,
-                    Value::String(src.clone()),
-                    src,
-                    pnt,
-                ));
+                let mut value = Value::String(src.clone());
+                for modifier in &self.options.text.modify {
+                    value = modifier(value);
+                }
+                return Ok(Token::new("#TX", TIN_TX, value, src, pnt));
             }
         }
 

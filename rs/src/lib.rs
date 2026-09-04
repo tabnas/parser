@@ -22,8 +22,8 @@ pub use grammar::{GrammarError, GrammarSpec};
 pub use options::{
     BudgetCheck, BudgetOptions, CommentDef, FixedOptions, FixedToken, InfoOptions, MatchToken,
     MatchTokenCallback, MatchTokenMatcher, MatchTokenResult, Options, ParseOptions, ParsePrepare,
-    RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, ValueDef, ValueOptions,
-    ValueTransform,
+    RecoverOptions, ResultOptions, RewindOptions, SpaceOptions, TextModifier, ValueDef,
+    ValueOptions, ValueTransform,
 };
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
@@ -66,6 +66,7 @@ pub struct Tabnas {
     pub(crate) alt_backtracks: HashMap<String, AltBack>,
     pub(crate) match_token_refs: HashMap<String, (MatchTokenCallback, bool)>,
     pub(crate) value_transform_refs: HashMap<String, ValueTransform>,
+    pub(crate) text_modifier_refs: HashMap<String, TextModifier>,
 }
 
 impl Default for Tabnas {
@@ -93,6 +94,7 @@ impl Tabnas {
             alt_backtracks: HashMap::new(),
             match_token_refs: HashMap::new(),
             value_transform_refs: HashMap::new(),
+            text_modifier_refs: HashMap::new(),
         }
     }
 
@@ -114,6 +116,7 @@ impl Tabnas {
             alt_backtracks: HashMap::new(),
             match_token_refs: HashMap::new(),
             value_transform_refs: HashMap::new(),
+            text_modifier_refs: HashMap::new(),
         }
     }
 
@@ -261,6 +264,18 @@ impl Tabnas {
     ) -> &mut Self {
         self.value_transform_refs
             .insert(name.into(), Arc::new(transform));
+        self
+    }
+
+    /// Register an effect-based unquoted-text value modifier for use from a
+    /// serialized `options.text.modify` reference.
+    pub fn text_modifier_ref(
+        &mut self,
+        name: impl Into<String>,
+        modifier: impl Fn(Value) -> Value + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.text_modifier_refs
+            .insert(name.into(), Arc::new(modifier));
         self
     }
 

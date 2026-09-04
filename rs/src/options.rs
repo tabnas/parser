@@ -46,14 +46,30 @@ impl Default for FixedOptions {
     }
 }
 
-#[derive(Debug, Clone)]
+pub type TextModifier = Arc<dyn Fn(crate::Value) -> crate::Value + Send + Sync>;
+
+#[derive(Clone)]
 pub struct TextOptions {
     pub lex: bool,
+    pub modify: Vec<TextModifier>,
+}
+
+impl fmt::Debug for TextOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TextOptions")
+            .field("lex", &self.lex)
+            .field("modify", &self.modify.len())
+            .finish()
+    }
 }
 
 impl Default for TextOptions {
     fn default() -> Self {
-        TextOptions { lex: true }
+        TextOptions {
+            lex: true,
+            modify: Vec::new(),
+        }
     }
 }
 

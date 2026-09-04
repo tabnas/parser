@@ -6,7 +6,7 @@ use crate::rule::{AltSpec, CompareOp, Condition, RuleSpec};
 use crate::utility::{modlist, ListMods};
 use crate::{
     builtins::is_builtin_action, AltBack, AltCondition, AltError, AltModifier, AltNext,
-    MatchTokenCallback, Tabnas, Value, ValueTransform,
+    MatchTokenCallback, Tabnas, TextModifier, Value, ValueTransform,
 };
 use indexmap::IndexMap;
 use regex::RegexBuilder;
@@ -24,6 +24,7 @@ struct AltRefs {
     backtracks: HashMap<String, AltBack>,
     match_tokens: HashMap<String, (MatchTokenCallback, bool)>,
     value_transforms: HashMap<String, ValueTransform>,
+    text_modifiers: HashMap<String, TextModifier>,
 }
 
 impl From<&Tabnas> for AltRefs {
@@ -37,6 +38,7 @@ impl From<&Tabnas> for AltRefs {
             backtracks: tabnas.alt_backtracks.clone(),
             match_tokens: tabnas.match_token_refs.clone(),
             value_transforms: tabnas.value_transform_refs.clone(),
+            text_modifiers: tabnas.text_modifier_refs.clone(),
         }
     }
 }
@@ -623,6 +625,38 @@ fn apply_options(
     if let Some(text) = map.get("text") {
         let text = object(text, "options.text")?;
         set_bool(text, "lex", &mut options.text.lex);
+        if let Some(modify) = text.get("modify") {
+            let references =
+                match modify {
+                    JsonValue::Null | JsonValue::Bool(false) => Vec::new(),
+                    JsonValue::String(reference) => vec![reference.as_str()],
+                    JsonValue::Array(references) => references
+                        .iter()
+                        .map(|reference| {
+                            reference.as_str().ok_or_else(|| {
+                                GrammarError(
+                                "Grammar: options.text.modify entries must be function references"
+                                    .into(),
+                            )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => return Err(GrammarError(
+                        "Grammar: options.text.modify must be a function reference, array, or null"
+                            .into(),
+                    )),
+                };
+            options.text.modify = references
+                .into_iter()
+                .map(|reference| {
+                    refs.text_modifiers.get(reference).cloned().ok_or_else(|| {
+                        GrammarError(format!(
+                            "Grammar: unknown text modifier function reference: {reference}"
+                        ))
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+        }
     }
     if let Some(space) = map.get("space") {
         let space = object(space, "options.space")?;
