@@ -260,6 +260,7 @@ impl Default for MapOptions {
 pub struct LexOptions {
     pub empty: bool,
     pub empty_result: crate::Value,
+    pub relex: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +281,7 @@ impl Default for LexOptions {
         LexOptions {
             empty: true,
             empty_result: crate::Value::Undefined,
+            relex: false,
         }
     }
 }

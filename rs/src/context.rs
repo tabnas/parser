@@ -149,4 +149,12 @@ impl Context {
     pub(crate) fn next_replay(&mut self) -> Option<Token> {
         self.replay.pop_front()
     }
+
+    pub(crate) fn take_replay(&mut self) -> VecDeque<Token> {
+        std::mem::take(&mut self.replay)
+    }
+
+    pub(crate) fn restore_replay(&mut self, replay: VecDeque<Token>) {
+        self.replay = replay;
+    }
 }

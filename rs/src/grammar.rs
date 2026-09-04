@@ -824,6 +824,7 @@ fn apply_options(
     if let Some(lex) = map.get("lex") {
         let lex = object(lex, "options.lex")?;
         set_bool(lex, "empty", &mut options.lex.empty);
+        set_bool(lex, "relex", &mut options.lex.relex);
         if let Some(value) = lex.get("emptyResult") {
             options.lex.empty_result = Value::from_json(value);
         }

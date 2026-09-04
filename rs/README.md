@@ -25,8 +25,10 @@ Serialized grammars also support declarative conditions, group filters,
 load-bound builtin configuration, tree/value builtins, token and rule
 subscribers, public parse actions with bounded mark/rewind history, parse
 budgets, path-aware continuation queries, and opt-in panic-mode recovery with
-structured recovery diagnostics. Rust directly executes every non-exempt
-shared TSV fixture; the fixture paths are not copied into the crate. The
+structured recovery diagnostics. Opt-in negotiated lexing can re-cut contested
+source spans for scannerless serialized grammars, including rollback when a
+candidate alternate later fails. Rust directly executes every non-exempt shared
+TSV fixture; the fixture paths are not copied into the crate. The
 repository gate requires every non-exempt shared fixture to have a TypeScript,
 Go, and Rust runner, and the strict-JSON differential gate compares token
 streams over every data row in both JSON and parser corpora.

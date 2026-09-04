@@ -18,6 +18,16 @@ pub struct Lexer<'a> {
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
+    want: Option<Vec<crate::Tin>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LexerState {
+    idx: usize,
+    ri: usize,
+    ci: usize,
+    err: Option<TabnasError>,
+    end_reached: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -48,6 +58,7 @@ impl<'a> Lexer<'a> {
             err: None,
             end_reached: false,
             exclude_regex,
+            want: None,
         }
     }
 
@@ -99,6 +110,12 @@ impl<'a> Lexer<'a> {
         } else {
             None
         }
+    }
+
+    fn wants(&self, tin: crate::Tin) -> bool {
+        self.want
+            .as_ref()
+            .is_none_or(|wanted| wanted.contains(&tin))
     }
 
     fn is_text_delimiter_here(&self) -> bool {
@@ -174,6 +191,51 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Re-cut an already buffered source span, constrained to the token
+    /// identities requested by one alternate. On success the cursor remains
+    /// after the new cut; the returned state can restore the original cut if
+    /// that alternate later fails.
+    pub(crate) fn relex(
+        &mut self,
+        from: &Token,
+        wanted: &[crate::Tin],
+    ) -> Option<(Token, LexerState)> {
+        if from.src.is_empty() || from.pos > self.char_len || wanted.is_empty() {
+            return None;
+        }
+        let saved = LexerState {
+            idx: self.idx,
+            ri: self.ri,
+            ci: self.ci,
+            err: self.err.clone(),
+            end_reached: self.end_reached,
+        };
+        self.idx = from.pos;
+        self.ri = from.ri;
+        self.ci = from.ci;
+        self.err = None;
+        self.end_reached = false;
+        self.want = Some(wanted.to_vec());
+        let recut = self.next_raw().ok();
+        self.want = None;
+        match recut.filter(|token| wanted.contains(&token.tin)) {
+            Some(token) => Some((token, saved)),
+            None => {
+                self.restore(saved);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn restore(&mut self, state: LexerState) {
+        self.idx = state.idx;
+        self.ri = state.ri;
+        self.ci = state.ci;
+        self.err = state.err;
+        self.end_reached = state.end_reached;
+        self.want = None;
+    }
+
     fn next_raw(&mut self) -> Result<Token, TabnasError> {
         if self.end_reached {
             return Ok(Token::new(
@@ -203,6 +265,9 @@ impl<'a> Lexer<'a> {
         let remaining = &self.src[self.byte_position()..];
         let custom = self.options.match_lex.then(|| {
             self.options.match_tokens.values().find_map(|matcher| {
+                if !self.wants(matcher.tin) {
+                    return None;
+                }
                 matcher.regex.find(remaining).and_then(|found| {
                     (found.start() == 0).then(|| {
                         (
@@ -233,7 +298,11 @@ impl<'a> Lexer<'a> {
                 .fixed
                 .tokens
                 .values()
-                .filter(|token| !token.source.is_empty() && remaining.starts_with(&token.source))
+                .filter(|token| {
+                    self.wants(token.tin)
+                        && !token.source.is_empty()
+                        && remaining.starts_with(&token.source)
+                })
                 .max_by_key(|token| token.source.len())
                 .map(|token| (token.name.clone(), token.tin, token.source.clone()))
         });
@@ -251,7 +320,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 1. Whitespace
-        if self.options.space.lex && self.options.space.chars.contains(c) {
+        if self.options.space.lex && self.wants(TIN_SP) && self.options.space.chars.contains(c) {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if self.options.space.chars.contains(ch) {
@@ -272,6 +341,7 @@ impl<'a> Lexer<'a> {
 
         // 2. Line ending
         if self.options.line.lex
+            && self.wants(TIN_LN)
             && (self.options.line.chars.contains(c) || self.options.line.fixed.contains(&c))
         {
             let mut src = String::new();
@@ -310,7 +380,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 3. Comments (longest opening marker wins; ties sort by name).
-        if self.options.comment.lex {
+        if self.options.comment.lex && self.wants(TIN_CM) {
             let mut definitions: Vec<_> = self
                 .options
                 .comment
@@ -410,7 +480,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 5. Quoted Strings
-        if self.options.string.lex && self.options.string.chars.contains(c) {
+        if self.options.string.lex && self.wants(TIN_ST) && self.options.string.chars.contains(c) {
             let start = (self.idx, self.ri, self.ci);
             match self.match_string(c, pnt) {
                 result @ Ok(_) => return result,
@@ -423,14 +493,19 @@ impl<'a> Lexer<'a> {
         }
 
         // 6. Numbers
-        if self.options.number.lex && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit()) {
+        if self.options.number.lex
+            && (self.wants(TIN_NR) || self.wants(TIN_VL))
+            && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit())
+        {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
         }
 
         // 7. Text and named/regex values share the same delimited run.
-        if (self.options.text.lex || self.options.value.lex) && !self.is_text_delimiter_here() {
+        let value_lex = self.options.value.lex && self.wants(TIN_VL);
+        let text_lex = self.options.text.lex && self.wants(TIN_TX);
+        if (text_lex || value_lex) && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
             let remaining = self.src[self.byte_position()..].to_string();
             let mut src = String::new();
@@ -442,7 +517,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
 
-            if self.options.value.lex {
+            if value_lex {
                 if let Some(definition) = self
                     .options
                     .value
@@ -500,7 +575,7 @@ impl<'a> Lexer<'a> {
                 }
             }
 
-            if !self.options.text.lex {
+            if !text_lex {
                 (self.idx, self.ri, self.ci) = start;
             } else {
                 return Ok(Token::new(

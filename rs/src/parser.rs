@@ -3,7 +3,7 @@
 use crate::builtins::run_builtin_action;
 use crate::context::Context;
 use crate::error::TabnasError;
-use crate::lexer::Lexer;
+use crate::lexer::{Lexer, LexerState};
 use crate::options::Options;
 use crate::rule::{
     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
@@ -14,7 +14,7 @@ use crate::{
     Action, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber, TokenSubscriber,
 };
 use indexmap::IndexMap;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuations {
@@ -41,6 +41,14 @@ struct ParseMode<'a> {
     recovering: bool,
     errors: &'a mut Vec<TabnasError>,
     partial: Option<Value>,
+}
+
+struct RelexUndo {
+    position: usize,
+    token: Token,
+    lexer: LexerState,
+    tokens: Vec<Token>,
+    replay: VecDeque<Token>,
 }
 
 pub struct Parser {
@@ -472,6 +480,13 @@ impl Parser {
                                 self.attach_error(error.clone(), rule, stack, alts, None)
                             })
                             .unwrap_or_else(|| error.clone());
+                        if self.options.lex.relex {
+                            let mut token = error_token(&recovery_error);
+                            for subscriber in &self.lex_subscribers {
+                                subscriber(&mut token, rule, context);
+                            }
+                            break token;
+                        }
                         if mode.recovering
                             && absorb_lex_error(
                                 &recovery_error,
@@ -664,28 +679,52 @@ impl Parser {
                 }
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
-                if s_len > 0 {
+                let mut relex_undo: Option<RelexUndo> = None;
+                for (pos, pos_tins) in alt.s.iter().enumerate() {
                     if let Err(error) = self.ensure_lookahead(
                         &mut lexer,
                         &mut context,
                         &mut current_rule,
                         &stack,
-                        s_len,
+                        pos + 1,
                         mode,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
-
-                    for (pos, pos_tins) in alt.s.iter().enumerate() {
-                        if pos >= context.t.len() {
+                    let Some(token) = context.t.get(pos).cloned() else {
+                        alt_matches = false;
+                        break;
+                    };
+                    if !slot_matches(pos_tins, token.tin) {
+                        let recut = (self.options.lex.relex
+                            && !token.src.is_empty()
+                            && !pos_tins.is_empty())
+                        .then(|| lexer.relex(&token, pos_tins))
+                        .flatten();
+                        let Some((mut recut, lexer_state)) = recut else {
+                            alt_matches = false;
+                            break;
+                        };
+                        for subscriber in &self.lex_subscribers {
+                            subscriber(&mut recut, &mut current_rule, &mut context);
+                        }
+                        if !pos_tins.contains(&recut.tin) {
+                            lexer.restore(lexer_state);
                             alt_matches = false;
                             break;
                         }
-                        let t = &context.t[pos];
-                        if !slot_matches(pos_tins, t.tin) {
-                            alt_matches = false;
-                            break;
+                        let replay = context.take_replay();
+                        if relex_undo.is_none() {
+                            relex_undo = Some(RelexUndo {
+                                position: pos,
+                                token,
+                                lexer: lexer_state,
+                                tokens: context.t.clone(),
+                                replay,
+                            });
                         }
+                        context.t[pos] = recut;
+                        context.t.truncate(pos + 1);
                     }
                 }
 
@@ -700,11 +739,23 @@ impl Parser {
                     if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
                         || !conditions_match(&alt.c, &candidate, &stack)
                     {
-                        continue;
+                        alt_matches = false;
                     }
-                    matched_alt_idx = Some(idx);
-                    matched_count = s_len;
-                    break;
+                    if alt_matches {
+                        matched_alt_idx = Some(idx);
+                        matched_count = s_len;
+                        break;
+                    }
+                }
+                if let Some(undo) = relex_undo {
+                    lexer.restore(undo.lexer);
+                    context.t = undo.tokens;
+                    context.restore_replay(undo.replay);
+                    for subscriber in &self.lex_subscribers {
+                        let mut restored = undo.token.clone();
+                        subscriber(&mut restored, &mut current_rule, &mut context);
+                    }
+                    debug_assert_eq!(context.t.get(undo.position), Some(&undo.token));
                 }
             }
 
@@ -979,7 +1030,8 @@ impl Parser {
                     } else {
                         (String::new(), src.len(), 1, 1)
                     };
-                    let error = TabnasError::new("unexpected", src_token, src, si, ri, ci);
+                    let code = t0.as_ref().map_or("unexpected", deferred_error_code);
+                    let error = TabnasError::new(code, src_token, src, si, ri, ci);
                     self.notify_rule_done(
                         &current_rule,
                         &context,
@@ -1035,7 +1087,8 @@ impl Parser {
                         || (String::new(), src.chars().count(), 1, 1),
                         |value| (value.src.clone(), value.pos, value.ri, value.ci),
                     );
-                    let error = TabnasError::new("unexpected", source, src, pos, row, col);
+                    let code = token.as_ref().map_or("unexpected", deferred_error_code);
+                    let error = TabnasError::new(code, source, src, pos, row, col);
                     self.notify_rule_done(
                         &current_rule,
                         &context,
@@ -1154,6 +1207,11 @@ fn best_partial_value(
 }
 
 fn error_token(error: &TabnasError) -> Token {
+    let byte_position = error
+        .full_source
+        .char_indices()
+        .nth(error.pos)
+        .map_or(error.full_source.len(), |(index, _)| index);
     let mut token = Token::new(
         "#BD",
         TIN_BD,
@@ -1161,7 +1219,7 @@ fn error_token(error: &TabnasError) -> Token {
         error.src.clone(),
         crate::Point {
             len: error.len,
-            si: error.pos,
+            si: byte_position,
             pos: error.pos,
             ri: error.row,
             ci: error.col,
@@ -1170,6 +1228,18 @@ fn error_token(error: &TabnasError) -> Token {
     token.err = error.code.clone();
     token.why = error.code.clone();
     token
+}
+
+fn deferred_error_code(token: &Token) -> &str {
+    if token.tin != TIN_BD {
+        "unexpected"
+    } else if !token.why.is_empty() {
+        &token.why
+    } else if !token.err.is_empty() {
+        &token.err
+    } else {
+        "unexpected"
+    }
 }
 
 fn mid_construct(code: &str) -> bool {
