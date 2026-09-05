@@ -1049,6 +1049,7 @@ pub(crate) fn resolved_action_order(
 pub struct Rule {
     pub i: usize,
     pub d: usize,
+    pub(crate) spec_index: usize,
     pub name: String,
     /// Immutable snapshot of the grammar definition used to create this
     /// runtime rule. Native callbacks can inspect it just like `rule.spec`
@@ -1068,6 +1069,7 @@ pub struct Rule {
     pub parent_node: Option<Rc<RefCell<Value>>>,
     pub child_node: Value,
     pub(crate) child_node_is_self: bool,
+    pub(crate) child_node_ref: Option<Rc<RefCell<Value>>>,
     pub parent_rule: Option<Rc<RuleSnapshot>>,
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
@@ -1113,6 +1115,7 @@ impl Rule {
         Rule {
             i: 0,
             d: 0,
+            spec_index: 0,
             name,
             spec,
             state: RuleState::Open,
@@ -1126,6 +1129,7 @@ impl Rule {
             parent_node: None,
             child_node: Value::Undefined,
             child_node_is_self: false,
+            child_node_ref: None,
             parent_rule: None,
             child_rule: None,
             prev_rule: None,
@@ -1145,6 +1149,7 @@ impl Rule {
         Rule {
             i: 0,
             d: 0,
+            spec_index: 0,
             name,
             spec,
             state: RuleState::Open,
@@ -1158,6 +1163,7 @@ impl Rule {
             parent_node: None,
             child_node: Value::Undefined,
             child_node_is_self: false,
+            child_node_ref: None,
             parent_rule: None,
             child_rule: None,
             prev_rule: None,
@@ -1171,9 +1177,41 @@ impl Rule {
         }
     }
 
-    pub(crate) fn bind_spec(&mut self, spec: &RuleSpec) {
+    pub(crate) fn with_shared_spec(spec: Arc<RuleSpec>, node: Rc<RefCell<Value>>) -> Self {
+        Rule {
+            i: 0,
+            d: 0,
+            spec_index: 0,
+            name: spec.name.clone(),
+            spec,
+            state: RuleState::Open,
+            bo: true,
+            ao: true,
+            bc: true,
+            ac: true,
+            skip_befores: false,
+            need: 0,
+            node,
+            parent_node: None,
+            child_node: Value::Undefined,
+            child_node_is_self: false,
+            child_node_ref: None,
+            parent_rule: None,
+            child_rule: None,
+            prev_rule: None,
+            next_rule: None,
+            next_rule_name: None,
+            n: HashMap::new(),
+            u: HashMap::new(),
+            k: HashMap::new(),
+            o: Vec::new(),
+            c: Vec::new(),
+        }
+    }
+
+    pub(crate) fn bind_shared_spec(&mut self, spec: Arc<RuleSpec>) {
         self.name.clone_from(&spec.name);
-        self.spec = Arc::new(spec.clone());
+        self.spec = spec;
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.
         self.bo = true;
@@ -1209,18 +1247,22 @@ impl Rule {
     /// Resolve a matched opening token's eager or lazy semantic value without
     /// exposing the temporary token clone needed by Rust's borrow rules.
     pub fn resolve_open_value(&mut self, index: usize, context: &mut Context) -> Value {
-        self.o
-            .get(index)
-            .cloned()
-            .map_or(Value::Undefined, |token| token.resolve_val(self, context))
+        let Some(token) = self.o.get(index) else {
+            return Value::Undefined;
+        };
+        let fallback = token.val.clone();
+        let callback = token.val_fn.clone();
+        callback.map_or(fallback, |callback| callback.call(self, context))
     }
 
     /// Resolve a matched closing token's eager or lazy semantic value.
     pub fn resolve_close_value(&mut self, index: usize, context: &mut Context) -> Value {
-        self.c
-            .get(index)
-            .cloned()
-            .map_or(Value::Undefined, |token| token.resolve_val(self, context))
+        let Some(token) = self.c.get(index) else {
+            return Value::Undefined;
+        };
+        let fallback = token.val.clone();
+        let callback = token.val_fn.clone();
+        callback.map_or(fallback, |callback| callback.call(self, context))
     }
 
     /// Counter comparisons use zero for an unset counter, matching the
@@ -1276,9 +1318,57 @@ impl Rule {
         })
     }
 
-    pub(crate) fn accept_child_node(&mut self, child: &Rule) {
+    pub(crate) fn accept_child_node(&mut self, child: &Rule, materialize_shared: bool) {
         self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
-        self.child_node = child.node.borrow().clone();
+        if materialize_shared {
+            self.child_node = child.node.borrow().clone();
+            self.child_node_ref = None;
+        } else if self.child_node_is_self {
+            self.child_node = Value::Undefined;
+            self.child_node_ref = None;
+        } else {
+            self.child_node = Value::Undefined;
+            self.child_node_ref = Some(child.node.clone());
+        }
+    }
+
+    pub(crate) fn child_node_is_undefined(&self) -> bool {
+        if self.child_node_is_self {
+            return self.node.borrow().is_undefined();
+        }
+        self.child_node_ref.as_ref().map_or_else(
+            || self.child_node.is_undefined(),
+            |node| node.borrow().is_undefined(),
+        )
+    }
+
+    pub(crate) fn child_node_value(&mut self) -> Value {
+        if self.child_node_is_self {
+            self.node.borrow().clone()
+        } else if let Some(node) = &self.child_node_ref {
+            node.borrow().clone()
+        } else {
+            self.child_node.clone()
+        }
+    }
+
+    pub(crate) fn adopt_child_node(&mut self) -> bool {
+        if self.child_node_is_undefined() {
+            return false;
+        }
+        if let Some(node) = self.child_node_ref.take() {
+            self.node = node;
+        } else {
+            self.node = Rc::new(RefCell::new(self.child_node.clone()));
+        }
+        self.child_node_is_self = true;
+        true
+    }
+
+    pub(crate) fn clear_child_node(&mut self) {
+        self.child_node = Value::Undefined;
+        self.child_node_ref = None;
+        self.child_node_is_self = false;
     }
 }
 

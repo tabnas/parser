@@ -19,6 +19,7 @@ use crate::{
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuations {
@@ -52,6 +53,22 @@ struct RelexUndo {
     token: Token,
     checkpoint: RelexCheckpoint,
     tokens: Vec<Token>,
+}
+
+struct PreparedRule {
+    spec: Arc<RuleSpec>,
+    open_enabled: Vec<bool>,
+    close_enabled: Vec<bool>,
+    open_alt_actions: Vec<Vec<AltActionBinding>>,
+    close_alt_actions: Vec<Vec<AltActionBinding>>,
+    open_push_indices: Vec<Option<usize>>,
+    close_push_indices: Vec<Option<usize>>,
+    open_replace_indices: Vec<Option<usize>>,
+    close_replace_indices: Vec<Option<usize>>,
+    bo_actions: Vec<ActionBinding>,
+    ao_actions: Vec<ActionBinding>,
+    bc_actions: Vec<ActionBinding>,
+    ac_actions: Vec<ActionBinding>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +149,54 @@ impl Parser {
         self.instance = instance;
     }
 
+    fn needs_context_snapshots(&self) -> bool {
+        self.options.parse.budget.on_check.is_some()
+            || self.options.map.merge.is_some()
+            // A matcher-family check can return a native Token carrying a
+            // lazy value callback. That callback receives the live Context,
+            // so preserve the same snapshots/history as other imperative
+            // lexer hooks whenever any check is installed.
+            || self.options.match_check.is_some()
+            || self.options.fixed.check.is_some()
+            || self.options.space.check.is_some()
+            || self.options.line.check.is_some()
+            || self.options.string.check.is_some()
+            || self.options.comment.check.is_some()
+            || self.options.number.check.is_some()
+            || self.options.text.check.is_some()
+            || self
+                .options
+                .text
+                .modify
+                .iter()
+                .any(|modifier| matches!(modifier, crate::options::TextModifier::Imperative(_)))
+            || self
+                .options
+                .lex
+                .matchers
+                .values()
+                .any(|matcher| matcher.imperative.is_some())
+            || !self.context_actions.is_empty()
+            || !self.matched_actions.is_empty()
+            || !self.state_actions.is_empty()
+            || !self.lex_subscribers.is_empty()
+            || !self.rule_subscribers.is_empty()
+            || !self.rule_done_subscribers.is_empty()
+            || self.rules.values().any(rule_has_context_callbacks)
+    }
+
+    fn needs_rule_links(&self, snapshot_context: bool) -> bool {
+        snapshot_context
+            || !self.actions.is_empty()
+            || self.rules.values().any(rule_has_link_conditions)
+    }
+
+    fn needs_rewind_history(&self, snapshot_context: bool) -> bool {
+        snapshot_context
+            || self.options.lex.relex
+            || self.rules.values().any(rule_uses_probe_actions)
+    }
+
     fn run_action(
         &self,
         name: &str,
@@ -143,7 +208,7 @@ impl Parser {
 
     fn run_after_actions(
         &self,
-        spec: &RuleSpec,
+        bindings: &[ActionBinding],
         is_open: bool,
         rule: &mut Rule,
         context: &mut Context,
@@ -152,17 +217,12 @@ impl Parser {
         if (is_open && !rule.ao) || (!is_open && !rule.ac) {
             return Ok(());
         }
-        let (actions, callbacks, states, order) = if is_open {
-            (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
-        } else {
-            (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
-        };
         let next = rule.next_rule.clone();
         let mut output = None;
-        for binding in resolved_action_order(actions, callbacks, states, order) {
+        for binding in bindings {
             output = match binding {
                 ActionBinding::Named(action) => {
-                    if let Some(callback) = self.state_actions.get(&action) {
+                    if let Some(callback) = self.state_actions.get(action) {
                         self.run_state_callback(
                             "named lifecycle after action",
                             callback,
@@ -181,7 +241,7 @@ impl Parser {
                             )
                         })?
                     } else {
-                        self.run_action(&action, rule, context).map_err(|error| {
+                        self.run_action(action, rule, context).map_err(|error| {
                             self.attach_action_error(
                                 error,
                                 site.source,
@@ -194,7 +254,7 @@ impl Parser {
                     }
                 }
                 ActionBinding::Callback(callback) => {
-                    self.run_context_callback("lifecycle after action", &callback, rule, context)
+                    self.run_context_callback("lifecycle after action", callback, rule, context)
                         .map_err(|error| {
                             self.attach_action_error(
                                 error,
@@ -209,7 +269,7 @@ impl Parser {
                 ActionBinding::State(callback) => self
                     .run_state_callback(
                         "lifecycle after action",
-                        &callback,
+                        callback,
                         rule,
                         context,
                         next.as_deref(),
@@ -331,7 +391,6 @@ impl Parser {
         context: &mut Context,
         config: Option<&Value>,
     ) -> Result<(), TabnasError> {
-        context.set_rule(rule);
         match catch_unwind(AssertUnwindSafe(|| {
             run_builtin_action_with_info(name, rule, context, config, &self.options.info)
         })) {
@@ -591,7 +650,7 @@ impl Parser {
                                     )
                                 })?;
                             }
-                            if self.options.is_ignored(token.tin) {
+                            if lexer.is_ignored(token.tin) {
                                 continue;
                             }
                             for subscriber in &self.token_subscribers {
@@ -686,7 +745,7 @@ impl Parser {
 
         self.notify_forced_close(current_rule, context, &src, stack)?;
         while let Some(mut parent) = stack.pop() {
-            parent.accept_child_node(current_rule);
+            parent.accept_child_node(current_rule, true);
             parent.child_rule = Some(current_rule.snapshot());
             parent.next_rule = parent.child_rule.clone();
             if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
@@ -1127,7 +1186,11 @@ impl Parser {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
                 break;
             }
-            let expected_match_tins = self.expected_match_tins(rule, context.t.len());
+            let expected_match_tins = if self.options.match_tokens.is_empty() {
+                Vec::new()
+            } else {
+                self.expected_match_tins(rule, context.t.len())
+            };
             let token = loop {
                 let next = match context.next_replay() {
                     Some(token) => Ok(token),
@@ -1230,7 +1293,7 @@ impl Parser {
                         ));
                     }
                 }
-                if !self.options.is_ignored(token.tin) {
+                if !lexer.is_ignored(token.tin) {
                     break token;
                 }
             };
@@ -1259,9 +1322,18 @@ impl Parser {
         mode: &mut ParseMode<'_>,
     ) -> Result<Value, TabnasError> {
         let input_meta = meta.clone();
+        let snapshot_context = self.needs_context_snapshots();
+        let track_rule_links = self.needs_rule_links(snapshot_context);
+        let needs_rewind_history = self.needs_rewind_history(snapshot_context);
+        let has_prepare =
+            !self.options.parse.prepare.is_empty() || !self.options.parse.named_prepare.is_empty();
         let mut context = Context::new(
             self.options.rewind.history,
-            src,
+            if snapshot_context || has_prepare {
+                src
+            } else {
+                ""
+            },
             meta,
             self.options.clone(),
             self.instance.clone(),
@@ -1305,12 +1377,121 @@ impl Parser {
             return Ok(Value::Undefined);
         }
 
+        // The mature ports retain normalized rule state. Prepare group gates
+        // and one shared spec per rule once, instead of rescanning group CSVs
+        // and cloning an entire RuleSpec on every parser pass.
+        let prepared_rules: IndexMap<String, PreparedRule> = self
+            .rules
+            .iter()
+            .map(|(name, spec)| {
+                (
+                    name.clone(),
+                    PreparedRule {
+                        spec: Arc::new(spec.clone()),
+                        open_enabled: spec
+                            .open
+                            .iter()
+                            .map(|alt| groups_enabled(alt, &self.options))
+                            .collect(),
+                        close_enabled: spec
+                            .close
+                            .iter()
+                            .map(|alt| groups_enabled(alt, &self.options))
+                            .collect(),
+                        open_alt_actions: spec
+                            .open
+                            .iter()
+                            .map(|alt| {
+                                resolved_alt_action_order(
+                                    &alt.a,
+                                    &alt.action_fns,
+                                    &alt.matched_action_fns,
+                                    &alt.action_order,
+                                )
+                            })
+                            .collect(),
+                        close_alt_actions: spec
+                            .close
+                            .iter()
+                            .map(|alt| {
+                                resolved_alt_action_order(
+                                    &alt.a,
+                                    &alt.action_fns,
+                                    &alt.matched_action_fns,
+                                    &alt.action_order,
+                                )
+                            })
+                            .collect(),
+                        open_push_indices: spec
+                            .open
+                            .iter()
+                            .map(|alt| {
+                                alt.p
+                                    .as_deref()
+                                    .and_then(|name| self.rules.get_index_of(name))
+                            })
+                            .collect(),
+                        close_push_indices: spec
+                            .close
+                            .iter()
+                            .map(|alt| {
+                                alt.p
+                                    .as_deref()
+                                    .and_then(|name| self.rules.get_index_of(name))
+                            })
+                            .collect(),
+                        open_replace_indices: spec
+                            .open
+                            .iter()
+                            .map(|alt| {
+                                alt.r
+                                    .as_deref()
+                                    .and_then(|name| self.rules.get_index_of(name))
+                            })
+                            .collect(),
+                        close_replace_indices: spec
+                            .close
+                            .iter()
+                            .map(|alt| {
+                                alt.r
+                                    .as_deref()
+                                    .and_then(|name| self.rules.get_index_of(name))
+                            })
+                            .collect(),
+                        bo_actions: resolved_action_order(
+                            &spec.bo,
+                            &spec.bo_fns,
+                            &spec.bo_state_fns,
+                            &spec.bo_order,
+                        ),
+                        ao_actions: resolved_action_order(
+                            &spec.ao,
+                            &spec.ao_fns,
+                            &spec.ao_state_fns,
+                            &spec.ao_order,
+                        ),
+                        bc_actions: resolved_action_order(
+                            &spec.bc,
+                            &spec.bc_fns,
+                            &spec.bc_state_fns,
+                            &spec.bc_order,
+                        ),
+                        ac_actions: resolved_action_order(
+                            &spec.ac,
+                            &spec.ac_fns,
+                            &spec.ac_state_fns,
+                            &spec.ac_order,
+                        ),
+                    },
+                )
+            })
+            .collect();
         let mut current_rule = Rule::new(start_name, Value::Undefined);
-        current_rule.bind_spec(
-            self.rules
-                .get(start_name)
-                .expect("start rule existence was checked before construction"),
-        );
+        let (start_index, _, start_rule) = prepared_rules
+            .get_full(start_name)
+            .expect("start rule existence was checked before construction");
+        current_rule.bind_shared_spec(start_rule.spec.clone());
+        current_rule.spec_index = start_index;
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
@@ -1328,14 +1509,20 @@ impl Parser {
         let max_iterations = self
             .rules
             .len()
-            .saturating_mul(src.encode_utf16().count())
+            .saturating_mul(lexer.char_len())
             .saturating_mul(4)
             .saturating_mul(maxmul)
             .max(100);
         let budget = &self.options.parse.budget;
 
+        if !needs_rewind_history {
+            context.discard_rewind_history();
+        }
+
         'parse: loop {
-            context.set_active(&current_rule, &stack);
+            if snapshot_context {
+                context.set_active(&current_rule, &stack);
+            }
             update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
             if iterations > max_iterations {
@@ -1373,27 +1560,61 @@ impl Parser {
                 }
             }
 
-            let spec = match self.rules.get(&current_rule.name) {
-                Some(s) => s.clone(),
-                None => {
-                    let pnt = context
-                        .t
-                        .first()
-                        .map(|t| (t.pos, t.ri, t.ci))
-                        .unwrap_or((0, 1, 1));
-                    return Err(TabnasError::new(
-                        "unknown_rule",
-                        &current_rule.name,
-                        src,
-                        pnt.0,
-                        pnt.1,
-                        pnt.2,
-                    ));
-                }
+            let prepared_index = if track_rule_links {
+                prepared_rules
+                    .get_index(current_rule.spec_index)
+                    .filter(|(name, _)| name.as_str() == current_rule.name)
+                    .map(|_| current_rule.spec_index)
+                    .or_else(|| {
+                        prepared_rules
+                            .get_full(&current_rule.name)
+                            .map(|(index, _, _)| index)
+                    })
+            } else {
+                prepared_rules
+                    .get_index(current_rule.spec_index)
+                    .map(|_| current_rule.spec_index)
             };
+            let Some(prepared_index) = prepared_index else {
+                let pnt = context
+                    .t
+                    .first()
+                    .map(|t| (t.pos, t.ri, t.ci))
+                    .unwrap_or((0, 1, 1));
+                return Err(TabnasError::new(
+                    "unknown_rule",
+                    &current_rule.name,
+                    src,
+                    pnt.0,
+                    pnt.1,
+                    pnt.2,
+                ));
+            };
+            current_rule.spec_index = prepared_index;
+            let prepared_rule = prepared_rules
+                .get_index(prepared_index)
+                .expect("resolved prepared rule index")
+                .1;
 
             let is_open = current_rule.state == RuleState::Open;
-            let alts = if is_open { &spec.open } else { &spec.close };
+            let spec = prepared_rule.spec.as_ref();
+            let (alts, enabled_alts, alt_actions, push_indices, replace_indices) = if is_open {
+                (
+                    &spec.open,
+                    &prepared_rule.open_enabled,
+                    &prepared_rule.open_alt_actions,
+                    &prepared_rule.open_push_indices,
+                    &prepared_rule.open_replace_indices,
+                )
+            } else {
+                (
+                    &spec.close,
+                    &prepared_rule.close_enabled,
+                    &prepared_rule.close_alt_actions,
+                    &prepared_rule.close_push_indices,
+                    &prepared_rule.close_replace_indices,
+                )
+            };
 
             for subscriber in &self.rule_subscribers {
                 let result = self.catch_callback("rule subscriber", src, || {
@@ -1421,24 +1642,12 @@ impl Parser {
                 current_rule.bc
             };
             if !skip_befores && before_enabled {
-                let (actions, callbacks, states, order, label) = if is_open {
-                    (
-                        &spec.bo,
-                        &spec.bo_fns,
-                        &spec.bo_state_fns,
-                        &spec.bo_order,
-                        "before-open action",
-                    )
+                let (bindings, label) = if is_open {
+                    (&prepared_rule.bo_actions, "before-open action")
                 } else {
-                    (
-                        &spec.bc,
-                        &spec.bc_fns,
-                        &spec.bc_state_fns,
-                        &spec.bc_order,
-                        "before-close action",
-                    )
+                    (&prepared_rule.bc_actions, "before-close action")
                 };
-                let next = is_open.then(|| current_rule.snapshot());
+                let next = (is_open && track_rule_links).then(|| current_rule.snapshot());
                 let site = ParseSite {
                     source: src,
                     stack: &stack,
@@ -1446,10 +1655,10 @@ impl Parser {
                 };
                 let mut output = None;
                 let mut lifecycle_error = None;
-                for binding in resolved_action_order(actions, callbacks, states, order) {
+                for binding in bindings {
                     output = match binding {
                         ActionBinding::Named(action) => {
-                            if let Some(callback) = self.state_actions.get(&action) {
+                            if let Some(callback) = self.state_actions.get(action) {
                                 self.run_state_callback(
                                     label,
                                     callback,
@@ -1468,7 +1677,7 @@ impl Parser {
                                     )
                                 })?
                             } else {
-                                self.run_action(&action, &mut current_rule, &mut context)
+                                self.run_action(action, &mut current_rule, &mut context)
                                     .map_err(|error| {
                                         self.attach_action_error(
                                             error,
@@ -1484,7 +1693,7 @@ impl Parser {
                         ActionBinding::Callback(callback) => {
                             self.run_context_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -1496,7 +1705,7 @@ impl Parser {
                         ActionBinding::State(callback) => self
                             .run_state_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                                 next.as_deref(),
@@ -1543,7 +1752,7 @@ impl Parser {
             let mut matched_seed = AltMatch::default();
 
             for (idx, alt) in alts.iter().enumerate() {
-                if !groups_enabled(alt, &self.options) {
+                if !enabled_alts[idx] {
                     continue;
                 }
                 let s_len = alt.s.len();
@@ -1565,11 +1774,12 @@ impl Parser {
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
-                    let Some(token) = context.t.get(pos).cloned() else {
+                    let Some(token) = context.t.get(pos) else {
                         alt_matches = false;
                         break;
                     };
                     if !slot_matches(pos_tins, token.tin) {
+                        let token = token.clone();
                         let recut = if self.options.lex.relex
                             && !token.src.is_empty()
                             && !pos_tins.is_empty()
@@ -1613,7 +1823,13 @@ impl Parser {
                     }
                 }
 
-                if alt_matches {
+                let has_conditions = alt.c_ref.is_some()
+                    || !alt.c.is_empty()
+                    || alt.c_fn.is_some()
+                    || alt.c_match.is_some()
+                    || alt.c_lex.is_some()
+                    || alt.c_lex_match.is_some();
+                if alt_matches && has_conditions {
                     let mut candidate = current_rule.clone();
                     let tokens: Vec<Token> = context.t.iter().take(s_len).cloned().collect();
                     if is_open {
@@ -1714,12 +1930,12 @@ impl Parser {
                             }
                         }
                     }
-                    if alt_matches {
-                        matched_alt_idx = Some(idx);
-                        matched_count = s_len;
-                        matched_seed = candidate_match;
-                        break;
-                    }
+                }
+                if alt_matches {
+                    matched_alt_idx = Some(idx);
+                    matched_count = s_len;
+                    matched_seed = candidate_match;
+                    break;
                 }
                 if let Some(undo) = relex_undo {
                     lexer.unrelex(undo.checkpoint, &mut context);
@@ -1738,27 +1954,28 @@ impl Parser {
             }
 
             if let Some(idx) = matched_alt_idx {
-                let mut alt = alts[idx].clone();
-
-                // Copy matched tokens
-                let matched_tokens: Vec<Token> =
-                    context.t.iter().take(matched_count).cloned().collect();
-                if is_open {
-                    current_rule.o = matched_tokens;
-                } else {
-                    current_rule.c = matched_tokens;
+                let defer_token_transfer = !context.retains_rewind_history()
+                    && !alt_needs_tokens_before_consumption(&alts[idx]);
+                if !defer_token_transfer {
+                    let matched_tokens: Vec<Token> =
+                        context.t.iter().take(matched_count).cloned().collect();
+                    if is_open {
+                        current_rule.o = matched_tokens;
+                    } else {
+                        current_rule.c = matched_tokens;
+                    }
                 }
 
                 // Compatibility modifier for the original two-argument Rust
                 // callback tier. It rewrites the source spec before dynamic
                 // fields are resolved. The full `h_match` callback below runs
                 // at the canonical point over the resolved AltMatch.
-                if let Some(modifier) = alt.h.clone() {
+                let modified_alt = if let Some(modifier) = alts[idx].h.clone() {
                     context.set_rule(&current_rule);
                     let result = self.catch_callback("alternate modifier", src, || {
-                        modifier(alt, &mut current_rule, &mut context)
+                        modifier(alts[idx].clone(), &mut current_rule, &mut context)
                     });
-                    alt = result.map_err(|error| {
+                    Some(result.map_err(|error| {
                         self.attach_error(
                             error,
                             &current_rule,
@@ -1766,39 +1983,49 @@ impl Parser {
                             alts,
                             Self::phase_token(&current_rule),
                         )
-                    })?;
-                }
+                    })?)
+                } else {
+                    None
+                };
+                let alt = modified_alt.as_ref().unwrap_or(&alts[idx]);
 
                 let mut matched = matched_seed;
                 matched.h = alt.h_match.clone();
-                if !alt.n.is_empty() {
+                let expose_match = alt_has_match_consumers(alt, &self.matched_actions);
+                let capture_done = mode.recovering || !self.rule_done_subscribers.is_empty();
+                let retain_static_match = expose_match || capture_done;
+                if expose_match && !alt.n.is_empty() {
                     matched.n = alt.n.clone();
                 }
-                if !alt.u.is_empty() {
+                if expose_match && !alt.u.is_empty() {
                     matched.u = alt.u.clone();
                 }
-                if !alt.k.is_empty() {
+                if expose_match && !alt.k.is_empty() {
                     matched.k = alt.k.clone();
                 }
-                if !alt.g.is_empty() {
+                let keep_match_groups = capture_done || expose_match;
+                if keep_match_groups && !alt.g.is_empty() {
                     matched.g = alt
                         .g
                         .split(',')
-                        .map(str::trim)
+                        .map(str::trim_ascii)
                         .filter(|group| !group.is_empty())
                         .map(str::to_owned)
                         .collect();
                 }
-                let actions = resolved_alt_action_order(
-                    &alt.a,
-                    &alt.action_fns,
-                    &alt.matched_action_fns,
-                    &alt.action_order,
-                );
-                if !actions.is_empty() {
-                    matched.actions = actions;
+                let modified_actions = modified_alt.as_ref().map(|alt| {
+                    resolved_alt_action_order(
+                        &alt.a,
+                        &alt.action_fns,
+                        &alt.matched_action_fns,
+                        &alt.action_order,
+                    )
+                });
+                let selected_actions = modified_actions.as_ref().unwrap_or(&alt_actions[idx]);
+                if expose_match && !selected_actions.is_empty() {
+                    matched.actions = selected_actions.clone();
                 }
-                if !alt.action_configs.is_empty() {
+                if expose_match && !alt.action_configs.is_empty() {
                     matched.action_configs = alt.action_configs.clone();
                 }
 
@@ -1868,7 +2095,7 @@ impl Parser {
                             )
                         })?
                         .filter(|name| !name.is_empty());
-                } else if alt.p_fn.is_none() {
+                } else if alt.p_fn.is_none() && retain_static_match {
                     if let Some(route) = alt.p.clone() {
                         matched.p = (!route.is_empty()).then_some(route);
                     }
@@ -1906,7 +2133,7 @@ impl Parser {
                             )
                         })?
                         .filter(|name| !name.is_empty());
-                } else if alt.r_fn.is_none() {
+                } else if alt.r_fn.is_none() && retain_static_match {
                     if let Some(route) = alt.r.clone() {
                         matched.r = (!route.is_empty()).then_some(route);
                     }
@@ -1948,7 +2175,7 @@ impl Parser {
 
                 if let Some(modifier) = alt.h_match.clone() {
                     context.set_rule(&current_rule);
-                    let next = is_open.then(|| current_rule.snapshot());
+                    let next = (is_open && track_rule_links).then(|| current_rule.snapshot());
                     matched = self
                         .catch_callback("matched alternate modifier", src, || {
                             modifier(matched, &mut current_rule, &mut context, next.as_deref())
@@ -1976,13 +2203,13 @@ impl Parser {
                         token.ri,
                         token.ci,
                     );
-                    let done_alt = RuleDoneAlt {
+                    let done_alt = capture_done.then(|| RuleDoneAlt {
                         b: matched.b,
                         g: matched.g.clone(),
                         p: matched.p.clone().unwrap_or_default(),
                         r: matched.r.clone().unwrap_or_default(),
                         err: Some(token.clone()),
-                    };
+                    });
                     let error = self.attach_error(error, &current_rule, &stack, alts, Some(&token));
                     self.recover_error_pass(
                         error,
@@ -1991,7 +2218,7 @@ impl Parser {
                         } else {
                             RuleState::Close
                         },
-                        Some(done_alt),
+                        done_alt,
                         false,
                         src,
                         &mut current_rule,
@@ -2004,7 +2231,10 @@ impl Parser {
                 }
 
                 // Update counters n
-                for (k, v) in &matched.n {
+                let match_n = if expose_match { &matched.n } else { &alt.n };
+                let match_u = if expose_match { &matched.u } else { &alt.u };
+                let match_k = if expose_match { &matched.k } else { &alt.k };
+                for (k, v) in match_n {
                     if *v == 0 {
                         current_rule.n.insert(k.clone(), 0);
                     } else {
@@ -2013,30 +2243,41 @@ impl Parser {
                 }
 
                 // Update user props u
-                for (k, v) in &matched.u {
+                for (k, v) in match_u {
                     current_rule.u.insert(k.clone(), v.clone());
                 }
 
                 // Update keep props k
-                for (k, v) in &matched.k {
+                for (k, v) in match_k {
                     current_rule.k.insert(k.clone(), v.clone());
                 }
 
                 let backtrack = matched.b;
                 let consumed = matched_count.saturating_sub(backtrack);
-                context.record_consumed(consumed);
+                if defer_token_transfer {
+                    let matched_tokens = context.consume_into_rule(matched_count, consumed);
+                    if is_open {
+                        current_rule.o = matched_tokens;
+                    } else {
+                        current_rule.c = matched_tokens;
+                    }
+                } else {
+                    context.record_consumed(consumed);
+                }
 
                 // Run action. A bad token returned by a canonical action is
                 // raised through the same recovery path as alt.e and
                 // lifecycle actions; later actions must not run.
                 let mut matched_action_error = None;
                 let mut matched_action_token = None;
-                for binding in matched.actions.clone() {
+                let owned_actions = expose_match.then(|| matched.actions.clone());
+                let action_bindings = owned_actions.as_deref().unwrap_or(selected_actions);
+                for binding in action_bindings {
                     let act_name = match binding {
                         AltActionBinding::Context(callback) => {
                             self.run_context_callback(
                                 "alternate action",
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -2084,9 +2325,9 @@ impl Parser {
                             }
                             continue;
                         }
-                        AltActionBinding::Named(name) => name,
+                        AltActionBinding::Named(name) => name.as_str(),
                     };
-                    if let Some(callback) = self.matched_actions.get(&act_name) {
+                    if let Some(callback) = self.matched_actions.get(act_name) {
                         context.set_rule(&current_rule);
                         let result = self
                             .catch_callback("named matched alternate action", src, || {
@@ -2119,7 +2360,7 @@ impl Parser {
                         }
                         continue;
                     }
-                    match act_name.as_str() {
+                    match act_name {
                         "@probeInit$" => {
                             current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
                             current_rule
@@ -2182,10 +2423,14 @@ impl Parser {
                         }
                         _ => self
                             .run_action_with_config(
-                                &act_name,
+                                act_name,
                                 &mut current_rule,
                                 &mut context,
-                                matched.action_configs.get(&act_name),
+                                if expose_match {
+                                    matched.action_configs.get(act_name)
+                                } else {
+                                    alt.action_configs.get(act_name)
+                                },
                             )
                             .map_err(|error| {
                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
@@ -2193,7 +2438,7 @@ impl Parser {
                     }
                 }
                 if let Some(error) = matched_action_error {
-                    let recovered_alt = Some(RuleDoneAlt {
+                    let recovered_alt = capture_done.then(|| RuleDoneAlt {
                         b: matched.b,
                         g: matched.g.clone(),
                         p: matched.p.clone().unwrap_or_default(),
@@ -2224,13 +2469,32 @@ impl Parser {
                 // The canonical action receives the live match record. Its
                 // post-action p/r writes are a supported routing channel, so
                 // resolve the transition only after the action sequence.
-                let push_name = matched.p.clone();
-                let replace_name = matched.r.clone();
-                let done_alt = Some(RuleDoneAlt {
+                let push_name = if retain_static_match || alt.p_fn.is_some() {
+                    matched.p.as_deref()
+                } else {
+                    alt.p.as_deref().filter(|name| !name.is_empty())
+                };
+                let replace_name = if retain_static_match || alt.r_fn.is_some() {
+                    matched.r.as_deref()
+                } else {
+                    alt.r.as_deref().filter(|name| !name.is_empty())
+                };
+                let modified_route = modified_alt.is_some();
+                let push_index = if modified_route || retain_static_match || alt.p_fn.is_some() {
+                    push_name.and_then(|name| prepared_rules.get_index_of(name))
+                } else {
+                    push_indices[idx]
+                };
+                let replace_index = if modified_route || retain_static_match || alt.r_fn.is_some() {
+                    replace_name.and_then(|name| prepared_rules.get_index_of(name))
+                } else {
+                    replace_indices[idx]
+                };
+                let done_alt = capture_done.then(|| RuleDoneAlt {
                     b: matched.b,
                     g: matched.g.clone(),
-                    p: push_name.clone().unwrap_or_default(),
-                    r: replace_name.clone().unwrap_or_default(),
+                    p: push_name.unwrap_or_default().to_string(),
+                    r: replace_name.unwrap_or_default().to_string(),
                     err: None,
                 });
 
@@ -2239,9 +2503,8 @@ impl Parser {
                 // canonical point: after the matched action, but before any
                 // lifecycle after-action or transition.
                 let unknown_route = push_name
-                    .as_ref()
-                    .or(replace_name.as_ref())
-                    .filter(|name| !self.rules.contains_key(name.as_str()));
+                    .filter(|_| push_index.is_none())
+                    .or_else(|| replace_name.filter(|_| replace_index.is_none()));
                 if let Some(name) = unknown_route {
                     let mut token = Self::phase_token(&current_rule)
                         .cloned()
@@ -2250,7 +2513,7 @@ impl Parser {
                     token.bad("unknown_rule");
                     token
                         .use_data
-                        .insert("rulename".into(), Value::String(name.clone()));
+                        .insert("rulename".into(), Value::String(name.to_string()));
                     let error = self.raised_token_error(
                         &token,
                         &current_rule,
@@ -2283,25 +2546,36 @@ impl Parser {
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
                 // The action still belongs to the rule whose alternate matched.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
-                if let Some(ref push_name) = push_name {
-                    let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
-                    if let Some(child_spec) = self.rules.get(push_name) {
-                        child.bind_spec(child_spec);
-                    }
+                if let Some(child_index) = push_index {
+                    let push_name = push_name.expect("push index requires a route name");
+                    let child_rule = prepared_rules
+                        .get_index(child_index)
+                        .expect("route existence was checked before transition")
+                        .1;
+                    let child_spec = &child_rule.spec;
+                    let mut child =
+                        Rule::with_shared_spec(child_spec.clone(), current_rule.node.clone());
+                    child.spec_index = child_index;
                     child.i = next_rule_id;
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
                     child.parent_node = Some(current_rule.node.clone());
                     child.n = current_rule.n.clone();
                     child.k = current_rule.k.clone();
-                    child.parent_rule = Some(current_rule.snapshot());
-                    current_rule.next_rule_name = Some(push_name.clone());
-                    current_rule.child_rule = Some(child.snapshot());
-                    current_rule.next_rule = current_rule.child_rule.clone();
+                    if track_rule_links {
+                        current_rule.next_rule_name = Some(push_name.to_string());
+                        child.parent_rule = Some(current_rule.snapshot());
+                        current_rule.child_rule = Some(child.snapshot());
+                        current_rule.next_rule = current_rule.child_rule.clone();
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        if is_open {
+                            &prepared_rule.ao_actions
+                        } else {
+                            &prepared_rule.ac_actions
+                        },
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2332,15 +2606,23 @@ impl Parser {
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
-                    child.parent_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule.clone();
+                    if track_rule_links {
+                        child.parent_rule = Some(current_rule.snapshot());
+                    }
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                     stack.push(current_rule);
                     current_rule = child;
-                } else if let Some(ref replace_name) = replace_name {
-                    let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
-                    if let Some(next_spec) = self.rules.get(replace_name) {
-                        next.bind_spec(next_spec);
-                    }
+                } else if let Some(next_index) = replace_index {
+                    let replace_name = replace_name.expect("replace index requires a route name");
+                    let next_rule = prepared_rules
+                        .get_index(next_index)
+                        .expect("route existence was checked before transition")
+                        .1;
+                    let next_spec = &next_rule.spec;
+                    let mut next =
+                        Rule::with_shared_spec(next_spec.clone(), current_rule.node.clone());
+                    next.spec_index = next_index;
                     next.i = next_rule_id;
                     next_rule_id += 1;
                     next.d = current_rule.d;
@@ -2348,10 +2630,16 @@ impl Parser {
                     next.parent_rule = current_rule.parent_rule.clone();
                     next.n = current_rule.n.clone();
                     next.k = current_rule.k.clone();
-                    current_rule.next_rule_name = Some(replace_name.clone());
-                    current_rule.next_rule = Some(next.snapshot());
+                    if track_rule_links {
+                        current_rule.next_rule_name = Some(replace_name.to_string());
+                        current_rule.next_rule = Some(next.snapshot());
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        if is_open {
+                            &prepared_rule.ao_actions
+                        } else {
+                            &prepared_rule.ac_actions
+                        },
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2382,14 +2670,19 @@ impl Parser {
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
-                    next.prev_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule;
+                    if track_rule_links {
+                        next.prev_rule = Some(current_rule.snapshot());
+                    }
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                     current_rule = next;
                 } else if is_open {
-                    current_rule.next_rule_name = Some(current_rule.name.clone());
-                    current_rule.next_rule = Some(current_rule.snapshot());
+                    if track_rule_links {
+                        current_rule.next_rule_name = Some(current_rule.name.clone());
+                        current_rule.next_rule = Some(current_rule.snapshot());
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        &prepared_rule.ao_actions,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2414,13 +2707,16 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                 } else {
                     // Close phase pop
-                    current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
-                    current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    if track_rule_links {
+                        current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
+                        current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        &prepared_rule.ac_actions,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -2445,29 +2741,41 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                     if let Some(mut parent) = parent {
-                        parent.accept_child_node(&current_rule);
-                        parent.child_rule = Some(current_rule.snapshot());
-                        parent.next_rule = parent.child_rule.clone();
+                        parent.accept_child_node(&current_rule, track_rule_links);
+                        if track_rule_links {
+                            parent.child_rule = Some(current_rule.snapshot());
+                            parent.next_rule = parent.child_rule.clone();
+                        }
                         current_rule = parent;
                     } else {
                         // Root rule popped! Done.
-                        completed_value = Some(current_rule.node.borrow().clone());
+                        completed_value = Some(if track_rule_links {
+                            current_rule.node.borrow().clone()
+                        } else {
+                            std::mem::replace(
+                                &mut *current_rule.node.borrow_mut(),
+                                Value::Undefined,
+                            )
+                        });
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    done_alt,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = completed_rule.as_ref() {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;
@@ -2476,13 +2784,15 @@ impl Parser {
             } else if alts.is_empty() {
                 // A state with no alternatives performs an implicit empty
                 // pass. It still resolves next and runs lifecycle after-actions.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
                 if is_open {
-                    current_rule.next_rule_name = Some(current_rule.name.clone());
-                    current_rule.next_rule = Some(current_rule.snapshot());
+                    if track_rule_links {
+                        current_rule.next_rule_name = Some(current_rule.name.clone());
+                        current_rule.next_rule = Some(current_rule.snapshot());
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        &prepared_rule.ao_actions,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2507,12 +2817,15 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                 } else {
-                    current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
-                    current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    if track_rule_links {
+                        current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
+                        current_rule.next_rule = stack.last().map(Rule::snapshot);
+                    }
                     let after = self.run_after_actions(
-                        &spec,
+                        &prepared_rule.ac_actions,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -2537,28 +2850,40 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule =
+                        (!self.rule_done_subscribers.is_empty()).then(|| current_rule.clone());
                     if let Some(mut parent) = parent {
-                        parent.accept_child_node(&current_rule);
-                        parent.child_rule = Some(current_rule.snapshot());
-                        parent.next_rule = parent.child_rule.clone();
+                        parent.accept_child_node(&current_rule, track_rule_links);
+                        if track_rule_links {
+                            parent.child_rule = Some(current_rule.snapshot());
+                            parent.next_rule = parent.child_rule.clone();
+                        }
                         current_rule = parent;
                     } else {
-                        completed_value = Some(current_rule.node.borrow().clone());
+                        completed_value = Some(if track_rule_links {
+                            current_rule.node.borrow().clone()
+                        } else {
+                            std::mem::replace(
+                                &mut *current_rule.node.borrow_mut(),
+                                Value::Undefined,
+                            )
+                        });
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    None,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = completed_rule.as_ref() {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        None,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;
@@ -3130,28 +3455,129 @@ fn continuation_tins(
 }
 
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
-    let groups: Vec<&str> = alt
-        .g
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let includes: Vec<&str> = options
-        .rule
-        .include
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let excludes: Vec<&str> = options
+    let contains_group = |group: &str| {
+        alt.g
+            .split(',')
+            .map(str::trim_ascii)
+            .any(|item| item == group)
+    };
+    let include = options.rule.include.trim_ascii();
+    let included = include.is_empty()
+        || include
+            .split(',')
+            .map(str::trim_ascii)
+            .filter(|group| !group.is_empty())
+            .any(contains_group);
+    let excluded = options
         .rule
         .exclude
         .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    (includes.is_empty() || includes.iter().any(|include| groups.contains(include)))
-        && !excludes.iter().any(|exclude| groups.contains(exclude))
+        .map(str::trim_ascii)
+        .filter(|group| !group.is_empty())
+        .any(contains_group);
+    included && !excluded
+}
+
+fn alt_has_match_consumers(alt: &AltSpec, matched_actions: &HashMap<String, AltAction>) -> bool {
+    alt.p_match.is_some()
+        || alt.r_match.is_some()
+        || alt.b_match.is_some()
+        || alt.c_match.is_some()
+        || alt.c_lex_match.is_some()
+        || alt.h_match.is_some()
+        || alt.e_match.is_some()
+        || !alt.matched_action_fns.is_empty()
+        || alt.a.iter().any(|name| matched_actions.contains_key(name))
+        || alt.action_order.iter().any(|binding| match binding {
+            AltActionBinding::Matched(_) => true,
+            AltActionBinding::Named(name) => matched_actions.contains_key(name),
+            AltActionBinding::Context(_) => false,
+        })
+}
+
+fn alt_needs_tokens_before_consumption(alt: &AltSpec) -> bool {
+    alt.c_ref.is_some()
+        || !alt.c.is_empty()
+        || alt.c_fn.is_some()
+        || alt.c_match.is_some()
+        || alt.c_lex.is_some()
+        || alt.c_lex_match.is_some()
+        || alt.e.is_some()
+        || alt.e_match.is_some()
+        || alt.p_fn.is_some()
+        || alt.p_match.is_some()
+        || alt.r_fn.is_some()
+        || alt.r_match.is_some()
+        || alt.b_fn.is_some()
+        || alt.b_match.is_some()
+        || alt.h.is_some()
+        || alt.h_match.is_some()
+}
+
+fn rule_has_context_callbacks(spec: &RuleSpec) -> bool {
+    let lifecycle_callbacks = !spec.bo_fns.is_empty()
+        || !spec.ao_fns.is_empty()
+        || !spec.bc_fns.is_empty()
+        || !spec.ac_fns.is_empty()
+        || !spec.bo_state_fns.is_empty()
+        || !spec.ao_state_fns.is_empty()
+        || !spec.bc_state_fns.is_empty()
+        || !spec.ac_state_fns.is_empty();
+    lifecycle_callbacks
+        || spec
+            .open
+            .iter()
+            .chain(&spec.close)
+            .any(alt_has_context_callbacks)
+}
+
+fn rule_has_link_conditions(spec: &RuleSpec) -> bool {
+    spec.open.iter().chain(&spec.close).any(|alt| {
+        alt.c.iter().any(|condition| {
+            matches!(
+                condition.path.first().map(String::as_str),
+                Some("child" | "prev" | "next")
+            )
+        })
+    })
+}
+
+fn rule_uses_probe_actions(spec: &RuleSpec) -> bool {
+    let is_probe = |name: &String| matches!(name.as_str(), "@probeInit$" | "@probeDecide$");
+    spec.bo
+        .iter()
+        .chain(&spec.ao)
+        .chain(&spec.bc)
+        .chain(&spec.ac)
+        .any(is_probe)
+        || spec.open.iter().chain(&spec.close).any(|alt| {
+            alt.a.iter().any(is_probe)
+                || alt.action_order.iter().any(|binding| {
+                    matches!(
+                        binding,
+                        AltActionBinding::Named(name) if is_probe(name)
+                    )
+                })
+        })
+}
+
+fn alt_has_context_callbacks(alt: &AltSpec) -> bool {
+    alt.p_fn.is_some()
+        || alt.p_match.is_some()
+        || alt.r_fn.is_some()
+        || alt.r_match.is_some()
+        || alt.b_fn.is_some()
+        || alt.b_match.is_some()
+        || !alt.action_fns.is_empty()
+        || !alt.matched_action_fns.is_empty()
+        || alt.c_fn.is_some()
+        || alt.c_match.is_some()
+        || alt.c_lex.is_some()
+        || alt.c_lex_match.is_some()
+        || alt.h.is_some()
+        || alt.h_match.is_some()
+        || alt.e.is_some()
+        || alt.e_match.is_some()
 }
 
 fn builtin_condition_matches(reference: Option<&str>, rule: &Rule) -> bool {

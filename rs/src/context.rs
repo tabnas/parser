@@ -98,6 +98,7 @@ pub struct Context {
     pub t: Vec<Token>,
     replay: VecDeque<Token>,
     history_limit: Option<usize>,
+    retain_history: bool,
     root: Option<Rc<RefCell<Value>>>,
     pub(crate) recover_at: Option<usize>,
     pub(crate) recover_si: Option<usize>,
@@ -128,6 +129,7 @@ impl Context {
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
             history_limit: history_limit.filter(|limit| *limit > 0),
+            retain_history: true,
             root: None,
             recover_at: None,
             recover_si: None,
@@ -263,6 +265,11 @@ impl Context {
             return;
         }
         let count = count.min(self.t.len());
+        if !self.retain_history {
+            self.t.drain(0..count);
+            self.v_abs += count;
+            return;
+        }
         self.v.extend(self.t.drain(0..count));
         self.v_abs += count;
 
@@ -272,6 +279,29 @@ impl Context {
                 self.v.drain(0..remove);
             }
         }
+    }
+
+    pub(crate) fn retains_rewind_history(&self) -> bool {
+        self.retain_history
+    }
+
+    pub(crate) fn consume_into_rule(&mut self, matched: usize, consumed: usize) -> Vec<Token> {
+        debug_assert!(!self.retain_history);
+        let consumed = consumed.min(self.t.len());
+        let mut tokens: Vec<Token> = self.t.drain(0..consumed).collect();
+        tokens.extend(
+            self.t
+                .iter()
+                .take(matched.saturating_sub(consumed))
+                .cloned(),
+        );
+        self.v_abs += consumed;
+        tokens
+    }
+
+    pub(crate) fn discard_rewind_history(&mut self) {
+        self.retain_history = false;
+        self.v.clear();
     }
 
     pub(crate) fn next_replay(&mut self) -> Option<Token> {
