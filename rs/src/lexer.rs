@@ -9,11 +9,14 @@ use crate::value::Value;
 use regex::Regex;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+const STRICT_JSON_NUMBER_EXCLUDE: &str = r"^(?:\+|[+-]?\.|-?0\d)|\.$";
+
 pub struct Lexer<'a> {
     src: &'a str,
     chars: Vec<char>,
     byte_indices: Vec<usize>,
     char_len: usize,
+    utf16_len: usize,
     idx: usize,
     ri: usize,
     ci: usize,
@@ -21,8 +24,12 @@ pub struct Lexer<'a> {
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
+    strict_json_number_exclude: bool,
+    fixed_single_ascii: Option<[Option<usize>; 128]>,
+    ignored: Vec<bool>,
     want: Option<Vec<crate::Tin>>,
     standalone: Option<(crate::Rule, crate::Context)>,
+    standalone_initialized: bool,
 }
 
 #[derive(Clone)]
@@ -50,16 +57,25 @@ enum CheckFlow {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
-        let mut chars = Vec::new();
-        let mut byte_indices = Vec::new();
+        // ASCII is the overwhelmingly common parser input. Reserving by byte
+        // length avoids repeated growth there, while remaining a valid upper
+        // bound for UTF-8 input.
+        let mut chars = Vec::with_capacity(src.len());
+        let mut byte_indices = Vec::with_capacity(src.len());
+        let mut utf16_len = 0;
         for (b_idx, c) in src.char_indices() {
             chars.push(c);
             byte_indices.push(b_idx);
+            utf16_len += c.len_utf16();
         }
         let char_len = chars.len();
 
+        let strict_json_number_exclude =
+            options.number.exclude.as_deref() == Some(STRICT_JSON_NUMBER_EXCLUDE);
         let exclude_regex = if let Some(ref pat) = options.number.exclude {
-            Regex::new(pat).ok()
+            (!strict_json_number_exclude)
+                .then(|| Regex::new(pat).ok())
+                .flatten()
         } else {
             None
         };
@@ -77,22 +93,44 @@ impl<'a> Lexer<'a> {
                 .then_with(|| name_a.cmp(name_b))
         });
 
-        let standalone = Some((
-            crate::Rule::new("#NORULE", Value::Undefined),
-            crate::Context::new(
-                options.rewind.history,
-                src,
-                Value::Undefined,
-                options.clone(),
-                crate::InstanceInfo::default(),
-            ),
-        ));
+        let mut fixed_ascii_table = [None; 128];
+        let mut fixed_ascii_eligible = true;
+        for (index, token) in options.fixed.tokens.values().enumerate() {
+            if token.source.len() != 1 || !token.source.is_ascii() {
+                fixed_ascii_eligible = false;
+                break;
+            }
+            let byte = token.source.as_bytes()[0] as usize;
+            if fixed_ascii_table[byte].replace(index).is_some() {
+                // Duplicate source literals still need the generic wanted-tin
+                // filtering path during negotiated re-lexing.
+                fixed_ascii_eligible = false;
+                break;
+            }
+        }
+        let fixed_single_ascii = fixed_ascii_eligible.then_some(fixed_ascii_table);
+        let ignored = options
+            .token_set
+            .get("IGNORE")
+            .map_or_else(Vec::new, |tins| {
+                let length = tins
+                    .iter()
+                    .filter_map(|tin| usize::try_from(*tin).ok())
+                    .max()
+                    .map_or(0, |tin| tin + 1);
+                let mut ignored = vec![false; length];
+                for tin in tins.iter().filter_map(|tin| usize::try_from(*tin).ok()) {
+                    ignored[tin] = true;
+                }
+                ignored
+            });
 
         Lexer {
             src,
             chars,
             byte_indices,
             char_len,
+            utf16_len,
             idx: 0,
             ri: 1,
             ci: 1,
@@ -100,8 +138,15 @@ impl<'a> Lexer<'a> {
             err: None,
             end_reached: false,
             exclude_regex,
+            strict_json_number_exclude,
+            fixed_single_ascii,
+            ignored,
             want: None,
-            standalone,
+            // Parser-owned lexing supplies its live rule and context, so do
+            // not clone the source and Options for the standalone API unless
+            // that API is actually used.
+            standalone: None,
+            standalone_initialized: false,
         }
     }
 
@@ -128,6 +173,10 @@ impl<'a> Lexer<'a> {
     /// Full immutable source supplied to this lexer.
     pub fn source(&self) -> &str {
         self.src
+    }
+
+    pub(crate) fn utf16_len(&self) -> usize {
+        self.utf16_len
     }
 
     /// Source remaining at the live cursor.
@@ -269,6 +318,14 @@ impl<'a> Lexer<'a> {
             .is_none_or(|wanted| wanted.contains(&tin))
     }
 
+    pub(crate) fn is_ignored(&self, tin: crate::Tin) -> bool {
+        usize::try_from(tin)
+            .ok()
+            .and_then(|tin| self.ignored.get(tin))
+            .copied()
+            .unwrap_or(false)
+    }
+
     fn run_check(&mut self, check: Option<LexCheck>, point: Point) -> CheckFlow {
         let Some(check) = check else {
             return CheckFlow::Continue;
@@ -308,6 +365,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[inline]
     fn run_custom_matchers(
         &mut self,
         index: &mut usize,
@@ -315,6 +373,9 @@ impl<'a> Lexer<'a> {
         point: Point,
         plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
     ) -> Option<Token> {
+        if self.options.lex.matchers.is_empty() {
+            return None;
+        }
         while let Some(matcher) = self
             .options
             .lex
@@ -384,13 +445,7 @@ impl<'a> Lexer<'a> {
         };
         let remaining = &self.src[self.byte_indices[index]..];
         (self.options.space.lex && self.options.space.chars.contains(ch))
-            || (self.options.fixed.lex
-                && self
-                    .options
-                    .fixed
-                    .tokens
-                    .values()
-                    .any(|token| !token.source.is_empty() && remaining.starts_with(&token.source)))
+            || (self.options.fixed.lex && self.has_fixed_at(ch, remaining))
             || (self.options.line.lex
                 && (self.options.line.chars.contains(ch)
                     || self.options.line.fixed.contains(&ch)
@@ -408,6 +463,36 @@ impl<'a> Lexer<'a> {
                 .any(|ender| !ender.is_empty() && remaining.starts_with(ender))
     }
 
+    fn has_fixed_at(&self, character: char, remaining: &str) -> bool {
+        if let Some(table) = &self.fixed_single_ascii {
+            return character
+                .is_ascii()
+                .then(|| table[character as usize])
+                .flatten()
+                .is_some();
+        }
+        self.options
+            .fixed
+            .tokens
+            .values()
+            .any(|token| !token.source.is_empty() && remaining.starts_with(&token.source))
+    }
+
+    #[inline]
+    fn number_is_excluded(&self, source: &str) -> bool {
+        if self.strict_json_number_exclude {
+            let unsigned = source.strip_prefix('-').unwrap_or(source);
+            return source.starts_with('+')
+                || source.ends_with('.')
+                || unsigned.starts_with('.')
+                || (unsigned.as_bytes().first() == Some(&b'0')
+                    && unsigned.as_bytes().get(1).is_some_and(u8::is_ascii_digit));
+        }
+        self.exclude_regex
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(source))
+    }
+
     /// Fetches the next non-IGNORE token (skipping spaces, lines, comments).
     pub fn next_token(&mut self) -> Result<Token, TabnasError> {
         let point = self.current_point();
@@ -418,7 +503,7 @@ impl<'a> Lexer<'a> {
 
             loop {
                 let token = self.next_raw(None)?;
-                if !self.options.is_ignored(token.tin) {
+                if !self.is_ignored(token.tin) {
                     return Ok(token);
                 }
             }
@@ -460,7 +545,7 @@ impl<'a> Lexer<'a> {
     ) -> Result<Token, TabnasError> {
         loop {
             let token = self.next_raw_for_rule(rule, context)?;
-            if !self.options.is_ignored(token.tin) {
+            if !self.is_ignored(token.tin) {
                 return Ok(token);
             }
         }
@@ -596,6 +681,19 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
     ) -> Result<Token, TabnasError> {
+        if !self.standalone_initialized {
+            self.standalone = Some((
+                crate::Rule::new("#NORULE", Value::Undefined),
+                crate::Context::new(
+                    self.options.rewind.history,
+                    self.src,
+                    Value::Undefined,
+                    self.options.clone(),
+                    crate::InstanceInfo::default(),
+                ),
+            ));
+            self.standalone_initialized = true;
+        }
         let Some((mut rule, mut context)) = self.standalone.take() else {
             return self.next_raw_with(expected_match_tins, None);
         };
@@ -795,16 +893,29 @@ impl<'a> Lexer<'a> {
         };
         let remaining = &self.src[self.byte_position()..];
         let fixed = (self.options.fixed.lex && !fixed_skipped).then(|| {
-            self.options
-                .fixed
-                .tokens
-                .values()
-                .filter(|token| {
-                    self.wants(token.tin)
-                        && !token.source.is_empty()
-                        && remaining.starts_with(&token.source)
+            let direct = self.fixed_single_ascii.as_ref().and_then(|table| {
+                c.is_ascii()
+                    .then(|| table[c as usize])
+                    .flatten()
+                    .and_then(|index| self.options.fixed.tokens.get_index(index))
+                    .map(|(_, token)| token)
+                    .filter(|token| self.wants(token.tin))
+            });
+            direct
+                .or_else(|| {
+                    self.fixed_single_ascii.is_none().then(|| {
+                        self.options
+                            .fixed
+                            .tokens
+                            .values()
+                            .filter(|token| {
+                                self.wants(token.tin)
+                                    && !token.source.is_empty()
+                                    && remaining.starts_with(&token.source)
+                            })
+                            .max_by_key(|token| token.source.len())
+                    })?
                 })
-                .max_by_key(|token| token.source.len())
                 .map(|token| (token.name.clone(), token.tin, token.source.clone()))
         });
         if let Some(Some((name, tin, matched))) = fixed {
@@ -1027,7 +1138,7 @@ impl<'a> Lexer<'a> {
         };
         if (text_lex || value_lex) && !text_skipped && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
-            let remaining = self.src[self.byte_position()..].to_string();
+            let start_byte = self.byte_position();
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if self.is_text_delimiter_here() {
@@ -1071,7 +1182,14 @@ impl<'a> Lexer<'a> {
                     definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
                     for (_, definition) in definitions {
                         let regex = definition.matcher.as_ref().expect("filtered matcher");
-                        let target = if definition.consume { &remaining } else { &src };
+                        // A consuming value regexp may inspect the whole
+                        // remaining source. Borrow that suffix instead of
+                        // copying it for every ordinary text/value token.
+                        let target = if definition.consume {
+                            &self.src[start_byte..]
+                        } else {
+                            &src
+                        };
                         let Some(captures) = regex.captures(target) else {
                             continue;
                         };
@@ -1304,11 +1422,7 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     if saw_digit && self.is_text_delimiter_here() {
-                        if self
-                            .exclude_regex
-                            .as_ref()
-                            .is_some_and(|regex| regex.is_match(&src))
-                        {
+                        if self.number_is_excluded(&src) {
                             self.reset_number(start_idx, pnt);
                             return Ok(None);
                         }
@@ -1439,12 +1553,10 @@ impl<'a> Lexer<'a> {
         }
 
         // Check exclusion regex (e.g. ^00+)
-        if let Some(ref re) = self.exclude_regex {
-            if re.is_match(&src) {
-                // Number is excluded, backtrack
-                self.reset_number(start_idx, pnt);
-                return Ok(None);
-            }
+        if self.number_is_excluded(&src) {
+            // Number is excluded, backtrack
+            self.reset_number(start_idx, pnt);
+            return Ok(None);
         }
 
         if self.options.value.lex {
@@ -1469,11 +1581,15 @@ impl<'a> Lexer<'a> {
         }
 
         // Parse float
-        let parse_src = self.options.number.sep.as_ref().map_or_else(
-            || src.clone(),
-            |separator| src.chars().filter(|ch| !separator.contains(*ch)).collect(),
-        );
-        match parse_src.parse::<f64>() {
+        let parsed = if let Some(separator) = self.options.number.sep.as_ref() {
+            src.chars()
+                .filter(|ch| !separator.contains(*ch))
+                .collect::<String>()
+                .parse::<f64>()
+        } else {
+            src.parse::<f64>()
+        };
+        match parsed {
             Ok(num) => Ok(Some(Token::new(
                 "#NR",
                 TIN_NR,
@@ -1526,6 +1642,50 @@ impl<'a> Lexer<'a> {
     }
 
     fn match_string(&mut self, quote: char, pnt: Point) -> Result<Token, TabnasError> {
+        // Escape-free strings are overwhelmingly common. Scan the retained
+        // source once and copy the raw/value slices only after the closing
+        // quote is known, matching the mature ports' fast path.
+        if !self.options.string.multi_chars.contains(quote)
+            && self.options.string.replace.is_empty()
+            && self
+                .options
+                .line
+                .row_chars
+                .chars()
+                .all(|character| self.options.line.chars.contains(character))
+        {
+            let start = self.idx;
+            let mut end = start + 1;
+            while let Some(character) = self.chars.get(end).copied() {
+                if character == quote {
+                    let raw_start = self.byte_indices[start];
+                    let value_start = self.byte_indices[start + 1];
+                    let value_end = self.byte_indices[end];
+                    let raw_end = self
+                        .byte_indices
+                        .get(end + 1)
+                        .copied()
+                        .unwrap_or(self.src.len());
+                    self.idx = end + 1;
+                    self.ci += end - start + 1;
+                    return Ok(Token::new(
+                        "#ST",
+                        TIN_ST,
+                        Value::String(self.src[value_start..value_end].to_string()),
+                        self.src[raw_start..raw_end].to_string(),
+                        pnt,
+                    ));
+                }
+                if character == self.options.string.escape_char
+                    || self.options.line.chars.contains(character)
+                    || ((character as u32) < 32 && !self.options.string.allow_control)
+                {
+                    break;
+                }
+                end += 1;
+            }
+        }
+
         let quote_char = self.advance().unwrap();
         let mut out_str = String::new();
         let mut raw_src = String::new();

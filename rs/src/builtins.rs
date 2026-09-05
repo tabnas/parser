@@ -146,9 +146,39 @@ fn list_value(info: &InfoOptions, implicit: bool) -> Value {
 }
 
 fn token_value(rule: &mut Rule, context: &mut Context, index: usize, info: &InfoOptions) -> Value {
-    let Some(token) = rule.o.get(index).cloned() else {
+    let Some(token) = rule.o.get(index) else {
         return Value::Undefined;
     };
+    // Native JSON tokens carry eager values. Avoid cloning the full Token
+    // (notably its owned source string and metadata maps) unless a lazy
+    // callback really needs mutable access to the live rule/context.
+    if token.val_fn.is_none() {
+        let value = token.val.clone();
+        if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
+            let string = match &value {
+                Value::String(value) => value.clone(),
+                Value::Text(value) => value.string.clone(),
+                _ => return value,
+            };
+            let quote = if token.tin == TIN_ST {
+                token
+                    .src
+                    .chars()
+                    .next()
+                    .map_or_else(String::new, |ch| ch.to_string())
+            } else {
+                String::new()
+            };
+            return Value::Text(Text { quote, string });
+        }
+        return value;
+    }
+
+    let token = token.clone();
+    // Lazy values observe Context as well as the live Rule. Refresh its
+    // snapshot only on this uncommon callback path so ordinary built-ins do
+    // not pay for a recursive Rule clone.
+    context.set_rule(rule);
     let value = token.resolve_val(rule, context);
     if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
         let string = match &value {
@@ -248,16 +278,15 @@ pub(crate) fn run_builtin_action_with_info(
                     config_string(config, "kind"),
                 )));
             }
-            if !rule.child_node.is_undefined() && !rule.child_node_is_self {
+            if !rule.child_node_is_undefined() && !rule.child_node_is_self {
+                let child = rule.child_node_value();
                 if let Value::Object(node) = &mut *rule.node.borrow_mut() {
-                    capture_child(node, rule.child_node.clone());
+                    capture_child(node, child);
                 }
             }
         }
         "@bubble$" => {
-            if !rule.child_node.is_undefined() {
-                rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
-            }
+            rule.adopt_child_node();
         }
         "@fold$" => {
             if let Some(parent_node) = &rule.parent_node {
@@ -280,18 +309,12 @@ pub(crate) fn run_builtin_action_with_info(
         }
         "@val-bc" => {
             let is_undef = rule.node.borrow().is_undefined();
-            if is_undef {
-                if !rule.child_node.is_undefined() {
-                    rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
-                } else if rule.os() > 0 {
-                    rule.node = Rc::new(RefCell::new(token_value(rule, context, 0, info)));
-                }
+            if is_undef && !rule.adopt_child_node() && rule.os() > 0 {
+                rule.node = Rc::new(RefCell::new(token_value(rule, context, 0, info)));
             }
         }
         "@value$" => {
-            if !rule.child_node.is_undefined() {
-                rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
-            } else {
+            if !rule.adopt_child_node() {
                 let value = config_index(config, "from").map_or(Value::Undefined, |index| {
                     token_value(rule, context, index, info)
                 });
@@ -312,8 +335,7 @@ pub(crate) fn run_builtin_action_with_info(
         }
         "@reset$" => {
             rule.node = Rc::new(RefCell::new(Value::Undefined));
-            rule.child_node = Value::Undefined;
-            rule.child_node_is_self = false;
+            rule.clear_child_node();
         }
         "@key$" => {
             if let Some(token) = config_index(config, "from").and_then(|index| rule.o.get(index)) {
@@ -338,12 +360,14 @@ pub(crate) fn run_builtin_action_with_info(
                 }
             };
             if let Some(Value::String(key)) = rule.u.get(&slot).cloned() {
-                map_insert(&mut rule.node.borrow_mut(), key, rule.child_node.clone());
+                let child = rule.child_node_value();
+                map_insert(&mut rule.node.borrow_mut(), key, child);
             }
         }
         "@push$" => {
-            if !rule.child_node.is_undefined() {
-                list_push(&mut rule.node.borrow_mut(), rule.child_node.clone());
+            if !rule.child_node_is_undefined() {
+                let child = rule.child_node_value();
+                list_push(&mut rule.node.borrow_mut(), child);
             }
         }
         "@map-bo" => {
@@ -366,13 +390,15 @@ pub(crate) fn run_builtin_action_with_info(
         }
         "@pair-bc" => {
             if let Some(Value::String(key)) = rule.u.get("key").cloned() {
+                let child = rule.child_node_value();
                 let mut node = rule.node.borrow_mut();
-                map_insert(&mut node, key, rule.child_node.clone());
+                map_insert(&mut node, key, child);
             }
         }
-        "@elem-bc" if !rule.child_node.is_undefined() => {
+        "@elem-bc" if !rule.child_node_is_undefined() => {
+            let child = rule.child_node_value();
             let mut node = rule.node.borrow_mut();
-            list_push(&mut node, rule.child_node.clone());
+            list_push(&mut node, child);
         }
         _ => return false,
     }

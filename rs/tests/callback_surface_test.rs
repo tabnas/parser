@@ -30,6 +30,10 @@ fn lazy_token_values_receive_and_mutate_the_live_rule_and_context() {
                         context.source.clone(),
                         context.meta.clone(),
                         context.rule.as_ref().map(|rule| rule.name.clone()),
+                        context
+                            .rule
+                            .as_ref()
+                            .and_then(|rule| rule.o.first().map(|token| token.src.clone())),
                     ));
                     Value::String("LAZY".into())
                 }),
@@ -52,6 +56,7 @@ fn lazy_token_values_receive_and_mutate_the_live_rule_and_context() {
             "$".into(),
             Value::from_json(&json!({"request": 1})),
             Some("val".into()),
+            Some("$".into()),
         )]
     );
 }
