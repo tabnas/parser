@@ -352,6 +352,9 @@ pub(crate) fn run_builtin_action_with_info(
         "@list-bo" => {
             rule.node = Rc::new(RefCell::new(list_value(info, false)));
         }
+        // The captured key belongs only to this pair rule and is consumed by
+        // @pair-bc on that same rule. Store it in `u`, the non-propagating
+        // scratch bag, so it cannot leak into child rules as `n` or `k` would.
         "@pairkey" => {
             if let Some(t0) = rule.o0() {
                 let key = match &t0.val {

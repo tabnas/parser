@@ -1536,14 +1536,9 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c == quote {
                 raw_src.push(self.advance().unwrap());
-                // If there's an uncombined lone surrogate, flush it or handle it
-                if let Some(high) = pending_high_surrogate {
-                    if let Some(ch) = char::from_u32(high as u32) {
-                        out_str.push(ch);
-                    } else {
-                        out_str.push('\u{FFFD}');
-                    }
-                }
+                // Rust strings cannot represent a lone UTF-16 surrogate, so
+                // preserve the Go-port behavior and fold it to U+FFFD.
+                self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
                 return Ok(Token::new(
                     "#ST",
                     TIN_ST,
@@ -1652,27 +1647,11 @@ impl<'a> Lexer<'a> {
                                     }
                                 };
 
-                                match char::from_u32(cp) {
-                                    Some(ch) => {
-                                        self.flush_surrogate(
-                                            &mut pending_high_surrogate,
-                                            &mut out_str,
-                                        );
-                                        out_str.push(ch);
-                                    }
-                                    None => {
-                                        let err = TabnasError::new(
-                                            "invalid_unicode",
-                                            format!("\\u{{{}}}", hex),
-                                            self.src,
-                                            esc_point.pos - 1,
-                                            esc_point.ri,
-                                            esc_point.ci - 1,
-                                        );
-                                        self.err = Some(err.clone());
-                                        return Err(err);
-                                    }
-                                }
+                                self.emit_unicode_escape(
+                                    cp,
+                                    &mut pending_high_surrogate,
+                                    &mut out_str,
+                                );
                             } else {
                                 // Exactly 4 hex digits: \uXXXX
                                 let mut hex = String::new();
@@ -1715,47 +1694,11 @@ impl<'a> Lexer<'a> {
                                     err
                                 })?;
 
-                                // Surrogate pair handling
-                                if (0xD800..=0xDBFF).contains(&cp) {
-                                    // High surrogate
-                                    self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                                    pending_high_surrogate = Some(cp);
-                                } else if (0xDC00..=0xDFFF).contains(&cp) {
-                                    // Low surrogate
-                                    if let Some(high) = pending_high_surrogate.take() {
-                                        let full_cp = 0x10000
-                                            + (((high as u32) - 0xD800) << 10)
-                                            + ((cp as u32) - 0xDC00);
-                                        if let Some(ch) = char::from_u32(full_cp) {
-                                            out_str.push(ch);
-                                        } else {
-                                            out_str.push('\u{FFFD}');
-                                        }
-                                    } else {
-                                        // Lone low surrogate
-                                        if let Some(ch) = char::from_u32(cp as u32) {
-                                            out_str.push(ch);
-                                        } else {
-                                            out_str.push('\u{FFFD}');
-                                        }
-                                    }
-                                } else {
-                                    self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                                    if let Some(ch) = char::from_u32(cp as u32) {
-                                        out_str.push(ch);
-                                    } else {
-                                        let err = TabnasError::new(
-                                            "invalid_unicode",
-                                            format!("\\u{}", hex),
-                                            self.src,
-                                            esc_point.pos - 1,
-                                            esc_point.ri,
-                                            esc_point.ci - 1,
-                                        );
-                                        self.err = Some(err.clone());
-                                        return Err(err);
-                                    }
-                                }
+                                self.emit_unicode_escape(
+                                    u32::from(cp),
+                                    &mut pending_high_surrogate,
+                                    &mut out_str,
+                                );
                             }
                         }
                         'x' if !self.options.string.escape_strict => {
@@ -1835,12 +1778,27 @@ impl<'a> Lexer<'a> {
     }
 
     fn flush_surrogate(&self, pending: &mut Option<u16>, out: &mut String) {
-        if let Some(high) = pending.take() {
-            if let Some(ch) = char::from_u32(high as u32) {
-                out.push(ch);
+        if pending.take().is_some() {
+            out.push('\u{FFFD}');
+        }
+    }
+
+    /// Emit one decoded Unicode escape while pairing UTF-16 surrogate code
+    /// units across both `\\uXXXX` and `\\u{...}` spellings.
+    fn emit_unicode_escape(&self, cp: u32, pending: &mut Option<u16>, out: &mut String) {
+        if (0xD800..=0xDBFF).contains(&cp) {
+            self.flush_surrogate(pending, out);
+            *pending = Some(cp as u16);
+        } else if (0xDC00..=0xDFFF).contains(&cp) {
+            if let Some(high) = pending.take() {
+                let scalar = 0x10000 + (((u32::from(high)) - 0xD800) << 10) + (cp - 0xDC00);
+                out.push(char::from_u32(scalar).expect("paired surrogates form a Unicode scalar"));
             } else {
                 out.push('\u{FFFD}');
             }
+        } else {
+            self.flush_surrogate(pending, out);
+            out.push(char::from_u32(cp).expect("validated escape is a Unicode scalar"));
         }
     }
 }

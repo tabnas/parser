@@ -91,7 +91,7 @@ impl<'de> Deserialize<'de> for ListRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
     Undefined,
@@ -104,6 +104,19 @@ pub enum Value {
     Text(Text),
     ListRef(ListRef),
     MapRef(MapRef),
+}
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Undefined is an internal sentinel and has no distinct JSON
+        // representation. Deserialize through serde_json's tagged value so
+        // JSON null always becomes Value::Null instead of being captured by
+        // the first unit variant of an untagged enum.
+        serde_json::Value::deserialize(deserializer).map(|value| Self::from_json(&value))
+    }
 }
 
 impl Value {

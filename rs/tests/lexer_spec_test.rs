@@ -90,6 +90,44 @@ fn strict_escape_option_matches_json_escape_surface() {
 }
 
 #[test]
+fn unicode_surrogates_pair_across_escape_spellings() {
+    let astral = "\u{1F600}";
+    for source in [
+        r#""\ud83d\ude00""#,
+        r#""\u{d83d}\u{de00}""#,
+        r#""\ud83d\u{de00}""#,
+        r#""\u{d83d}\ude00""#,
+    ] {
+        assert_eq!(
+            lex(source, Options::default()).unwrap(),
+            format!("#ST:{astral}"),
+            "source {source:?}"
+        );
+    }
+
+    assert_eq!(
+        lex(r#""a\u{d83d}\u{de00}\ud83d\ude00b""#, Options::default()).unwrap(),
+        format!("#ST:a{astral}{astral}b")
+    );
+}
+
+#[test]
+fn lone_unicode_surrogates_fold_to_replacement() {
+    for source in [
+        r#""\ud800""#,
+        r#""\u{d800}""#,
+        r#""\udc00""#,
+        r#""\u{dc00}""#,
+    ] {
+        assert_eq!(lex(source, Options::default()).unwrap(), "#ST:\u{FFFD}");
+    }
+    assert_eq!(
+        lex(r#""\ud800\u{41}""#, Options::default()).unwrap(),
+        "#ST:\u{FFFD}A"
+    );
+}
+
+#[test]
 fn text_line_terminator_fixture() {
     for row in rows("lex-text-line-terminator.tsv") {
         let mut options = Options::default();

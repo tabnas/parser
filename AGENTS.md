@@ -111,10 +111,12 @@ entirely.
 Two things about this repo's version have bitten a release. Both fail loudly,
 but only after you have already bumped, so know them before you start.
 
-**The version lives in four places here, not three.** The usual three are
+**The shared engine version is declared in six places here, not three.** The usual three are
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
-in `go/tabnas.go`; drift between them is caught by `ts/test/version.test.*`
-and `go/version_test.go`. The fourth is `schema/error-codes.json`, which
+in `go/tabnas.go`; Rust adds `version` in `rs/Cargo.toml` and `pub const
+VERSION` in `rs/src/lib.rs`. Drift within each runtime is caught by
+`ts/test/version.test.*`, `go/version_test.go`, and `rs/tests/version_test.rs`.
+The sixth is `schema/error-codes.json`, which
 embeds the engine version in its payload — so **a version bump on its own
 makes the registry stale**, with no code change involved. Both runtimes then
 fail:
