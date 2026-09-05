@@ -1283,6 +1283,10 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 			if ctx.RSI > 0 {
 				ctx.RSI--
 				next = ctx.RS[ctx.RSI]
+				// A pushed rule may replace itself before it closes. Publish
+				// the final replacement so parent actions capture the node
+				// that actually consumed the input.
+				next.Child = r
 			} else {
 				next = NoRule
 			}
@@ -1292,6 +1296,9 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		if ctx.RSI > 0 {
 			ctx.RSI--
 			next = ctx.RS[ctx.RSI]
+			// See the matched-alt pop above: the closing rule can be a
+			// replacement of the child originally stored on the parent.
+			next.Child = r
 		} else {
 			next = NoRule
 		}
@@ -1407,6 +1414,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	unI := -1
 	var unTkn *Token
 	var unSaved relexPoint
+	var unTokens []*Token
 
 	for _, alt := range alts {
 		matched := 0
@@ -1494,6 +1502,10 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 						unI = i
 						unTkn = ctx.T[i]
 						unSaved = lex.RelexUndo()
+						// The lexer snapshot is already past every inherited
+						// lookahead token. Keep the full buffer so undo cannot
+						// clear those slots and silently skip their source spans.
+						unTokens = append(unTokens[:0], ctx.T...)
 					}
 					// The recut replaces the buffered token; anything
 					// fetched beyond it was lexed from positions that may
@@ -1573,8 +1585,14 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		// buffer as it was before this one touched it.
 		if unI != -1 {
 			lex.Unrelex(unSaved)
-			ctx.setT(unI, unTkn)
-			ctx.dropT(unI + 1)
+			ctx.T = append(ctx.T[:0], unTokens...)
+			ctx.T0, ctx.T1 = NoToken, NoToken
+			if 0 < len(ctx.T) {
+				ctx.T0 = ctx.T[0]
+			}
+			if 1 < len(ctx.T) {
+				ctx.T1 = ctx.T[1]
+			}
 			// Re-announce the RESTORED token to lex subscribers. The
 			// recut fired an event when it was cut; without a matching
 			// event for the undo, a position-keyed consumer would keep

@@ -1,0 +1,69 @@
+# PROPOSED workflow — lives in ci/workflows/ for review; move to
+# .github/workflows/rust.yml to activate, per ADR-8.
+name: rust
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Use LF line endings
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v4
+      with:
+        path: parser
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24.x
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+    - name: Set up Rust MSRV
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: '1.85'
+        components: rustfmt, clippy
+    - name: Clone serialized grammar producers
+      shell: bash
+      run: |
+        git clone --depth 1 https://github.com/tabnas/json.git json
+        git clone --depth 1 https://github.com/tabnas/bnf.git bnf
+        git clone --depth 1 https://github.com/tabnas/abnf.git abnf
+        git clone --depth 1 https://github.com/tabnas/ebnf.git ebnf
+        git clone --depth 1 https://github.com/tabnas/gbnf.git gbnf
+    - name: Install TypeScript dependencies
+      shell: bash
+      run: |
+        ( cd parser/ts && npm ci )
+        ( cd json/ts && npm ci )
+        ( cd bnf/ts && npm install )
+        ( cd abnf/ts && npm install )
+        ( cd ebnf/ts && npm install )
+        ( cd gbnf/ts && npm install )
+    - name: Wire and build working-tree TypeScript engines
+      shell: bash
+      run: |
+        . parser/ci/lib/wire.sh
+        link_ts_dep bnf/ts parser "$PWD/parser/ts"
+        link_ts_dep abnf/ts parser "$PWD/parser/ts"
+        link_ts_dep abnf/ts bnf "$PWD/bnf/ts"
+        link_ts_dep ebnf/ts parser "$PWD/parser/ts"
+        link_ts_dep ebnf/ts bnf "$PWD/bnf/ts"
+        link_ts_dep gbnf/ts parser "$PWD/parser/ts"
+        link_ts_dep gbnf/ts bnf "$PWD/bnf/ts"
+        ( cd parser/ts && npm run build )
+        ( cd bnf/ts && npm run build )
+        ( cd abnf/ts && npm run build )
+        ( cd ebnf/ts && npm run build )
+        ( cd gbnf/ts && npm run build )
+    - name: Run Rust and three-runtime parity gates
+      shell: bash
+      run: parser/ci/rust/run.sh

@@ -1,7 +1,7 @@
 # CI harnesses (staged for review)
 
 Everything in this folder is runnable locally today; nothing is wired
-into `.github/` yet. The two proposed workflows live in `workflows/` —
+into `.github/` yet. The proposed workflows live in `workflows/` —
 review them and move them to `.github/workflows/` to activate.
 
 Layout assumption (matches the existing build.yml convention): sibling
@@ -115,13 +115,15 @@ and report the pair.
 
 ## parity/ — cross-runtime token-stream parity
 
-Both lexers must emit identical consumed-token streams for identical
+All available lexers must emit identical consumed-token streams for identical
 input; the value-level TSV suites cannot see token-boundary or position
-drift. `tokdump.js` and `gotokdump/` dump one flat record per consumed
-token via the public lex-subscriber API; `run-parity.sh [grammar]
-[spec-dir] [unescape|raw]` feeds every input column of every TSV
-fixture through both and diffs (one process per runtime; per-file
-sections).
+drift. `tokdump.js`, `gotokdump/`, and Rust's `parity_tokdump` dump one flat
+record per consumed token via the public lex-subscriber API;
+`run-parity.sh [grammar] [spec-dir] [unescape|raw]` feeds every input column
+of every TSV fixture through them and diffs the streams (one process per
+runtime; per-file sections). The function-free strict-JSON arm runs all three
+runtimes; jsonic remains TypeScript/Go until it has a serialized grammar
+artifact Rust can load.
 
 Comparison contract (each normalization is documented in the dumpers):
 
@@ -138,11 +140,33 @@ Comparison contract (each normalization is documented in the dumpers):
   error path differs three documented ways (TS delivers #BD then
   throws / Go substitutes #ZZ; wind-down re-delivery; TS's
   trailing-content probe delivers one extra token).
-- The TSV input column is unescaped per the corpus's own loader
-  convention (parser/jsonic corpora escape `\n`; json's is raw).
+- The TSV input column is decoded with the shared fixture codec
+  (`\n`, `\r`, `\t`, and `\\`) for every tabnas corpus; comments and
+  headers are excluded exactly as the shared loader excludes them.
 
-Status at time of writing: `jsonic` over parser/test/spec — 1158/1158
-identical; `json` over json/ts/test/spec — 84/84 identical.
+Status at time of writing: `jsonic` over parser/test/spec — 312/312 data
+rows identical in TypeScript and Go; `json` — 119/119 data rows from the JSON
+corpus and 312/312 data rows from parser/test/spec identical in TypeScript,
+Go, and Rust.
+
+## rust/ — native-port gate
+
+- `run.sh` checks formatting, builds and tests every Rust target at the
+  locked dependency graph, runs strict Clippy, then executes both shared TSV
+  token-stream parity arms against TypeScript and Go. It then compiles the
+  shared strict-JSON grammar against a seeded generated value/error corpus,
+  checks 35 acceptance/rejection cases produced by the sibling ABNF and EBNF
+  compilers, then compiles the sibling GBNF repo's explicit llama.cpp corpus
+  to schema-v3 pure data and requires Rust to match TypeScript values and
+  error codes for all 96 samples.
+  The GBNF compiler-consumer gate intentionally reads that corpus's maintained
+  census rather than copying cases into this repo; sibling `bnf`, `abnf`,
+  `ebnf`, and `gbnf` checkouts must therefore be present (or located via
+  `TABNAS_ROOT`).
+- `workflows/rust.yml` is its staged PR workflow. It tests the crate's declared
+  Rust 1.85 minimum and clones the strict-JSON and BNF-family compiler
+  dependencies needed by the parity gates. Promote it under ADR-8 to make the
+  existing local Rust gate required on pull requests.
 
 This harness found three real engine divergences during bring-up, all
 fixed in the engine alongside it: TS lexed unquoted `__proto__` /
@@ -249,3 +273,5 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
   **Promote it only after the Phase 1 escape repairs land** (`#123`), or it
   opens red — see the status note above.
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
+- `rust.yml` — formatting, build, tests, strict Clippy, and the two
+  TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.

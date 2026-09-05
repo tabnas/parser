@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 Richard Rodger, MIT License */
 
-// Every shared fixture must be executed by BOTH runners.
+// Every shared parity fixture must be executed by all three runtimes.
 //
 // The shared corpus only means anything if both ports actually run it. This
 // repo has been on the wrong side of that: before the ownership split, most
@@ -11,7 +11,7 @@
 // This makes it a build failure: add a .tsv without wiring it into both
 // ports and this test says so. Fixtures that are deliberately not parity
 // fixtures go in nonParity with the reason, and that list is asserted to
-// stay honest — an entry that IS referenced by both runners fails too, so
+// stay honest — an entry that IS referenced by all runners fails too, so
 // an exemption cannot outlive its justification.
 
 package tabnas
@@ -29,7 +29,7 @@ var nonParity = map[string]string{
 		"ships no grammar, so its rows cannot be parsed here at all",
 }
 
-func TestSpecFixturesRunByBothRunners(t *testing.T) {
+func TestSpecFixturesRunByAllRuntimes(t *testing.T) {
 	specs, err := filepath.Glob(filepath.Join(specDir(), "*.tsv"))
 	if err != nil || len(specs) == 0 {
 		t.Fatalf("cannot list %s: %v", specDir(), err)
@@ -37,11 +37,13 @@ func TestSpecFixturesRunByBothRunners(t *testing.T) {
 
 	goSrc := concatSources(t, ".", ".go")
 	tsSrc := concatSources(t, filepath.Join("..", "ts", "test"), ".js")
+	rustSrc := concatSources(t, filepath.Join("..", "rs", "tests"), ".rs")
 
 	for _, p := range specs {
 		name := strings.TrimSuffix(filepath.Base(p), ".tsv")
-		inGo := strings.Contains(goSrc, `"`+name+`"`) || strings.Contains(goSrc, `"`+name+`.tsv"`)
-		inTS := strings.Contains(tsSrc, `'`+name+`'`) || strings.Contains(tsSrc, `"`+name+`"`)
+		inGo := strings.Contains(goSrc, `"`+name+`"`) || strings.Contains(goSrc, name+`.tsv`)
+		inTS := strings.Contains(tsSrc, `'`+name+`'`) || strings.Contains(tsSrc, `"`+name+`"`) || strings.Contains(tsSrc, name+`.tsv`)
+		inRust := strings.Contains(rustSrc, name+`.tsv`)
 
 		if reason, ok := nonParity[name]; ok {
 			if inGo && inTS {
@@ -57,6 +59,10 @@ func TestSpecFixturesRunByBothRunners(t *testing.T) {
 		if !inTS {
 			t.Errorf("%s.tsv is not referenced by any TS test — a fixture only "+
 				"one port runs is not a parity fixture", name)
+		}
+		if !inRust {
+			t.Errorf("%s.tsv is not referenced by any Rust test — a fixture only " +
+				"the mature ports run is not a three-runtime parity fixture", name)
 		}
 	}
 }

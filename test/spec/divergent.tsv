@@ -1,16 +1,17 @@
-name	probe	arg	input	go	ts	justification
+name	probe	arg	input	go	ts	rust	justification
 # The executable cross-port divergence register (ADR-14).
 #
 # DIVERGENCE.md is the prose record and stays authoritative on WHY each
 # split exists and what it costs. This file is what RUNS: every row is
-# asserted by BOTH suites -- go/divergent_test.go reproduces the `go`
-# column, ts/test/divergent.test.js the `ts` column -- so a divergence
+# asserted by all runtime suites -- go/divergent_test.go reproduces `go`,
+# ts/test/divergent.test.js reproduces `ts`, and the Rust runner reproduces
+# `rust` -- so a divergence
 # that gets FIXED fails here exactly as loudly as one that regresses, and
 # the row must then be deleted. Prose cannot do that. The sibling repo
 # has the scars: jsonic's differences doc claimed 2.e3 and 1e999 still
 # diverged long after they were aligned.
 #
-# SEVEN tab-separated columns:
+# EIGHT tab-separated columns:
 #
 #   name           unique, kebab-case; the failure message names it
 #   probe          `lex` or `spec` -- the closed observation set below
@@ -18,6 +19,7 @@ name	probe	arg	input	go	ts	justification
 #   input          the source text
 #   go             what the Go port produces TODAY
 #   ts             what the TypeScript port produces TODAY
+#   rust           what the Rust port produces TODAY
 #   justification  why this is recorded rather than repaired
 #
 # A row here is an admission of parity debt, not a way to silence a
@@ -88,27 +90,27 @@ name	probe	arg	input	go	ts	justification
 #   a serialized backreference terminal
 #
 # @divergence: Column positions for astral characters
-astral-col-ascii-control	lex	{"find":"y","show":["ci"]}	x y	3	3	Control row, not a divergence: throughout the BMP the two ports report the same column. Kept adjacent so a repair to the row below cannot be mistaken for unrelated breakage.
-astral-col-astral	lex	{"find":"y","show":["ci"]}	😀 y	3	4	Forced by the scan unit: TypeScript scans UTF-16 code units, so U+1F600 advances the column by TWO; Go scans runes and advances by one. Neither port can adopt the other's without changing what its lexer scans. The input is U+1F600, a space, and `y`.
+astral-col-ascii-control	lex	{"find":"y","show":["ci"]}	x y	3	3	3	Control row, not a divergence: throughout the BMP the two ports report the same column. Kept adjacent so a repair to the row below cannot be mistaken for unrelated breakage.
+astral-col-astral	lex	{"find":"y","show":["ci"]}	😀 y	3	4	3	Forced by the scan unit: TypeScript scans UTF-16 code units, so U+1F600 advances the column by TWO; Go scans runes and advances by one. Neither port can adopt the other's without changing what its lexer scans. The input is U+1F600, a space, and `y`.
 #
 # @divergence: Token offsets reach parsed values, not only diagnostics
-token-si-ascii-control	lex	{"find":"y","show":["si"]}	x y	2	2	Control row, not a divergence: for ASCII input the two ports agree on Token.SI.
-token-si-astral	lex	{"find":"y","show":["si"]}	😀 y	5	3	Go's Token.SI is a BYTE offset (4 bytes for U+1F600, plus the space); TypeScript's counts UTF-16 units (2, plus the space). Worse than the column split above because Token.SI is plugin API: a plugin that records it lands the scan unit in its OUTPUT, which is how @tabnas/c came to carry it in a CST span. Not repairable in a plugin.
+token-si-ascii-control	lex	{"find":"y","show":["si"]}	x y	2	2	2	Control row, not a divergence: for ASCII input the two ports agree on Token.SI.
+token-si-astral	lex	{"find":"y","show":["si"]}	😀 y	5	3	5	Go's Token.SI is a BYTE offset (4 bytes for U+1F600, plus the space); TypeScript's counts UTF-16 units (2, plus the space). Worse than the column split above because Token.SI is plugin API: a plugin that records it lands the scan unit in its OUTPUT, which is how @tabnas/c came to carry it in a CST span. Not repairable in a plugin.
 #
 # @divergence: Lone surrogates in quoted strings
-surrogate-pair-control	lex	{"show":["valhex"]}	"\ud83d\ude00"	d83d.de00	d83d.de00	Control row, not a divergence: a well-formed surrogate PAIR agrees in every spelling. Three of those spellings were broken in Go until 0.8.4, so this is worth an assertion of its own.
-lone-surrogate	lex	{"show":["valhex"]}	"\ud800"	fffd	d800	TypeScript preserves the unpaired code unit because JS strings are UTF-16 and permit it; Go folds it to U+FFFD, matching encoding/json. Each port does the right thing for its own string model. The cost is real -- Go conflates values TS keeps distinct, reported downstream as a lattice-law breach (aontu#24) -- so read DIVERGENCE.md before touching this.
+surrogate-pair-control	lex	{"show":["valhex"]}	"\ud83d\ude00"	d83d.de00	d83d.de00	d83d.de00	Control row, not a divergence: a well-formed surrogate PAIR agrees in every spelling. Three of those spellings were broken in Go until 0.8.4, so this is worth an assertion of its own.
+lone-surrogate	lex	{"show":["valhex"]}	"\ud800"	fffd	d800	fffd	TypeScript preserves the unpaired code unit because JS strings are UTF-16 and permit it; Go folds it to U+FFFD, matching encoding/json. Each port does the right thing for its own string model. The cost is real -- Go conflates values TS keeps distinct, reported downstream as a lattice-law breach (aontu#24) -- so read DIVERGENCE.md before touching this.
 #
 # @divergence: An explicitly empty option cannot be expressed in Go
-empty-chars-control	lex	{"show":["name","src"]}	"ab"	#ST:"ab"	#ST:"ab"	Control row, not a divergence: with the default quote characters both ports lex a quoted string as #ST.
-empty-chars	lex	{"opts":{"string":{"chars":""}},"show":["name","src"]}	"ab"	#ST:"ab"	#TX:"ab"	String.Chars is a plain string in the Go options, so "" is its zero value and an explicitly empty value cannot be told from an unset one -- the default quotes stay in force and the input is still a string. TypeScript distinguishes '' from undefined and honours it, so the same text is ordinary text there. @tabnas/css shipped this in both ports. The repair is Chars *string, a breaking change across a published module, so it is a release-policy call rather than a parity fix -- see DIVERGENCE.md for the adoption count.
+empty-chars-control	lex	{"show":["name","src"]}	"ab"	#ST:"ab"	#ST:"ab"	#ST:"ab"	Control row, not a divergence: with the default quote characters both ports lex a quoted string as #ST.
+empty-chars	lex	{"opts":{"string":{"chars":""}},"show":["name","src"]}	"ab"	#ST:"ab"	#TX:"ab"	#TX:"ab"	String.Chars is a plain string in the Go options, so "" is its zero value and an explicitly empty value cannot be told from an unset one -- the default quotes stay in force and the input is still a string. TypeScript distinguishes '' from undefined and honours it, so the same text is ordinary text there. @tabnas/css shipped this in both ports. The repair is Chars *string, a breaking change across a published module, so it is a release-policy call rather than a parity fix -- see DIVERGENCE.md for the adoption count.
 #
 # @divergence: Regex dialect in serialized terminals
-regex-ws-ascii-control	spec	{"spec":"ws","show":["code"]}	 	OK	OK	Control row, not a divergence: the input is one U+0020, which JS \s and RE2 \s both match. A change here means something other than the dialect gap broke.
-regex-ws-nbsp	spec	{"spec":"ws","show":["code"]}	 	ERROR:unexpected	OK	The input is one U+00A0 NO-BREAK SPACE. JS \s is Unicode-aware; RE2's is the Perl class [\t\n\f\r ], so Go rejects it. Mechanically repairable by a compile-time rewrite, at the price of this engine owning a regex-dialect translation layer for every downstream grammar in both runtimes -- a maintainer decision, not a mechanical fix.
-regex-ws-ideographic	spec	{"spec":"ws","show":["code"]}	　	ERROR:unexpected	OK	The input is one U+3000 IDEOGRAPHIC SPACE. A second point of the same class gap, kept because a partial repair that widened RE2's class by a few code points would otherwise look like a full one.
-regex-ci-ascii-control	spec	{"spec":"ci","show":["code"]}	k	OK	OK	Control row, not a divergence: ASCII case folding agrees.
-regex-ci-kelvin	spec	{"spec":"ci","show":["code"]}	K	OK	ERROR:unexpected	The input is one U+212A KELVIN SIGN. The gap runs the OTHER WAY here: RE2 case-folds by Unicode rules and matches it, while JS /i without /u does not fold it to `k`. Not repairable the way \s is -- RE2 has no ASCII-only folding flag, so matching JS would mean rewriting the pattern into explicit alternations.
-regex-lookahead	spec	{"spec":"lookahead","show":["code"]}	x	INSTALL_ERROR	OK	A harsher kind of divergence: not a different result but a grammar that will not LOAD. RE2 implements no lookahead, by design, and go/utility.go refuses the pattern at compile time. That is the right failure mode, and it still means a spec written and tested against TypeScript can be unloadable in Go.
-regex-backreference	spec	{"spec":"backref","show":["code"]}	aa	INSTALL_ERROR	OK	The same install-time refusal for a backreference, which RE2 also omits by design. Kept separate from lookahead because the two are refused by different branches.
+regex-ws-ascii-control	spec	{"spec":"ws","show":["code"]}	 	OK	OK	OK	Control row, not a divergence: the input is one U+0020, which JS \s and RE2 \s both match. A change here means something other than the dialect gap broke.
+regex-ws-nbsp	spec	{"spec":"ws","show":["code"]}	 	ERROR:unexpected	OK	OK	The input is one U+00A0 NO-BREAK SPACE. JS \s is Unicode-aware; RE2's is the Perl class [\t\n\f\r ], so Go rejects it. Mechanically repairable by a compile-time rewrite, at the price of this engine owning a regex-dialect translation layer for every downstream grammar in both runtimes -- a maintainer decision, not a mechanical fix.
+regex-ws-ideographic	spec	{"spec":"ws","show":["code"]}	　	ERROR:unexpected	OK	OK	The input is one U+3000 IDEOGRAPHIC SPACE. A second point of the same class gap, kept because a partial repair that widened RE2's class by a few code points would otherwise look like a full one.
+regex-ci-ascii-control	spec	{"spec":"ci","show":["code"]}	k	OK	OK	OK	Control row, not a divergence: ASCII case folding agrees.
+regex-ci-kelvin	spec	{"spec":"ci","show":["code"]}	K	OK	ERROR:unexpected	OK	The input is one U+212A KELVIN SIGN. The gap runs the OTHER WAY here: RE2 case-folds by Unicode rules and matches it, while JS /i without /u does not fold it to `k`. Not repairable the way \s is -- RE2 has no ASCII-only folding flag, so matching JS would mean rewriting the pattern into explicit alternations.
+regex-lookahead	spec	{"spec":"lookahead","show":["code"]}	x	INSTALL_ERROR	OK	INSTALL_ERROR	A harsher kind of divergence: not a different result but a grammar that will not LOAD. RE2 implements no lookahead, by design, and go/utility.go refuses the pattern at compile time. That is the right failure mode, and it still means a spec written and tested against TypeScript can be unloadable in Go.
+regex-backreference	spec	{"spec":"backref","show":["code"]}	aa	INSTALL_ERROR	OK	INSTALL_ERROR	The same install-time refusal for a backreference, which RE2 also omits by design. Kept separate from lookahead because the two are refused by different branches.
 #

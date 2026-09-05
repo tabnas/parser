@@ -382,6 +382,44 @@ func TestEagerFixtureParity(t *testing.T) {
 	}
 }
 
+func TestReplacedChildPublishesFinalNode(t *testing.T) {
+	j := Make()
+	if err := j.Grammar(fixtureSpec(t, "replace-child.fixture.json")); err != nil {
+		t.Fatalf("install fixture grammar: %v", err)
+	}
+	got, err := j.Parse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kids":[{"kids":[],"rule":"leaf","src":"a"}],"rule":"top","src":"a"}`
+	if string(encoded) != want {
+		t.Fatalf("replaced child node:\n  got  %s\n  want %s", encoded, want)
+	}
+}
+
+func TestFailedRelexRestoresEarlierLookahead(t *testing.T) {
+	j := Make()
+	if err := j.Grammar(fixtureSpec(t, "relex-rollback.fixture.json")); err != nil {
+		t.Fatalf("install relex rollback fixture: %v", err)
+	}
+	got, err := j.Parse("abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kids":[],"rule":"top","src":"abc"}`
+	if string(encoded) != want {
+		t.Fatalf("relex rollback node:\n  got  %s\n  want %s", encoded, want)
+	}
+}
+
 // --- native-value builders ---
 
 func TestNativeValueBuilders(t *testing.T) {

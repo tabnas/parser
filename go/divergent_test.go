@@ -4,8 +4,7 @@
 //
 // test/spec/divergent.tsv records each KNOWN split as the value each port
 // actually produces. This runner asserts the `go` column; the TypeScript
-// runner (ts/test/divergent.test.js) asserts the `ts` column, from the
-// same file.
+// and Rust runners assert their columns from the same file.
 //
 // The property that matters: a divergence which gets FIXED fails here as
 // loudly as one that regresses, forcing the row to be deleted. Prose
@@ -35,7 +34,7 @@ import (
 	"unicode/utf16"
 )
 
-const divergentCols = 7
+const divergentCols = 8
 const divergentMaxTokens = 64
 
 // ---------------------------------------------------------------------
@@ -439,7 +438,7 @@ func TestDivergentRegister(t *testing.T) {
 		}
 		if len(row.cols) != divergentCols {
 			t.Errorf("line %d: want %d columns (name probe arg input go ts "+
-				"justification), got %d", row.lineNo, divergentCols, len(row.cols))
+				"rust justification), got %d", row.lineNo, divergentCols, len(row.cols))
 			continue
 		}
 
@@ -450,7 +449,7 @@ func TestDivergentRegister(t *testing.T) {
 		for i, c := range row.cols {
 			cols[i] = preprocessEscapes(c)
 		}
-		name, probe, argRaw, input, want, why := cols[0], cols[1], cols[2], cols[3], cols[4], cols[6]
+		name, probe, argRaw, input, want, why := cols[0], cols[1], cols[2], cols[3], cols[4], cols[7]
 
 		if seen[name] {
 			t.Errorf("%s: duplicate row name", name)

@@ -1,0 +1,61 @@
+{
+  "v": 3,
+  "clear": true,
+  "options": {
+    "rule": {
+      "start": "top"
+    }
+  },
+  "rule": {
+    "top": {
+      "open": [
+        {
+          "p": "middle",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "top",
+              "kind": "user",
+              "nterms": 0
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$",
+          "k": {
+            "capture$": {
+              "rule": "top",
+              "kind": "user"
+            }
+          }
+        }
+      ]
+    },
+    "middle": {
+      "open": [
+        {
+          "r": "leaf"
+        }
+      ]
+    },
+    "leaf": {
+      "open": [
+        {
+          "s": "#TX",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "leaf",
+              "kind": "user",
+              "nterms": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

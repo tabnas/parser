@@ -376,13 +376,16 @@ except `jsonic-cli`, which has no grammar to diagram (no `railroad`) and uses
 | [markdown](https://github.com/tabnas/markdown) | Markdown record/field grammar plugin | [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [multisource](https://github.com/tabnas/multisource) | Multi-source / include resolution plugin | [directive](https://github.com/tabnas/directive), [jsonic](https://github.com/tabnas/jsonic), [parser](https://github.com/tabnas/parser), [path](https://github.com/tabnas/path) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 
-## TypeScript is canonical; Go follows
+## TypeScript is canonical; ports follow
 
 The **TypeScript implementation is the original and canonical** engine —
 it defines the behaviour, the API shape, and the conformance fixtures. The
 **Go port follows that functionality**: same engine model, same grammar-free
-design, same layout, validated against the same shared fixtures. When the
-two ever differ, the TypeScript behaviour is authoritative.
+design, same layout, validated against the same shared fixtures. The Rust
+crate is an early native slice covering the lexer, core rule transitions,
+structured diagnostics, and strict-JSON conformance; it does not yet claim the
+full plugin/recovery surface. When ports differ, TypeScript behaviour is
+authoritative unless a recorded decision says otherwise.
 
 ## Choose your runtime
 
@@ -390,6 +393,7 @@ two ever differ, the TypeScript behaviour is authoritative.
 |---|---|---|
 | **TypeScript / JavaScript** — original & canonical | `@tabnas/parser` (npm) | [`ts/README.md`](ts/README.md) |
 | **Go** — port that follows the TS engine | `github.com/tabnas/parser/go` | [`go/README.md`](go/README.md) |
+| **Rust** — native engine slice | `rs/` workspace crate | [`rs/README.md`](rs/README.md) |
 
 ## Documentation
 
@@ -417,6 +421,7 @@ runtimes:
 |---|---|
 | [`ts/`](ts/) | The canonical TypeScript engine (the `@tabnas/parser` npm package). |
 | [`go/`](go/) | The Go port (`github.com/tabnas/parser/go`) — grammar-free, same layout as TS. |
+| [`rs/`](rs/) | The Rust lexer/rule-engine slice (`tabnas` crate); see its README for current scope. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
 

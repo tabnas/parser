@@ -19,6 +19,7 @@ lexer. Grammar is contributed by plugins.
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
 | `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const VERSION` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
+| `rs/` | Early Rust engine slice. It covers core lexing/rule transitions and the shared strict-JSON/diagnostic fixtures, but is not yet the full imperative plugin/recovery port described in `doc/rust-port-implementation-plan.md`. |
 | `test/spec/` | `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`) for the engine's own surface: strict-JSON (`include-json*.tsv`), `utility-*.tsv`, `lex-string-control.tsv`, `happy.tsv`. Every file here has a runner in this repo. Relaxed-grammar fixtures belong in the grammar's repo — see [`test/AGENTS.md`](test/AGENTS.md). |
 
 ## Authority and alignment rules
@@ -83,8 +84,16 @@ go test ./...                  # engine + strict-JSON fixture; shared fixtures
 go test -coverpkg=./... -cover ./...
 ```
 
+From `rs/`:
+
+```bash
+cargo build --all-targets
+cargo test --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 The repo-root [`Makefile`](Makefile) (adapted from voxgig/util) wraps
-both halves: `make build|test|clean` run the TS and Go sides,
+all runtimes: `make build|test|clean` run the TS, Go, and Rust sides,
 `make reset` rebuilds from clean, and `make publish-go V=x.y.z` injects
 `V` into the `const VERSION` in `go/tabnas.go`, commits, and tags
 `go/vX.Y.Z`. `make publish-ts` publishes the TS package at its
@@ -102,10 +111,12 @@ entirely.
 Two things about this repo's version have bitten a release. Both fail loudly,
 but only after you have already bumped, so know them before you start.
 
-**The version lives in four places here, not three.** The usual three are
+**The shared engine version is declared in six places here, not three.** The usual three are
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
-in `go/tabnas.go`; drift between them is caught by `ts/test/version.test.*`
-and `go/version_test.go`. The fourth is `schema/error-codes.json`, which
+in `go/tabnas.go`; Rust adds `version` in `rs/Cargo.toml` and `pub const
+VERSION` in `rs/src/lib.rs`. Drift within each runtime is caught by
+`ts/test/version.test.*`, `go/version_test.go`, and `rs/tests/version_test.rs`.
+The sixth is `schema/error-codes.json`, which
 embeds the engine version in its payload — so **a version bump on its own
 makes the registry stale**, with no code change involved. Both runtimes then
 fail:
@@ -154,34 +165,35 @@ The commands that prove a change is correct:
 make build && make test      # both runtimes, LOCALLY
 make -C ts test              # TypeScript alone, when iterating
 (cd go && go test ./...)     # Go alone
+(cd rs && cargo test --all-targets) # Rust slice alone
 ```
 
-These are **local** checks. The root `Makefile` runs this repo's TypeScript and
-Go targets and nothing else — it does not clone or build any downstream repo,
+These are **local** checks. The root `Makefile` runs this repo's TypeScript,
+Go, and Rust targets and nothing else — it does not clone or build any downstream repo,
 so a change that keeps this repo green while breaking a sibling grammar passes
 all of them. CI is what covers criterion 3 below; there is no local command
 that does.
 
 What "correct" means here, in order of authority:
 
-1. **The shared fixtures pass in BOTH runtimes.** `test/spec/*.tsv` is the
+1. **The shared fixtures pass in all runtimes.** `test/spec/*.tsv` is the
    parity contract. A row green in one runtime and red in the other is a
    failure, not a discrepancy.
    The one exception is declared in code, not folklore: `nonParity` in
    `go/spec_registration_test.go` exempts `happy.tsv` (a TypeScript loader
    smoke-test whose relaxed inputs the grammar-free Go engine cannot parse at
    all). That list is itself asserted to stay honest — an entry that *is* run
-   by both runners fails the test — so do not try to wire an exempt fixture
+   by all runners fails the test — so do not try to wire an exempt fixture
    into Go, and do not add an exemption without the reason.
 2. **Any genuine difference is recorded — in the right one of two files.**
    They are not interchangeable, and the authority rules above point at the
    other one:
-   - [`DIVERGENCE.md`](DIVERGENCE.md) is the **parity record**: the two ports
+   - [`DIVERGENCE.md`](DIVERGENCE.md) is the **parity record**: the runtimes
      produce a *different result for the same input*. The bar is high — a
      divergence is a bug until someone argues otherwise and is agreed with,
      and the default response is to fix the engine. Its entries are also
      REGISTERED, per ADR-14, in `test/spec/divergent.tsv` — a column per
-     runtime, asserted by both suites, so a divergence that gets repaired
+     runtime, asserted by every suite, so a divergence that gets repaired
      fails as loudly as one that regresses and the row must then be
      deleted. Prose alone rots silently, and has here. A gate in
      `go/divergent_test.go` requires every `### ` heading in
