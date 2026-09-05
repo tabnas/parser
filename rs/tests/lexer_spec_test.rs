@@ -245,6 +245,13 @@ fn configured_line_characters_rows_and_single_mode_are_honored() {
     assert_eq!((line.name.as_str(), line.src.as_str()), ("#LN", ";;"));
     assert_eq!((text.name.as_str(), text.ri, text.ci), ("#TX", 3, 1));
 
+    let mut string_rows = Options::default();
+    string_rows.line.row_chars = ";".into();
+    let mut lexer = Lexer::new("\"a;b\" x", string_rows);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "\"a;b\"");
+    let text = lexer.next_token().unwrap();
+    assert_eq!((text.src.as_str(), text.ri, text.ci), ("x", 2, 4));
+
     let mut single = Options::default();
     single.line.single = true;
     let mut lexer = Lexer::new("\n\nx", single);

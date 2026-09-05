@@ -230,6 +230,30 @@ fn declarative_conditions_resolve_nested_values_tokens_and_rule_graph() {
 }
 
 #[test]
+fn callback_free_nested_parent_link_conditions_retain_rule_links() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "fixed":{"token":{"#TA":"a","#TB":"b"}}
+              },
+              "rule":{
+                "top":{"open":[{"s":"#TA","p":"child"}]},
+                "child":{"open":[{
+                  "s":"#TB","c":{"parent.child.name":"child"}
+                }]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse("ab").unwrap(), Value::Null);
+}
+
+#[test]
 fn condition_validation_and_group_filters_fail_closed() {
     for (document, message) in [
         (
@@ -271,6 +295,18 @@ fn condition_validation_and_group_filters_fail_closed() {
         .unwrap();
     parser.parse("1").unwrap();
     assert_eq!(*seen.lock().unwrap(), ["@keep"]);
+
+    let mut unicode_space = Tabnas::new();
+    unicode_space
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top","include":"keep"}},
+              "rule":{"top":{"open":[{"s":"#NR","g":"\u00a0keep\u00a0"}]}}
+            }"##,
+        )
+        .unwrap();
+    assert_eq!(unicode_space.parse("1").unwrap(), Value::Null);
 }
 
 #[test]
@@ -522,6 +558,26 @@ fn capture_does_not_capture_a_child_that_kept_the_parent_node() {
         "rule": "top", "src": "x", "kids": []
     }));
     let actual = parser.parse("x").unwrap();
+    assert!(actual.deep_equal(&expected), "actual: {actual}");
+}
+
+#[test]
+fn bubble_keeps_a_non_undefined_node_shared_with_the_child() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{
+                "open":[{"s":"#TX","a":"@object$","p":"child"}],
+                "close":[{"a":"@bubble$"}]
+              },
+              "child":{}
+            }}"##,
+        )
+        .unwrap();
+
+    let actual = parser.parse("x").unwrap();
+    let expected = Value::from_json(&serde_json::json!({}));
     assert!(actual.deep_equal(&expected), "actual: {actual}");
 }
 

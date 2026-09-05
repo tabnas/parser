@@ -45,6 +45,26 @@ fn rule_iteration_guard_still_stops_a_runaway() {
 }
 
 #[test]
+fn rule_iteration_guard_counts_utf16_code_units() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{"top":{"open":[
+                {"c":{"n.count":{"$lt":500}},"n":{"count":1},"r":"top"},
+                {"s":"#TX","c":{"n.count":{"$gte":500}}}
+              ]}}
+            }"##,
+        )
+        .unwrap();
+
+    let source = "😀".repeat(30);
+    assert!(parser.parse(&source).is_ok());
+}
+
+#[test]
 fn serialized_budget_and_rule_multiplier_are_validated() {
     let mut parser = Tabnas::new();
     parser

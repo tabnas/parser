@@ -1353,6 +1353,9 @@ impl Rule {
     }
 
     pub(crate) fn adopt_child_node(&mut self) -> bool {
+        if self.child_node_is_self {
+            return !self.node.borrow().is_undefined();
+        }
         if self.child_node_is_undefined() {
             return false;
         }

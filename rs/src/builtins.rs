@@ -175,6 +175,10 @@ fn token_value(rule: &mut Rule, context: &mut Context, index: usize, info: &Info
     }
 
     let token = token.clone();
+    // Lazy values observe Context as well as the live Rule. Refresh its
+    // snapshot only on this uncommon callback path so ordinary built-ins do
+    // not pay for a recursive Rule clone.
+    context.set_rule(rule);
     let value = token.resolve_val(rule, context);
     if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
         let string = match &value {

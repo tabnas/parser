@@ -344,6 +344,30 @@ fn callback_generated_unknown_routes_fail_before_lifecycle_after_actions() {
 }
 
 #[test]
+fn a_valid_push_ignores_an_unused_unknown_replace_route() {
+    let mut parser = Tabnas::new();
+    parser.action_with_match_ref("@routes", |_rule, _context, matched| {
+        matched.p = Some("child".into());
+        matched.r = Some("ghost".into());
+        Ok(None)
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{
+                "top":{"open":[{"s":"#NR","a":"@routes"}]},
+                "child":{"open":[{"s":"#ZZ"}]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse("1").unwrap(), Value::Null);
+}
+
+#[test]
 fn matched_action_can_redirect_the_live_alternate() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut parser = Tabnas::new();

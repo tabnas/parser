@@ -1509,7 +1509,7 @@ impl Parser {
         let max_iterations = self
             .rules
             .len()
-            .saturating_mul(lexer.char_len())
+            .saturating_mul(lexer.utf16_len())
             .saturating_mul(4)
             .saturating_mul(maxmul)
             .max(100);
@@ -2008,7 +2008,7 @@ impl Parser {
                     matched.g = alt
                         .g
                         .split(',')
-                        .map(str::trim_ascii)
+                        .map(str::trim)
                         .filter(|group| !group.is_empty())
                         .map(str::to_owned)
                         .collect();
@@ -2502,9 +2502,11 @@ impl Parser {
                 // grammar-install time. Reject an unknown destination at the
                 // canonical point: after the matched action, but before any
                 // lifecycle after-action or transition.
-                let unknown_route = push_name
-                    .filter(|_| push_index.is_none())
-                    .or_else(|| replace_name.filter(|_| replace_index.is_none()));
+                let unknown_route = if push_name.is_some() {
+                    push_name.filter(|_| push_index.is_none())
+                } else {
+                    replace_name.filter(|_| replace_index.is_none())
+                };
                 if let Some(name) = unknown_route {
                     let mut token = Self::phase_token(&current_rule)
                         .cloned()
@@ -3455,24 +3457,19 @@ fn continuation_tins(
 }
 
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
-    let contains_group = |group: &str| {
-        alt.g
-            .split(',')
-            .map(str::trim_ascii)
-            .any(|item| item == group)
-    };
-    let include = options.rule.include.trim_ascii();
+    let contains_group = |group: &str| alt.g.split(',').map(str::trim).any(|item| item == group);
+    let include = options.rule.include.trim();
     let included = include.is_empty()
         || include
             .split(',')
-            .map(str::trim_ascii)
+            .map(str::trim)
             .filter(|group| !group.is_empty())
             .any(contains_group);
     let excluded = options
         .rule
         .exclude
         .split(',')
-        .map(str::trim_ascii)
+        .map(str::trim)
         .filter(|group| !group.is_empty())
         .any(contains_group);
     included && !excluded
@@ -3534,10 +3531,10 @@ fn rule_has_context_callbacks(spec: &RuleSpec) -> bool {
 fn rule_has_link_conditions(spec: &RuleSpec) -> bool {
     spec.open.iter().chain(&spec.close).any(|alt| {
         alt.c.iter().any(|condition| {
-            matches!(
-                condition.path.first().map(String::as_str),
-                Some("child" | "prev" | "next")
-            )
+            condition
+                .path
+                .iter()
+                .any(|part| matches!(part.as_str(), "child" | "prev" | "next"))
         })
     })
 }

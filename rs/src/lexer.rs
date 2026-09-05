@@ -16,6 +16,7 @@ pub struct Lexer<'a> {
     chars: Vec<char>,
     byte_indices: Vec<usize>,
     char_len: usize,
+    utf16_len: usize,
     idx: usize,
     ri: usize,
     ci: usize,
@@ -61,9 +62,11 @@ impl<'a> Lexer<'a> {
         // bound for UTF-8 input.
         let mut chars = Vec::with_capacity(src.len());
         let mut byte_indices = Vec::with_capacity(src.len());
+        let mut utf16_len = 0;
         for (b_idx, c) in src.char_indices() {
             chars.push(c);
             byte_indices.push(b_idx);
+            utf16_len += c.len_utf16();
         }
         let char_len = chars.len();
 
@@ -127,6 +130,7 @@ impl<'a> Lexer<'a> {
             chars,
             byte_indices,
             char_len,
+            utf16_len,
             idx: 0,
             ri: 1,
             ci: 1,
@@ -171,8 +175,8 @@ impl<'a> Lexer<'a> {
         self.src
     }
 
-    pub(crate) fn char_len(&self) -> usize {
-        self.char_len
+    pub(crate) fn utf16_len(&self) -> usize {
+        self.utf16_len
     }
 
     /// Source remaining at the live cursor.
@@ -1643,6 +1647,12 @@ impl<'a> Lexer<'a> {
         // quote is known, matching the mature ports' fast path.
         if !self.options.string.multi_chars.contains(quote)
             && self.options.string.replace.is_empty()
+            && self
+                .options
+                .line
+                .row_chars
+                .chars()
+                .all(|character| self.options.line.chars.contains(character))
         {
             let start = self.idx;
             let mut end = start + 1;
