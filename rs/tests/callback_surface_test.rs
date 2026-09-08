@@ -92,6 +92,50 @@ fn lazy_token_value_panics_become_active_action_errors() {
 }
 
 #[test]
+fn plain_actions_that_install_lazy_values_retain_live_context() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let callback_seen = seen.clone();
+    let mut parser = Tabnas::new();
+    parser.action("@install-lazy", move |rule| {
+        let seen = callback_seen.clone();
+        rule.o[0] = rule.o[0].clone().with_lazy_value(move |rule, context| {
+            seen.lock().unwrap().push((
+                rule.name.clone(),
+                context.source.clone(),
+                context
+                    .rule_stack
+                    .iter()
+                    .map(|rule| rule.name.clone())
+                    .collect::<Vec<_>>(),
+                context.v.iter().map(|token| token.src.clone()).collect(),
+                context.v_abs,
+            ));
+            Value::String("LAZY".into())
+        });
+    });
+    parser
+        .grammar_json(
+            r##"{"clear":true,"options":{"rule":{"start":"top"}},"rule":{
+              "top":{"open":[{"p":"leaf"}],"close":[{"a":"@bubble$"}]},
+              "leaf":{"open":[{"s":"#NR","a":["@install-lazy","@value$"]}]}
+            }}"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse("7").unwrap(), Value::String("LAZY".into()));
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [(
+            "leaf".into(),
+            "7".into(),
+            vec!["top".into()],
+            vec!["7".into()],
+            1
+        )]
+    );
+}
+
+#[test]
 fn list_custom_runs_after_delete_and_move_and_can_replace() {
     let mods = ListMods::<i32> {
         delete: vec![1],

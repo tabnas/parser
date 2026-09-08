@@ -176,6 +176,10 @@ impl Parser {
                 .matchers
                 .values()
                 .any(|matcher| matcher.imperative.is_some())
+            // A legacy rule-only action can replace a matched token with one
+            // carrying a lazy value callback. Preserve the Context that the
+            // callback will receive when a later built-in resolves it.
+            || !self.actions.is_empty()
             || !self.context_actions.is_empty()
             || !self.matched_actions.is_empty()
             || !self.state_actions.is_empty()

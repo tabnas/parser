@@ -7,9 +7,11 @@ use crate::token::{
 };
 use crate::value::Value;
 use regex::Regex;
+use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 const STRICT_JSON_NUMBER_EXCLUDE: &str = r"^(?:\+|[+-]?\.|-?0\d)|\.$";
+const MAX_DENSE_IGNORED_TIN: usize = 4095;
 
 pub struct Lexer<'a> {
     src: &'a str,
@@ -27,6 +29,7 @@ pub struct Lexer<'a> {
     strict_json_number_exclude: bool,
     fixed_single_ascii: Option<[Option<usize>; 128]>,
     ignored: Vec<bool>,
+    ignored_sparse: HashSet<crate::Tin>,
     want: Option<Vec<crate::Tin>>,
     standalone: Option<(crate::Rule, crate::Context)>,
     standalone_initialized: bool,
@@ -109,21 +112,29 @@ impl<'a> Lexer<'a> {
             }
         }
         let fixed_single_ascii = fixed_ascii_eligible.then_some(fixed_ascii_table);
-        let ignored = options
-            .token_set
-            .get("IGNORE")
-            .map_or_else(Vec::new, |tins| {
-                let length = tins
-                    .iter()
-                    .filter_map(|tin| usize::try_from(*tin).ok())
-                    .max()
-                    .map_or(0, |tin| tin + 1);
-                let mut ignored = vec![false; length];
-                for tin in tins.iter().filter_map(|tin| usize::try_from(*tin).ok()) {
-                    ignored[tin] = true;
+        // Normal token identities are small and benefit from direct indexed
+        // lookup. Public Options can also contain sparse caller-chosen tins,
+        // so cap the dense table rather than allocating through the largest
+        // integer identity.
+        let mut ignored = Vec::new();
+        let mut ignored_sparse = HashSet::new();
+        if let Some(tins) = options.token_set.get("IGNORE") {
+            let largest_dense = tins
+                .iter()
+                .filter_map(|tin| usize::try_from(*tin).ok())
+                .filter(|tin| *tin <= MAX_DENSE_IGNORED_TIN)
+                .max();
+            ignored.resize(largest_dense.map_or(0, |tin| tin + 1), false);
+            for tin in tins {
+                if let Ok(index) = usize::try_from(*tin) {
+                    if let Some(entry) = ignored.get_mut(index) {
+                        *entry = true;
+                    } else {
+                        ignored_sparse.insert(*tin);
+                    }
                 }
-                ignored
-            });
+            }
+        }
 
         Lexer {
             src,
@@ -141,6 +152,7 @@ impl<'a> Lexer<'a> {
             strict_json_number_exclude,
             fixed_single_ascii,
             ignored,
+            ignored_sparse,
             want: None,
             // Parser-owned lexing supplies its live rule and context, so do
             // not clone the source and Options for the standalone API unless
@@ -319,11 +331,12 @@ impl<'a> Lexer<'a> {
     }
 
     pub(crate) fn is_ignored(&self, tin: crate::Tin) -> bool {
-        usize::try_from(tin)
+        let dense = usize::try_from(tin)
             .ok()
             .and_then(|tin| self.ignored.get(tin))
             .copied()
-            .unwrap_or(false)
+            .unwrap_or(false);
+        dense || self.ignored_sparse.contains(&tin)
     }
 
     fn run_check(&mut self, check: Option<LexCheck>, point: Point) -> CheckFlow {
@@ -1647,6 +1660,7 @@ impl<'a> Lexer<'a> {
         // quote is known, matching the mature ports' fast path.
         if !self.options.string.multi_chars.contains(quote)
             && self.options.string.replace.is_empty()
+            && !self.options.line.row_chars.contains(quote)
             && self
                 .options
                 .line
