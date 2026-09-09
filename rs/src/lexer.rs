@@ -15,6 +15,7 @@ const MAX_DENSE_IGNORED_TIN: usize = 4095;
 
 pub struct Lexer<'a> {
     src: &'a str,
+    ascii: bool,
     chars: Vec<char>,
     byte_indices: Vec<usize>,
     char_len: usize,
@@ -60,18 +61,27 @@ enum CheckFlow {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
-        // ASCII is the overwhelmingly common parser input. Reserving by byte
-        // length avoids repeated growth there, while remaining a valid upper
-        // bound for UTF-8 input.
-        let mut chars = Vec::with_capacity(src.len());
-        let mut byte_indices = Vec::with_capacity(src.len());
-        let mut utf16_len = 0;
-        for (b_idx, c) in src.char_indices() {
-            chars.push(c);
-            byte_indices.push(b_idx);
-            utf16_len += c.len_utf16();
-        }
-        let char_len = chars.len();
+        // ASCII scalar, byte, and UTF-16 positions are identical. Keep only
+        // the borrowed source in that overwhelmingly common case; Unicode
+        // input retains the decoded scalar/index representation needed for
+        // constant-time cursor movement and byte-safe source slicing.
+        let ascii = src.is_ascii();
+        let (chars, byte_indices, char_len, utf16_len) = if ascii {
+            (Vec::new(), Vec::new(), src.len(), src.len())
+        } else {
+            // Byte length is a valid upper bound for both UTF-8-derived
+            // vectors and avoids repeated growth while decoding.
+            let mut chars = Vec::with_capacity(src.len());
+            let mut byte_indices = Vec::with_capacity(src.len());
+            let mut utf16_len = 0;
+            for (byte_index, character) in src.char_indices() {
+                chars.push(character);
+                byte_indices.push(byte_index);
+                utf16_len += character.len_utf16();
+            }
+            let char_len = chars.len();
+            (chars, byte_indices, char_len, utf16_len)
+        };
 
         let strict_json_number_exclude =
             options.number.exclude.as_deref() == Some(STRICT_JSON_NUMBER_EXCLUDE);
@@ -140,6 +150,7 @@ impl<'a> Lexer<'a> {
 
         Lexer {
             src,
+            ascii,
             chars,
             byte_indices,
             char_len,
@@ -265,16 +276,8 @@ impl<'a> Lexer<'a> {
     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
         let point = self.current_point();
         let source = if start <= end && end <= self.char_len {
-            let start_byte = self
-                .byte_indices
-                .get(start)
-                .copied()
-                .unwrap_or(self.src.len());
-            let end_byte = self
-                .byte_indices
-                .get(end)
-                .copied()
-                .unwrap_or(self.src.len());
+            let start_byte = self.byte_position_at(start);
+            let end_byte = self.byte_position_at(end);
             self.src[start_byte..end_byte].to_string()
         } else {
             self.peek()
@@ -287,43 +290,52 @@ impl<'a> Lexer<'a> {
     }
 
     fn byte_position(&self) -> usize {
-        self.byte_indices
-            .get(self.idx)
-            .copied()
-            .unwrap_or(self.src.len())
+        self.byte_position_at(self.idx)
+    }
+
+    #[inline]
+    fn byte_position_at(&self, index: usize) -> usize {
+        if self.ascii {
+            index.min(self.src.len())
+        } else {
+            self.byte_indices
+                .get(index)
+                .copied()
+                .unwrap_or(self.src.len())
+        }
+    }
+
+    #[inline]
+    fn char_at(&self, index: usize) -> Option<char> {
+        if index >= self.char_len {
+            None
+        } else if self.ascii {
+            Some(char::from(self.src.as_bytes()[index]))
+        } else {
+            self.chars.get(index).copied()
+        }
     }
 
     fn advance(&mut self) -> Option<char> {
-        if self.idx < self.char_len {
-            let c = self.chars[self.idx];
-            self.idx += 1;
-            if self.options.line.row_chars.contains(c) {
-                self.ri += 1;
-                self.ci = 1;
-            } else {
-                self.ci += 1;
-            }
-            Some(c)
+        let character = self.char_at(self.idx)?;
+        self.idx += 1;
+        if self.options.line.row_chars.contains(character) {
+            self.ri += 1;
+            self.ci = 1;
         } else {
-            None
+            self.ci += 1;
         }
+        Some(character)
     }
 
     fn peek(&self) -> Option<char> {
-        if self.idx < self.char_len {
-            Some(self.chars[self.idx])
-        } else {
-            None
-        }
+        self.char_at(self.idx)
     }
 
     fn peek_at(&self, offset: usize) -> Option<char> {
-        let i = self.idx + offset;
-        if i < self.char_len {
-            Some(self.chars[i])
-        } else {
-            None
-        }
+        self.idx
+            .checked_add(offset)
+            .and_then(|index| self.char_at(index))
     }
 
     fn wants(&self, tin: crate::Tin) -> bool {
@@ -455,10 +467,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn is_text_delimiter_at(&self, index: usize) -> bool {
-        let Some(ch) = self.chars.get(index).copied() else {
+        let Some(ch) = self.char_at(index) else {
             return true;
         };
-        let remaining = &self.src[self.byte_indices[index]..];
+        let remaining = &self.src[self.byte_position_at(index)..];
         (self.options.space.lex && self.options.space.chars.contains(ch))
             || (self.options.fixed.lex && self.has_fixed_at(ch, remaining))
             || (self.options.line.lex
@@ -1649,9 +1661,8 @@ impl<'a> Lexer<'a> {
         }
         let starts_with_separator = self.idx > run_start
             && separator.as_ref().is_some_and(|separator| {
-                self.chars[run_start..self.idx]
-                    .first()
-                    .is_some_and(|ch| separator.contains(*ch))
+                self.char_at(run_start)
+                    .is_some_and(|character| separator.contains(character))
             });
         (saw_digit, starts_with_separator || last_was_separator)
     }
@@ -1672,16 +1683,12 @@ impl<'a> Lexer<'a> {
         {
             let start = self.idx;
             let mut end = start + 1;
-            while let Some(character) = self.chars.get(end).copied() {
+            while let Some(character) = self.char_at(end) {
                 if character == quote {
-                    let raw_start = self.byte_indices[start];
-                    let value_start = self.byte_indices[start + 1];
-                    let value_end = self.byte_indices[end];
-                    let raw_end = self
-                        .byte_indices
-                        .get(end + 1)
-                        .copied()
-                        .unwrap_or(self.src.len());
+                    let raw_start = self.byte_position_at(start);
+                    let value_start = self.byte_position_at(start + 1);
+                    let value_end = self.byte_position_at(end);
+                    let raw_end = self.byte_position_at(end + 1);
                     self.idx = end + 1;
                     self.ci += end - start + 1;
                     return Ok(Token::new(
@@ -1976,5 +1983,28 @@ impl<'a> Lexer<'a> {
             self.flush_surrogate(pending, out);
             out.push(char::from_u32(cp).expect("validated escape is a Unicode scalar"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lexer;
+    use crate::Options;
+
+    #[test]
+    fn ascii_sources_do_not_materialize_scalar_or_byte_index_vectors() {
+        let ascii = Lexer::new("ascii\n123", Options::default());
+        assert!(ascii.ascii);
+        assert!(ascii.chars.is_empty());
+        assert!(ascii.byte_indices.is_empty());
+        assert_eq!(ascii.char_len, 9);
+        assert_eq!(ascii.utf16_len, 9);
+
+        let unicode = Lexer::new("é😀", Options::default());
+        assert!(!unicode.ascii);
+        assert_eq!(unicode.chars, ['é', '😀']);
+        assert_eq!(unicode.byte_indices, [0, 2]);
+        assert_eq!(unicode.char_len, 2);
+        assert_eq!(unicode.utf16_len, 3);
     }
 }

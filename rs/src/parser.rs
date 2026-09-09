@@ -3473,13 +3473,15 @@ fn continuation_tins(
 
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     let contains_group = |group: &str| alt.g.split(',').map(str::trim).any(|item| item == group);
-    let include = options.rule.include.trim();
-    let included = include.is_empty()
-        || include
-            .split(',')
-            .map(str::trim)
-            .filter(|group| !group.is_empty())
-            .any(contains_group);
+    let mut include = options
+        .rule
+        .include
+        .split(',')
+        .map(str::trim)
+        .filter(|group| !group.is_empty());
+    let included = include
+        .next()
+        .is_none_or(|first| contains_group(first) || include.any(contains_group));
     let excluded = options
         .rule
         .exclude

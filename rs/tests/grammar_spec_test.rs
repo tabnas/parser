@@ -307,6 +307,18 @@ fn condition_validation_and_group_filters_fail_closed() {
         )
         .unwrap();
     assert_eq!(unicode_space.parse("1").unwrap(), Value::Null);
+
+    let mut delimiter_only = Tabnas::new();
+    delimiter_only
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top","include":" , , "}},
+              "rule":{"top":{"open":[{"s":"#NR","g":"any"}]}}
+            }"##,
+        )
+        .unwrap();
+    assert_eq!(delimiter_only.parse("1").unwrap(), Value::Null);
 }
 
 #[test]
