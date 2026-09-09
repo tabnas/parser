@@ -112,6 +112,21 @@ Per-runtime notes:
   and `match-tokens-expected-at-slot-win-over-earlier-eager`
   (ts/test/cover-lex.test.js) now pin the shared behaviour.
 
+  The eager pass also yields to a FIXED literal the slot expects and
+  that it cannot out-cut, in all three runtimes. Ties go to the literal;
+  an eager matcher that cuts further still wins, so a keyword cannot
+  truncate a longer word. Without it a character class containing a
+  literal the grammar also uses swallowed it — `num = "0" / posdigit
+  *digit` beside `digit = %x30-39` rejected `0.0.0` in Go (whose emitter
+  has always marked classes eager) and would have in TS the moment the
+  bnf emitter did the same. Pinned by
+  `TestExpectedLiteralBeatsAnEagerTieWithoutRelex` and
+  `TestExpectedLiteralDoesNotTruncateALongerEagerMatch` (Go),
+  `expected-fixed-literal-beats-an-eager-tie` (TS) and
+  `expected_literal_beats_an_eager_tie_without_relex` (Rust). It also
+  narrows what negotiated lexing is FOR: a tie no longer needs a recut,
+  only a contest the class wins on length does.
+
 It cannot widen the accepted language. A recut is returned only when its
 tin is in the alternate's OWN list, so every position still requires
 exactly what it always required; a wrong re-cut fails the parse rather

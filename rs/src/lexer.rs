@@ -758,6 +758,36 @@ impl<'a> Lexer<'a> {
             // expected list at all (a standalone lexer, no rule) nothing
             // constrains the caller and every matcher is eligible in the
             // first pass.
+            // The longest FIXED literal this slot expects that matches
+            // here, or 0. Only the eager pass consults it: there, a
+            // literal the slot names beats an eager-only matcher that
+            // cuts no further than it does. Without this, a character
+            // class that CONTAINS a literal the grammar also uses
+            // swallows it wherever the class is eager (`num = "0" /
+            // posdigit *digit` beside `digit = %x30-39` rejected
+            // `0.0.0`). LENGTH decides, not mere existence, so a keyword
+            // literal cannot truncate a longer word: ties go to the
+            // literal, and an eager matcher that cuts further still
+            // wins. TS and Go do the same, in makeMatchMatcher and
+            // matchMatch.
+            let fix_len = if self.want.is_none() && self.options.fixed.lex {
+                expected_match_tins.map_or(0, |expected| {
+                    self.options
+                        .fixed
+                        .tokens
+                        .values()
+                        .filter(|token| {
+                            !token.source.is_empty()
+                                && expected.contains(&token.tin)
+                                && remaining.starts_with(&token.source)
+                        })
+                        .map(|token| token.source.len())
+                        .max()
+                        .unwrap_or(0)
+                })
+            } else {
+                0
+            };
             let passes = if self.want.is_some() { 1 } else { 2 };
             (0..passes).find_map(|pass| {
                 self.options.match_tokens.values().find_map(|matcher| {
@@ -779,6 +809,11 @@ impl<'a> Lexer<'a> {
                         MatchTokenMatcher::Regex(regex) => regex
                             .find(remaining)
                             .filter(|found| found.start() == 0)
+                            // The eager pass yields to an expected
+                            // literal it cannot out-cut; the fixed
+                            // matcher (2e6) runs next and takes it. See
+                            // `fix_len` above.
+                            .filter(|found| pass == 0 || fix_len == 0 || found.len() > fix_len)
                             .map(|found| {
                                 let source = found.as_str().to_string();
                                 (source.clone(), Value::String(source))

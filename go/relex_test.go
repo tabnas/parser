@@ -37,7 +37,11 @@ func relexFalse() *bool { b := false; return &b }
 // sub-matches the fixed token at the ender and QUEUES it, so it is already
 // #NL. That queue is the other half of what makes a first cut sticky — it
 // just happens to pick the wanted identity there.)
-func contestedGrammar(relex *bool) *Tabnas {
+func contestedGrammar(relex *bool) *Tabnas { return contestedGrammarSeq(relex, 1) }
+
+// slots is how many #NL the rule wants in a row: one for the tie case,
+// two where the class has to out-cut the literal to stay contested.
+func contestedGrammarSeq(relex *bool, slots int) *Tabnas {
 	nl := "\n"
 	j := Make(Options{
 		Lex: &LexOptions{Relex: relex},
@@ -49,8 +53,12 @@ func contestedGrammar(relex *bool) *Tabnas {
 	})
 
 	j.Rule("val", func(rs *RuleSpec, p *Parser) {
+		seq := make([][]Tin, slots)
+		for i := range seq {
+			seq[i] = []Tin{j.Token("#NL")}
+		}
 		rs.AddOpen(&AltSpec{
-			S: [][]Tin{{j.Token("#NL")}},
+			S: seq,
 			A: func(r *Rule, ctx *Context) { r.Node = "NL" },
 		})
 	})
@@ -95,13 +103,69 @@ func TestRelexRepetitionClassContestedByLiteral(t *testing.T) {
 	}
 }
 
-// The same grammar and the same input WITHOUT the option: the close
-// alternate sees #WS where it wants #NL and fails. This is the behaviour
-// every existing Go grammar has today, and it must not change.
+// The same contest WITHOUT the option, on input the class cuts FURTHER
+// than the literal. The lexer prefers a literal the slot expects only
+// when the eager matcher cannot out-cut it (see matchMatch's fixLen), so
+// here `#WS` takes both newlines, the alternate wanting `#NL` sees a
+// token it did not ask for, and the parse fails. Only a recut resolves
+// it — which is what makes this the honest check that the option is not
+// silently on.
 func TestRelexOffLeavesTheContestUnresolved(t *testing.T) {
-	if _, err := contestedGrammar(relexFalse()).Parse("\n"); err == nil {
+	if _, err := contestedGrammarSeq(relexFalse(), 2).Parse("\n\n"); err == nil {
 		t.Error("expected a parse error with Relex off — if this now " +
 			"passes, the option is not inert when unset")
+	}
+	// And with it on, the recut resolves exactly this input.
+	if out, err := contestedGrammarSeq(relexTrue(), 2).Parse("\n\n"); err != nil || out != "NL" {
+		t.Errorf("with Relex on: got %#v, %v; want %q", out, err, "NL")
+	}
+}
+
+// An equal-length contest, Relex OFF: a literal the slot expects beats
+// an eager matcher that only ties it. This is the case that made the
+// engine reject grammars it plainly accepts — `num = "0" / posdigit
+// *digit` beside `digit = %x30-39`, where the eager class swallowed
+// every `0` and the fixed `#0` was never produced — and it needs no
+// negotiated lexing to resolve, because nothing has to be re-cut: the
+// lexer simply does not hand out a token the slot did not ask for when
+// one it did ask for fits the same characters.
+func TestExpectedLiteralBeatsAnEagerTieWithoutRelex(t *testing.T) {
+	out, err := contestedGrammar(relexFalse()).Parse("\n")
+	if err != nil || out != "NL" {
+		t.Errorf("got %#v, %v; want %q", out, err, "NL")
+	}
+}
+
+// And the literal must not truncate a longer word: `#IF` is the only
+// token the slot names, but the eager `#ID` cuts further, so `iffy` is
+// an identifier and the alternate fails rather than quietly parsing
+// `if` and leaving `fy` behind. Relex is what turns that into a parse,
+// and only where the grammar asked for it.
+func TestExpectedLiteralDoesNotTruncateALongerEagerMatch(t *testing.T) {
+	kw := "if"
+	build := func(relex *bool) *Tabnas {
+		j := Make(Options{
+			Lex: &LexOptions{Relex: relex},
+			Match: &MatchOptions{
+				Token:      map[string]*regexp.Regexp{"#ID": regexp.MustCompile(`^[a-z]+`)},
+				TokenEager: map[string]bool{"#ID": true},
+			},
+			Fixed: &FixedOptions{Token: map[string]*string{"#IF": &kw}},
+		})
+		j.Rule("val", func(rs *RuleSpec, p *Parser) {
+			rs.AddOpen(&AltSpec{
+				S: [][]Tin{{j.Token("#IF")}, {j.Token("#ID")}},
+				A: func(r *Rule, ctx *Context) { r.Node = "if+" + r.O1.Src },
+			})
+		})
+		return j
+	}
+
+	if _, err := build(relexFalse()).Parse("iffy"); err == nil {
+		t.Error("`iffy` must not parse with Relex off: #ID out-cuts #IF")
+	}
+	if out, err := build(relexTrue()).Parse("iffy"); err != nil || out != "if+fy" {
+		t.Errorf("Parse(iffy) = %#v, %v; want %q", out, err, "if+fy")
 	}
 }
 

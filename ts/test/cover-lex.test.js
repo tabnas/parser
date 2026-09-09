@@ -254,6 +254,33 @@ describe('cover-lex', () => {
     assert.equal(j.parse('ab'), 'one')
   })
 
+  it('expected-fixed-literal-beats-an-eager-tie', () => {
+    // The eager pass yields to a literal the slot expects that it
+    // cannot out-cut. Without this a character class containing a
+    // literal the grammar also uses swallowed it: `num = "0" / posdigit
+    // *digit` beside `digit = %x30-39` rejected `0.0.0`, because the
+    // eager class took every `0` and the fixed `#0` was never produced.
+    const build = (seq) => {
+      const j = new Tabnas({
+        rule: { start: 'top' },
+        fixed: { token: { '#NL': '\n' } },
+        match: { token: { '#WS': Object.assign(/^[ \t\n]+/, { eager$: true }) } },
+        tokenSet: { IGNORE: [] },
+      })
+      j.rule('top', (rs) => rs.open([{ s: seq, a: (r) => (r.node = 'NL') }]))
+      return j
+    }
+
+    // A tie goes to the expected literal: no recut needed, and the
+    // parse that used to fail now succeeds.
+    assert.equal(build(['#NL']).parse('\n'), 'NL')
+
+    // But the literal must not truncate a longer eager match: `#WS`
+    // takes both newlines, the alternate wanting a second `#NL` sees a
+    // token it did not ask for, and only negotiated lexing resolves it.
+    assert.throws(() => build(['#NL', '#NL']).parse('\n\n'))
+  })
+
   it('match-tokens-without-a-rule-are-ungated', () => {
     // A standalone lexer — makeLex + lex.next() with no rule, the shape
     // the exported lexer API and the tests above use — has no rule and

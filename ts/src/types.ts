@@ -728,9 +728,11 @@ export type AltAction = (rule: Rule, ctx: Context, alt: AltMatch) => any
 // lexer's tcol gating, so it can fire at a slot the active rule's token
 // column does not list — but it never OUTBIDS the column: the lexer
 // tries the matchers the slot expects first and the eager ones it does
-// not only if none of those matched (ts/src/lexer.ts makeMatchMatcher,
-// go/lexer.go matchMatch). With no rule at all (a standalone lexer)
-// there is no column, and every matcher is eligible. Serialized
+// not only if none of those matched, and an eager matcher also yields
+// to a FIXED literal the column lists that it cannot cut past
+// (ts/src/lexer.ts makeMatchMatcher, go/lexer.go matchMatch). With no
+// rule at all (a standalone lexer) there is no column, and every
+// matcher is eligible. Serialized
 // grammars carry the eager flag via the `@~/pattern/flags` ref form
 // (see resolveFuncRefs).
 export type EagerRegExp = RegExp & { tin$?: number; eager$?: boolean }

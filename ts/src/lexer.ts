@@ -598,6 +598,54 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     const col =
       null == want && gated ? (rspec as any).def.tcol[oc][tI] : undefined
 
+    // The longest FIXED literal the slot expects that matches here, or
+    // 0. Computed once per lex, and only when the eager pass is reached:
+    // pass 0 is the match tokens the slot expects, and between a token
+    // the slot expects and a literal it expects, the existing matcher
+    // order decides. -1 means "not computed yet".
+    //
+    // In the eager pass, a literal the slot names beats an eager-only
+    // matcher that cuts no further than it does. Without this, a
+    // character class that CONTAINS a literal the grammar also uses
+    // swallows it wherever the class is eager: `num = "0" / posdigit
+    // *digit` beside `digit = %x30-39` lexed every `0` as the class, the
+    // fixed `#0` was never produced, and no alternate of `num` could
+    // match — Go rejected `0.0.0` for a grammar that plainly accepts it,
+    // and TS did too once the bnf emitter marked classes eager.
+    // Eagerness is for firing where the column is narrower than the
+    // grammar, never for outbidding what the column names.
+    //
+    // LENGTH decides, not mere existence: an eager matcher that cuts
+    // FURTHER than the literal still wins, so a keyword literal cannot
+    // truncate a longer word (`#IF` = "if" beside an eager `#ID` =
+    // /^[a-z]+/ leaves `iffy` to `#ID`, and takes `if` itself). Ties go
+    // to the literal, which is the case this exists for.
+    //
+    // Read from `cfg.fixed.token` at lex time, never snapshotted when
+    // the matcher was built: a grammar adds its own literals after the
+    // matchers exist, and a snapshot would hold only the defaults —
+    // which is exactly the case this has to see (`#0` is the grammar's).
+    // Go reads `Config.FixedTokens` the same way, in expectedFixedLen.
+    let fixLen = -1
+    const expectedFixedLen = (): number => {
+      if (-1 !== fixLen) return fixLen
+      fixLen = 0
+      if (!cfg.fixed.lex || null == col || 0 === col.length) return fixLen
+      const src = lex.src
+      const sI = pnt.sI
+      const ftoken = cfg.fixed.token
+      for (const fsrc of keys(ftoken)) {
+        const ftin = ftoken[fsrc]
+        if (
+          null != ftin && fsrc.length > fixLen &&
+          col.includes(ftin) && src.startsWith(fsrc, sI)
+        ) {
+          fixLen = fsrc.length
+        }
+      }
+      return fixLen
+    }
+
     for (let pass = 0; pass < 2; pass++) {
       for (let tokenMatcher of tokenMatchers) {
         const tin = (tokenMatcher as any).tin$
@@ -622,6 +670,12 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
           if (m) {
             let msrc = m[0]
             let mlen = msrc.length
+            // The eager pass yields to an expected literal it cannot
+            // out-cut; the fixed matcher (order 2e6) runs next and takes
+            // it. See `expectedFixedLen` above.
+            if (1 === pass && mlen <= expectedFixedLen()) {
+              continue
+            }
             if (0 < mlen) {
               let tkn: Token | undefined = undefined
 
