@@ -81,3 +81,39 @@ func TestFnrefMethod(t *testing.T) {
 		t.Errorf("Fnref: got %v want [bo]", log)
 	}
 }
+
+// The phase of an `@<rule>-<phase>` fnref is the suffix after the LAST
+// hyphen, so a hyphenated rule name — the shape every ABNF grammar's rule
+// names take — wires every lifecycle phase. Go always did; the TS runtime
+// read everything after the FIRST hyphen as the phase and threw from
+// grammar(). Pinned in both so the two cannot drift again (TS twin:
+// cover-engine.test.js "fnref-hyphenated-rule-name").
+func TestFnrefHyphenatedRuleName(t *testing.T) {
+	j := Make(Options{Rule: &RuleOptions{Start: "valid-sem-ver"}})
+	j.Token("#Ta", "a")
+	var order []string
+	push := func(s string) StateAction {
+		return StateAction(func(r *Rule, _ *Context) { order = append(order, s) })
+	}
+	if err := j.Grammar(&GrammarSpec{
+		Ref: map[FuncRef]any{
+			"@valid-sem-ver-bo": push("bo"),
+			"@valid-sem-ver-ao": push("ao"),
+			"@valid-sem-ver-bc": push("bc"),
+			"@valid-sem-ver-ac": push("ac"),
+		},
+		Rule: map[string]*GrammarRuleSpec{"valid-sem-ver": {
+			Open:  []*GrammarAltSpec{{S: "#Ta"}},
+			Close: []*GrammarAltSpec{{S: "#ZZ"}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Parse("a"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bo", "ao", "bc", "ac"}
+	if len(order) != 4 || order[0] != want[0] || order[1] != want[1] || order[2] != want[2] || order[3] != want[3] {
+		t.Errorf("hyphenated fnref phases: got %v want %v", order, want)
+	}
+}

@@ -294,7 +294,13 @@ class RuleSpec {
       let phaseSet = installed.get(base)
       if (!phaseSet) installed.set(base, phaseSet = new WeakSet())
 
-      const aname = base.replace(/^[^-]+-/, '')
+      // The phase is the two characters after the LAST hyphen. Stripping
+      // up to the FIRST hyphen instead read `@valid-semver-bo` as the phase
+      // `semver-bo`, and `this['semver-bo']` is not a function: a hyphenated
+      // rule name — every ABNF grammar has them — could not take a
+      // lifecycle fnref at all in TypeScript, while go/grammarspec.go
+      // wireStateActions builds the key from the suffix and always could.
+      const aname = base.substring(base.length - 2)
 
       // `/replace` clears all prior actions for this phase (from any
       // plugin) and installs the replacement, then owns the phase.

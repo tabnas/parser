@@ -324,6 +324,37 @@ describe('cover-engine', () => {
       assert.deepEqual(order, ['pre', 'app'])
     })
 
+    it('fnref-hyphenated-rule-name', () => {
+      // The phase of an `@<rule>-<phase>` fnref is the suffix after the
+      // LAST hyphen. It used to be read as everything after the FIRST,
+      // so a rule named `pre-release` — the shape every ABNF grammar's
+      // rule names take — threw "this[release-bo] is not a function"
+      // from grammar(), where the Go engine wired it. Every phase, on a
+      // name with two hyphens, so a regression in any one of them shows.
+      let j = new Tabnas({
+        rule: { start: 'valid-sem-ver' },
+        fixed: { token: { Ta: 'a' } },
+      })
+      let Ta = j.token.Ta
+      let order = []
+      j.grammar({
+        ref: {
+          '@valid-sem-ver-bo': () => order.push('bo'),
+          '@valid-sem-ver-ao': () => order.push('ao'),
+          '@valid-sem-ver-bc': () => order.push('bc'),
+          '@valid-sem-ver-ac': () => order.push('ac'),
+        },
+        rule: {
+          'valid-sem-ver': {
+            open: [{ s: [Ta] }],
+            close: [{ s: ['#ZZ'] }],
+          },
+        },
+      })
+      j.parse('a')
+      assert.deepEqual(order, ['bo', 'ao', 'bc', 'ac'])
+    })
+
     it('rule-counter-comparators-and-toString', () => {
       let j = new Tabnas({
         rule: { start: 'top' },
