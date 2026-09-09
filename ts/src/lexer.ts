@@ -566,58 +566,68 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
       }
     }
 
-    for (let tokenMatcher of tokenMatchers) {
-      // Only match Token if present in Rule sequence.
-      // Exception: an `eager$` flag on the matcher opts out of
-      // tcol gating — the matcher fires whenever its regex matches
-      // and the downstream parser rejects tokens it doesn't expect
-      // at the current position. This is what ABNF's
-      // case-insensitive literals need: the lexer has to emit the
-      // literal's own tin even when the current rule's tcol is
-      // narrower, so the next rule up the stack can see the token
-      // as its proper type rather than falling through to #TX.
+    // Two passes over the token matchers, in tin order within each, as
+    // go/lexer.go matchMatch has always made: first the matchers whose
+    // tin the rule expects at this slot, then the `eager$` ones it does
+    // not. One pass, with eagerness merely bypassing the gate, let an
+    // eager matcher EARLIER in tin order win over an expected one later:
+    // `s = p *d [t]` with `p = %x31-39`, `d = %x30-39` read the `2` of
+    // `12` as `p`, and the `*d` loop, which wanted `d`, failed on a token
+    // it never expected. Preferring what the parser expects at the slot
+    // is what eagerness was for: a token that must still fire where the
+    // rule's collated column is narrower than the grammar (a case-
+    // insensitive literal; a character class at a lookahead slot the
+    // column does not cover), never one that steals an expected cut.
+    //
+    // A matcher with no `tin$` (a function matcher registered without a
+    // token) has no gate to fail and runs in the first pass, as before.
+    //
+    // Under a negotiated-lexing `want` the alternate's own tin list
+    // replaces the column and is the sharper gate; one filtered pass is
+    // the whole search, as in Go.
+    const col = null == want ? rule.spec.def.tcol[oc][tI] : undefined
 
-      if (null != want) {
-        // Negotiated lexing: the alternate's own tin list replaces tcol
-        // gating — only matchers able to produce a wanted tin run.
-        if (
-          !(tokenMatcher as any).tin$ ||
-          !want.includes((tokenMatcher as any).tin$)
-        ) {
-          continue
+    for (let pass = 0; pass < 2; pass++) {
+      for (let tokenMatcher of tokenMatchers) {
+        const tin = (tokenMatcher as any).tin$
+
+        if (null != want) {
+          if (!tin || !want.includes(tin)) {
+            continue
+          }
+        } else {
+          const expected = !tin || (null != col && col.includes(tin))
+          if (0 === pass ? !expected : expected || !(tokenMatcher as any).eager$) {
+            continue
+          }
         }
-      } else if (
-        (tokenMatcher as any).tin$ &&
-        !(tokenMatcher as any).eager$ &&
-        !rule.spec.def.tcol[oc][tI].includes((tokenMatcher as any).tin$)
-      ) {
-        continue
-      }
 
-      if (tokenMatcher instanceof RegExp) {
-        let m = fwd.match(tokenMatcher)
+        if (tokenMatcher instanceof RegExp) {
+          let m = fwd.match(tokenMatcher)
 
-        if (m) {
-          let msrc = m[0]
-          let mlen = msrc.length
-          if (0 < mlen) {
-            let tkn: Token | undefined = undefined
+          if (m) {
+            let msrc = m[0]
+            let mlen = msrc.length
+            if (0 < mlen) {
+              let tkn: Token | undefined = undefined
 
-            let tin = (tokenMatcher as any).tin$
-            tkn = lex.token(tin, msrc, msrc, pnt)
+              tkn = lex.token(tin, msrc, msrc, pnt)
 
-            pnt.sI += mlen
-            pnt.cI += mlen
+              pnt.sI += mlen
+              pnt.cI += mlen
 
+              return tkn
+            }
+          }
+        } else {
+          let tkn: any = tokenMatcher(lex, rule)
+          if (null != tkn) {
             return tkn
           }
         }
-      } else {
-        let tkn: any = tokenMatcher(lex, rule)
-        if (null != tkn) {
-          return tkn
-        }
       }
+
+      if (null != want) break
     }
   })
 }

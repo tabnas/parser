@@ -209,6 +209,51 @@ describe('cover-lex', () => {
     assert.equal(j.parse('=b'), 'TX:=b')
   })
 
+  it('match-tokens-expected-at-slot-win-over-earlier-eager', () => {
+    // Two passes over the match tokens, as go/lexer.go makes: first the
+    // tokens the rule expects at this slot, then the eager ones it does
+    // not. Both '#EA' and '#XA' match an 'a'; '#EA' is registered first
+    // (lower tin) and eager, '#XA' is what the rule expects. One pass in
+    // tin order with eagerness bypassing the gate produced '#EA' and the
+    // rule failed on a token it never asked for — a grammar with a class
+    // inside a class (`p = %x31-39`, `d = %x30-39`) read the `2` of `12`
+    // as the narrower class it did not expect there.
+    const make = () => new Tabnas({
+      rule: { start: 'top' },
+      fixed: { token: { '#X': '!' } },
+      match: {
+        token: {
+          '#EA': Object.assign(/^a/, { eager$: true }),
+          '#XA': Object.assign(/^[a-z]/, { eager$: true }),
+        },
+      },
+    })
+
+    let j = make()
+    j.rule('top', (rs) =>
+      rs.open([{ s: ['#XA'], a: (r) => (r.node = r.o0.name) }])
+        .close([{ s: ['#ZZ'] }]))
+    assert.equal(j.parse('a'), '#XA')
+
+    // And an eager token still fires at a lookahead slot the rule's
+    // collated column does not cover: the first alternate peeks two
+    // tokens ('#XA' then '#X'), so slot 1 lists only '#X'; the 'b' of
+    // 'ab' matches nothing expected there and would have been a fatal
+    // #BD. The eager '#XA' lexes it instead, the two-token alternate
+    // fails cleanly, and the one-token alternate carries on.
+    j = make()
+    j.rule('top', (rs) =>
+      rs.open([
+        { s: ['#XA', '#X'], a: (r) => (r.node = 'pair') },
+        { s: ['#XA'], p: 'rest', a: (r) => (r.node = 'one') },
+      ])
+        .close([{ s: ['#ZZ'] }]))
+    j.rule('rest', (rs) =>
+      rs.open([{ s: ['#XA'], a: (r) => (r.node = r.o0.name) }]))
+    assert.equal(j.parse('a!'), 'pair')
+    assert.equal(j.parse('ab'), 'one')
+  })
+
   it('string-escapes-and-replace', () => {
     // Valid \x ascii escape.
     assert.equal(summary({}, '"\\x41"'), '#ST:A #ZZ')

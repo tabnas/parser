@@ -1337,20 +1337,17 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 						// Pass 1: eager-only fallbacks (position-expected
 						// ones were already tried in pass 0).
 						//
-						// NOTE this is NOT what TS does, and the difference
-						// is a live divergence — see the eager case in
-						// #136. TS makes ONE tin-ordered pass in which
-						// eagerness only bypasses the gate, so an eager
-						// matcher earlier in that order wins over a
-						// position-expected one later. Collapsing these two
-						// passes is the honest repair and is NOT done here:
-						// Go's tins come from map iteration order
-						// (MapToOptions over a Go map), so a single
-						// tin-ordered pass makes the winner a coin flip
-						// where TS's object-key order is deterministic.
-						// Measured: collapsing them broke
-						// TestSerializedRegexTokensParse, which TS passes.
-						// The ordering has to be made deterministic first.
+						// The TS lexer makes the same two passes (see
+						// makeMatchMatcher in ts/src/lexer.ts). It used to
+						// make ONE tin-ordered pass in which eagerness only
+						// bypassed the gate, so an eager matcher earlier in
+						// that order won over a position-expected one later
+						// — the eager case of #136 — and a class inside a
+						// class (`p = %x31-39`, `d = %x30-39`) read the `2`
+						// of `12` as the narrower class the `*d` loop never
+						// asked for. Preferring what the parser expects at
+						// the slot is the behaviour both runtimes now share,
+						// and TS pins it in cover-lex.test.js.
 						continue
 					}
 				}
