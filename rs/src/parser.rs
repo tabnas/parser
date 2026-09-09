@@ -151,6 +151,11 @@ impl Parser {
 
     fn needs_context_snapshots(&self) -> bool {
         self.options.parse.budget.on_check.is_some()
+            // Prepare hooks can seed lookahead with native lazy tokens before
+            // lexing starts. Their callbacks must retain the same live rule
+            // snapshots and rewind history as lexer-injected lazy tokens.
+            || !self.options.parse.prepare.is_empty()
+            || !self.options.parse.named_prepare.is_empty()
             || self.options.map.merge.is_some()
             // A matcher-family check can return a native Token carrying a
             // lazy value callback. That callback receives the live Context,
@@ -1995,7 +2000,13 @@ impl Parser {
 
                 let mut matched = matched_seed;
                 matched.h = alt.h_match.clone();
-                let expose_match = alt_has_match_consumers(alt, &self.matched_actions);
+                // A compatibility modifier may remove the callback that
+                // already populated matched_seed. Preserve those effects,
+                // while also detecting consumers added by the returned alt.
+                let expose_match = alt_has_match_consumers(&alts[idx], &self.matched_actions)
+                    || modified_alt.as_ref().is_some_and(|modified| {
+                        alt_has_match_consumers(modified, &self.matched_actions)
+                    });
                 let capture_done = mode.recovering || !self.rule_done_subscribers.is_empty();
                 let retain_static_match = expose_match || capture_done;
                 if expose_match && !alt.n.is_empty() {

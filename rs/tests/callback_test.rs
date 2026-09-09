@@ -93,6 +93,49 @@ fn canonical_callbacks_share_the_resolved_alt_match_in_canonical_order() {
 }
 
 #[test]
+fn condition_match_effects_survive_compatibility_alt_modifiers() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+
+    parser.alt_condition_with_match("@condition", |_rule, _context, matched| {
+        matched.p = Some("child".into());
+        matched
+            .u
+            .insert("condition".into(), Value::String("kept".into()));
+        true
+    });
+    parser.alt_modifier("@drop-condition", |mut alt, _rule, _context| {
+        alt.c_match = None;
+        alt
+    });
+    parser.action("@record", |rule| {
+        assert_eq!(rule.u.get("condition"), Some(&Value::String("kept".into())));
+    });
+    let child_calls = calls.clone();
+    parser.action("@child", move |_rule| {
+        child_calls.lock().unwrap().push("child")
+    });
+
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{
+                "top":{"open":[{
+                  "s":"#NR", "c":"@condition", "h":"@drop-condition", "a":"@record"
+                }]},
+                "child":{"open":[{"s":"#ZZ","a":"@child"}]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("1").unwrap();
+    assert_eq!(*calls.lock().unwrap(), ["child"]);
+}
+
+#[test]
 fn lifecycle_callbacks_receive_next_and_chain_token_output() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut parser = Tabnas::new();

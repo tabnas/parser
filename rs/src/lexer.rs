@@ -126,12 +126,14 @@ impl<'a> Lexer<'a> {
                 .max();
             ignored.resize(largest_dense.map_or(0, |tin| tin + 1), false);
             for tin in tins {
-                if let Ok(index) = usize::try_from(*tin) {
-                    if let Some(entry) = ignored.get_mut(index) {
-                        *entry = true;
-                    } else {
-                        ignored_sparse.insert(*tin);
-                    }
+                let Ok(index) = usize::try_from(*tin) else {
+                    ignored_sparse.insert(*tin);
+                    continue;
+                };
+                if let Some(entry) = ignored.get_mut(index) {
+                    *entry = true;
+                } else {
+                    ignored_sparse.insert(*tin);
                 }
             }
         }

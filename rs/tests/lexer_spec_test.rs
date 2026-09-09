@@ -273,21 +273,22 @@ fn string_quotes_that_are_row_characters_update_following_positions() {
 }
 
 #[test]
-fn sparse_high_ignore_tins_do_not_size_the_dense_cache() {
-    let sparse_tin = i32::MAX;
-    let mut options = Options::default();
-    options.fixed.tokens.insert(
-        "#SPARSE".into(),
-        FixedToken {
-            name: "#SPARSE".into(),
-            tin: sparse_tin,
-            source: "!".into(),
-        },
-    );
-    options.token_set.insert("IGNORE".into(), vec![sparse_tin]);
+fn sparse_ignore_tins_do_not_size_or_bypass_the_dense_cache() {
+    for (name, tin, source) in [("#HIGH", i32::MAX, "!"), ("#NEGATIVE", -2, "?")] {
+        let mut options = Options::default();
+        options.fixed.tokens.insert(
+            name.into(),
+            FixedToken {
+                name: name.into(),
+                tin,
+                source: source.into(),
+            },
+        );
+        options.token_set.insert("IGNORE".into(), vec![tin]);
 
-    let mut lexer = Lexer::new("!", options);
-    assert_eq!(lexer.next_token().unwrap().tin, TIN_ZZ);
+        let mut lexer = Lexer::new(source, options);
+        assert_eq!(lexer.next_token().unwrap().tin, TIN_ZZ, "tin {tin}");
+    }
 }
 
 #[test]
