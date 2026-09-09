@@ -254,6 +254,37 @@ describe('cover-lex', () => {
     assert.equal(j.parse('ab'), 'one')
   })
 
+  it('match-tokens-without-a-rule-are-ungated', () => {
+    // A standalone lexer — makeLex + lex.next() with no rule, the shape
+    // the exported lexer API and the tests above use — has no rule and
+    // so no token column to gate on. Every match token is eligible
+    // there, eager or not: nothing downstream constrains the caller.
+    // Deriving the column unconditionally threw instead, and Lex.next
+    // turned that into a #BD, so a standalone lexer carrying any match
+    // token stopped dead on the first character it should have matched.
+    const run = (eager) => {
+      const re = /^x+/
+      if (eager) re.eager$ = true
+      const j = tn.make({ match: { token: { '#X': re } } })
+      const lex = makeLex({
+        src: () => 'xxy',
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const out = []
+      for (let i = 0; i < 4; i++) {
+        const t = lex.next()
+        out.push(t.name + ':' + t.src)
+        if ('#ZZ' === t.name || '#BD' === t.name) break
+      }
+      return out.join(' ')
+    }
+
+    assert.equal(run(true), '#X:xx #TX:y #ZZ:')
+    assert.equal(run(false), '#X:xx #TX:y #ZZ:')
+  })
+
   it('string-escapes-and-replace', () => {
     // Valid \x ascii escape.
     assert.equal(summary({}, '"\\x41"'), '#ST:A #ZZ')

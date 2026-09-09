@@ -1222,13 +1222,23 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 	}
 
 	// Match tokens (TS: tokenMatchers loop).
-	// Only match if the token type is expected in the current rule position.
-	if rule != nil && rule.Spec != nil {
+	// Only match if the token type is expected in the current rule
+	// position — unless there is no rule at all. A standalone lexer
+	// (Lex.Next with a nil rule, the shape the exported lexer API uses)
+	// has nothing to gate on: no parser rule constrains what the caller
+	// can use, so every match token is eligible and the two passes below
+	// collapse into the first. Skipping the whole block, as this did,
+	// silently dropped every match token there. TS does the same, keyed
+	// on the same condition (ts/src/lexer.ts makeMatchMatcher, `gated`).
+	{
+		gated := rule != nil && rule.Spec != nil
 		var alts []*AltSpec
-		if rule.State == OPEN {
-			alts = rule.Spec.open
-		} else {
-			alts = rule.Spec.close
+		if gated {
+			if rule.State == OPEN {
+				alts = rule.Spec.open
+			} else {
+				alts = rule.Spec.close
+			}
 		}
 
 		// Two passes so a token EXPECTED at this rule position wins over a
@@ -1297,7 +1307,9 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// An alternate shorter than tI has nothing to say about
 					// this slot and must not vote.
 					slot := l.tI
-					positionExpected := false
+					// Ungated: nothing to be expected BY, so everything
+					// is, and pass 0 runs every candidate in tin order.
+					positionExpected := !gated
 					for _, alt := range alts {
 						altS := alt.S
 						if l.Ctx != nil {

@@ -529,7 +529,17 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     // remainder string, so materialize it (memoized per position).
     let fwd = lex.refwd()
 
-    let oc = 'o' === (rule as Rule).state ? 0 : 1
+    // A standalone lexer (`makeLex` + `lex.next()` with no rule, which
+    // the exported lexer API and its tests use) has no rule and so no
+    // token column to gate on. Nothing constrains what the caller can
+    // use there, so every matcher is eligible and the two passes below
+    // collapse into the first. Reading `rule.spec` unconditionally threw
+    // instead, and `Lex.next` turned that into a `#BD` token — which is
+    // what a standalone lexer with any match token got, before this
+    // change as well as after it.
+    const rspec = null == rule ? undefined : (rule as Rule).spec
+    const gated = null != rspec
+    let oc = gated && 'o' === (rule as Rule).state ? 0 : 1
 
     // Under a negotiated-lexing constraint, value matchers are skipped
     // outright: they produce value tokens (#VL) by content, not by the
@@ -585,7 +595,8 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     // Under a negotiated-lexing `want` the alternate's own tin list
     // replaces the column and is the sharper gate; one filtered pass is
     // the whole search, as in Go.
-    const col = null == want ? rule.spec.def.tcol[oc][tI] : undefined
+    const col =
+      null == want && gated ? (rspec as any).def.tcol[oc][tI] : undefined
 
     for (let pass = 0; pass < 2; pass++) {
       for (let tokenMatcher of tokenMatchers) {
@@ -596,7 +607,10 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
             continue
           }
         } else {
-          const expected = !tin || (null != col && col.includes(tin))
+          // Ungated (no rule): everything is expected, so pass 0 runs
+          // every matcher in tin order and pass 1 finds nothing left.
+          const expected =
+            !tin || !gated || (null != col && col.includes(tin))
           if (0 === pass ? !expected : expected || !(tokenMatcher as any).eager$) {
             continue
           }

@@ -91,17 +91,26 @@ Per-runtime notes:
   `ignored` token; Go's token carries no such field (its lexer skips
   ignored tokens in `Lex.Next` rather than attaching them), so there is
   nothing to preserve.
-- **Go skips rule-position gating under a want, deliberately.** Go's
-  match matcher carries a two-pass `positionExpected` scan that TS has
-  no equivalent of (TS gates by token column instead). Under a want that
-  scan is dead — `wants(tin)` is the gate — so Go does not run it, and
-  skips the second pass entirely. No behavioural effect, and it matters:
-  computing it anyway walked every alternate's slot-0 tins for every
-  candidate token, costing 25–98x on scannerless grammars with many
-  alternates (the llama.cpp GBNF corpus via `@tabnas/gbnf`: `json.gbnf`
-  went 26.9ms → 273µs per parse of an 8-character input). Do not
-  "restore parity" by reinstating the scan on the want path — there is
-  no TS behaviour to be parity with.
+- **Both runtimes skip rule-position gating under a want,
+  deliberately.** Go's match matcher makes a two-pass
+  `positionExpected` scan; TS makes the same two passes over its token
+  column (`ts/src/lexer.ts` makeMatchMatcher — position-expected
+  matchers first, eager-only ones second). Under a want that scan is
+  dead in both — the alternate's own tin list is the gate — so neither
+  runs it and neither makes the second pass. No behavioural effect, and
+  it matters: computing it anyway walked every alternate's slot-0 tins
+  for every candidate token, costing 25–98x on scannerless grammars with
+  many alternates (the llama.cpp GBNF corpus via `@tabnas/gbnf`:
+  `json.gbnf` went 26.9ms → 273µs per parse of an 8-character input). Do
+  not "restore parity" by reinstating the scan on the want path — there
+  is nothing on either side to be parity with.
+
+  Until the TS lexer gained its second pass, the two orders differed and
+  the difference was observable: an eager matcher earlier in tin order
+  beat a position-expected one later in TS but not in Go. That entry has
+  been retired; `TestEagerPrecedenceMatchesTS` (go/lexslotgate_test.go)
+  and `match-tokens-expected-at-slot-win-over-earlier-eager`
+  (ts/test/cover-lex.test.js) now pin the shared behaviour.
 
 It cannot widen the accepted language. A recut is returned only when its
 tin is in the alternate's OWN list, so every position still requires

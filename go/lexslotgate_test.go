@@ -139,28 +139,24 @@ func TestLexerGateIgnoresWildcardSlots(t *testing.T) {
 	}
 }
 
-// DIVERGENCE REGISTER — eager precedence. This pins what Go DOES, not
-// what it should do, so it goes red the moment the divergence is
-// repaired and cannot outlive what it records (admin ADR-14).
+// Eager precedence, now shared by both runtimes. This was a divergence
+// register entry: Go made two passes over its match tokens, the
+// position-expected ones first, while TS made one tin-ordered pass in
+// which eagerness merely bypassed the column gate — so an eager matcher
+// earlier in tin order beat a position-expected one later, and TS
+// rejected `aq` where Go accepted it.
 //
-// TS makes ONE tin-ordered pass over its match tokens in which eagerness
-// only bypasses the column gate, so an eager matcher earlier in that
-// order wins over a position-expected one later. Go makes two passes,
-// position-expected first, so the position-expected matcher always wins.
+// The repair went the other way round from the one this comment used to
+// propose: rather than collapsing Go's two passes (which Go cannot do
+// deterministically — its tins come from map iteration order, and a
+// single tin-ordered pass broke TestSerializedRegexTokensParse), TS
+// gained Go's two passes. So this is no longer a register entry; it is
+// an ordinary parity test, and ts/test/cover-lex.test.js
+// ('match-tokens-expected-at-slot-win-over-earlier-eager') is its twin.
 //
-// With rule `#A #X`, an eager `#E`, and both `#E` and `#X` matching `q`:
-//
-//	TypeScript  `aq` -> rejected (it lexes #E at slot 1, the alternate
-//	                    fails, and the error lands on #A at 1:1)
-//	Go          `aq` -> accepted, slot 1 holding #X
-//
-// Collapsing Go's two passes is the honest repair and is deliberately
-// NOT done here. Go's tins come from map iteration order, so a single
-// tin-ordered pass makes the winner non-deterministic where TS's
-// object-key order is stable — measured: it broke
-// TestSerializedRegexTokensParse, which TS passes. The ordering has to
-// be made deterministic first, and that is its own change.
-func TestEagerPrecedenceDivergesFromTS(t *testing.T) {
+// With rule `#A #X`, an eager `#E`, and both `#E` and `#X` matching `q`,
+// both runtimes now accept `aq` with slot 1 holding #X.
+func TestEagerPrecedenceMatchesTS(t *testing.T) {
 	no := false
 	j := Make(Options{
 		Rule:    &RuleOptions{Start: "top", Exclude: "tabnas,imp"},
@@ -188,9 +184,39 @@ func TestEagerPrecedenceDivergesFromTS(t *testing.T) {
 	})
 	out, err := j.Parse("aq")
 	if err != nil || out != "#X" {
-		t.Fatalf("the recorded divergence no longer reproduces "+
-			"(got out=%v err=%v). If Go now REJECTS `aq`, it has been "+
-			"repaired to match TypeScript — delete this test and the "+
-			"register entry it belongs to.", out, err)
+		t.Fatalf("expected-before-eager selection broke: `aq` should "+
+			"parse with #X at slot 1 in both runtimes (got out=%v "+
+			"err=%v)", out, err)
+	}
+}
+
+// A standalone lexer — Lex.Next with a nil rule, the shape the exported
+// lexer API uses — has no rule position to gate on, so every match token
+// is eligible there. Go used to skip the whole match-token block when
+// rule was nil and silently produced no match tokens at all; TS threw
+// and turned that into a #BD. Both now lex it.
+func TestMatchTokensWithoutARuleAreUngated(t *testing.T) {
+	no := false
+	j := Make(Options{
+		Text:    &TextOptions{Lex: &no},
+		Number:  &NumberOptions{Lex: &no},
+		Comment: &CommentOptions{Lex: &no},
+	})
+	x := j.Token("#X")
+	j.SetOptions(Options{Match: &MatchOptions{
+		Token: map[string]*regexp.Regexp{"#X": regexp.MustCompile(`^x+`)},
+	}})
+
+	for _, eager := range []bool{false, true} {
+		if eager {
+			j.SetOptions(Options{Match: &MatchOptions{
+				TokenEager: map[string]bool{"#X": true},
+			}})
+		}
+		lex := NewLex("xxy", j.Config())
+		tkn := lex.Next()
+		if tkn == nil || tkn.Tin != x || tkn.Src != "xx" {
+			t.Fatalf("eager=%v: standalone lex gave %v, want #X \"xx\"", eager, tkn)
+		}
 	}
 }

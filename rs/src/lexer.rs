@@ -743,31 +743,54 @@ impl<'a> Lexer<'a> {
 
         let remaining = &self.src[self.byte_position()..];
         let custom = (self.options.match_lex && !match_skipped).then(|| {
-            self.options.match_tokens.values().find_map(|matcher| {
-                if !self.wants(matcher.tin) {
-                    return None;
-                }
-                if self.want.is_none()
-                    && !matcher.eager
-                    && expected_match_tins.is_some_and(|expected| !expected.contains(&matcher.tin))
-                {
-                    return None;
-                }
-                let result = match &matcher.matcher {
-                    MatchTokenMatcher::Regex(regex) => regex
-                        .find(remaining)
-                        .filter(|found| found.start() == 0)
-                        .map(|found| {
-                            let source = found.as_str().to_string();
-                            (source.clone(), Value::String(source))
-                        }),
-                    MatchTokenMatcher::Callback(callback) => callback(remaining)
-                        .filter(|result| {
-                            !result.source.is_empty() && remaining.starts_with(&result.source)
-                        })
-                        .map(|result| (result.source, result.value)),
-                };
-                result.map(|(source, value)| (matcher.name.clone(), matcher.tin, source, value))
+            // Two passes, position-expected before eager, as go/lexer.go
+            // matchMatch and ts/src/lexer.ts makeMatchMatcher both make.
+            // One tin-ordered pass in which eagerness merely bypassed the
+            // slot gate let an eager matcher EARLIER in tin order win over
+            // an expected one later: with `p = %x31-39` beside
+            // `d = %x30-39`, the `2` of `12` lexed as the narrower class
+            // the `*d` loop never asked for. Eagerness is for firing where
+            // the slot's list is narrower than the grammar, never for
+            // outbidding what the slot names.
+            //
+            // Under a want the alternate's own tin list is the sharper
+            // gate, so one filtered pass is the whole search. With no
+            // expected list at all (a standalone lexer, no rule) nothing
+            // constrains the caller and every matcher is eligible in the
+            // first pass.
+            let passes = if self.want.is_some() { 1 } else { 2 };
+            (0..passes).find_map(|pass| {
+                self.options.match_tokens.values().find_map(|matcher| {
+                    if !self.wants(matcher.tin) {
+                        return None;
+                    }
+                    if self.want.is_none() {
+                        let expected = expected_match_tins
+                            .map_or(true, |expected| expected.contains(&matcher.tin));
+                        if pass == 0 {
+                            if !expected {
+                                return None;
+                            }
+                        } else if expected || !matcher.eager {
+                            return None;
+                        }
+                    }
+                    let result = match &matcher.matcher {
+                        MatchTokenMatcher::Regex(regex) => regex
+                            .find(remaining)
+                            .filter(|found| found.start() == 0)
+                            .map(|found| {
+                                let source = found.as_str().to_string();
+                                (source.clone(), Value::String(source))
+                            }),
+                        MatchTokenMatcher::Callback(callback) => callback(remaining)
+                            .filter(|result| {
+                                !result.source.is_empty() && remaining.starts_with(&result.source)
+                            })
+                            .map(|result| (result.source, result.value)),
+                    };
+                    result.map(|(source, value)| (matcher.name.clone(), matcher.tin, source, value))
+                })
             })
         });
         if let Some(Some((name, tin, matched, value))) = custom {
