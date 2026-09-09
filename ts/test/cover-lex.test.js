@@ -209,6 +209,109 @@ describe('cover-lex', () => {
     assert.equal(j.parse('=b'), 'TX:=b')
   })
 
+  it('match-tokens-expected-at-slot-win-over-earlier-eager', () => {
+    // Two passes over the match tokens, as go/lexer.go makes: first the
+    // tokens the rule expects at this slot, then the eager ones it does
+    // not. Both '#EA' and '#XA' match an 'a'; '#EA' is registered first
+    // (lower tin) and eager, '#XA' is what the rule expects. One pass in
+    // tin order with eagerness bypassing the gate produced '#EA' and the
+    // rule failed on a token it never asked for — a grammar with a class
+    // inside a class (`p = %x31-39`, `d = %x30-39`) read the `2` of `12`
+    // as the narrower class it did not expect there.
+    const make = () => new Tabnas({
+      rule: { start: 'top' },
+      fixed: { token: { '#X': '!' } },
+      match: {
+        token: {
+          '#EA': Object.assign(/^a/, { eager$: true }),
+          '#XA': Object.assign(/^[a-z]/, { eager$: true }),
+        },
+      },
+    })
+
+    let j = make()
+    j.rule('top', (rs) =>
+      rs.open([{ s: ['#XA'], a: (r) => (r.node = r.o0.name) }])
+        .close([{ s: ['#ZZ'] }]))
+    assert.equal(j.parse('a'), '#XA')
+
+    // And an eager token still fires at a lookahead slot the rule's
+    // collated column does not cover: the first alternate peeks two
+    // tokens ('#XA' then '#X'), so slot 1 lists only '#X'; the 'b' of
+    // 'ab' matches nothing expected there and would have been a fatal
+    // #BD. The eager '#XA' lexes it instead, the two-token alternate
+    // fails cleanly, and the one-token alternate carries on.
+    j = make()
+    j.rule('top', (rs) =>
+      rs.open([
+        { s: ['#XA', '#X'], a: (r) => (r.node = 'pair') },
+        { s: ['#XA'], p: 'rest', a: (r) => (r.node = 'one') },
+      ])
+        .close([{ s: ['#ZZ'] }]))
+    j.rule('rest', (rs) =>
+      rs.open([{ s: ['#XA'], a: (r) => (r.node = r.o0.name) }]))
+    assert.equal(j.parse('a!'), 'pair')
+    assert.equal(j.parse('ab'), 'one')
+  })
+
+  it('expected-fixed-literal-beats-an-eager-tie', () => {
+    // The eager pass yields to a literal the slot expects that it
+    // cannot out-cut. Without this a character class containing a
+    // literal the grammar also uses swallowed it: `num = "0" / posdigit
+    // *digit` beside `digit = %x30-39` rejected `0.0.0`, because the
+    // eager class took every `0` and the fixed `#0` was never produced.
+    const build = (seq) => {
+      const j = new Tabnas({
+        rule: { start: 'top' },
+        fixed: { token: { '#NL': '\n' } },
+        match: { token: { '#WS': Object.assign(/^[ \t\n]+/, { eager$: true }) } },
+        tokenSet: { IGNORE: [] },
+      })
+      j.rule('top', (rs) => rs.open([{ s: seq, a: (r) => (r.node = 'NL') }]))
+      return j
+    }
+
+    // A tie goes to the expected literal: no recut needed, and the
+    // parse that used to fail now succeeds.
+    assert.equal(build(['#NL']).parse('\n'), 'NL')
+
+    // But the literal must not truncate a longer eager match: `#WS`
+    // takes both newlines, the alternate wanting a second `#NL` sees a
+    // token it did not ask for, and only negotiated lexing resolves it.
+    assert.throws(() => build(['#NL', '#NL']).parse('\n\n'))
+  })
+
+  it('match-tokens-without-a-rule-are-ungated', () => {
+    // A standalone lexer — makeLex + lex.next() with no rule, the shape
+    // the exported lexer API and the tests above use — has no rule and
+    // so no token column to gate on. Every match token is eligible
+    // there, eager or not: nothing downstream constrains the caller.
+    // Deriving the column unconditionally threw instead, and Lex.next
+    // turned that into a #BD, so a standalone lexer carrying any match
+    // token stopped dead on the first character it should have matched.
+    const run = (eager) => {
+      const re = /^x+/
+      if (eager) re.eager$ = true
+      const j = tn.make({ match: { token: { '#X': re } } })
+      const lex = makeLex({
+        src: () => 'xxy',
+        cfg: j.internal().config,
+        opts: j.options,
+        sub: {},
+      })
+      const out = []
+      for (let i = 0; i < 4; i++) {
+        const t = lex.next()
+        out.push(t.name + ':' + t.src)
+        if ('#ZZ' === t.name || '#BD' === t.name) break
+      }
+      return out.join(' ')
+    }
+
+    assert.equal(run(true), '#X:xx #TX:y #ZZ:')
+    assert.equal(run(false), '#X:xx #TX:y #ZZ:')
+  })
+
   it('string-escapes-and-replace', () => {
     // Valid \x ascii escape.
     assert.equal(summary({}, '"\\x41"'), '#ST:A #ZZ')

@@ -33,12 +33,10 @@ fn failed_alternate_restores_the_original_cut() {
     assert!(fixed_parser(true, alternatives).parse("ab").is_ok());
 }
 
-#[test]
-fn eager_regex_class_can_be_recut_as_a_literal() {
-    for (relex, accepted) in [(false, false), (true, true)] {
-        let mut parser = Tabnas::new();
-        let grammar = format!(
-            r##"{{
+fn contested_parser_seq(relex: bool, sequence: &str) -> Tabnas {
+    let mut parser = Tabnas::new();
+    let grammar = format!(
+        r##"{{
               "clear":true,
               "options":{{
                 "lex":{{"relex":{relex}}},
@@ -47,12 +45,39 @@ fn eager_regex_class_can_be_recut_as_a_literal() {
                 "fixed":{{"token":{{"#NL":"\n"}}}},
                 "tokenSet":{{"IGNORE":[]}}
               }},
-              "rule":{{"top":{{"open":[{{"s":"#NL"}}]}}}}
+              "rule":{{"top":{{"open":[{{"s":"{sequence}"}}]}}}}
             }}"##
-        );
-        parser.grammar_json(&grammar).unwrap();
-        let result = parser.parse("\n");
+    );
+    parser.grammar_json(&grammar).unwrap();
+    parser
+}
+
+fn contested_parser(relex: bool) -> Tabnas {
+    contested_parser_seq(relex, "#NL")
+}
+
+#[test]
+fn eager_regex_class_can_be_recut_as_a_literal() {
+    // The class cuts FURTHER than the literal here (both newlines), so
+    // the lexer's preference for a literal the slot expects does not
+    // apply and only a recut resolves the contest. That is what makes
+    // this an honest check that the option is not silently on.
+    for (relex, accepted) in [(false, false), (true, true)] {
+        let result = contested_parser_seq(relex, "#NL #NL").parse("\n\n");
         assert_eq!(result.is_ok(), accepted, "relex={relex}: {result:?}");
+    }
+}
+
+#[test]
+fn expected_literal_beats_an_eager_tie_without_relex() {
+    // An equal-length contest needs no recut: the lexer does not hand
+    // out a token the slot did not ask for when one it did ask for fits
+    // the same characters. This is the case that made the engine reject
+    // grammars it plainly accepts (`num = "0" / posdigit *digit` beside
+    // `digit = %x30-39`).
+    for relex in [false, true] {
+        let result = contested_parser(relex).parse("\n");
+        assert!(result.is_ok(), "relex={relex}: {result:?}");
     }
 }
 

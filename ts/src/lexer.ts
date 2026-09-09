@@ -529,7 +529,17 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     // remainder string, so materialize it (memoized per position).
     let fwd = lex.refwd()
 
-    let oc = 'o' === (rule as Rule).state ? 0 : 1
+    // A standalone lexer (`makeLex` + `lex.next()` with no rule, which
+    // the exported lexer API and its tests use) has no rule and so no
+    // token column to gate on. Nothing constrains what the caller can
+    // use there, so every matcher is eligible and the two passes below
+    // collapse into the first. Reading `rule.spec` unconditionally threw
+    // instead, and `Lex.next` turned that into a `#BD` token — which is
+    // what a standalone lexer with any match token got, before this
+    // change as well as after it.
+    const rspec = null == rule ? undefined : (rule as Rule).spec
+    const gated = null != rspec
+    let oc = gated && 'o' === (rule as Rule).state ? 0 : 1
 
     // Under a negotiated-lexing constraint, value matchers are skipped
     // outright: they produce value tokens (#VL) by content, not by the
@@ -566,58 +576,126 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
       }
     }
 
-    for (let tokenMatcher of tokenMatchers) {
-      // Only match Token if present in Rule sequence.
-      // Exception: an `eager$` flag on the matcher opts out of
-      // tcol gating — the matcher fires whenever its regex matches
-      // and the downstream parser rejects tokens it doesn't expect
-      // at the current position. This is what ABNF's
-      // case-insensitive literals need: the lexer has to emit the
-      // literal's own tin even when the current rule's tcol is
-      // narrower, so the next rule up the stack can see the token
-      // as its proper type rather than falling through to #TX.
+    // Two passes over the token matchers, in tin order within each, as
+    // go/lexer.go matchMatch has always made: first the matchers whose
+    // tin the rule expects at this slot, then the `eager$` ones it does
+    // not. One pass, with eagerness merely bypassing the gate, let an
+    // eager matcher EARLIER in tin order win over an expected one later:
+    // `s = p *d [t]` with `p = %x31-39`, `d = %x30-39` read the `2` of
+    // `12` as `p`, and the `*d` loop, which wanted `d`, failed on a token
+    // it never expected. Preferring what the parser expects at the slot
+    // is what eagerness was for: a token that must still fire where the
+    // rule's collated column is narrower than the grammar (a case-
+    // insensitive literal; a character class at a lookahead slot the
+    // column does not cover), never one that steals an expected cut.
+    //
+    // A matcher with no `tin$` (a function matcher registered without a
+    // token) has no gate to fail and runs in the first pass, as before.
+    //
+    // Under a negotiated-lexing `want` the alternate's own tin list
+    // replaces the column and is the sharper gate; one filtered pass is
+    // the whole search, as in Go.
+    const col =
+      null == want && gated ? (rspec as any).def.tcol[oc][tI] : undefined
 
-      if (null != want) {
-        // Negotiated lexing: the alternate's own tin list replaces tcol
-        // gating — only matchers able to produce a wanted tin run.
+    // The longest FIXED literal the slot expects that matches here, or
+    // 0. Computed once per lex, and only when the eager pass is reached:
+    // pass 0 is the match tokens the slot expects, and between a token
+    // the slot expects and a literal it expects, the existing matcher
+    // order decides. -1 means "not computed yet".
+    //
+    // In the eager pass, a literal the slot names beats an eager-only
+    // matcher that cuts no further than it does. Without this, a
+    // character class that CONTAINS a literal the grammar also uses
+    // swallows it wherever the class is eager: `num = "0" / posdigit
+    // *digit` beside `digit = %x30-39` lexed every `0` as the class, the
+    // fixed `#0` was never produced, and no alternate of `num` could
+    // match — Go rejected `0.0.0` for a grammar that plainly accepts it,
+    // and TS did too once the bnf emitter marked classes eager.
+    // Eagerness is for firing where the column is narrower than the
+    // grammar, never for outbidding what the column names.
+    //
+    // LENGTH decides, not mere existence: an eager matcher that cuts
+    // FURTHER than the literal still wins, so a keyword literal cannot
+    // truncate a longer word (`#IF` = "if" beside an eager `#ID` =
+    // /^[a-z]+/ leaves `iffy` to `#ID`, and takes `if` itself). Ties go
+    // to the literal, which is the case this exists for.
+    //
+    // Read from `cfg.fixed.token` at lex time, never snapshotted when
+    // the matcher was built: a grammar adds its own literals after the
+    // matchers exist, and a snapshot would hold only the defaults —
+    // which is exactly the case this has to see (`#0` is the grammar's).
+    // Go reads `Config.FixedTokens` the same way, in expectedFixedLen.
+    let fixLen = -1
+    const expectedFixedLen = (): number => {
+      if (-1 !== fixLen) return fixLen
+      fixLen = 0
+      if (!cfg.fixed.lex || null == col || 0 === col.length) return fixLen
+      const src = lex.src
+      const sI = pnt.sI
+      const ftoken = cfg.fixed.token
+      for (const fsrc of keys(ftoken)) {
+        const ftin = ftoken[fsrc]
         if (
-          !(tokenMatcher as any).tin$ ||
-          !want.includes((tokenMatcher as any).tin$)
+          null != ftin && fsrc.length > fixLen &&
+          col.includes(ftin) && src.startsWith(fsrc, sI)
         ) {
-          continue
+          fixLen = fsrc.length
         }
-      } else if (
-        (tokenMatcher as any).tin$ &&
-        !(tokenMatcher as any).eager$ &&
-        !rule.spec.def.tcol[oc][tI].includes((tokenMatcher as any).tin$)
-      ) {
-        continue
       }
+      return fixLen
+    }
 
-      if (tokenMatcher instanceof RegExp) {
-        let m = fwd.match(tokenMatcher)
+    for (let pass = 0; pass < 2; pass++) {
+      for (let tokenMatcher of tokenMatchers) {
+        const tin = (tokenMatcher as any).tin$
 
-        if (m) {
-          let msrc = m[0]
-          let mlen = msrc.length
-          if (0 < mlen) {
-            let tkn: Token | undefined = undefined
+        if (null != want) {
+          if (!tin || !want.includes(tin)) {
+            continue
+          }
+        } else {
+          // Ungated (no rule): everything is expected, so pass 0 runs
+          // every matcher in tin order and pass 1 finds nothing left.
+          const expected =
+            !tin || !gated || (null != col && col.includes(tin))
+          if (0 === pass ? !expected : expected || !(tokenMatcher as any).eager$) {
+            continue
+          }
+        }
 
-            let tin = (tokenMatcher as any).tin$
-            tkn = lex.token(tin, msrc, msrc, pnt)
+        if (tokenMatcher instanceof RegExp) {
+          let m = fwd.match(tokenMatcher)
 
-            pnt.sI += mlen
-            pnt.cI += mlen
+          if (m) {
+            let msrc = m[0]
+            let mlen = msrc.length
+            // The eager pass yields to an expected literal it cannot
+            // out-cut; the fixed matcher (order 2e6) runs next and takes
+            // it. See `expectedFixedLen` above.
+            if (1 === pass && mlen <= expectedFixedLen()) {
+              continue
+            }
+            if (0 < mlen) {
+              let tkn: Token | undefined = undefined
 
+              tkn = lex.token(tin, msrc, msrc, pnt)
+
+              pnt.sI += mlen
+              pnt.cI += mlen
+
+              return tkn
+            }
+          }
+        } else {
+          let tkn: any = tokenMatcher(lex, rule)
+          if (null != tkn) {
             return tkn
           }
         }
-      } else {
-        let tkn: any = tokenMatcher(lex, rule)
-        if (null != tkn) {
-          return tkn
-        }
       }
+
+      if (null != want) break
     }
   })
 }

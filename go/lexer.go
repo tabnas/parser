@@ -1222,13 +1222,23 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 	}
 
 	// Match tokens (TS: tokenMatchers loop).
-	// Only match if the token type is expected in the current rule position.
-	if rule != nil && rule.Spec != nil {
+	// Only match if the token type is expected in the current rule
+	// position — unless there is no rule at all. A standalone lexer
+	// (Lex.Next with a nil rule, the shape the exported lexer API uses)
+	// has nothing to gate on: no parser rule constrains what the caller
+	// can use, so every match token is eligible and the two passes below
+	// collapse into the first. Skipping the whole block, as this did,
+	// silently dropped every match token there. TS does the same, keyed
+	// on the same condition (ts/src/lexer.ts makeMatchMatcher, `gated`).
+	{
+		gated := rule != nil && rule.Spec != nil
 		var alts []*AltSpec
-		if rule.State == OPEN {
-			alts = rule.Spec.open
-		} else {
-			alts = rule.Spec.close
+		if gated {
+			if rule.State == OPEN {
+				alts = rule.Spec.open
+			} else {
+				alts = rule.Spec.close
+			}
 		}
 
 		// Two passes so a token EXPECTED at this rule position wins over a
@@ -1240,11 +1250,52 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 		// tcol gating, which only emits tokens listed at the current slot.
 		// Pass 0 considers only position-0-expected tokens; pass 1 adds
 		// the eager-only fallbacks.
-		runMatch := func(mt *MatchTokenEntry, tin Tin, re *regexp.Regexp) *Token {
+		// The longest FIXED literal this slot expects that matches here,
+		// or 0. Only the eager pass consults it: pass 0 is the match
+		// tokens the slot expects, and between a token the slot expects
+		// and a literal it expects, the existing matcher order decides.
+		//
+		// In the eager pass, a literal the slot names beats an
+		// eager-only matcher that cuts no further than it does. Without
+		// this, a character class that CONTAINS a literal the grammar
+		// also uses swallows it, because the emitter marks every class
+		// eager: `num = "0" / posdigit *digit` beside `digit = %x30-39`
+		// lexed every `0` as the class, the fixed `#0` was never
+		// produced, and no alternate of `num` could match — this engine
+		// rejected `0.0.0` for a grammar that plainly accepts it.
+		// Eagerness is for firing where the slot's list is narrower than
+		// the grammar, never for outbidding what the slot names.
+		//
+		// LENGTH decides, not mere existence: an eager matcher that cuts
+		// FURTHER than the literal still wins, so a keyword literal
+		// cannot truncate a longer word (`#IF` = "if" beside an eager
+		// `#ID` = ^[a-z]+ leaves `iffy` to `#ID`, and takes `if`
+		// itself). Ties go to the literal, which is the case this exists
+		// for. TS does the same, in makeMatchMatcher.
+		// Computed on first need in the eager pass, never up front: the
+		// scan is O(fixed tokens x alternates) and pass 0 usually
+		// settles it. -1 means "not computed yet".
+		fixLen := -1
+		expectedFixedLen := func() int {
+			if fixLen < 0 {
+				fixLen = 0
+				if gated && l.want == nil && l.Config.FixedLex {
+					fixLen = l.expectedFixedLen(alts, fwd)
+				}
+			}
+			return fixLen
+		}
+
+		runMatch := func(mt *MatchTokenEntry, tin Tin, re *regexp.Regexp, pass int) *Token {
 			if mt.Fn != nil {
 				return mt.Fn(l, rule)
 			}
 			res := re.FindString(fwd)
+			// The eager pass yields to an expected literal it cannot
+			// out-cut; the fixed matcher (2e6) runs next and takes it.
+			if pass == 1 && len(res) <= expectedFixedLen() {
+				return nil
+			}
 			if res != "" {
 				name := l.tinNameFor(tin)
 				tkn := l.Token(name, tin, res, res)
@@ -1297,7 +1348,9 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// An alternate shorter than tI has nothing to say about
 					// this slot and must not vote.
 					slot := l.tI
-					positionExpected := false
+					// Ungated: nothing to be expected BY, so everything
+					// is, and pass 0 runs every candidate in tin order.
+					positionExpected := !gated
 					for _, alt := range alts {
 						altS := alt.S
 						if l.Ctx != nil {
@@ -1337,24 +1390,21 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 						// Pass 1: eager-only fallbacks (position-expected
 						// ones were already tried in pass 0).
 						//
-						// NOTE this is NOT what TS does, and the difference
-						// is a live divergence — see the eager case in
-						// #136. TS makes ONE tin-ordered pass in which
-						// eagerness only bypasses the gate, so an eager
-						// matcher earlier in that order wins over a
-						// position-expected one later. Collapsing these two
-						// passes is the honest repair and is NOT done here:
-						// Go's tins come from map iteration order
-						// (MapToOptions over a Go map), so a single
-						// tin-ordered pass makes the winner a coin flip
-						// where TS's object-key order is deterministic.
-						// Measured: collapsing them broke
-						// TestSerializedRegexTokensParse, which TS passes.
-						// The ordering has to be made deterministic first.
+						// The TS lexer makes the same two passes (see
+						// makeMatchMatcher in ts/src/lexer.ts). It used to
+						// make ONE tin-ordered pass in which eagerness only
+						// bypassed the gate, so an eager matcher earlier in
+						// that order won over a position-expected one later
+						// — the eager case of #136 — and a class inside a
+						// class (`p = %x31-39`, `d = %x30-39`) read the `2`
+						// of `12` as the narrower class the `*d` loop never
+						// asked for. Preferring what the parser expects at
+						// the slot is the behaviour both runtimes now share,
+						// and TS pins it in cover-lex.test.js.
 						continue
 					}
 				}
-				if tkn := runMatch(mt, tin, re); tkn != nil {
+				if tkn := runMatch(mt, tin, re, pass); tkn != nil {
 					return tkn
 				}
 			}
@@ -1367,6 +1417,42 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 	}
 
 	return nil
+}
+
+// expectedFixedLen is the length of the longest fixed literal that some
+// alternate names at the slot being filled and that matches the source
+// here, or 0. See the call site in matchMatch: it is what lets an
+// expected literal beat an eager-only match token it out-cuts or ties.
+// FixedSorted is longest-first, so the first hit is the longest.
+func (l *Lex) expectedFixedLen(alts []*AltSpec, fwd string) int {
+	if len(l.Config.FixedSorted) == 0 {
+		return 0
+	}
+	slot := l.tI
+	for _, fs := range l.Config.FixedSorted {
+		if fs == "" || !strings.HasPrefix(fwd, fs) {
+			continue
+		}
+		ftin, ok := l.Config.FixedTokens[fs]
+		if !ok {
+			continue
+		}
+		for _, alt := range alts {
+			altS := alt.S
+			if l.Ctx != nil {
+				altS = l.Ctx.altS(alt)
+			}
+			if len(altS) <= slot {
+				continue
+			}
+			for _, want := range altS[slot] {
+				if want == ftin {
+					return len(fs)
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func (l *Lex) bad(why string, pstart, pend int) *Token {
