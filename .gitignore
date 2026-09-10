@@ -149,3 +149,8 @@ vite.config.ts.timestamp-*
 # exit. Ignored so a crashed or interrupted run cannot leave a duplicate
 # dist/ staged for commit.
 .abba-null/
+
+# ci/fleet/run-fleet.sh checks the fleet out here: thirty repositories at
+# their latest release, each with its own node_modules. Generated, large,
+# and re-fetched on demand -- never committed.
+ci/fleet/.work/

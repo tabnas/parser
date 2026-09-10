@@ -1,0 +1,16 @@
+# Known-broken fleet entries, one per line, as:
+#
+#     <package>/<runtime>: <reason>
+#
+# The entry is still RUN. Two rules, both taken from
+# ci/gate/fixture-sync-allow.txt, whose design problem was the same one:
+#
+#   - a line with no reason is rejected outright, so a package cannot be
+#     quieted by adding a bare name;
+#   - an entry that PASSES fails the gate, so an exemption cannot outlive
+#     the breakage it was written for. That is the failure mode an allow
+#     list has: it goes on being obeyed long after it stops being true,
+#     and the next real break lands in the space it left.
+#
+# This file is empty on purpose. Nothing has earned a line yet, and an
+# example entry would be a line nobody put a reason behind.

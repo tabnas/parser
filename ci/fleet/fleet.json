@@ -1,0 +1,59 @@
+{
+  "$comment": [
+    "The fleet: every published tabnas grammar, compiler and plugin that runs",
+    "ON this engine. ci/fleet/run-fleet.sh checks each one out at its LATEST",
+    "released version and runs that repo's own suites against the",
+    "working-tree engine.",
+    "",
+    "`base` is the grammar this one extends, from the repo's own",
+    "tabnas.plugin.json. It is here for BUILD ORDER only — run-fleet.sh",
+    "topologically sorts on it, because jsonic cannot build before json.",
+    "",
+    "`suites` false means: install and wire it, because other repos' tests",
+    "import it, but do not run its own suite. Only @tabnas/support is set",
+    "that way, and only because it is the shared test-fixture loader rather",
+    "than something that parses.",
+    "",
+    "Adding a package: add the row. run-fleet.sh resolves its version from",
+    "npm at run time, so nothing here records one."
+  ],
+  "packages": [
+    { "name": "support", "base": null, "suites": false },
+
+    { "name": "bnf", "base": null, "suites": true },
+    { "name": "abnf", "base": "bnf", "suites": true },
+    { "name": "ebnf", "base": "bnf", "suites": true },
+    { "name": "gbnf", "base": "bnf", "suites": true },
+
+    { "name": "debug", "base": null, "suites": true },
+    { "name": "railroad", "base": null, "suites": true },
+
+    { "name": "json", "base": null, "suites": true },
+    { "name": "jsonl", "base": "json", "suites": true },
+    { "name": "jsonic", "base": "json", "suites": true },
+    { "name": "jsonc", "base": "jsonic", "suites": true },
+    { "name": "json5", "base": "jsonic", "suites": true },
+
+    { "name": "yaml", "base": "jsonic", "suites": true },
+    { "name": "toml", "base": "jsonic", "suites": true },
+    { "name": "ini", "base": "jsonic", "suites": true },
+    { "name": "csv", "base": "jsonic", "suites": true },
+    { "name": "xml", "base": "jsonic", "suites": true },
+    { "name": "css", "base": "jsonic", "suites": true },
+    { "name": "c", "base": "jsonic", "suites": true },
+    { "name": "zon", "base": "jsonic", "suites": true },
+
+    { "name": "proto", "base": "abnf", "suites": true },
+    { "name": "semver", "base": "abnf", "suites": true },
+
+    { "name": "markdown", "base": null, "suites": true },
+    { "name": "feed", "base": null, "suites": true },
+    { "name": "chess", "base": null, "suites": true },
+
+    { "name": "expr", "base": "jsonic", "suites": true },
+    { "name": "directive", "base": null, "suites": true },
+    { "name": "hoover", "base": null, "suites": true },
+    { "name": "path", "base": null, "suites": true },
+    { "name": "multisource", "base": null, "suites": true }
+  ]
+}

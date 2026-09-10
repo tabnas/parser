@@ -8,6 +8,83 @@ Layout assumption (matches the existing build.yml convention): sibling
 checkouts next to this repo — `<root>/parser`, `<root>/json`,
 `<root>/jsonic` (override the root with `TABNAS_ROOT`).
 
+`fleet/` is the exception: it fetches the checkouts it needs itself, at
+each package's released version, so it needs nothing beside this repo.
+
+## fleet/ — the downstream regression gate
+
+Nothing else here answers the question an engine change actually raises:
+**does every published grammar still work on it?** `gate/` runs json and
+jsonic from whatever sibling checkouts are on the machine — two of thirty
+packages, at whatever revision the operator happens to have. This one
+checks out ALL of them at the version users are installing, and runs each
+repo's own suites against the working-tree engine.
+
+```bash
+ci/fleet/run-fleet.sh                       # the fleet, both runtimes
+ci/fleet/run-fleet.sh --only expr,jsonic    # just these (bases pulled in)
+ci/fleet/run-fleet.sh --runtime ts          # one runtime
+ci/fleet/run-fleet.sh --offline             # reuse .work, no network
+ci/fleet/run-fleet.sh --update-lock         # record the versions tested
+```
+
+It is deliberately not part of `make test`: thirty clones and two
+toolchains is minutes, not seconds, and it reaches the network. Run it on
+demand, and in CI — `workflows/fleet.yml` is the staged workflow, a small
+required arm on pull requests and the whole fleet nightly.
+
+**This gate is not speculative.** `@tabnas/parser` 0.9.1 shipped a
+regression in expression precedence: on it, with expr at *any* published
+version, `1+2*3` parses to `["*",2,3]` — the `1 +` is dropped. Run against
+the two engine trees:
+
+```
+ts/v0.9.0 →  expr/ts PASS   →  FLEET PASS
+ts/v0.9.1 →  expr/ts FAIL   →  FLEET FAIL      (16 of expr's own tests)
+```
+
+Sixteen failing tests in a published package, and every check in this
+repository was green. That is the hole.
+
+**Which means this gate is red on main today.** `expr/ts` fails against the
+working tree because the working tree is 0.9.1. That is the gate reporting
+correctly, not a harness bug — but promote `workflows/fleet.yml` as
+required only after the precedence fix lands, or promote it now as
+visible-but-not-required and let the red row be the reminder. `gate.yml`
+carries the same caveat for the same kind of reason.
+
+- `fleet.json` — the fleet. `base` is the grammar each one extends, used
+  for build order only (jsonic cannot build before json); naming a package
+  with `--only` pulls in its base chain. `suites: false` means wire it but
+  do not test it, and only `@tabnas/support` is set that way, because it is
+  the shared fixture loader rather than something that parses.
+- `expect-fail.txt` — known-broken entries, `<package>/<runtime>: <reason>`.
+  Two rules, both taken from `gate/fixture-sync-allow.txt`, whose design
+  problem was the same one: a line with **no reason is rejected**, so a
+  package cannot be quieted by adding a bare name; and an entry that
+  **passes fails the gate**, so an exemption cannot outlive the breakage it
+  was written for. The file ships empty.
+- `fleet.lock` — the versions the last `--update-lock` run recorded. The
+  script prints what moved since; it never fails on a difference, because a
+  new release is the thing being tested. Not committed until a full run has
+  produced one — a lock listing versions nobody ran would be a record of
+  nothing.
+
+**Both wirings prove themselves.** TypeScript goes through
+`link_ts_dep` (`lib/wire.sh`), shared with `run-gate.sh` and
+`run-bench.sh`, and then the harness asks node where it actually resolved
+`@tabnas/parser` from — a nested `node_modules` can shadow a correct
+symlink. Go has no symlink to inspect at all, so after `go work init` the
+harness asks `go list -m` which directory the engine resolved to. Either
+check failing aborts the run rather than reporting a result. A fleet gate
+that silently tests the PUBLISHED engine is worse than no gate: it is
+thirty green rows that mean nothing.
+
+Checkouts land in `ci/fleet/.work/` (gitignored) at each package's
+`ts/vX.Y.Z` release tag. A package with no such tag is still run, off its
+default branch, and the log says so — "we tested the release" and "we
+tested main" are different claims.
+
 ## gate/ — the engine conformance gate
 
 The engine's own CI currently exercises ~50 strict-JSON fixture rows
@@ -272,6 +349,9 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 
   **Promote it only after the Phase 1 escape repairs land** (`#123`), or it
   opens red — see the status note above.
+- `fleet.yml` — the downstream regression gate: a small required arm on
+  every PR, the whole fleet nightly and on demand. See `fleet/` above for
+  what it catches and why it is separate from `gate.yml`.
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
 - `rust.yml` — formatting, build, tests, strict Clippy, and the two
   TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
