@@ -21,8 +21,15 @@
 #   ci/fleet/run-fleet.sh --offline             # reuse .work, no network
 #   ci/fleet/run-fleet.sh --update-lock         # rewrite fleet.lock
 #
-# Exit status is the gate: 0 only when every suite that was expected to
-# pass did, AND nothing in expect-fail.txt passed unexpectedly.
+# THE GATE ONLY MEANS SOMETHING IF IT RAN. Every way this script can produce
+# a green result without having tested the working-tree engine is treated as
+# a failure, not a skip: a missing checkout, a failed install, a failed
+# build, an engine that resolves anywhere but here. A harness that passes
+# having run nothing is worse than no harness.
+#
+# Exit status is the gate: 0 only when every suite that was expected to pass
+# did, AND nothing in expect-fail.txt passed or failed differently than it
+# said it would.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -41,7 +48,7 @@ while [ $# -gt 0 ]; do
     --work) WORK="$2"; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
     --update-lock) UPDATE_LOCK=1; shift ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "run-fleet: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -51,10 +58,19 @@ case "$RUNTIME" in ts|go|both) ;; *) echo "run-fleet: --runtime must be ts, go o
 step() { printf '\n=== %s ===\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 
+# Per-suite output lives here so a CI failure can be read. Discarding it
+# leaves a workflow log with a FAIL row and no diagnostic, on an ephemeral
+# checkout nobody can inspect afterwards.
+LOGS="$WORK/.logs"
+
 # link_ts_dep lives in ci/lib/wire.sh, shared with run-gate.sh and
 # run-bench.sh so the three wirings cannot drift apart. Wiring the wrong
 # engine is the one failure that makes this whole harness lie.
 . "$DIR/../lib/wire.sh"
+
+fail=0
+results=()
+record() { results+=("$(printf '%-22s %s' "$1" "$2")"); }
 
 # --- preflight ---------------------------------------------------------
 # Fail on a missing toolchain HERE, with a sentence, rather than thirty
@@ -85,8 +101,7 @@ manifest() {
 
     // Build order, by base chain: jsonic cannot build before json. A
     // selection pulls in the bases it needs to build, even when they were
-    // not asked for, and they are marked so the report can say why they
-    // are there.
+    // not asked for.
     const need = new Set()
     const pull = (name) => {
       if (need.has(name) || !all.has(name)) return
@@ -108,7 +123,6 @@ manifest() {
     for (const name of order) {
       const p = all.get(name)
       const asked = !only || only.has(name)
-      // name<TAB>suites<TAB>asked
       console.log([name, p.suites && asked ? "1" : "0", asked ? "1" : "0"].join("\t"))
     }
   ' "$DIR/fleet.json" "$ONLY"
@@ -127,26 +141,43 @@ step "fleet: ${#NAMES[@]} package(s)"
 note "${NAMES[*]}"
 
 # --- expected failures -------------------------------------------------
-# A known-broken package is recorded HERE, with a reason, and it is still
-# run. Two rules, both borrowed from ci/gate/fixture-sync-allow.txt:
-#   - an entry that PASSES is a failure, so an exemption cannot outlive
-#     the breakage it was written for;
+# A known-broken package is recorded HERE and is still RUN. The format is
+#
+#     <package>/<runtime> :: <signature> :: <reason>
+#
+# and all three fields are required. <signature> is a substring that must
+# appear in the suite's output for the exemption to apply, because "this
+# package fails" is not a claim worth writing down: an entry that accepts
+# ANY non-zero exit turns off regression detection for that package
+# entirely, so a NEW break behind a known one would ride in unnoticed.
+# Three rules, the first two taken from ci/gate/fixture-sync-allow.txt,
+# whose design problem was the same one:
 #   - an entry with no reason is rejected, so nobody can quiet a package
-#     by adding a bare name.
-declare -A EXPECT_FAIL=()
+#     by adding a bare name;
+#   - an entry that PASSES fails the gate, so an exemption cannot outlive
+#     the breakage it was written for;
+#   - an entry that fails WITHOUT its signature fails the gate, so it
+#     covers the one breakage it names and nothing else.
+declare -A XFAIL_SIG=()
+declare -A XFAIL_WHY=()
 EXPECT_FILE="$DIR/expect-fail.txt"
 if [ -f "$EXPECT_FILE" ]; then
   while IFS= read -r line; do
-    line="${line%%#*}"
-    line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    [ -n "$line" ] || continue
-    key="${line%%:*}"
-    reason="$(echo "${line#*:}" | sed 's/^[[:space:]]*//')"
-    if [ "$key" = "$line" ] || [ -z "$reason" ]; then
-      echo "run-fleet: expect-fail.txt: '$line' has no reason — refusing to run" >&2
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    # A comment is a `#` that STARTS the line. Stripping from the first `#`
+    # anywhere would eat the `#` in a signature, and the most useful
+    # signatures are test-runner output like `# fail 16`.
+    case "$line" in ''|'#'*) continue ;; esac
+    key="$(printf '%s' "$line" | awk -F' *:: *' '{print $1}')"
+    sig="$(printf '%s' "$line" | awk -F' *:: *' '{print $2}')"
+    why="$(printf '%s' "$line" | awk -F' *:: *' '{print $3}')"
+    if [ -z "$key" ] || [ -z "$sig" ] || [ -z "$why" ]; then
+      echo "run-fleet: expect-fail.txt: '$line'" >&2
+      echo "run-fleet: needs '<package>/<runtime> :: <signature> :: <reason>' — refusing to run" >&2
       exit 2
     fi
-    EXPECT_FAIL["$key"]="$reason"
+    XFAIL_SIG["$key"]="$sig"
+    XFAIL_WHY["$key"]="$why"
   done < "$EXPECT_FILE"
 fi
 
@@ -155,7 +186,14 @@ fi
 # what a user gets from `npm i @tabnas/<name>`. The git tag `ts/vX.Y.Z` is
 # the commit that produced it (see each repo's `repo-tag` script), so it is
 # the tree whose tests describe that release.
+#
+# Go is versioned SEPARATELY, as `go/vX.Y.Z` on the Go module proxy. The two
+# usually move together and usually match, but nothing enforces that, and
+# running the Go suites off the npm release's tree would silently test the
+# wrong source the first time they diverge. So both are resolved, and the Go
+# arm gets its own checkout whenever they differ.
 declare -A VERSION=()
+declare -A GOVERSION=()
 declare -A LOCKED=()
 LOCK="$DIR/fleet.lock"
 if [ -f "$LOCK" ]; then
@@ -165,6 +203,17 @@ if [ -f "$LOCK" ]; then
     LOCKED["$n"]="$v"
   done < "$LOCK"
 fi
+
+# The Go tree for a package: its own checkout when the Go release differs
+# from the npm one, otherwise the same tree.
+godir() {
+  local name="$1"
+  if [ -n "${GOVERSION[$name]:-}" ] && [ "${GOVERSION[$name]}" != "${VERSION[$name]:-}" ]; then
+    printf '%s/.go/%s/go' "$WORK" "$name"
+  else
+    printf '%s/%s/go' "$WORK" "$name"
+  fi
+}
 
 if [ "$OFFLINE" = 1 ]; then
   step "versions: --offline, reusing $WORK as it stands"
@@ -177,61 +226,120 @@ else
       exit 2
     fi
     VERSION["$name"]="$v"
+
+    gv=""
+    if [ "$RUNTIME" != "ts" ]; then
+      gv="$(go list -m -versions "github.com/tabnas/$name/go" 2>/dev/null | awk '{print $NF}')"
+      gv="${gv#v}"
+      GOVERSION["$name"]="$gv"
+    fi
+
     was="${LOCKED[$name]:-}"
+    suffix=""
+    [ -n "$gv" ] && [ "$gv" != "$v" ] && suffix="  go $gv (SEPARATE CHECKOUT)"
     if [ -z "$was" ]; then
-      note "$(printf '%-14s %-10s (new — not in fleet.lock)' "$name" "$v")"
+      note "$(printf '%-14s %-10s (new — not in fleet.lock)%s' "$name" "$v" "$suffix")"
     elif [ "$was" != "$v" ]; then
-      note "$(printf '%-14s %-10s <- %s  UPDATED' "$name" "$v" "$was")"
+      note "$(printf '%-14s %-10s <- %s  UPDATED%s' "$name" "$v" "$was" "$suffix")"
     else
-      note "$(printf '%-14s %-10s' "$name" "$v")"
+      note "$(printf '%-14s %-10s%s' "$name" "$v" "$suffix")"
     fi
   done
 fi
 
 # --- check out each package at that version ----------------------------
-mkdir -p "$WORK"
+# `git checkout --force` does not remove untracked files, and a previous
+# release's build output left in place can let a suite pass without the
+# current source ever compiling. Clean it.
+checkout_at() { # checkout_at <repo-dir> <slug> <tag> <label>
+  local repo="$1" slug="$2" tag="$3" label="$4"
+  if [ ! -d "$repo/.git" ]; then
+    rm -rf "$repo"
+    git clone --quiet --filter=blob:none --no-checkout \
+      "https://github.com/tabnas/$slug.git" "$repo" || {
+        echo "run-fleet: clone failed for $slug" >&2; return 1; }
+  fi
+  if git -C "$repo" fetch --quiet --depth 1 origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null &&
+     git -C "$repo" checkout --quiet --force "$tag" 2>/dev/null; then
+    git -C "$repo" clean -qfdx -e node_modules
+    note "$(printf '%-14s %s%s' "$slug" "$tag" "$label")"
+  else
+    # A missing release tag is REPORTED, never silent: the run still has to
+    # happen, but "we tested the release" and "we tested the default
+    # branch" are different claims and the log has to say which.
+    local head
+    head="$(git -C "$repo" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
+    head="${head:-main}"
+    git -C "$repo" fetch --quiet --depth 1 origin "$head" &&
+      git -C "$repo" checkout --quiet --force FETCH_HEAD || {
+        echo "run-fleet: cannot check out $slug" >&2; return 1; }
+    git -C "$repo" clean -qfdx -e node_modules
+    note "$(printf '%-14s %s  (NO TAG %s — used %s)%s' \
+      "$slug" "$(git -C "$repo" rev-parse --short HEAD)" "$tag" "$head" "$label")"
+  fi
+}
+
+mkdir -p "$WORK" "$LOGS"
 if [ "$OFFLINE" = 0 ]; then
   step "checkout"
   for name in "${NAMES[@]}"; do
-    v="${VERSION[$name]}"
-    repo="$WORK/$name"
-    tag="ts/v$v"
-
-    if [ ! -d "$repo/.git" ]; then
-      rm -rf "$repo"
-      git clone --quiet --filter=blob:none --no-checkout \
-        "https://github.com/tabnas/$name.git" "$repo" || {
-          echo "run-fleet: clone failed for $name" >&2; exit 2; }
-    fi
-
-    if git -C "$repo" fetch --quiet --depth 1 origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null &&
-       git -C "$repo" checkout --quiet --force "$tag" 2>/dev/null; then
-      note "$(printf '%-14s %s' "$name" "$tag")"
-    else
-      # A missing release tag is REPORTED, never silent: the run still has
-      # to happen, but "we tested the default branch" and "we tested the
-      # release" are different claims and the log has to say which.
-      head="$(git -C "$repo" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
-      head="${head:-main}"
-      git -C "$repo" fetch --quiet --depth 1 origin "$head" &&
-        git -C "$repo" checkout --quiet --force FETCH_HEAD || {
-          echo "run-fleet: cannot check out $name" >&2; exit 2; }
-      note "$(printf '%-14s %s  (NO TAG %s — used %s)' "$name" "$(git -C "$repo" rev-parse --short HEAD)" "$tag" "$head")"
+    checkout_at "$WORK/$name" "$name" "ts/v${VERSION[$name]}" "" || exit 2
+    gv="${GOVERSION[$name]:-}"
+    if [ -n "$gv" ] && [ "$gv" != "${VERSION[$name]}" ]; then
+      mkdir -p "$WORK/.go"
+      checkout_at "$WORK/.go/$name" "$name" "go/v$gv" "  [go]" || exit 2
     fi
   done
 fi
 
+# --- every selected checkout must actually be here ---------------------
+# Without this, `--offline` against an empty or half-populated work
+# directory records every suite as "skipped, no runtime in this repo" and
+# reports FLEET PASS having run nothing at all. A checkout that is missing
+# is a broken run, not an absent runtime.
+step "checkouts present"
+missing=()
+for name in "${NAMES[@]}"; do
+  [ -d "$WORK/$name/.git" ] || missing+=("$name")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "run-fleet: no checkout for: ${missing[*]}" >&2
+  echo "run-fleet: re-run without --offline to fetch them" >&2
+  exit 2
+fi
+note "${#NAMES[@]} checkout(s)"
+
+# --- build the engine FIRST --------------------------------------------
+# Before anything resolves or imports @tabnas/parser. Its package.json
+# points main and every export at dist/, which `npm i` does not create, so
+# a clean checkout has no dist at all — and both the resolution probe below
+# and every downstream build would fail against a tree that is merely
+# unbuilt rather than wrong.
+if [ "$RUNTIME" != "go" ]; then
+  step "build the engine"
+  ( cd "$PARSER_ROOT/ts" && npx tsc --build src test ) || {
+    echo "run-fleet: the engine's own TS build failed — fix that first" >&2; exit 2; }
+  [ -f "$PARSER_ROOT/ts/dist/tabnas.js" ] || {
+    echo "run-fleet: the engine built but $PARSER_ROOT/ts/dist/tabnas.js is absent" >&2; exit 2; }
+  note "$PARSER_ROOT/ts/dist"
+fi
+
 # --- install TS toolchains ---------------------------------------------
+# An install failure FAILS the gate. Reusing .work after an earlier good
+# run can leave enough node_modules behind that the build and the suite
+# both pass against a stale dependency graph — green, and about nothing.
 if [ "$RUNTIME" != "go" ]; then
   step "npm install"
   for name in "${NAMES[@]}"; do
     [ -d "$WORK/$name/ts" ] || { note "$name: no ts/ — skipped"; continue; }
-    if ( cd "$WORK/$name/ts" && npm install --no-audit --no-fund --silent >/dev/null 2>&1 ); then
+    if ( cd "$WORK/$name/ts" && npm install --no-audit --no-fund --silent \
+           >"$LOGS/$name.install.log" 2>&1 ); then
       note "$name: ok"
     else
-      # An install failure is not a test result. Say so plainly rather than
-      # letting it surface later as a hundred MODULE_NOT_FOUND lines.
-      note "$name: INSTALL FAILED"
+      note "$name: INSTALL FAILED (see $LOGS/$name.install.log)"
+      record "$name/ts" "INSTALL FAILED"
+      SUITES["$name"]=0
+      fail=1
     fi
   done
 
@@ -250,13 +358,14 @@ if [ "$RUNTIME" != "go" ]; then
       link_ts_dep "$tsdir" "$dep" "$WORK/$dep/ts" || exit 2
     done
   done
+
   # link_ts_dep already proves each symlink resolves where it was pointed.
   # This proves the stronger thing: that node, running in that directory,
   # LOADS the engine from here. A nested node_modules or a package export
   # map can still shadow a correct symlink, and the result would be a green
   # run that says nothing about this working tree.
   for probe in "${NAMES[@]}"; do
-    [ -d "$WORK/$probe/ts" ] || continue
+    [ -d "$WORK/$probe/ts/node_modules" ] || continue
     resolved="$(cd "$WORK/$probe/ts" && node -p "require.resolve('@tabnas/parser')" 2>/dev/null)"
     case "$resolved" in
       "$PARSER_ROOT/ts"/*) ;;
@@ -279,7 +388,8 @@ if [ "$RUNTIME" != "ts" ]; then
   trap 'rm -rf "$GOWORK_DIR"' EXIT
   GOMODS=("$PARSER_ROOT/go")
   for name in "${NAMES[@]}"; do
-    [ -d "$WORK/$name/go" ] && GOMODS+=("$WORK/$name/go")
+    d="$(godir "$name")"
+    [ -d "$d" ] && GOMODS+=("$d")
   done
   ( cd "$GOWORK_DIR" && go work init "${GOMODS[@]}" >/dev/null ) || {
     echo "run-fleet: go work init failed" >&2; exit 2; }
@@ -304,33 +414,33 @@ if [ "$RUNTIME" != "ts" ]; then
   note "${#GOMODS[@]} module(s), engine resolves to $PARSER_ROOT/go"
 fi
 
-# --- build --------------------------------------------------------------
+# --- build the fleet ----------------------------------------------------
+# A build failure FAILS the gate and takes that package's suites out of the
+# run. Letting it through and hoping the test script rebuilds is how a
+# package whose source no longer compiles against this engine reports PASS
+# off output left by the previous release.
 if [ "$RUNTIME" != "go" ]; then
-  step "build TS (engine first, then the fleet in base order)"
-  ( cd "$PARSER_ROOT/ts" && npx tsc --build src test ) || {
-    echo "run-fleet: the engine's own TS build failed — fix that first" >&2; exit 2; }
+  step "build the fleet, in base order"
   for name in "${NAMES[@]}"; do
     [ -d "$WORK/$name/ts/src" ] || continue
-    if ( cd "$WORK/$name/ts" && npx tsc --build src >/dev/null 2>&1 ); then
+    [ "${SUITES[$name]}" != "0" ] || [ -d "$WORK/$name/ts/node_modules" ] || continue
+    if ( cd "$WORK/$name/ts" && npx tsc --build src >"$LOGS/$name.build.log" 2>&1 ); then
       note "$name: built"
     else
-      note "$name: BUILD FAILED"
+      note "$name: BUILD FAILED (see $LOGS/$name.build.log)"
+      record "$name/ts" "BUILD FAILED"
+      SUITES["$name"]=0
+      fail=1
     fi
   done
 fi
 
 # --- run ----------------------------------------------------------------
-results=()
-fail=0
-
-record() { # record <label> <status>
-  results+=("$(printf '%-22s %s' "$1" "$2")")
-}
-
 run_suite() { # run_suite <name> <runtime> <dir> <cmd...>
   local name="$1" rt="$2" dir="$3"
   shift 3
   local label="$name/$rt"
+  local log="$LOGS/$name.$rt.log"
 
   if [ ! -d "$dir" ]; then
     record "$label" "SKIP (no $rt/ in this repo)"
@@ -338,16 +448,21 @@ run_suite() { # run_suite <name> <runtime> <dir> <cmd...>
   fi
 
   local status
-  if ( cd "$dir" && "$@" >/dev/null 2>&1 ); then status=pass; else status=fail; fi
+  if ( cd "$dir" && "$@" >"$log" 2>&1 ); then status=pass; else status=fail; fi
 
-  local expected="${EXPECT_FAIL[$label]:-}"
-  if [ -n "$expected" ]; then
-    if [ "$status" = fail ]; then
-      record "$label" "xfail ($expected)"
-    else
+  local sig="${XFAIL_SIG[$label]:-}"
+  if [ -n "$sig" ]; then
+    if [ "$status" != fail ]; then
       # An exemption that no longer describes reality hides the next real
       # break. Passing here is a failure of the FILE, and it says so.
       record "$label" "UNEXPECTED PASS — remove from expect-fail.txt"
+      fail=1
+    elif grep -qF -- "$sig" "$log"; then
+      record "$label" "xfail (${XFAIL_WHY[$label]})"
+    else
+      # It failed, but not for the reason the exemption names. That is a
+      # new break wearing an old exemption's coat.
+      record "$label" "FAIL — not the expected failure ($sig absent)"
       fail=1
     fi
     return
@@ -356,7 +471,7 @@ run_suite() { # run_suite <name> <runtime> <dir> <cmd...>
   if [ "$status" = pass ]; then
     record "$label" "PASS"
   else
-    record "$label" "FAIL"
+    record "$label" "FAIL (see $log)"
     fail=1
   fi
 }
@@ -367,18 +482,38 @@ for name in "${NAMES[@]}"; do
   if [ "$RUNTIME" != "go" ]; then
     printf '  %s/ts ... ' "$name"
     run_suite "$name" ts "$WORK/$name/ts" npm test --silent
-    printf '%s\n' "${results[-1]##* }"
+    printf '%s\n' "${results[-1]#* }"
   fi
   if [ "$RUNTIME" != "ts" ]; then
     printf '  %s/go ... ' "$name"
-    run_suite "$name" go "$WORK/$name/go" go test ./...
-    printf '%s\n' "${results[-1]##* }"
+    run_suite "$name" go "$(godir "$name")" go test ./...
+    printf '%s\n' "${results[-1]#* }"
   fi
 done
 
 # --- report -------------------------------------------------------------
 step "fleet result"
 printf '%s\n' "${results[@]}"
+
+# The diagnostics, not just the verdict. A CI log showing `expr/ts FAIL`
+# and nothing else cannot be acted on, and the checkout it came from is
+# gone by the time anyone looks.
+if [ "$fail" != 0 ]; then
+  step "output of failing suites"
+  for entry in "${results[@]}"; do
+    case "$entry" in
+      *FAIL*)
+        label="${entry%% *}"
+        log="$LOGS/${label%/*}.${label##*/}.log"
+        [ -f "$log" ] || log="$LOGS/${label%/*}.build.log"
+        [ -f "$log" ] || log="$LOGS/${label%/*}.install.log"
+        [ -f "$log" ] || continue
+        printf '\n--- %s (last 40 lines of %s) ---\n' "$label" "$log"
+        tail -40 "$log"
+        ;;
+    esac
+  done
+fi
 
 if [ "$UPDATE_LOCK" = 1 ] && [ "$OFFLINE" = 0 ]; then
   {

@@ -109,9 +109,14 @@ jobs:
             --runtime "$FLEET_RUNTIME" \
             --update-lock
 
+      # The versions tested, and the output of anything that failed. The
+      # checkout is ephemeral, so a log not uploaded here cannot be read
+      # after the job ends.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fleet-versions
-          path: ci/fleet/fleet.lock
+          name: fleet-results
+          path: |
+            ci/fleet/fleet.lock
+            ci/fleet/.work/.logs/
           if-no-files-found: ignore

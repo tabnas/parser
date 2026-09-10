@@ -58,12 +58,18 @@ carries the same caveat for the same kind of reason.
   with `--only` pulls in its base chain. `suites: false` means wire it but
   do not test it, and only `@tabnas/support` is set that way, because it is
   the shared fixture loader rather than something that parses.
-- `expect-fail.txt` — known-broken entries, `<package>/<runtime>: <reason>`.
-  Two rules, both taken from `gate/fixture-sync-allow.txt`, whose design
-  problem was the same one: a line with **no reason is rejected**, so a
-  package cannot be quieted by adding a bare name; and an entry that
-  **passes fails the gate**, so an exemption cannot outlive the breakage it
-  was written for. The file ships empty.
+- `expect-fail.txt` — known-broken entries, as
+  `<package>/<runtime> :: <signature> :: <reason>`. All three fields are
+  required. Three rules; the first two come from
+  `gate/fixture-sync-allow.txt`, whose design problem was the same one:
+  a line with **no reason is rejected**, so a package cannot be quieted by
+  adding a bare name; an entry that **passes fails the gate**, so an
+  exemption cannot outlive the breakage it was written for; and an entry
+  that **fails without its signature fails the gate**, because "this
+  package fails" is not a claim worth recording — an exemption accepting
+  any non-zero exit turns regression detection off for that package
+  entirely, and a second, newer break would ride in behind the first. The
+  file ships empty: the expr break on 0.9.1 is real and is meant to block.
 - `fleet.lock` — the versions the last `--update-lock` run recorded. The
   script prints what moved since; it never fails on a difference, because a
   new release is the thing being tested. Not committed until a full run has
@@ -81,9 +87,34 @@ that silently tests the PUBLISHED engine is worse than no gate: it is
 thirty green rows that mean nothing.
 
 Checkouts land in `ci/fleet/.work/` (gitignored) at each package's
-`ts/vX.Y.Z` release tag. A package with no such tag is still run, off its
-default branch, and the log says so — "we tested the release" and "we
-tested main" are different claims.
+`ts/vX.Y.Z` release tag, cleaned of untracked files so a previous
+release's build output cannot stand in for one that no longer compiles. A
+package with no such tag is still run, off its default branch, and the log
+says so — "we tested the release" and "we tested main" are different
+claims.
+
+**Go is versioned separately.** A package's Go module is tagged
+`go/vX.Y.Z` on the module proxy, independently of its npm release. They
+usually match, and nothing enforces that, so both are resolved and the Go
+arm gets its own checkout whenever they differ — otherwise the Go suites
+would run off the npm release's tree and silently test the wrong source
+the first time the two diverge.
+
+**Nothing green happens without a run.** Every route to a pass that did
+not actually exercise the working-tree engine fails instead: a missing
+checkout (so `--offline` against an empty `.work` aborts rather than
+reporting a clean sweep of skips), a failed `npm install`, a failed
+downstream build (which also takes that package's suites out of the run,
+rather than letting them pass off stale output), or an engine that
+resolves anywhere but here. The engine is built before anything resolves
+it, too: `npm i` does not create `ts/dist`, so on a clean checkout the
+resolution probe would otherwise fail against a tree that is merely
+unbuilt.
+
+Per-suite output is kept in `.work/.logs/` and the last 40 lines of every
+failing one are printed at the end of the run — a CI log reading
+`expr/ts FAIL` and nothing else cannot be acted on, and the checkout it
+came from is gone by the time anyone looks.
 
 ## gate/ — the engine conformance gate
 
