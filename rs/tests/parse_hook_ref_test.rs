@@ -1,7 +1,7 @@
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tabnas::{Tabnas, Value};
+use tabnas::{Tabnas, Token, Value, TIN_VL};
 
 const NUMBER_GRAMMAR: &str = r##"{
   "clear":true,
@@ -64,6 +64,48 @@ fn complete_prepare_callback_receives_owner_context_and_input_meta() {
         *seen.lock().unwrap(),
         [(id, "4".into(), meta.clone(), meta)]
     );
+}
+
+#[test]
+fn prepare_injected_lazy_tokens_retain_consumed_history() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let lazy_seen = seen.clone();
+    let mut parser = Tabnas::new();
+    parser.parse_prepare(move |context| {
+        let seen = lazy_seen.clone();
+        context.set_t0(
+            Token {
+                name: "#VL".into(),
+                tin: TIN_VL,
+                val: Value::String("EAGER".into()),
+                src: "$".into(),
+                ..Token::default()
+            }
+            .with_lazy_value(move |rule, context| {
+                seen.lock().unwrap().push((
+                    rule.name.clone(),
+                    context.v.iter().map(|token| token.src.clone()).collect(),
+                    context.v_abs,
+                ));
+                Value::String("LAZY".into())
+            }),
+        );
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{"rule":{"start":"top"}},
+              "rule":{"top":{
+                "open":[{"s":"#VL","a":"@value$"}],
+                "close":[{"s":"#NR"}]
+              }}
+            }"##,
+        )
+        .unwrap();
+
+    assert_eq!(parser.parse("1").unwrap(), Value::String("LAZY".into()));
+    assert_eq!(*seen.lock().unwrap(), [("top".into(), vec!["$".into()], 1)]);
 }
 
 #[test]

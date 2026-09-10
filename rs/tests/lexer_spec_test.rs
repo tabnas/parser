@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tabnas::lexer::Lexer;
 use tabnas::options::Options;
-use tabnas::{CommentDef, Value, ValueDef, TIN_ZZ};
+use tabnas::{CommentDef, FixedToken, Value, ValueDef, TIN_ZZ};
 
 fn unescape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -245,11 +245,50 @@ fn configured_line_characters_rows_and_single_mode_are_honored() {
     assert_eq!((line.name.as_str(), line.src.as_str()), ("#LN", ";;"));
     assert_eq!((text.name.as_str(), text.ri, text.ci), ("#TX", 3, 1));
 
+    let mut string_rows = Options::default();
+    string_rows.line.row_chars = ";".into();
+    let mut lexer = Lexer::new("\"a;b\" x", string_rows);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "\"a;b\"");
+    let text = lexer.next_token().unwrap();
+    assert_eq!((text.src.as_str(), text.ri, text.ci), ("x", 2, 4));
+
     let mut single = Options::default();
     single.line.single = true;
     let mut lexer = Lexer::new("\n\nx", single);
     assert_eq!(lexer.next_raw_token().unwrap().src, "\n");
     assert_eq!(lexer.next_raw_token().unwrap().src, "\n");
+}
+
+#[test]
+fn string_quotes_that_are_row_characters_update_following_positions() {
+    let mut options = Options::default();
+    options.line.lex = false;
+    options.line.chars = "\"".into();
+    options.line.row_chars = "\"".into();
+
+    let mut lexer = Lexer::new("\"a\" x", options);
+    assert_eq!(lexer.next_raw_token().unwrap().src, "\"a\"");
+    let text = lexer.next_token().unwrap();
+    assert_eq!((text.src.as_str(), text.ri, text.ci), ("x", 3, 2));
+}
+
+#[test]
+fn sparse_ignore_tins_do_not_size_or_bypass_the_dense_cache() {
+    for (name, tin, source) in [("#HIGH", i32::MAX, "!"), ("#NEGATIVE", -2, "?")] {
+        let mut options = Options::default();
+        options.fixed.tokens.insert(
+            name.into(),
+            FixedToken {
+                name: name.into(),
+                tin,
+                source: source.into(),
+            },
+        );
+        options.token_set.insert("IGNORE".into(), vec![tin]);
+
+        let mut lexer = Lexer::new(source, options);
+        assert_eq!(lexer.next_token().unwrap().tin, TIN_ZZ, "tin {tin}");
+    }
 }
 
 #[test]

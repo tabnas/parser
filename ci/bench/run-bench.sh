@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# run-bench.sh — the dual-runtime benchmark harness.
+# run-bench.sh — the three-runtime benchmark harness.
 #
 # Generates the deterministic fixture matrix (pinned seed — TS and Go
-# read identical bytes), then runs the TS benchmarks (each parser in its
-# own process) and the Go benchmarks (-benchmem). Numbers are advisory:
+# read identical bytes), then runs the TS and Rust benchmarks (each parser
+# in its own process) and the Go benchmarks (-benchmem). Numbers are advisory:
 # compare against a baseline run on the SAME machine, back-to-back;
 # never hard-gate CI on absolute thresholds.
 #
@@ -20,7 +20,11 @@ ROOT="${TABNAS_ROOT:-$(cd "$PARSER_ROOT/.." && pwd)}"
 FIX="$DIR/fixtures"
 
 MODE="${1:-full}"
-if [ "$MODE" = quick ]; then ITERS=10 WARMUP=5 BENCHTIME=5x; else ITERS=30 WARMUP=15 BENCHTIME=2s; fi
+if [ "$MODE" = quick ]; then
+  ITERS=10 WARMUP=5 RUST_ITERS=3 RUST_WARMUP=1 BENCHTIME=5x
+else
+  ITERS=30 WARMUP=15 RUST_ITERS=10 RUST_WARMUP=5 BENCHTIME=2s
+fi
 
 # --- TS wiring: measure the WORKING TREE, not whatever npm installed ---
 # Without this the harness benchmarks the PUBLISHED @tabnas/parser that
@@ -63,3 +67,11 @@ trap 'rm -rf "$GOWORK_DIR"' EXIT
 ( cd "$DIR/gobench" && \
   GOWORK="$GOWORK_DIR/go.work" BENCH_FIXTURE_DIR="$FIX" \
   go test -run='^$' -bench=. -benchmem -benchtime="$BENCHTIME" -count=1 )
+
+echo
+echo "=== Rust benchmarks ==="
+cargo build --release --manifest-path "$DIR/rustbench/Cargo.toml"
+RUST_BENCH="$DIR/rustbench/target/release/tabnas-rustbench"
+for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json; do
+  "$RUST_BENCH" "$FIX/$f" "$RUST_ITERS" "$RUST_WARMUP"
+done

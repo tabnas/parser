@@ -1,0 +1,11 @@
+[package]
+name = "tabnas-rustbench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tabnas = { path = "../../../rs" }
+
+[profile.release]
+debug = 1
