@@ -20,6 +20,13 @@
 #   ci/fleet/run-fleet.sh --runtime ts          # one runtime
 #   ci/fleet/run-fleet.sh --offline             # reuse .work, no network
 #   ci/fleet/run-fleet.sh --update-lock         # rewrite fleet.lock
+#   ci/fleet/run-fleet.sh --record-timings      # append to timings.tsv
+#
+# Every run TIMES each suite and prints the durations. Only --record-timings
+# writes them down, because a timing record is a deliberate measurement, not
+# a side effect of pushing: an ordinary run leaves timings.tsv alone, so the
+# file stays a series of runs somebody meant to compare rather than noise
+# from every branch that happened to run the gate.
 #
 # THE GATE ONLY MEANS SOMETHING IF IT RAN. Every way this script can produce
 # a green result without having tested the working-tree engine is treated as
@@ -40,6 +47,7 @@ ONLY=""
 RUNTIME="both"
 OFFLINE=0
 UPDATE_LOCK=0
+RECORD_TIMINGS=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +56,7 @@ while [ $# -gt 0 ]; do
     --work) WORK="$2"; shift 2 ;;
     --offline) OFFLINE=1; shift ;;
     --update-lock) UPDATE_LOCK=1; shift ;;
+    --record-timings) RECORD_TIMINGS=1; shift ;;
     -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "run-fleet: unknown option $1" >&2; exit 2 ;;
   esac
@@ -72,6 +81,21 @@ fail=0
 results=()
 record() { results+=("$(printf '%-22s %s' "$1" "$2")"); }
 
+# Durations, keyed by <package>/<runtime>, in milliseconds.
+declare -A TIMING=()
+TIMED_ORDER=()
+
+# node rather than `date +%s%N` (not portable to the macOS runners) or bash 5's
+# EPOCHREALTIME (whose decimal separator follows the locale). node is already
+# required by the preflight, and one spawn either side of a suite that runs
+# for seconds is not a measurement error worth caring about.
+now_ms() { node -e 'process.stdout.write(String(Date.now()))'; }
+
+# Milliseconds as seconds, to one decimal: the numbers being compared are
+# whole seconds apart and more precision would suggest a resolution this has
+# no claim to.
+secs() { node -e 'process.stdout.write((Number(process.argv[1])/1000).toFixed(1))' "$1"; }
+
 # --- preflight ---------------------------------------------------------
 # Fail on a missing toolchain HERE, with a sentence, rather than thirty
 # rows of identical "command not found" further down.
@@ -82,63 +106,46 @@ if [ "$RUNTIME" != "ts" ]; then
   command -v go >/dev/null 2>&1 || { echo "run-fleet: go is required for --runtime go/both" >&2; exit 2; }
 fi
 
-# --- the manifest ------------------------------------------------------
-# Read through node rather than jq: node is already a hard dependency of
-# this repo and jq is not, so parsing JSON with a regex is not the trade
-# being made here.
-manifest() {
+# --- the roster --------------------------------------------------------
+# fleet.json says WHICH packages are in the fleet and nothing about how they
+# depend on each other: that lives in each package's own ts/package.json,
+# and graph.mjs reads it from the checkouts. A second copy here would be one
+# more thing to keep in step, and the first full run proved a hand-kept one
+# wrong — a single `base` per package built ini before hoover and c before
+# expr, and both failed with "Cannot find module".
+roster() {
   node -e '
     const m = require(process.argv[1])
     const only = process.argv[2] ? new Set(process.argv[2].split(",").map(s => s.trim())) : null
     const all = new Map(m.packages.map((p) => [p.name, p]))
-
     for (const want of only ?? []) {
       if (!all.has(want)) {
         console.error(`run-fleet: --only names ${want}, which is not in fleet.json`)
         process.exit(2)
       }
     }
-
-    // Build order, by base chain: jsonic cannot build before json. A
-    // selection pulls in the bases it needs to build, even when they were
-    // not asked for.
-    const need = new Set()
-    const pull = (name) => {
-      if (need.has(name) || !all.has(name)) return
-      need.add(name)
-      const base = all.get(name).base
-      if (base) pull(base)
-    }
-    for (const p of m.packages) if (!only || only.has(p.name)) pull(p.name)
-
-    const order = []
-    const emit = (name) => {
-      if (order.includes(name) || !need.has(name)) return
-      const base = all.get(name).base
-      if (base) emit(base)
-      order.push(name)
-    }
-    for (const name of need) emit(name)
-
-    for (const name of order) {
-      const p = all.get(name)
-      const asked = !only || only.has(name)
-      console.log([name, p.suites && asked ? "1" : "0", asked ? "1" : "0"].join("\t"))
+    for (const p of m.packages) {
+      if (only && !only.has(p.name)) continue
+      console.log([p.name, p.suites ? "1" : "0"].join("\t"))
     }
   ' "$DIR/fleet.json" "$ONLY"
 }
 
-MANIFEST="$(manifest)" || exit 2
-NAMES=()
+ROSTER="$(roster)" || exit 2
+ASKED=()
 declare -A SUITES=()
-while IFS=$'\t' read -r name suites _asked; do
+while IFS=$'\t' read -r name suites; do
   [ -n "$name" ] || continue
-  NAMES+=("$name")
+  ASKED+=("$name")
   SUITES["$name"]="$suites"
-done <<< "$MANIFEST"
+done <<< "$ROSTER"
 
-step "fleet: ${#NAMES[@]} package(s)"
-note "${NAMES[*]}"
+# NAMES is filled in after checkout, once the real graph can be read. Until
+# then only the asked-for set is known.
+NAMES=("${ASKED[@]}")
+
+step "fleet: ${#ASKED[@]} package(s) asked for"
+note "${ASKED[*]}"
 
 # --- expected failures -------------------------------------------------
 # A known-broken package is recorded HERE and is still RUN. The format is
@@ -181,7 +188,7 @@ if [ -f "$EXPECT_FILE" ]; then
   done < "$EXPECT_FILE"
 fi
 
-# --- resolve the latest published version of each package --------------
+# --- versions and checkout ---------------------------------------------
 # "Latest" is what the registry serves as the `latest` dist-tag, which is
 # what a user gets from `npm i @tabnas/<name>`. The git tag `ts/vX.Y.Z` is
 # the commit that produced it (see each repo's `repo-tag` script), so it is
@@ -195,6 +202,7 @@ fi
 declare -A VERSION=()
 declare -A GOVERSION=()
 declare -A LOCKED=()
+declare -A DONE=()
 LOCK="$DIR/fleet.lock"
 if [ -f "$LOCK" ]; then
   while IFS=' ' read -r n v; do
@@ -215,39 +223,35 @@ godir() {
   fi
 }
 
-if [ "$OFFLINE" = 1 ]; then
-  step "versions: --offline, reusing $WORK as it stands"
-else
-  step "versions: checking the registry for updates"
-  for name in "${NAMES[@]}"; do
-    v="$(npm view "@tabnas/$name" version 2>/dev/null | tail -1)"
-    if [ -z "$v" ]; then
-      echo "run-fleet: cannot resolve @tabnas/$name from the registry" >&2
-      exit 2
-    fi
-    VERSION["$name"]="$v"
+resolve_version() { # resolve_version <name>
+  local name="$1" v gv was suffix
+  [ -z "${VERSION[$name]:-}" ] || return 0
+  v="$(npm view "@tabnas/$name" version 2>/dev/null | tail -1)"
+  if [ -z "$v" ]; then
+    echo "run-fleet: cannot resolve @tabnas/$name from the registry" >&2
+    exit 2
+  fi
+  VERSION["$name"]="$v"
 
-    gv=""
-    if [ "$RUNTIME" != "ts" ]; then
-      gv="$(go list -m -versions "github.com/tabnas/$name/go" 2>/dev/null | awk '{print $NF}')"
-      gv="${gv#v}"
-      GOVERSION["$name"]="$gv"
-    fi
+  gv=""
+  if [ "$RUNTIME" != "ts" ]; then
+    gv="$(go list -m -versions "github.com/tabnas/$name/go" 2>/dev/null | awk '{print $NF}')"
+    gv="${gv#v}"
+    GOVERSION["$name"]="$gv"
+  fi
 
-    was="${LOCKED[$name]:-}"
-    suffix=""
-    [ -n "$gv" ] && [ "$gv" != "$v" ] && suffix="  go $gv (SEPARATE CHECKOUT)"
-    if [ -z "$was" ]; then
-      note "$(printf '%-14s %-10s (new — not in fleet.lock)%s' "$name" "$v" "$suffix")"
-    elif [ "$was" != "$v" ]; then
-      note "$(printf '%-14s %-10s <- %s  UPDATED%s' "$name" "$v" "$was" "$suffix")"
-    else
-      note "$(printf '%-14s %-10s%s' "$name" "$v" "$suffix")"
-    fi
-  done
-fi
+  was="${LOCKED[$name]:-}"
+  suffix=""
+  [ -n "$gv" ] && [ "$gv" != "$v" ] && suffix="  go $gv (SEPARATE CHECKOUT)"
+  if [ -z "$was" ]; then
+    note "$(printf '%-14s %-10s (new — not in fleet.lock)%s' "$name" "$v" "$suffix")"
+  elif [ "$was" != "$v" ]; then
+    note "$(printf '%-14s %-10s <- %s  UPDATED%s' "$name" "$v" "$was" "$suffix")"
+  else
+    note "$(printf '%-14s %-10s%s' "$name" "$v" "$suffix")"
+  fi
+}
 
-# --- check out each package at that version ----------------------------
 # `git checkout --force` does not remove untracked files, and a previous
 # release's build output left in place can let a suite pass without the
 # current source ever compiling. Clean it.
@@ -279,18 +283,50 @@ checkout_at() { # checkout_at <repo-dir> <slug> <tag> <label>
   fi
 }
 
+fetch_one() { # fetch_one <name>
+  local name="$1" gv
+  [ -z "${DONE[$name]:-}" ] || return 0
+  resolve_version "$name"
+  checkout_at "$WORK/$name" "$name" "ts/v${VERSION[$name]}" "" || exit 2
+  gv="${GOVERSION[$name]:-}"
+  if [ -n "$gv" ] && [ "$gv" != "${VERSION[$name]}" ]; then
+    mkdir -p "$WORK/.go"
+    checkout_at "$WORK/.go/$name" "$name" "go/v$gv" "  [go]" || exit 2
+  fi
+  DONE["$name"]=1
+}
+
 mkdir -p "$WORK" "$LOGS"
-if [ "$OFFLINE" = 0 ]; then
-  step "checkout"
-  for name in "${NAMES[@]}"; do
-    checkout_at "$WORK/$name" "$name" "ts/v${VERSION[$name]}" "" || exit 2
-    gv="${GOVERSION[$name]:-}"
-    if [ -n "$gv" ] && [ "$gv" != "${VERSION[$name]}" ]; then
-      mkdir -p "$WORK/.go"
-      checkout_at "$WORK/.go/$name" "$name" "go/v$gv" "  [go]" || exit 2
-    fi
+
+if [ "$OFFLINE" = 1 ]; then
+  step "versions: --offline, reusing $WORK as it stands"
+  mapfile -t NAMES < <(node "$DIR/graph.mjs" close "$WORK" "${ASKED[@]}")
+else
+  # A package's dependencies are only readable once it is checked out, so
+  # this is a fixpoint rather than one pass: fetch what is selected, ask the
+  # graph what that needs, fetch the difference, repeat. Naming `ini` has to
+  # bring in `hoover`, and nothing knows that until ini's package.json is on
+  # disk.
+  step "resolve and check out"
+  NAMES=("${ASKED[@]}")
+  for _round in 1 2 3 4 5; do
+    for name in "${NAMES[@]}"; do fetch_one "$name"; done
+    mapfile -t CLOSURE < <(node "$DIR/graph.mjs" close "$WORK" "${NAMES[@]}")
+    [ "${#CLOSURE[@]}" -eq "${#NAMES[@]}" ] && break
+    NAMES=("${CLOSURE[@]}")
   done
+  NAMES=("${CLOSURE[@]:-${NAMES[@]}}")
 fi
+
+# Build order from the real graph: every package after everything it needs.
+mapfile -t NAMES < <(node "$DIR/graph.mjs" order "$WORK" "${NAMES[@]}") || exit 2
+
+pulled=$(( ${#NAMES[@]} - ${#ASKED[@]} ))
+if [ "$pulled" -gt 0 ]; then
+  note "$pulled package(s) pulled in as dependencies"
+fi
+note "build order: ${NAMES[*]}"
+
 
 # --- every selected checkout must actually be here ---------------------
 # Without this, `--offline` against an empty or half-populated work
@@ -423,7 +459,7 @@ if [ "$RUNTIME" != "go" ]; then
   step "build the fleet, in base order"
   for name in "${NAMES[@]}"; do
     [ -d "$WORK/$name/ts/src" ] || continue
-    [ "${SUITES[$name]}" != "0" ] || [ -d "$WORK/$name/ts/node_modules" ] || continue
+    [ "${SUITES[$name]:-0}" != "0" ] || [ -d "$WORK/$name/ts/node_modules" ] || continue
     if ( cd "$WORK/$name/ts" && npx tsc --build src >"$LOGS/$name.build.log" 2>&1 ); then
       note "$name: built"
     else
@@ -447,8 +483,12 @@ run_suite() { # run_suite <name> <runtime> <dir> <cmd...>
     return
   fi
 
-  local status
+  local status t0 t1
+  t0="$(now_ms)"
   if ( cd "$dir" && "$@" >"$log" 2>&1 ); then status=pass; else status=fail; fi
+  t1="$(now_ms)"
+  TIMING["$label"]=$(( t1 - t0 ))
+  TIMED_ORDER+=("$label")
 
   local sig="${XFAIL_SIG[$label]:-}"
   if [ -n "$sig" ]; then
@@ -478,7 +518,7 @@ run_suite() { # run_suite <name> <runtime> <dir> <cmd...>
 
 step "suites"
 for name in "${NAMES[@]}"; do
-  [ "${SUITES[$name]}" = "1" ] || continue
+  [ "${SUITES[$name]:-0}" = "1" ] || continue
   if [ "$RUNTIME" != "go" ]; then
     printf '  %s/ts ... ' "$name"
     run_suite "$name" ts "$WORK/$name/ts" npm test --silent
@@ -494,6 +534,76 @@ done
 # --- report -------------------------------------------------------------
 step "fleet result"
 printf '%s\n' "${results[@]}"
+
+# --- timings ------------------------------------------------------------
+# Printed on every run. Written down only when asked.
+if [ ${#TIMED_ORDER[@]} -gt 0 ]; then
+  step "timings"
+  ts_ms=0
+  go_ms=0
+  for label in "${TIMED_ORDER[@]}"; do
+    ms="${TIMING[$label]}"
+    case "$label" in
+      */ts) ts_ms=$(( ts_ms + ms )) ;;
+      */go) go_ms=$(( go_ms + ms )) ;;
+    esac
+    printf '  %-22s %8ss\n' "$label" "$(secs "$ms")"
+  done
+  printf '  %-22s %8ss\n' "--- ts total" "$(secs "$ts_ms")"
+  printf '  %-22s %8ss\n' "--- go total" "$(secs "$go_ms")"
+  printf '  %-22s %8ss\n' "--- all suites" "$(secs $(( ts_ms + go_ms )))"
+
+  # These are SUITE times only: clone, npm install and build are excluded,
+  # because those are dominated by the network and by whatever npm already
+  # had cached, and a number that moves with the weather is not one to
+  # record. What is recorded is the part an engine change can actually
+  # move.
+  if [ "$RECORD_TIMINGS" = 1 ]; then
+    TIMINGS="$DIR/timings.tsv"
+    run_id="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    engine="$(git -C "$PARSER_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    host="$(uname -s | tr 'A-Z' 'a-z')-$(uname -m)"
+    nodev="$(node --version 2>/dev/null)"
+    gov="$(go version 2>/dev/null | awk '{print $3}')"
+    if [ ! -f "$TIMINGS" ]; then
+      {
+        echo "# Fleet suite timings, one row per suite per recorded run."
+        echo "#"
+        echo "# Written ONLY by \`ci/fleet/run-fleet.sh --record-timings\`. An ordinary"
+        echo "# run prints its timings and writes nothing, so this file is a series of"
+        echo "# measurements somebody meant to take rather than a log of every push."
+        echo "#"
+        echo "# seconds covers the SUITE only — clone, npm install and build are"
+        echo "# excluded, being dominated by the network and by whatever npm had"
+        echo "# cached. What is left is the part an engine change can move."
+        echo "#"
+        echo "# COMPARE ROWS FROM THE SAME host AND toolchain, AND PREFER RUNS TAKEN"
+        echo "# BACK TO BACK. These are wall-clock times on whatever machine ran them;"
+        echo "# across machines, or across a busy and an idle one, the difference"
+        echo "# between two rows says more about the machine than about the engine."
+        echo "# ci/bench/ab-compare.sh is the instrument for deciding whether a"
+        echo "# performance change is real; this file is for noticing that something"
+        echo "# has become slow, not for proving by how much."
+        printf 'run\thost\tnode\tgo\tengine\tpackage\truntime\tseconds\tstatus\n'
+      } > "$TIMINGS"
+    fi
+    for label in "${TIMED_ORDER[@]}"; do
+      pkg="${label%/*}"
+      rt="${label##*/}"
+      st=ok
+      for entry in "${results[@]}"; do
+        case "$entry" in
+          "$label"*FAIL*|"$label"*UNEXPECTED*) st=fail ;;
+          "$label"*xfail*) st=xfail ;;
+        esac
+      done
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$run_id" "$host" "$nodev" "${gov:-none}" "$engine" \
+        "$pkg" "$rt" "$(secs "${TIMING[$label]}")" "$st" >> "$TIMINGS"
+    done
+    note "recorded ${#TIMED_ORDER[@]} row(s) in $TIMINGS"
+  fi
+fi
 
 # The diagnostics, not just the verdict. A CI log showing `expr/ts FAIL`
 # and nothing else cannot be acted on, and the checkout it came from is

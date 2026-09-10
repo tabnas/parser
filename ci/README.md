@@ -26,6 +26,7 @@ ci/fleet/run-fleet.sh --only expr,jsonic    # just these (bases pulled in)
 ci/fleet/run-fleet.sh --runtime ts          # one runtime
 ci/fleet/run-fleet.sh --offline             # reuse .work, no network
 ci/fleet/run-fleet.sh --update-lock         # record the versions tested
+ci/fleet/run-fleet.sh --record-timings      # append to timings.tsv
 ```
 
 It is deliberately not part of `make test`: thirty clones and two
@@ -115,6 +116,33 @@ Per-suite output is kept in `.work/.logs/` and the last 40 lines of every
 failing one are printed at the end of the run — a CI log reading
 `expr/ts FAIL` and nothing else cannot be acted on, and the checkout it
 came from is gone by the time anyone looks.
+
+### Timings
+
+**Every run times each suite and prints the durations. Only
+`--record-timings` writes them down.** A timing record is a measurement
+somebody decided to take, not a side effect of pushing: an ordinary run
+leaves `timings.tsv` untouched, so the file stays a series of comparable
+runs rather than a log of every branch that happened to run the gate. The
+staged workflow follows the same rule — the nightly and PR arms record
+nothing, and `workflow_dispatch` carries a `record_timings` input,
+defaulting to false, for when a person is deliberately measuring.
+
+`seconds` covers the **suite only**. Clone, `npm install` and build are
+excluded: they are dominated by the network and by whatever npm had
+cached, and a number that moves with the weather is not one to write down.
+What is left is the part an engine change can actually move.
+
+**Compare rows from the same `host` and toolchain, and prefer runs taken
+back to back.** These are wall-clock times on whatever machine ran them;
+across two machines, or across a busy one and an idle one, the difference
+between two rows says more about the machine than about the engine. That
+is the same caveat `bench/` carries, and for the same reason — but the
+purpose here is narrower. This file is for noticing that something has
+become slow. Deciding whether a performance change is *real* is what
+`bench/ab-compare.sh` and its A/B/B/A protocol are for; two rows in a TSV
+cannot separate an effect from noise and should not be quoted as if they
+could.
 
 ## gate/ — the engine conformance gate
 

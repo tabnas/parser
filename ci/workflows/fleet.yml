@@ -49,6 +49,11 @@ on:
         description: 'ts, go, or both'
         required: false
         default: 'both'
+      record_timings:
+        description: 'Append suite timings to ci/fleet/timings.tsv (a deliberate measurement, not something a routine run should leave behind)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   # The PR arm: the base grammars plus the plugins that layer on them,
@@ -99,15 +104,27 @@ jobs:
       # command line: ${{ }} is substituted before the shell parses the
       # line, so an input interpolated there is shell source, not an
       # argument.
+      # Timings are printed by every run and RECORDED only when a person
+      # asks. A scheduled run appending a row nightly would fill the file
+      # with measurements nobody took, on a runner whose speed nobody
+      # controls — which is the opposite of a record worth comparing.
       - name: Fleet gate (everything)
         env:
           FLEET_ONLY: ${{ github.event.inputs.only }}
           FLEET_RUNTIME: ${{ github.event.inputs.runtime || 'both' }}
+          FLEET_RECORD: ${{ github.event.inputs.record_timings }}
         run: |
+          # An explicit if, not `[ … ] && extra+=(…)`: the && form leaves the
+          # statement with exit 1 when the condition is false, which is a
+          # trap under the runner's `bash -e`.
+          extra=()
+          if [ "$FLEET_RECORD" = "true" ]; then
+            extra+=(--record-timings)
+          fi
           ci/fleet/run-fleet.sh \
             --only "$FLEET_ONLY" \
             --runtime "$FLEET_RUNTIME" \
-            --update-lock
+            --update-lock "${extra[@]}"
 
       # The versions tested, and the output of anything that failed. The
       # checkout is ephemeral, so a log not uploaded here cannot be read
