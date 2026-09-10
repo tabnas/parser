@@ -711,11 +711,6 @@ class RuleSpec {
     // Pop closed rule off stack.
     else if (!is_open) {
       next = ctx.rs[--ctx.rsI] || ctx.NORULE
-      // A pushed rule may replace itself one or more times before it
-      // closes. Publish the final rule, not merely the instance that was
-      // created by the original push, so parent actions see the node that
-      // actually consumed the input.
-      if (next !== ctx.NORULE) next.child = rule
     }
 
 

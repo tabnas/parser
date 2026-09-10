@@ -1283,10 +1283,6 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 			if ctx.RSI > 0 {
 				ctx.RSI--
 				next = ctx.RS[ctx.RSI]
-				// A pushed rule may replace itself before it closes. Publish
-				// the final replacement so parent actions capture the node
-				// that actually consumed the input.
-				next.Child = r
 			} else {
 				next = NoRule
 			}
@@ -1296,9 +1292,6 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		if ctx.RSI > 0 {
 			ctx.RSI--
 			next = ctx.RS[ctx.RSI]
-			// See the matched-alt pop above: the closing rule can be a
-			// replacement of the child originally stored on the parent.
-			next.Child = r
 		} else {
 			next = NoRule
 		}
