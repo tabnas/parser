@@ -628,6 +628,22 @@ describe('builtins', () => {
       }
     })
 
+    it('@push$ survives a rule replacement', () => {
+      // A rule that allocates a list, pushes into it, and REPLACES itself
+      // to carry the chain on. The parent's `child` pointer still refers
+      // to the rule that was replaced, so a parent reading the result —
+      // here `@bubble$` on __start__ — reads THAT rule's node.
+      //
+      // Free in this port: the replacement is handed the same array
+      // OBJECT, so `push` mutates what the stale pointer sees. Go copies
+      // the slice header and dropped every element after the
+      // replacement, returning ["1"]. Same file, all three suites.
+      const spec = require('./push-replace.fixture.json')
+      const j = new Tabnas()
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('1,2'), ['1', '2'])
+    })
+
     it('@setval$/@push$ {src} take a member\'s value from its matched text', () => {
       // The tree builders accumulate every matched terminal into
       // `node.src`, and nothing could read it back out — so a member

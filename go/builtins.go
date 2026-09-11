@@ -352,10 +352,48 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 	}
 }
 
+// sameListHeader reports whether two node values are the SAME list, not
+// merely equal ones: same length and, when non-empty, the same backing
+// array. Used to decide which rules held the list a push just grew, so
+// only those get the new header.
+//
+// Two empty lists compare equal here. That is the intent: a list that was
+// allocated and then replaced before anything went into it is the same
+// list, and there is nothing else to tell them apart by.
+func sameListHeader(a, b any) bool {
+	as, aok := a.([]any)
+	bs, bok := b.([]any)
+	if !aok || !bok || len(as) != len(bs) {
+		return false
+	}
+	return len(as) == 0 || &as[0] == &bs[0]
+}
+
 // @push$ — append the child node to the array (skips the no-value child).
 // Works on a plain []any or a ListRef wrapper (info mode) via
-// NodeListAppend. Go slices are value types, so the grown header is
-// re-published to the parent (mirrors the json plugin's parent write-back).
+// NodeListAppend.
+//
+// Go slices are value types, so the grown header has to be re-published
+// to every rule that was holding the same list — otherwise those rules
+// keep a shorter one. TypeScript needs none of this: it hands out the
+// same array OBJECT, and `push` mutates it in place.
+//
+// Two directions, and they are not the same one:
+//
+//   - the PARENT, which pushed this rule and reads its list afterwards
+//     (mirrors the json plugin's parent write-back);
+//   - the rules this one REPLACED (`r:`), which is the direction that was
+//     missing. A replacement is seeded with the replaced rule's node and
+//     carries the chain on, but the PARENT'S Child pointer still refers
+//     to the rule that was replaced — so a parent reading the result
+//     through `@bubble$` or `@capture$` got the list as it stood before
+//     the replacement, dropping every element the rest of the chain
+//     appended. TypeScript hides this behind the shared object; here the
+//     header has to be carried back.
+//
+// Only rules that actually held the pre-append list are updated, so a
+// replacement that allocated a fresh container of its own cannot clobber
+// the one it replaced.
 func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Child == nil || IsUndefined(r.Child.Node) {
 		return
@@ -366,9 +404,16 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	}
 	switch r.Node.(type) {
 	case []any, ListRef:
+		before := r.Node
 		r.Node = NodeListAppend(r.Node, val)
 		if r.Parent != nil && r.Parent != NoRule {
 			r.Parent.Node = r.Node
+		}
+		for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
+			if !sameListHeader(p.Node, before) {
+				break
+			}
+			p.Node = r.Node
 		}
 	}
 }

@@ -729,6 +729,36 @@ func TestSrcValueFixtureParity(t *testing.T) {
 	}
 }
 
+// TestPushSurvivesReplacementFixtureParity: a rule that allocates a list,
+// pushes into it, and REPLACES itself to carry the chain on. The parent's
+// Child pointer still refers to the rule that was replaced, so a parent
+// reading the result — here @bubble$ on __start__ — reads THAT rule's
+// node.
+//
+// Free in TypeScript and Rust, which hand the replacement the same list
+// and mutate it in place. Here a slice is a value, so the grown header
+// has to be carried back along the Prev chain; without that this returned
+// ["1"], dropping every element appended after the replacement.
+//
+// Same fixture in all three suites, which is the only reason this was
+// ever noticed: the json-builder array oracle uses the OTHER idiom, where
+// the allocating and pushing rules are different rules in a parent/child
+// relationship, so the parent write-back already covered it.
+func TestPushSurvivesReplacementFixtureParity(t *testing.T) {
+	spec := fixtureSpec(t, "push-replace.fixture.json")
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []any{"1", "2"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
+	}
+}
+
 // omPlainify recursively converts OrderedMap nodes to plain map[string]any
 // (dropping order) so value-only comparisons against encoding/json can use
 // reflect.DeepEqual.
