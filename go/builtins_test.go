@@ -831,12 +831,12 @@ func TestPushReachesTheListsOwnerFromAnyDepth(t *testing.T) {
 	owner := &Rule{Name: "owner", Node: []any{}, Parent: NoRule, Prev: NoRule}
 	// `r:` — seeded from the rule it replaced, parented above it.
 	step := &Rule{Name: "step", Node: owner.Node, Parent: NoRule, Prev: owner,
-		nodeSeeded: true}
+		nodeOwner: owner}
 	prev := step
 	for i, val := range []any{"1", "2", "3"} {
-		// Each iteration is a push: seeded from its parent.
+		// Each iteration is a push: it inherits the same owner.
 		iter := &Rule{Name: "iter", Node: prev.Node, Parent: prev, Prev: NoRule,
-			nodeSeeded: true, Child: &Rule{Node: val}}
+			nodeOwner: owner, Child: &Rule{Node: val}}
 		builtinPushCfg(iter, nil, nil)
 		if got, _ := listHeader(owner.Node); i+1 != len(got) {
 			t.Fatalf("after %d pushes the owner holds %#v", i+1, got)
@@ -848,15 +848,15 @@ func TestPushReachesTheListsOwnerFromAnyDepth(t *testing.T) {
 	}
 }
 
-// The walk stops at the rule that ALLOCATED the list, and goes no further:
-// a rule holding an unrelated list above it is not holding this one.
+// The growth reaches the rule that ALLOCATED the list and stops there: a
+// rule holding an unrelated list above it is not holding this one.
 func TestPushStopsAtTheAllocatingRule(t *testing.T) {
 	outer := &Rule{Name: "outer", Node: []any{"untouched"}, Parent: NoRule,
 		Prev: NoRule}
 	// owner ran @array$: its own list, so it is not holding outer's.
 	owner := &Rule{Name: "owner", Node: []any{}, Parent: outer, Prev: NoRule}
 	iter := &Rule{Name: "iter", Node: owner.Node, Parent: owner, Prev: NoRule,
-		nodeSeeded: true, Child: &Rule{Node: "x"}}
+		nodeOwner: owner, Child: &Rule{Node: "x"}}
 	builtinPushCfg(iter, nil, nil)
 
 	if got, _ := listHeader(owner.Node); !reflect.DeepEqual(got, []any{"x"}) {
@@ -864,6 +864,32 @@ func TestPushStopsAtTheAllocatingRule(t *testing.T) {
 	}
 	if got, _ := listHeader(outer.Node); !reflect.DeepEqual(got, []any{"untouched"}) {
 		t.Errorf("an unrelated list above the owner was clobbered: %#v", got)
+	}
+}
+
+// @bubble$ lifting a child that is STILL CARRYING the inherited container
+// must keep that container's owner, not claim ownership. Claiming it
+// strands the rule that allocated the list, and a later push from deeper
+// in the chain leaves that rule with a stale header where TypeScript's
+// shared array stays complete. @value$ takes the same branch.
+func TestLiftingAnInheritedListKeepsItsOwner(t *testing.T) {
+	owner := &Rule{Name: "owner", Node: []any{}, Parent: NoRule, Prev: NoRule}
+	mid := &Rule{Name: "mid", Node: owner.Node, Parent: owner, Prev: NoRule,
+		nodeOwner: owner}
+	// mid's child is carrying the very same inherited list.
+	mid.Child = &Rule{Name: "kid", Node: owner.Node, Parent: mid,
+		Prev: NoRule, nodeOwner: owner}
+
+	builtinBubble(mid, nil)
+	if mid.nodeHolder() != owner {
+		t.Fatalf("bubble claimed ownership: holder is %v", mid.nodeHolder().Name)
+	}
+
+	deep := &Rule{Name: "deep", Node: mid.Node, Parent: mid, Prev: NoRule,
+		nodeOwner: mid.nodeHolder(), Child: &Rule{Node: "y"}}
+	builtinPushCfg(deep, nil, nil)
+	if got, _ := listHeader(owner.Node); !reflect.DeepEqual(got, []any{"y"}) {
+		t.Errorf("the allocating rule was stranded: got %#v, want [y]", got)
 	}
 }
 

@@ -932,27 +932,30 @@ type Rule struct {
 	// idempotent. Cleared as soon as it is honoured.
 	skipBefores bool
 	Node        any // Value node this rule is building.
-	// nodeSeeded reports that Node is still the container this rule was
-	// HANDED by its parent, rather than one an action allocated here.
+	// nodeOwner is the rule holding the AUTHORITATIVE copy of the
+	// container this rule is building into; nil means this rule holds it
+	// itself. Seeded down from the parent on push and from the replaced
+	// rule on `r:`, and reset to nil by every builtin that allocates a
+	// new container or scalar.
 	//
 	// It exists because a Go slice is a value. @push$ grows a list into a
-	// new header, which has to be re-published to every rule still
-	// holding that same list — and "still holding it" is precisely "was
-	// seeded and never allocated". Slice identity cannot answer it: two
-	// distinct EMPTY slices share a data pointer, and a list is empty
-	// exactly when the first push needs to propagate. TypeScript and Rust
-	// need none of this; they hand out the same list object.
+	// new header, so the growth must be published somewhere every holder
+	// agrees on — and a list can be grown many rules below where it was
+	// allocated. Naming the owner makes that one write. Walking the
+	// ancestors instead is quadratic in the length of the list, which is
+	// reachable from untrusted input.
 	//
-	// Cleared by every builtin that assigns a NEW container or scalar,
-	// and NOT by the in-place grows (@push$, @setval$), which keep the
-	// container they were given.
-	nodeSeeded bool
-	State      RuleState // Current phase: open ("o") or close ("c").
-	D          int       // Stack depth at which this rule was pushed.
-	Child      *Rule     // Rule pushed by this rule (NoRule if none).
-	Parent     *Rule     // Rule that pushed this rule (NoRule if none).
-	Prev       *Rule     // Rule this one replaced (NoRule if none).
-	Next       *Rule     // Rule to process after this one.
+	// Slice identity could not have answered "who still holds this?":
+	// two distinct EMPTY slices share a data pointer, and a list is empty
+	// exactly when the first push happens. TypeScript and Rust need none
+	// of this; they hand out the same list object.
+	nodeOwner *Rule
+	State     RuleState // Current phase: open ("o") or close ("c").
+	D         int       // Stack depth at which this rule was pushed.
+	Child     *Rule     // Rule pushed by this rule (NoRule if none).
+	Parent    *Rule     // Rule that pushed this rule (NoRule if none).
+	Prev      *Rule     // Rule this one replaced (NoRule if none).
+	Next      *Rule     // Rule to process after this one.
 
 	// Generalized per-position matched tokens. O[i] holds the token
 	// matched at the i-th lookahead position during OPEN (mirroring C
@@ -1060,14 +1063,22 @@ func (r *Rule) Exist(counter string) bool {
 	return ok
 }
 
+// nodeHolder is the rule holding the authoritative copy of this rule's
+// container: itself, or the rule it inherited that container from.
+func (r *Rule) nodeHolder() *Rule {
+	if r.nodeOwner != nil {
+		return r.nodeOwner
+	}
+	return r
+}
+
 // MakeRule creates a new Rule from a RuleSpec.
 func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
 	// N/U/K stay nil until first written (see the field docs / Ensure
 	// helpers) — most rules in value-building grammars never touch them.
 	r := &Rule{
 		I: ctx.UI, Name: spec.Name, Spec: spec, Node: node,
-		nodeSeeded: node != nil && !IsUndefined(node),
-		State:      OPEN, D: ctx.RSI,
+		State: OPEN, D: ctx.RSI,
 		Child: NoRule, Parent: NoRule, Prev: NoRule, Next: NoRule,
 		O: nil, ON: 0, C: nil, CN: 0,
 		O0: NoToken, O1: NoToken, C0: NoToken, C1: NoToken,
@@ -1251,6 +1262,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				}
 				ctx.RSI++
 				next = MakeRule(rulespec, ctx, r.Node)
+				next.nodeOwner = r.nodeHolder()
 				r.Child = next
 				next.Parent = r
 				if len(r.N) > 0 {
@@ -1276,6 +1288,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 			rulespec, ok := ctx.RSM[replaceName]
 			if ok {
 				next = MakeRule(rulespec, ctx, r.Node)
+				next.nodeOwner = r.nodeHolder()
 				next.Parent = r.Parent
 				next.Prev = r
 				if len(r.N) > 0 {

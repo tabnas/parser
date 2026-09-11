@@ -345,30 +345,43 @@ push landed anywhere the owner could see; the owner kept the empty
 original. TypeScript and Rust hand out the same list object, so every
 holder sees every element and there is nothing to re-publish.
 
-`@push$` now also walks the SEEDING chain: from the pushing rule up
-through the rules that are still holding the container they were handed,
-stopping at the rule that allocated it. At each hop it follows the link
-the node actually came from — the replaced rule for an `r:`, the pusher
-otherwise. Following `Parent` alone walks past the replaced rule and out
-of the chain: a rule that replaces itself before pushing a helper
-(`list` → `list$step1`) has the replacement parented ABOVE the owner, so
-the list would reach everything except the rule whose value is read.
+Every rule now knows which rule holds the authoritative copy of the
+container it is building into: `Rule.nodeOwner`, seeded down from the
+parent on a push and from the REPLACED rule on an `r:`, and reset to nil
+by every builtin that allocates a new container or scalar. `@push$` grows
+that rule's list and writes it back there — one write, whatever the
+depth.
 
-`Rule.nodeSeeded` is what makes this decidable, and it is why this is a
-separate walk rather than a wider guard on `sameGrownList`. Slice identity
-cannot answer "is this rule still holding the list I grew?": two distinct
-EMPTY slices share a data pointer, and a list is empty exactly when the
-first push needs to propagate. `nodeSeeded` is set by `MakeRule` when a
-rule is handed a node, and cleared by every builtin that assigns a new
-container or scalar — so "still seeded" means "never allocated one of its
-own", which is the question. An unrelated list above the owner can
-therefore never be clobbered: the owner allocated, so the walk stops
-there.
+The seeding has to follow the link the node actually came from. A rule
+that replaces itself before pushing a helper (`list` → `list$step1`) has
+the replacement parented ABOVE the owner, so inheriting through `Parent`
+alone would skip `list` — the list would reach everything except the rule
+whose value is read.
+
+Naming the owner rather than searching for it is also what keeps this
+linear. Walking the ancestors on each append is Θ(n²) in the length of
+the list, which is reachable from untrusted input: measured over this
+fixture, 1600 elements took 32.8 ms walking and 4.0 ms with the owner,
+against 3.5 ms for the (incorrect) unfixed engine.
+
+Slice identity could not have answered "who still holds this?" — two
+distinct EMPTY slices share a data pointer, and a list is empty exactly
+when the first push happens. That is the case this entry's predecessor
+recorded as traded away, and naming the owner removes the question rather
+than answering it.
+
+One consequence worth stating: a rule that LIFTS a child's node
+(`@bubble$`, `@value$`) inherits that node's owner rather than claiming
+ownership. Claiming it would strand the rule that allocated the container
+whenever the child was still carrying an inherited one, and a later push
+from deeper in the chain would leave the allocator with a stale header.
 
 Go-only bookkeeping for a Go-only problem — an unexported field, no API
 or spec-format change, and nothing for the other ports to mirror.
-`TestPushReachesTheListsOwnerFromAnyDepth` and
-`TestPushStopsAtTheAllocatingRule` pin the two directions.
+`TestPushReachesTheListsOwnerFromAnyDepth`,
+`TestPushStopsAtTheAllocatingRule` and
+`TestLiftingAnInheritedListKeepsItsOwner` pin the directions separately;
+`deep-push.fixture.json` runs in both suites.
 
 Turned up by `; @array` over an ABNF list idiom
 (`list = item *( "," item )`), where the emitted helpers fill the
