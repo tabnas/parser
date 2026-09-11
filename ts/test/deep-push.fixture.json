@@ -1,0 +1,104 @@
+{
+  "v": 5,
+  "options": {
+    "rule": {
+      "start": "__start__"
+    }
+  },
+  "rule": {
+    "top": {
+      "open": [
+        {
+          "p": "item",
+          "a": "@array$"
+        }
+      ],
+      "close": [
+        {
+          "r": "top$step1",
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "top$step1": {
+      "open": [
+        {
+          "p": "star"
+        }
+      ]
+    },
+    "star": {
+      "open": [
+        {
+          "s": "#CA",
+          "b": 1,
+          "p": "star$alt0"
+        },
+        {}
+      ]
+    },
+    "star$alt0": {
+      "open": [
+        {
+          "s": "#CA",
+          "p": "item"
+        }
+      ],
+      "close": [
+        {
+          "r": "star$alt0$step1",
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "star$alt0$step1": {
+      "open": [
+        {
+          "p": "star"
+        }
+      ]
+    },
+    "item": {
+      "open": [
+        {
+          "s": "#NR",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "nterms": 1
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$"
+        }
+      ]
+    },
+    "__start__": {
+      "open": [
+        {
+          "p": "top"
+        }
+      ],
+      "close": [
+        {
+          "s": "#ZZ",
+          "a": "@bubble$"
+        }
+      ]
+    }
+  }
+}

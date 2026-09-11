@@ -102,6 +102,7 @@ func cfgBool(v any) bool  { b, _ := v.(bool); return b }
 func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if cfgBool(cfg["init"]) {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
+		r.nodeOwner = nil
 	}
 	n, _ := r.Node.(map[string]any)
 	if n == nil {
@@ -121,6 +122,7 @@ func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Node == nil {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
+		r.nodeOwner = nil
 	}
 	n, _ := r.Node.(map[string]any)
 	if n == nil || r.Child == nil {
@@ -158,6 +160,12 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinBubble(r *Rule, _ *Context) {
 	if r.Child != nil && r.Child.Node != Undefined {
 		r.Node = r.Child.Node
+		// The lifted node keeps its OWNER. Claiming ownership here would
+		// strand the rule that actually allocated the container when the
+		// child is still carrying one handed down to it, and a later push
+		// from deeper in the chain would leave that rule with a stale
+		// header.
+		r.nodeOwner = r.Child.nodeHolder()
 	}
 }
 
@@ -206,6 +214,7 @@ func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
 		}
 	}
 	r.Node = Undefined
+	r.nodeOwner = nil
 }
 
 func asAnySlice(v any) []any {
@@ -276,17 +285,21 @@ func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 func builtinObjectCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.MapRef {
 		r.Node = MapRef{Val: make(map[string]any), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		r.nodeOwner = nil
 		return
 	}
 	if cfgBool(cfg["sort"]) {
 		r.Node = NewSortedMap()
+		r.nodeOwner = nil
 		return
 	}
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.PlainMap {
 		r.Node = map[string]any{}
+		r.nodeOwner = nil
 		return
 	}
 	r.Node = NewOrderedMap()
+	r.nodeOwner = nil
 }
 
 // @array$ — allocate a fresh empty array. With ListRef info on, allocate
@@ -294,14 +307,17 @@ func builtinObjectCfg(r *Rule, ctx *Context, cfg map[string]any) {
 func builtinArrayCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.ListRef {
 		r.Node = ListRef{Val: make([]any, 0), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		r.nodeOwner = nil
 		return
 	}
 	r.Node = make([]any, 0)
+	r.nodeOwner = nil
 }
 
 // @reset$ — clear the parent-seeded node back to the no-value sentinel.
 func builtinReset(r *Rule, _ *Context) {
 	r.Node = Undefined
+	r.nodeOwner = nil
 }
 
 // @key$ — capture the matched key token's value into a (non-propagated)
@@ -422,12 +438,20 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if cfgBool(cfg["src"]) {
 		val = srcVal(val)
 	}
-	switch r.Node.(type) {
+	// The rule holding the authoritative container. A list can be grown
+	// many rules below the one that allocated it — a right-recursive
+	// repetition helper inherits it and pushes from a new depth on every
+	// iteration — and a Go slice is a value, so the grown header has to
+	// reach that rule. Naming the owner makes it one write; walking the
+	// ancestors instead was quadratic in the length of the list.
+	owner := r.nodeHolder()
+	switch owner.Node.(type) {
 	case []any, ListRef:
-		before := r.Node
-		r.Node = NodeListAppend(r.Node, val)
+		before := owner.Node
+		owner.Node = NodeListAppend(owner.Node, val)
+		r.Node = owner.Node
 		if r.Parent != nil && r.Parent != NoRule {
-			r.Parent.Node = r.Node
+			r.Parent.Node = owner.Node
 		}
 		// ...and back along the replacement chain. A rule replaced via
 		// `r:` carries the chain on under a new Rule, and the parent's
@@ -446,7 +470,7 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 			if !sameGrownList(p.Node, before) {
 				break
 			}
-			p.Node = r.Node
+			p.Node = owner.Node
 		}
 	}
 }
@@ -458,11 +482,14 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if r.Child != nil && !IsUndefined(r.Child.Node) {
 		r.Node = r.Child.Node
+		// Same as @bubble$: a lifted container keeps its owner.
+		r.nodeOwner = r.Child.nodeHolder()
 		return
 	}
 	from := cfgInt(cfg["from"])
 	if from < 0 || from >= len(r.O) {
 		r.Node = Undefined
+		r.nodeOwner = nil
 		return
 	}
 	tok := r.O[from]
@@ -477,6 +504,7 @@ func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 		val = Text{Quote: quote, Str: str}
 	}
 	r.Node = val
+	r.nodeOwner = nil
 }
 
 // ---- Config binding (A1, ruling #120) -----------------------------
