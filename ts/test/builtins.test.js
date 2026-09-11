@@ -613,6 +613,21 @@ describe('builtins', () => {
         assert.deepEqual(build(input), JSON.parse(input), `build(${input})`)
       }
     })
+
+    it('@key$ {lit} names a member the input never spells', () => {
+      // The key side of @setval$ used to be reachable only from a TOKEN,
+      // which suits `{"a":1}` and suits nothing that DECLARES its shape:
+      // in `ver = major "," minor` the part names are in the grammar, not
+      // in the input, so there was no token for @key$ to read and the
+      // whole grammar could build no object at all.
+      //
+      // Same serialized fixture as go/TestLiteralKeyFixtureParity, so a
+      // port that drops `lit` fails on one side and is caught.
+      const spec = require('./literal-key.fixture.json')
+      const j = new Tabnas({ rule: { start: 'ver' } })
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('1,2'), { major: 1, minor: 2 })
+    })
   })
 
   describe('native-value builders (direct invocation)', () => {
@@ -646,6 +661,30 @@ describe('builtins', () => {
       const r2 = { u: {}, o: [{ val: 'x' }, { val: 'y' }] }
       builtinsSubpath.BUILTIN_CONFIG_FACTORY['@key$']({ slot: 'k2', from: 1 })(r2)
       assert.equal(r2.u.k2, 'y')
+    })
+
+    it('@key$ {lit} takes the key from config, not from a token', () => {
+      const key$lit = builtinsSubpath.BUILTIN_CONFIG_FACTORY['@key$']
+      // `lit` wins outright: the token is present and still not consulted,
+      // so a grammar that has no key token can name its own members.
+      const r = { u: {}, o: [{ val: 'fromToken' }] }
+      key$lit({ lit: 'fromConfig' })(r)
+      assert.equal(r.u.key, 'fromConfig')
+      // ...and it honours `slot`, so two members can be open at once.
+      const r2 = { u: {}, o: [] }
+      key$lit({ lit: 'major', slot: 'k2' })(r2)
+      assert.equal(r2.u.k2, 'major')
+      // An empty string is a real key, not an absent one.
+      const r3 = { u: {}, o: [{ val: 'fromToken' }] }
+      key$lit({ lit: '' })(r3)
+      assert.equal(r3.u.key, '')
+      // Anything that is not a string falls back to the token, matching
+      // Go's type assertion. A deserialized grammar can carry a null here.
+      for (const bad of [null, undefined, 7, {}]) {
+        const rb = { u: {}, o: [{ val: 'fromToken' }] }
+        key$lit({ lit: bad })(rb)
+        assert.equal(rb.u.key, 'fromToken', `lit: ${JSON.stringify(bad)}`)
+      }
     })
 
     it('@setval$ assigns child node under the captured key', () => {

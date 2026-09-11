@@ -44,7 +44,7 @@ import { recordKeyOrder } from './utility'
 // The config-schema version implemented by these builtins. A serialized
 // grammar that declares `GrammarSpec.v` greater than this is refused at
 // load (see Tabnas.grammar). Absent ⇒ treated as version 1.
-export const BUILTIN_SCHEMA_VERSION = 3
+export const BUILTIN_SCHEMA_VERSION = 4
 
 
 const defprop = Object.defineProperty
@@ -109,6 +109,7 @@ interface ArrayConfig {
 interface KeyConfig {
   slot?: string
   from?: number
+  lit?: string
 }
 interface SetvalConfig {
   slot?: string
@@ -254,8 +255,18 @@ const reset$: AltAction = (r: Rule) => {
 
 // Capture the matched key token's value into a (non-propagated) r.u slot,
 // for a later @setval$ on the same rule to consume.
+//
+// `lit` supplies the key as a CONSTANT instead of reading it from a
+// token. A grammar whose structure is declared rather than delimited —
+// `ver = maj "." min`, where `maj` names a part but no token carries the
+// text "maj" — has no token for @key$ to read, so without this the key
+// side of @setval$ is unreachable for it. The type says `string`, but a
+// grammar can arrive deserialized, so the guard is a typeof test rather
+// than a defined test: that keeps this port and the Go one agreeing on
+// every input, not merely on well-typed ones.
 const makeKey$ = (cfg: KeyConfig): AltAction => (r: Rule) => {
-  r.u[cfg.slot || 'key'] = r.o[cfg.from || 0]?.val
+  r.u[cfg.slot || 'key'] =
+    'string' === typeof cfg.lit ? cfg.lit : r.o[cfg.from || 0]?.val
 }
 
 // Assign the just-returned child node under the captured key: the object-
