@@ -274,6 +274,60 @@ consumption, so this was a divergence as well as a bug.
 
 Pinned by `ts/test/src-value.fixture.json`, which both suites run.
 
+### `@push$` across a rule replacement: Aligned (was a Go defect)
+
+A rule that allocates a list, pushes into it, and REPLACES itself (`r:`)
+to carry the chain on, with a parent reading the result afterwards
+(`@bubble$`, `@capture$`). The parent's `Child` pointer still refers to
+the rule that was REPLACED, so it reads that rule's node.
+
+TypeScript and Rust get this free: the replacement is handed the same list
+OBJECT, and pushing mutates it in place, so the stale pointer sees every
+element. A Go slice is a value — `NodeListAppend` returns a new header —
+so the replaced rule kept the list as it stood before the replacement, and
+the parent read it. `["1"]` here, `["1","2"]` there, from the same
+serialized grammar.
+
+Go already re-published the grown header to the PARENT for exactly this
+reason; the replacement direction was simply never covered. It now walks
+the `Prev` chain too, updating only rules that actually held the list this
+push grew (`sameGrownList`: same length AND same backing array), so a
+replacement that allocated a fresh container of its own cannot clobber the
+one it replaced — which is what `child-pusher.fixture.json` pins, and what
+TypeScript does.
+
+Info mode wraps a list in a `ListRef`, so the comparison unwraps
+(`listHeader`) rather than asserting `[]any`. That surface is Go-only, so
+no shared fixture can reach it; `TestPushSurvivesReplacementWithListRef`
+covers it directly.
+
+**One case is deliberately not propagated.** Go gives two distinct
+zero-length slices the same (or no) data pointer, so an EMPTY list cannot
+be told apart from another empty one. The propagation therefore declines
+on an empty list rather than guessing: a replacement that allocated its
+own empty list before its first push must not overwrite the list of the
+rule it replaced, because TypeScript would not. The mirror-image case — a
+rule that allocated a list, was replaced before anything went into it, and
+is then read by a parent — keeps the empty list here where TypeScript
+would show the elements. Recorded rather than silently traded away; no
+grammar the compilers emit produces it, because a rule that allocates a
+list also pushes into it before replacing itself.
+
+A tempting fix that is WRONG, recorded so it is not tried again: making a
+parent's `Child` follow the replacement chain forward. TypeScript reads
+the PRE-replacement child deliberately — `child-pusher.fixture.json`
+returns a `mid` kid, not the `alt` that replaced it — so following it
+forward diverges from TypeScript rather than aligning with it.
+
+Not specific to the value annotations that turned it up: `@push$` + `r:` +
+a parent read is reachable by any grammar. It went unnoticed because the
+json-builder fixture — the array oracle for every port — uses the OTHER
+idiom, where the allocating rule and the pushing rule are different rules
+in a parent/child relationship, so the parent write-back already covered
+it.
+
+Pinned by `ts/test/push-replace.fixture.json`, which all three suites run.
+
 ### `MapToOptions` carries only some options
 
 Not a divergence — an API gap here, recorded so it is not mistaken for

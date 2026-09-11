@@ -729,6 +729,84 @@ func TestSrcValueFixtureParity(t *testing.T) {
 	}
 }
 
+// TestPushSurvivesReplacementFixtureParity: a rule that allocates a list,
+// pushes into it, and REPLACES itself to carry the chain on. The parent's
+// Child pointer still refers to the rule that was replaced, so a parent
+// reading the result — here @bubble$ on __start__ — reads THAT rule's
+// node.
+//
+// Free in TypeScript and Rust, which hand the replacement the same list
+// and mutate it in place. Here a slice is a value, so the grown header
+// has to be carried back along the Prev chain; without that this returned
+// ["1"], dropping every element appended after the replacement.
+//
+// Same fixture in all three suites, which is the only reason this was
+// ever noticed: the json-builder array oracle uses the OTHER idiom, where
+// the allocating and pushing rules are different rules in a parent/child
+// relationship, so the parent write-back already covered it.
+func TestPushSurvivesReplacementFixtureParity(t *testing.T) {
+	spec := fixtureSpec(t, "push-replace.fixture.json")
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []any{"1", "2"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
+	}
+}
+
+// TestPushSurvivesReplacementWithListRef: the same replacement case, with
+// Info.List on so the node is a ListRef wrapper rather than a bare slice.
+//
+// Go-only surface, so no shared fixture can reach it and nothing else
+// would notice if the propagation only understood `[]any` — it would
+// skip every list in info mode and quietly drop elements again.
+func TestPushSurvivesReplacementWithListRef(t *testing.T) {
+	grow := func(r *Rule) {
+		builtinPushCfg(r, nil, nil)
+	}
+
+	// top holds the list; step replaced it and appends the second element.
+	seed := ListRef{Val: []any{"1"}, Meta: map[string]any{}}
+	top := &Rule{Node: seed}
+	step := &Rule{Node: seed, Prev: top, Child: &Rule{Node: "2"}}
+	grow(step)
+
+	got, ok := listHeader(top.Node)
+	if !ok {
+		t.Fatalf("the replaced rule no longer holds a list: %#v", top.Node)
+	}
+	if want := []any{"1", "2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("replaced rule's list: got %#v, want %#v", got, want)
+	}
+	if _, isRef := top.Node.(ListRef); !isRef {
+		t.Errorf("the ListRef wrapper must be preserved, got %T", top.Node)
+	}
+}
+
+// A replacement that allocated its OWN list must not overwrite the list of
+// the rule it replaced — TypeScript would not, because the fresh
+// allocation is a different object. Two distinct EMPTY lists cannot be
+// told apart in Go, so the propagation declines rather than guesses.
+func TestPushDoesNotClobberAFreshContainer(t *testing.T) {
+	held := []any{}
+	top := &Rule{Node: held}
+	// step ran @array$ before its first push: its own, distinct, empty list.
+	step := &Rule{Node: []any{}, Prev: top, Child: &Rule{Node: "x"}}
+	builtinPushCfg(step, nil, nil)
+
+	if got, _ := listHeader(top.Node); 0 != len(got) {
+		t.Errorf("a fresh container clobbered the one it replaced: got %#v", got)
+	}
+	if got, _ := listHeader(step.Node); 1 != len(got) {
+		t.Errorf("the replacement's own list should have grown: got %#v", got)
+	}
+}
+
 // omPlainify recursively converts OrderedMap nodes to plain map[string]any
 // (dropping order) so value-only comparisons against encoding/json can use
 // reflect.DeepEqual.

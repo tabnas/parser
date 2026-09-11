@@ -494,6 +494,24 @@ fn shared_src_value_grammar_fixture_executes_in_rust() {
 }
 
 #[test]
+fn shared_push_replace_grammar_fixture_executes_in_rust() {
+    // A rule that allocates a list, pushes into it, and REPLACES itself to
+    // carry the chain on, with a parent reading the result through
+    // @bubble$ — so it reads the node of the rule that was REPLACED.
+    //
+    // Free here and in TypeScript, which hand the replacement the same
+    // list and mutate it in place; Go copies the slice header and dropped
+    // every element after the replacement. Same file, all three suites.
+    let source = include_str!("../../ts/test/push-replace.fixture.json");
+    let mut parser = Tabnas::new();
+    parser.grammar_json(source).unwrap();
+    assert_eq!(
+        parser.parse("1,2").unwrap(),
+        Value::from_json(&serde_json::json!(["1", "2"]))
+    );
+}
+
+#[test]
 fn replaced_child_publishes_its_final_node_to_the_parent() {
     let source = include_str!("../../ts/test/replace-child.fixture.json");
     let mut parser = Tabnas::new();

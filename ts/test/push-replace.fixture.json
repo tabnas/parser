@@ -1,0 +1,98 @@
+{
+  "v": 5,
+  "options": {
+    "rule": {
+      "start": "__start__"
+    }
+  },
+  "rule": {
+    "top": {
+      "open": [
+        {
+          "p": "a",
+          "a": "@array$"
+        }
+      ],
+      "close": [
+        {
+          "r": "top$step1",
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "top$step1": {
+      "open": [
+        {
+          "s": "#CA",
+          "p": "b"
+        }
+      ],
+      "close": [
+        {
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "a": {
+      "open": [
+        {
+          "s": "#NR",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "nterms": 1
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$"
+        }
+      ]
+    },
+    "b": {
+      "open": [
+        {
+          "s": "#NR",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "nterms": 1
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$"
+        }
+      ]
+    },
+    "__start__": {
+      "open": [
+        {
+          "p": "top"
+        }
+      ],
+      "close": [
+        {
+          "s": "#ZZ",
+          "a": "@bubble$"
+        }
+      ]
+    }
+  }
+}
