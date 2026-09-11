@@ -77,14 +77,23 @@ against alternate-scoped in TypeScript.
 | `@object$` | `r.node = {}` (Object.create(null) / `map[string]any{}`) |
 | `@array$`  | `r.node = []` (`[]any{}`) |
 | `@reset$`  | `r.node = undefined` / `Undefined` (clears the parent-seeded node) |
-| `@key$`    | `r.u.key = r.o0.val` (capture the matched key token) |
+| `@key$`    | `r.u.key = r.o0.val` (capture the matched key token), or the constant `k.key$.lit` when set |
 | `@setval$` | `r.node[r.u.key] = r.child.node` (object property assign) |
 | `@push$`   | `r.node.push(r.child.node)` (array element append) |
 | `@value$`  | child-wins-else resolve the matched scalar token |
 
-`BUILTIN_SCHEMA_VERSION` (currently **3**) versions the config contract; a
+`BUILTIN_SCHEMA_VERSION` (currently **4**) versions the config contract; a
 grammar may declare `GrammarSpec.v` and the engine refuses one that needs a
 newer schema.
+
+**v4 adds `@key$ {lit}`** — the key as a CONSTANT rather than read from a
+token. A grammar that DECLARES its shape (`ver = major "," minor`, where the
+part names are in the grammar and no token carries them) has no key token for
+`@key$` to read, so the key side of `@setval$` was unreachable for it. The
+version bump is what makes that safe to depend on: a v3 engine handed a
+`lit`-using grammar would ignore the field and quietly build every member
+under one empty key instead of failing, so `lit` must be able to say it needs
+a v4 engine.
 
 ## v1 (shipped): plain nodes
 

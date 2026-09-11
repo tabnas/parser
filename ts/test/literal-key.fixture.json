@@ -1,0 +1,35 @@
+{
+  "v": 4,
+  "options": { "rule": { "start": "ver" } },
+  "rule": {
+    "ver": {
+      "open": [
+        {
+          "p": "major",
+          "a": ["@object$", "@key$"],
+          "k": { "key$": { "lit": "major" } }
+        }
+      ],
+      "close": [{ "r": "ver$rest", "a": "@setval$" }]
+    },
+    "ver$rest": {
+      "open": [
+        {
+          "s": "#CA",
+          "p": "minor",
+          "a": "@key$",
+          "k": { "key$": { "lit": "minor" } }
+        }
+      ],
+      "close": [{ "a": "@setval$" }]
+    },
+    "major": {
+      "open": [{ "s": "#NR", "a": "@reset$" }],
+      "close": [{ "a": "@value$" }]
+    },
+    "minor": {
+      "open": [{ "s": "#NR", "a": "@reset$" }],
+      "close": [{ "a": "@value$" }]
+    }
+  }
+}

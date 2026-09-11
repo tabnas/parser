@@ -37,8 +37,8 @@ func TestBuiltinRefsLibrary(t *testing.T) {
 			t.Errorf("missing builtin %q", k)
 		}
 	}
-	if BUILTIN_SCHEMA_VERSION != 3 {
-		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 3", BUILTIN_SCHEMA_VERSION)
+	if BUILTIN_SCHEMA_VERSION != 4 {
+		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 4", BUILTIN_SCHEMA_VERSION)
 	}
 }
 
@@ -479,6 +479,33 @@ func TestNativeValueBuilders(t *testing.T) {
 		t.Errorf("@key$: got %v", rk.U["key"])
 	}
 
+	// @key$ {lit} takes the key from config, not from a token: `lit` wins
+	// outright even with a token present, honours `slot`, treats "" as a
+	// real key, and falls back to the token for any non-string (matching
+	// the TS typeof guard — a deserialized grammar can carry a null).
+	rkl := &Rule{K: map[string]any{}, U: map[string]any{}, O: []*Token{{Val: "fromToken"}}}
+	builtinKeyCfg(rkl, nil, map[string]any{"lit": "fromConfig"})
+	if rkl.U["key"] != "fromConfig" {
+		t.Errorf("@key$ lit: got %v, want fromConfig", rkl.U["key"])
+	}
+	rks := &Rule{K: map[string]any{}, U: map[string]any{}}
+	builtinKeyCfg(rks, nil, map[string]any{"lit": "major", "slot": "k2"})
+	if rks.U["k2"] != "major" {
+		t.Errorf("@key$ lit+slot: got %v, want major", rks.U["k2"])
+	}
+	rke := &Rule{K: map[string]any{}, U: map[string]any{}, O: []*Token{{Val: "fromToken"}}}
+	builtinKeyCfg(rke, nil, map[string]any{"lit": ""})
+	if rke.U["key"] != "" {
+		t.Errorf(`@key$ lit "": got %v, want ""`, rke.U["key"])
+	}
+	for _, bad := range []any{nil, 7, map[string]any{}} {
+		rb := &Rule{K: map[string]any{}, U: map[string]any{}, O: []*Token{{Val: "fromToken"}}}
+		builtinKeyCfg(rb, nil, map[string]any{"lit": bad})
+		if rb.U["key"] != "fromToken" {
+			t.Errorf("@key$ lit %#v: got %v, want the token value", bad, rb.U["key"])
+		}
+	}
+
 	// @setval$ assigns child under captured key
 	rs := &Rule{K: map[string]any{}, Node: map[string]any{}, U: map[string]any{"key": "a"},
 		Child: &Rule{Node: 42}}
@@ -639,6 +666,34 @@ func TestJsonBuilderFixtureParity(t *testing.T) {
 		if !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), oracle) {
 			t.Errorf("build %q: got %#v, want %#v", input, UnwrapUndefined(got), oracle)
 		}
+	}
+}
+
+// TestLiteralKeyFixtureParity: the key side of @setval$ used to be
+// reachable only from a TOKEN, which suits `{"a":1}` and suits nothing
+// that DECLARES its shape: in `ver = major "," minor` the part names are
+// in the grammar, not in the input, so there was no token for @key$ to
+// read and the whole grammar could build no object at all.
+//
+// Same serialized fixture the TS suite runs, so a port that drops `lit`
+// fails on one side and is caught.
+func TestLiteralKeyFixtureParity(t *testing.T) {
+	spec := fixtureSpec(t, "literal-key.fixture.json")
+	if spec.Options == nil {
+		spec.Options = &Options{}
+	}
+	spec.Options.Rule = &RuleOptions{Start: "ver"}
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]any{"major": 1.0, "minor": 2.0}
+	if !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
 	}
 }
 

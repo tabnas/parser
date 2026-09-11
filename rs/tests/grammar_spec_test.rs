@@ -450,6 +450,23 @@ fn shared_probe_grammar_fixture_executes_in_rust() {
 }
 
 #[test]
+fn shared_literal_key_grammar_fixture_executes_in_rust() {
+    // Schema v4: `@key$ {lit}` names a member the input never spells.
+    // `ver = major "," minor` declares its shape rather than delimiting
+    // it, so no token carries the text "major" and the key side of
+    // @setval$ had nothing to read. The SAME fixture is run by the TS and
+    // Go suites, so a port that drops `lit` -- or refuses schema v4 --
+    // fails here and is caught.
+    let source = include_str!("../../ts/test/literal-key.fixture.json");
+    let mut parser = Tabnas::new();
+    parser.grammar_json(source).unwrap();
+    assert_eq!(
+        parser.parse("1,2").unwrap(),
+        Value::from_json(&serde_json::json!({"major": 1, "minor": 2}))
+    );
+}
+
+#[test]
 fn replaced_child_publishes_its_final_node_to_the_parent() {
     let source = include_str!("../../ts/test/replace-child.fixture.json");
     let mut parser = Tabnas::new();

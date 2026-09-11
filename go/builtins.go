@@ -48,7 +48,7 @@ import "reflect"
 // BUILTIN_SCHEMA_VERSION is the config-schema version these builtins
 // implement. A serialized grammar declaring GrammarSpec.V greater than
 // this is refused at load. Absent (zero) ⇒ treated as version 1.
-const BUILTIN_SCHEMA_VERSION = 3
+const BUILTIN_SCHEMA_VERSION = 4
 
 // mkNode builds the AST node shape produced by the tree builtins:
 // `{rule?, src, kids}`. `user` rules carry a `rule` tag; others omit it
@@ -287,10 +287,22 @@ func builtinReset(r *Rule, _ *Context) {
 
 // @key$ — capture the matched key token's value into a (non-propagated)
 // r.U slot for a later @setval$ on the same rule.
+//
+// "lit" supplies the key as a CONSTANT instead of reading it from a
+// token. A grammar whose structure is declared rather than delimited —
+// `ver = maj "." min`, where `maj` names a part but no token carries the
+// text "maj" — has no token for @key$ to read, so without this the key
+// side of @setval$ is unreachable for it. The type assertion (rather
+// than a nil test) keeps this port agreeing with the TS one on every
+// input: both take "lit" only when it is actually a string.
 func builtinKeyCfg(r *Rule, _ *Context, cfg map[string]any) {
 	slot := cfgStr(cfg["slot"])
 	if slot == "" {
 		slot = "key"
+	}
+	if lit, ok := cfg["lit"].(string); ok {
+		r.EnsureU()[slot] = lit
+		return
 	}
 	from := cfgInt(cfg["from"])
 	if from >= 0 && from < len(r.O) {

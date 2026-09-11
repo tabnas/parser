@@ -56,6 +56,20 @@ fn config_string(config: Option<&Value>, name: &str) -> String {
     }
 }
 
+/// The config value at `name` only when it really is a string.
+///
+/// Distinct from `config_string`, which folds "absent" and "" into the
+/// same empty String: `lit` needs them apart, because an empty string is
+/// a real key. Matching the TS `typeof` guard and the Go type assertion,
+/// anything that is not a string reads as absent, so the three ports
+/// agree on every input and not merely on well-typed ones.
+fn config_str_opt(config: Option<&Value>, name: &str) -> Option<String> {
+    match config_object(config).and_then(|map| map.get(name)) {
+        Some(Value::String(value)) => Some(value.clone()),
+        _ => None,
+    }
+}
+
 fn config_usize(config: Option<&Value>, name: &str) -> usize {
     match config_object(config).and_then(|map| map.get(name)) {
         Some(Value::Number(value)) if value.is_finite() && *value >= 0.0 => *value as usize,
@@ -316,15 +330,25 @@ pub(crate) fn run_builtin_action_with_info(
             rule.child_node_is_self = false;
         }
         "@key$" => {
-            if let Some(token) = config_index(config, "from").and_then(|index| rule.o.get(index)) {
-                let slot = {
-                    let configured = config_string(config, "slot");
-                    if configured.is_empty() {
-                        "key".to_string()
-                    } else {
-                        configured
-                    }
-                };
+            let slot = {
+                let configured = config_string(config, "slot");
+                if configured.is_empty() {
+                    "key".to_string()
+                } else {
+                    configured
+                }
+            };
+            // `lit` supplies the key as a CONSTANT instead of reading it
+            // from a token, and wins outright when set. A grammar whose
+            // structure is declared rather than delimited -- `ver = maj
+            // "." min`, where `maj` names a part but no token carries the
+            // text "maj" -- has no token for @key$ to read, so without
+            // this the key side of @setval$ is unreachable for it.
+            if let Some(lit) = config_str_opt(config, "lit") {
+                rule.u.insert(slot, Value::String(lit));
+            } else if let Some(token) =
+                config_index(config, "from").and_then(|index| rule.o.get(index))
+            {
                 rule.u.insert(slot, token.val.clone());
             }
         }
