@@ -37,8 +37,8 @@ func TestBuiltinRefsLibrary(t *testing.T) {
 			t.Errorf("missing builtin %q", k)
 		}
 	}
-	if BUILTIN_SCHEMA_VERSION != 4 {
-		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 4", BUILTIN_SCHEMA_VERSION)
+	if BUILTIN_SCHEMA_VERSION != 5 {
+		t.Errorf("BUILTIN_SCHEMA_VERSION = %d, want 5", BUILTIN_SCHEMA_VERSION)
 	}
 }
 
@@ -692,6 +692,38 @@ func TestLiteralKeyFixtureParity(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	want := map[string]any{"major": 1.0, "minor": 2.0}
+	if !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
+	}
+}
+
+// TestSrcValueFixtureParity: schema v5. A member whose value IS its
+// matched text had no way to get it -- the tree builders accumulate the
+// text into node.src, and no builtin could read it back out, so @setval$
+// could only assign the whole {rule, src, kids} node.
+//
+// One fixture covers all three cases the compiler has to emit:
+//   - major/minor: scalar members, flattened to their src by setval src
+//   - tags:        a member that built its OWN value, assigned whole
+//     (no src) -- this is what makes nesting work
+//   - the tags elements: flattened by push src, the array counterpart
+//
+// Run by the TS and Rust suites too, so a port that drops src is caught.
+func TestSrcValueFixtureParity(t *testing.T) {
+	spec := fixtureSpec(t, "src-value.fixture.json")
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2,3,4")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]any{
+		"major": "1",
+		"minor": "2",
+		"tags":  []any{"3", "4"},
+	}
 	if !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
 		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
 	}

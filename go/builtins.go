@@ -48,7 +48,7 @@ import "reflect"
 // BUILTIN_SCHEMA_VERSION is the config-schema version these builtins
 // implement. A serialized grammar declaring GrammarSpec.V greater than
 // this is refused at load. Absent (zero) ⇒ treated as version 1.
-const BUILTIN_SCHEMA_VERSION = 4
+const BUILTIN_SCHEMA_VERSION = 5
 
 // mkNode builds the AST node shape produced by the tree builtins:
 // `{rule?, src, kids}`. `user` rules carry a `rule` tag; others omit it
@@ -59,6 +59,25 @@ func mkNode(rule string, kind string) map[string]any {
 		return map[string]any{"rule": rule, "src": "", "kids": []any{}}
 	}
 	return map[string]any{"src": "", "kids": []any{}}
+}
+
+// srcVal returns the accumulated source text of a tree node -- the
+// {rule?, src, kids} shape mkNode builds -- or the node unchanged when it
+// is not one.
+//
+// "src" is how a member whose value IS its matched text gets that text:
+// the tree builders already accumulate it, and nothing else could read it
+// back out. A compiler emits "src" only where it already knows the member
+// is a scalar, so this never has to guess which it is: the fall-through
+// exists so asking for src where no tree node was built passes the value
+// along rather than erasing it.
+func srcVal(node any) any {
+	if m, ok := node.(map[string]any); ok {
+		if s, ok := m["src"].(string); ok {
+			return s
+		}
+	}
+	return node
 }
 
 // cfgInt reads a config number that may arrive as int (set at runtime) or
@@ -323,9 +342,13 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 		return
 	}
 	key, _ := r.U[slot].(string)
+	val := r.Child.Node
+	if cfgBool(cfg["src"]) {
+		val = srcVal(val)
+	}
 	switch r.Node.(type) {
 	case map[string]any, MapRef, *OrderedMap:
-		r.Node = NodeMapSet(r.Node, key, r.Child.Node)
+		r.Node = NodeMapSet(r.Node, key, val)
 	}
 }
 
@@ -333,13 +356,17 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 // Works on a plain []any or a ListRef wrapper (info mode) via
 // NodeListAppend. Go slices are value types, so the grown header is
 // re-published to the parent (mirrors the json plugin's parent write-back).
-func builtinPush(r *Rule, _ *Context) {
+func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Child == nil || IsUndefined(r.Child.Node) {
 		return
 	}
+	val := r.Child.Node
+	if cfgBool(cfg["src"]) {
+		val = srcVal(val)
+	}
 	switch r.Node.(type) {
 	case []any, ListRef:
-		r.Node = NodeListAppend(r.Node, r.Child.Node)
+		r.Node = NodeListAppend(r.Node, val)
 		if r.Parent != nil && r.Parent != NoRule {
 			r.Parent.Node = r.Node
 		}
@@ -415,6 +442,9 @@ func makeBuiltinKey(cfg map[string]any) AltAction {
 func makeBuiltinSetval(cfg map[string]any) AltAction {
 	return func(r *Rule, ctx *Context) { builtinSetvalCfg(r, ctx, cfg) }
 }
+func makeBuiltinPush(cfg map[string]any) AltAction {
+	return func(r *Rule, ctx *Context) { builtinPushCfg(r, ctx, cfg) }
+}
 func makeBuiltinValue(cfg map[string]any) AltAction {
 	return func(r *Rule, ctx *Context) { builtinValueCfg(r, ctx, cfg) }
 }
@@ -428,6 +458,7 @@ var (
 	builtinArray   = makeBuiltinArray(nil)
 	builtinKey     = makeBuiltinKey(nil)
 	builtinSetval  = makeBuiltinSetval(nil)
+	builtinPush    = makeBuiltinPush(nil)
 	builtinValue   = makeBuiltinValue(nil)
 )
 
@@ -446,6 +477,7 @@ var BUILTIN_CONFIG_FACTORY = map[FuncRef]func(map[string]any) AltAction{
 	"@array$":   makeBuiltinArray,
 	"@key$":     makeBuiltinKey,
 	"@setval$":  makeBuiltinSetval,
+	"@push$":    makeBuiltinPush,
 	"@value$":   makeBuiltinValue,
 }
 

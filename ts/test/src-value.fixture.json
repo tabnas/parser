@@ -1,0 +1,62 @@
+{
+  "v": 5,
+  "options": { "rule": { "start": "ver" } },
+  "rule": {
+    "ver": {
+      "open": [
+        {
+          "p": "major",
+          "a": ["@object$", "@key$"],
+          "k": { "key$": { "lit": "major" } }
+        }
+      ],
+      "close": [
+        { "r": "ver$step1", "a": "@setval$", "k": { "setval$": { "src": true } } }
+      ]
+    },
+    "ver$step1": {
+      "open": [
+        { "s": "#CA", "p": "minor", "a": "@key$", "k": { "key$": { "lit": "minor" } } }
+      ],
+      "close": [
+        { "r": "ver$step2", "a": "@setval$", "k": { "setval$": { "src": true } } }
+      ]
+    },
+    "ver$step2": {
+      "open": [
+        { "s": "#CA", "p": "tags", "a": "@key$", "k": { "key$": { "lit": "tags" } } }
+      ],
+      "close": [{ "a": "@setval$" }]
+    },
+
+    "major": {
+      "open": [
+        { "s": "#NR", "a": "@node$", "k": { "node$": { "init": true, "nterms": 1 } } }
+      ]
+    },
+    "minor": {
+      "open": [
+        { "s": "#NR", "a": "@node$", "k": { "node$": { "init": true, "nterms": 1 } } }
+      ]
+    },
+
+    "tags": { "open": [{ "p": "tagelem", "a": "@array$" }] },
+    "tagelem": {
+      "open": [{ "p": "tag" }],
+      "close": [
+        {
+          "s": "#CA",
+          "r": "tagelem",
+          "a": "@push$",
+          "k": { "push$": { "src": true } }
+        },
+        { "a": "@push$", "k": { "push$": { "src": true } } }
+      ]
+    },
+    "tag": {
+      "open": [
+        { "s": "#NR", "a": "@node$", "k": { "node$": { "init": true, "nterms": 1 } } }
+      ]
+    }
+  }
+}

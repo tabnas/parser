@@ -1873,6 +1873,15 @@ function isfnref(v: any) {
 // config into someone else's function and delete the key that function
 // was reading. A shadowed ref would be left exactly as it was.
 function bindBuiltinConfig(r: RuleSpec, a: AltSpec) {
+  // Config keys read while binding, consumed only once EVERY action has
+  // been bound. Deleting a key the moment it is read breaks an alternate
+  // that names the same configured builtin twice (`a: ['@push$',
+  // '@push$']`): the second bind finds the key gone and silently takes
+  // defaults, so one element of an array lands as its source text and
+  // the next as a raw tree node. Go defers consumption the same way and
+  // Rust stores config by action name, so binding eagerly here was a
+  // cross-runtime divergence as well as a bug.
+  const consumed: string[] = []
   const bindOne = (ref: any): any => {
     if (!isfnref(ref)) return ref
     const factory = BUILTIN_CONFIG_FACTORY[ref as string]
@@ -1881,16 +1890,7 @@ function bindBuiltinConfig(r: RuleSpec, a: AltSpec) {
 
     const name = (ref as string).slice(1) // '@value$' -> 'value$'
     const bound = factory((a.k && a.k[name]) || {})
-    if (a.k && name in a.k) {
-      delete a.k[name]
-      // An alternate whose ONLY `k` entry was builtin config now has an
-      // empty bag. Leaving `{}` behind would keep it merging into
-      // `rule.k` on every match for nothing, which is most of what this
-      // change exists to remove.
-      if (0 === Object.keys(a.k).length) {
-        a.k = undefined
-      }
-    }
+    if (a.k && name in a.k) consumed.push(name)
     return bound
   }
 
@@ -1902,6 +1902,17 @@ function bindBuiltinConfig(r: RuleSpec, a: AltSpec) {
   }
   else {
     a.a = bindOne(a.a)
+  }
+
+  if (null != a.k && 0 < consumed.length) {
+    for (const name of consumed) delete a.k[name]
+    // An alternate whose ONLY `k` entries were builtin config now has an
+    // empty bag. Leaving `{}` behind would keep it merging into `rule.k`
+    // on every match for nothing, which is most of what this change
+    // exists to remove.
+    if (0 === Object.keys(a.k).length) {
+      a.k = undefined
+    }
   }
 }
 

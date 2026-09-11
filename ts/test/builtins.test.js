@@ -250,15 +250,29 @@ describe('builtins', () => {
       // pd_mark) — rule state that MUST propagate. They are absent from
       // the bound set rather than carved out of it, so nothing here has
       // to know about them.
+      //
+      // @push$ used to be listed here too, but only as a statement of
+      // fact — it had no config — not by this rule. It takes `src` as of
+      // schema v5, and binding is exactly right for it: the config key
+      // leaves `alt.k`, so `push$` never propagates into a child. The
+      // probe family's reason to stay out is untouched, and that is what
+      // this test is actually for.
       const { BUILTIN_CONFIG_FACTORY } = builtinsSubpath
       for (const ref of ['@probeInit$', '@probeDecide$', '@probePhase0$',
-        '@probePhase1$', '@probePhase2$', '@bubble$', '@reset$', '@push$']) {
+        '@probePhase1$', '@probePhase2$', '@bubble$', '@reset$']) {
         assert.equal(
           BUILTIN_CONFIG_FACTORY[ref],
           undefined,
           ref + ' takes no per-alternate config and must not be bound',
         )
       }
+      // ...and the converse for @push$, so this stays a statement about
+      // WHICH builtins bind rather than a list that quietly rots.
+      assert.equal(
+        typeof BUILTIN_CONFIG_FACTORY['@push$'],
+        'function',
+        '@push$ takes `src` as of schema v5 and must be bound',
+      )
     })
   })
 
@@ -612,6 +626,70 @@ describe('builtins', () => {
         '{"a":1}', '[1,2,3]', '{"a":{"b":[true,null,"x"]}}', '{"a":1,"b":2}']) {
         assert.deepEqual(build(input), JSON.parse(input), `build(${input})`)
       }
+    })
+
+    it('@setval$/@push$ {src} take a member\'s value from its matched text', () => {
+      // The tree builders accumulate every matched terminal into
+      // `node.src`, and nothing could read it back out — so a member
+      // whose value IS its matched text could only be assigned as the
+      // whole `{rule, src, kids}` node.
+      //
+      // One fixture covers all three cases a compiler has to emit:
+      // major/minor are scalars flattened by `setval src`; `tags` built
+      // its OWN value and is assigned whole (no `src`), which is what
+      // makes nesting work; its elements are flattened by `push src`.
+      //
+      // Same file as go/TestSrcValueFixtureParity and Rust's
+      // shared_src_value_grammar_fixture_executes_in_rust.
+      const spec = require('./src-value.fixture.json')
+      const j = new Tabnas()
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('1,2,3,4'),
+        { major: '1', minor: '2', tags: ['3', '4'] })
+    })
+
+    it('{src} must be the boolean true, not merely truthy', () => {
+      // A serialized grammar reaches the engine through
+      // `grammar(JSON.parse(...))` without passing the TS interface, so
+      // `{"src": "false"}` is expressible. Go reads this config with a
+      // `v.(bool)` assertion, so a truthiness test here would switch src
+      // ON in this port and OFF in that one for the same grammar.
+      const setval$ = builtinsSubpath.BUILTIN_CONFIG_FACTORY['@setval$']
+      const ctx = {
+        cfg: { info: { map: false, marker: '__info__' }, map: null },
+      }
+      const treeNode = { src: '7', kids: [] }
+      for (const bad of ['false', 'true', 1, {}, []]) {
+        const r = { node: {}, u: { key: 'x' }, child: { node: treeNode } }
+        setval$({ src: bad })(r, ctx)
+        assert.deepEqual(r.node.x, treeNode,
+          `src: ${JSON.stringify(bad)} must not enable source extraction`)
+      }
+      const ok = { node: {}, u: { key: 'x' }, child: { node: treeNode } }
+      setval$({ src: true })(ok, ctx)
+      assert.equal(ok.node.x, '7')
+    })
+
+    it('repeating a configured builtin binds the config every time', () => {
+      // Config used to be consumed the moment it was read, so the SECOND
+      // `@push$` found the key gone and silently took defaults — one
+      // element as its source text, the next as a raw tree node.
+      const j = new Tabnas()
+      j.grammar({
+        v: 5,
+        options: { rule: { start: 'top' } },
+        rule: {
+          top: { open: [{ p: 'e', a: '@array$' }] },
+          e: {
+            open: [{ p: 'n' }],
+            close: [{ a: ['@push$', '@push$'], k: { push$: { src: true } } }],
+          },
+          n: {
+            open: [{ s: '#NR', a: '@node$', k: { node$: { init: true, nterms: 1 } } }],
+          },
+        },
+      })
+      assert.deepEqual(j.parse('7'), ['7', '7'])
     })
 
     it('@key$ {lit} names a member the input never spells', () => {

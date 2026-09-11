@@ -78,11 +78,11 @@ against alternate-scoped in TypeScript.
 | `@array$`  | `r.node = []` (`[]any{}`) |
 | `@reset$`  | `r.node = undefined` / `Undefined` (clears the parent-seeded node) |
 | `@key$`    | `r.u.key = r.o0.val` (capture the matched key token), or the constant `k.key$.lit` when set |
-| `@setval$` | `r.node[r.u.key] = r.child.node` (object property assign) |
-| `@push$`   | `r.node.push(r.child.node)` (array element append) |
+| `@setval$` | `r.node[r.u.key] = r.child.node` (object property assign), or the child's accumulated `src` when `k.setval$.src` |
+| `@push$`   | `r.node.push(r.child.node)` (array element append), or the child's accumulated `src` when `k.push$.src` |
 | `@value$`  | child-wins-else resolve the matched scalar token |
 
-`BUILTIN_SCHEMA_VERSION` (currently **4**) versions the config contract; a
+`BUILTIN_SCHEMA_VERSION` (currently **5**) versions the config contract; a
 grammar may declare `GrammarSpec.v` and the engine refuses one that needs a
 newer schema.
 
@@ -94,6 +94,27 @@ version bump is what makes that safe to depend on: a v3 engine handed a
 `lit`-using grammar would ignore the field and quietly build every member
 under one empty key instead of failing, so `lit` must be able to say it needs
 a v4 engine.
+
+**v5 adds `src` to `@setval$` and `@push$`** — a member's value taken from
+the source text the tree builders accumulated, rather than the whole
+`{rule?, src, kids}` node. `@node$`/`@capture$` already gather every matched
+terminal into `node.src`, but nothing could read it back out, so a member
+whose value IS its matched text (`maj = 1*DIGIT`) could not be expressed at
+all: `@value$` resolves a token, and a composite member has none.
+
+The two settings are how a compiler says which kind of member it is
+emitting, and it always knows statically:
+
+| member | emit | result |
+|---|---|---|
+| scalar (`maj = 1*DIGIT`) | `@setval$ {src: true}` | `"1"` |
+| builds its own value | `@setval$` | that object/array, nested |
+
+So nesting is not a special case — it is what *omitting* `src` already
+means. Same for `@push$`, which is why arrays behave identically.
+
+`@push$` takes per-alternate config for the first time at v5. It binds like
+the rest, so `k.push$` leaves `alt.k` and never propagates into a child.
 
 ## v1 (shipped): plain nodes
 

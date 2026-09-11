@@ -44,7 +44,7 @@ import { recordKeyOrder } from './utility'
 // The config-schema version implemented by these builtins. A serialized
 // grammar that declares `GrammarSpec.v` greater than this is refused at
 // load (see Tabnas.grammar). Absent ⇒ treated as version 1.
-export const BUILTIN_SCHEMA_VERSION = 4
+export const BUILTIN_SCHEMA_VERSION = 5
 
 
 const defprop = Object.defineProperty
@@ -113,6 +113,10 @@ interface KeyConfig {
 }
 interface SetvalConfig {
   slot?: string
+  src?: boolean
+}
+interface PushConfig {
+  src?: boolean
 }
 interface ValueConfig {
   from?: number
@@ -269,6 +273,27 @@ const makeKey$ = (cfg: KeyConfig): AltAction => (r: Rule) => {
     'string' === typeof cfg.lit ? cfg.lit : r.o[cfg.from || 0]?.val
 }
 
+// The accumulated source text of a tree node -- the `{rule?, src, kids}`
+// shape @node$/@capture$ build -- or the node unchanged when it is not
+// one.
+//
+// `src` is how a member whose value IS its matched text gets that text:
+// the tree builders already accumulate it, and nothing else could read
+// it back out. A compiler emits `src` only where it already knows the
+// member is a scalar, so this never has to guess which it is: the
+// fall-through exists so asking for src where no tree node was built
+// passes the value along rather than erasing it.
+// Strictly `true`, never merely truthy. Go reads this config through a
+// `v.(bool)` assertion and Rust's validator refuses a non-boolean
+// outright, so a serialized `{"src": "false"}` — reachable through
+// `grammar(JSON.parse(...))`, which bypasses the TS interface — would
+// otherwise switch src ON here and OFF there.
+const cfgTrue = (v: unknown): boolean => true === v
+
+const srcVal = (node: any): any =>
+  (null != node && 'object' === typeof node && 'string' === typeof node.src)
+    ? node.src : node
+
 // Assign the just-returned child node under the captured key: the object-
 // property set. No-op if r.node isn't an object. When info.map is on, a
 // key that collides with the marker is dropped (the marker rides as a
@@ -284,15 +309,17 @@ const makeSetval$ = (cfg: SetvalConfig): AltAction => (r: Rule, ctx: Context) =>
     if (ctx.cfg.map && ctx.cfg.map.ordered && !(key in n)) {
       recordKeyOrder(n, key)
     }
-    n[key] = r.child.node
+    n[key] = cfgTrue(cfg.src) ? srcVal(r.child.node) : r.child.node
   }
 }
 
 // Append the just-returned child node to the array (skips the no-value
-// child). No-op if r.node isn't an array.
-const push$: AltAction = (r: Rule) => {
+// child). No-op if r.node isn't an array. `src` appends the child's
+// accumulated source text instead of the node, the array counterpart of
+// @setval$'s own `src`.
+const makePush$ = (cfg: PushConfig): AltAction => (r: Rule) => {
   if (undefined !== r.child.node && Array.isArray(r.node)) {
-    r.node.push(r.child.node)
+    r.node.push(cfgTrue(cfg.src) ? srcVal(r.child.node) : r.child.node)
   }
 }
 
@@ -333,6 +360,7 @@ const fold$ = makeFold$({})
 const object$ = makeObject$({})
 const array$ = makeArray$({})
 const key$ = makeKey$({})
+const push$ = makePush$({})
 const setval$ = makeSetval$({})
 const value$ = makeValue$({})
 
@@ -355,6 +383,7 @@ export const BUILTIN_CONFIG_FACTORY: Readonly<
   '@array$': makeArray$,
   '@key$': makeKey$,
   '@setval$': makeSetval$,
+  '@push$': makePush$,
   '@value$': makeValue$,
 })
 
