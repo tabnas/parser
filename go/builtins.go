@@ -352,21 +352,41 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 	}
 }
 
-// sameListHeader reports whether two node values are the SAME list, not
-// merely equal ones: same length and, when non-empty, the same backing
-// array. Used to decide which rules held the list a push just grew, so
-// only those get the new header.
+// listHeader is the slice inside a node that holds a list, and whether
+// the node was one. Info mode wraps the slice in a ListRef, so a bare
+// `[]any` assertion would silently skip every list in that mode — which
+// is Go-only surface, so nothing else would have caught it.
+func listHeader(v any) ([]any, bool) {
+	switch l := v.(type) {
+	case []any:
+		return l, true
+	case ListRef:
+		return l.Val, true
+	}
+	return nil, false
+}
+
+// sameGrownList reports whether `held` is the very list that `before`
+// was: same length, and the same backing array.
 //
-// Two empty lists compare equal here. That is the intent: a list that was
-// allocated and then replaced before anything went into it is the same
-// list, and there is nothing else to tell them apart by.
-func sameListHeader(a, b any) bool {
-	as, aok := a.([]any)
-	bs, bok := b.([]any)
-	if !aok || !bok || len(as) != len(bs) {
+// EMPTY lists are deliberately NOT matched. Go gives two distinct
+// zero-length slices the same (or no) data pointer, so an empty list
+// cannot be told apart from another empty one — and guessing the wrong
+// way is worse than not propagating. A replacement that allocated its
+// OWN empty list before its first push must not overwrite the list of
+// the rule it replaced, because TypeScript would not: there the fresh
+// allocation is a different object and the replaced rule keeps its own.
+// Declining to propagate keeps that guarantee, at the cost of the
+// mirror-image case — a rule that allocated a list, was replaced before
+// anything went into it, and is then read by a parent — which is
+// recorded in go/doc/differences.md rather than silently traded away.
+func sameGrownList(held, before any) bool {
+	hs, hok := listHeader(held)
+	bs, bok := listHeader(before)
+	if !hok || !bok || len(hs) != len(bs) || 0 == len(bs) {
 		return false
 	}
-	return len(as) == 0 || &as[0] == &bs[0]
+	return &hs[0] == &bs[0]
 }
 
 // @push$ — append the child node to the array (skips the no-value child).
@@ -409,8 +429,21 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 		if r.Parent != nil && r.Parent != NoRule {
 			r.Parent.Node = r.Node
 		}
+		// ...and back along the replacement chain. A rule replaced via
+		// `r:` carries the chain on under a new Rule, and the parent's
+		// Child still refers to the rule that was REPLACED — so a parent
+		// reading the result (`@bubble$`, `@capture$`) reads that rule's
+		// node. In TypeScript the replacement is handed the same array
+		// OBJECT and pushing mutates it, so either pointer sees every
+		// element; here a slice is a value and the replaced rule would
+		// keep a shorter one.
+		//
+		// Only rules still holding the list this push grew are updated,
+		// so a replacement that allocated a container of its own cannot
+		// clobber the one it replaced — which is what TypeScript does,
+		// and what child-pusher.fixture.json pins.
 		for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
-			if !sameListHeader(p.Node, before) {
+			if !sameGrownList(p.Node, before) {
 				break
 			}
 			p.Node = r.Node
