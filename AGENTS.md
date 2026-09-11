@@ -171,8 +171,19 @@ make -C ts test              # TypeScript alone, when iterating
 These are **local** checks. The root `Makefile` runs this repo's TypeScript,
 Go, and Rust targets and nothing else — it does not clone or build any downstream repo,
 so a change that keeps this repo green while breaking a sibling grammar passes
-all of them. CI is what covers criterion 3 below; there is no local command
-that does.
+all of them.
+
+For criterion 3 below, run the fleet gate. It is not in `make test`, because
+it fetches thirty repositories and runs two toolchains over each:
+
+```bash
+ci/fleet/run-fleet.sh --only json,jsonic,expr,abnf,semver   # minutes
+ci/fleet/run-fleet.sh                                       # the whole fleet
+```
+
+It checks every published grammar out at the version users install and runs
+that repo's own suites against your working tree. See
+[`ci/README.md`](ci/README.md) for what it caught.
 
 What "correct" means here, in order of authority:
 
@@ -206,11 +217,16 @@ What "correct" means here, in order of authority:
    If you are unsure, ask whether the same input yields a different value. If
    yes it belongs in `DIVERGENCE.md`; if it is about how the two APIs are
    shaped, it belongs in `go/doc/differences.md`.
-3. **Downstream still builds.** This is the root of the dependency graph, so a
+3. **Downstream still passes.** This is the root of the dependency graph, so a
    change here reaches every grammar plugin in both runtimes, and downstream
    cannot fix it — the value is already decided by the time a plugin sees a
-   token. CI inverts the usual order for this repo and smoke-tests dependents;
-   do not dismiss a downstream failure as someone else's problem.
+   token. Do not dismiss a downstream failure as someone else's problem.
+
+   Building a dependent is not the check; **running its suite** is. Parser
+   0.9.1 shipped a precedence regression that left every downstream still
+   compiling and `1+2*3` parsing to `["*",2,3]` — sixteen of expr's own tests
+   red, and every check in this repository green. `ci/fleet/run-fleet.sh` is
+   the command that answers this criterion.
 
 Two loader details that are easy to break: the TS and Go TSV loaders
 (`ts/test/utility.js`, `go/spec_test.go`) must keep their escape handling in

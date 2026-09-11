@@ -1,0 +1,76 @@
+# Fleet suite timings, one row per suite per recorded run.
+#
+# Written ONLY by `ci/fleet/run-fleet.sh --record-timings`. An ordinary
+# run prints its timings and writes nothing, so this file is a series of
+# measurements somebody meant to take rather than a log of every push.
+#
+# seconds covers the SUITE only — clone, npm install and build are
+# excluded, being dominated by the network and by whatever npm had
+# cached. What is left is the part an engine change can move.
+#
+# COMPARE ROWS FROM THE SAME host AND toolchain, AND PREFER RUNS TAKEN
+# BACK TO BACK. These are wall-clock times on whatever machine ran them;
+# across machines, or across a busy and an idle one, the difference
+# between two rows says more about the machine than about the engine.
+# ci/bench/ab-compare.sh is the instrument for deciding whether a
+# performance change is real; this file is for noticing that something
+# has become slow, not for proving by how much.
+run	host	node	go	engine	package	runtime	seconds	status
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	bnf	ts	0.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	bnf	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	abnf	ts	110.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	abnf	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	json	ts	2.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	json	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonic	ts	4.7	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonic	go	0.4	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	expr	ts	9.2	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	expr	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	c	ts	64.8	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	c	go	122.2	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	chess	ts	9.7	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	chess	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	css	ts	28.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	css	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	csv	ts	6.4	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	csv	go	2.1	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	debug	ts	1.1	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	debug	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	directive	ts	4.7	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	directive	go	0.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	ebnf	ts	1.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	ebnf	go	0.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	xml	ts	27.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	xml	go	0.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	feed	ts	13.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	feed	go	0.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	gbnf	ts	23.8	fail
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	gbnf	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	hoover	ts	8.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	hoover	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	ini	ts	17.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	ini	go	1.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	json5	ts	13.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	json5	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonc	ts	26.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonc	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonl	ts	6.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	jsonl	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	markdown	ts	20.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	markdown	go	0.4	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	path	ts	10.9	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	path	go	0.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	multisource	ts	10.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	multisource	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	proto	ts	74.4	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	proto	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	railroad	ts	1.2	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	railroad	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	semver	ts	26.0	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	semver	go	0.3	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	toml	ts	15.1	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	toml	go	0.4	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	yaml	ts	22.1	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	yaml	go	0.4	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	zon	ts	74.6	ok
+2026-09-10T21:47:39Z	linux-x86_64	v22.22.2	go1.24.7	8e1b2cc	zon	go	0.3	ok

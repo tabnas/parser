@@ -1,0 +1,31 @@
+# Known-broken fleet entries, one per line, as:
+#
+#     <package>/<runtime> :: <signature> :: <reason>
+#
+# All three fields are required, and the entry is still RUN.
+#
+#   <signature>  a substring that must appear in the suite's output for the
+#                exemption to apply.
+#   <reason>     why it is broken, in a sentence.
+#
+# Three rules. The first two come from ci/gate/fixture-sync-allow.txt, whose
+# design problem was the same one; the third is why the signature exists:
+#
+#   - an entry with no reason is REJECTED, so a package cannot be quieted by
+#     adding a bare name;
+#   - an entry that PASSES fails the gate, so an exemption cannot outlive the
+#     breakage it was written for -- an allow list goes on being obeyed long
+#     after it stops being true, and the next real break lands in the space
+#     it left;
+#   - an entry that fails WITHOUT its signature fails the gate. "This package
+#     fails" is not a claim worth recording: an exemption that accepts any
+#     non-zero exit turns off regression detection for that package
+#     altogether, so a second, newer break would ride in behind the first.
+#
+# A `#` is a comment only at the START of a line, so a signature may contain
+# one -- and the most useful signatures do, being test-runner output such as
+# `# fail 16`.
+#
+# This file is empty on purpose. The expr break on parser 0.9.1 is REAL and
+# is meant to block: exempting it here would turn the gate off for the one
+# regression it was built to catch.

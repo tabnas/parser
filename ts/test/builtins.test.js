@@ -565,6 +565,29 @@ describe('builtins', () => {
       })
     })
 
+    // The contract `child` carries: it is the rule this rule PUSHED, and it
+    // stays that rule even when that rule replaces itself. makeFold$'s own
+    // comment depends on it ("the parent's r.child pointer stays on the
+    // FIRST iteration"), and so does every precedence-climbing grammar.
+    //
+    // Publishing the replacement instead handed a parent the node of a rule
+    // it never pushed: @tabnas/expr read `1+2*3` back as `["*",2,3]` -- left
+    // operand and operator dropped -- and 16 of its own tests plus 25 of
+    // @tabnas/c's went red against an engine whose own suite stayed green.
+    // A rule that must deliver a node upward across a replacement uses
+    // @fold$, which is what replace-child.fixture.json now does.
+    //
+    // Shared with go/builtins_test.go: same fixture, same expectation.
+    it('a replacement does not become the pusher\'s child', () => {
+      const j = new Tabnas()
+      j.grammar(clone(require('./child-pusher.fixture.json')))
+      assert.deepEqual(j.parse('a'), {
+        rule: 'top',
+        src: '',
+        kids: [{ rule: 'mid', src: '', kids: [] }],
+      })
+    })
+
     it('failed relex restores lookahead fetched by an earlier alternate', () => {
       const j = new Tabnas()
       j.grammar(clone(relexRollbackSpec))

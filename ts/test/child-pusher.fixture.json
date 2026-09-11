@@ -1,0 +1,28 @@
+{
+  "v": 3,
+  "clear": true,
+  "options": { "rule": { "start": "top" } },
+  "rule": {
+    "top": {
+      "open": [
+        { "p": "mid", "a": "@node$",
+          "k": { "node$": { "init": true, "rule": "top", "kind": "user", "nterms": 0 } } }
+      ],
+      "close": [
+        { "a": "@capture$", "k": { "capture$": { "rule": "top", "kind": "user" } } }
+      ]
+    },
+    "mid": {
+      "open": [
+        { "r": "alt", "a": "@node$",
+          "k": { "node$": { "init": true, "rule": "mid", "kind": "user", "nterms": 0 } } }
+      ]
+    },
+    "alt": {
+      "open": [
+        { "s": "#TX", "a": "@node$",
+          "k": { "node$": { "init": true, "rule": "alt", "kind": "user", "nterms": 1 } } }
+      ]
+    }
+  }
+}

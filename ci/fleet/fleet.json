@@ -1,0 +1,146 @@
+{
+  "$comment": [
+    "The fleet ROSTER: every published tabnas grammar, compiler and plugin",
+    "that runs ON this engine. ci/fleet/run-fleet.sh checks each one out at",
+    "its LATEST released version and runs that repo's own suites against the",
+    "working-tree engine.",
+    "",
+    "There is deliberately NO dependency information here. Build order comes",
+    "from each package's own ts/package.json, read by graph.mjs from the",
+    "checkouts, because that is the source of truth and a copy would be one",
+    "more thing to keep in step. A hand-kept `base` field was tried and was",
+    "wrong on the first full run: it built ini before hoover and c before",
+    "expr, and both failed with \"Cannot find module\".",
+    "",
+    "`suites` false means: install and wire it, because other repos' tests",
+    "import it, but do not run its own suite. Only @tabnas/support is set",
+    "that way, and only because it is the shared test-fixture loader rather",
+    "than something that parses.",
+    "",
+    "Adding a package: add the row. Its version is resolved from npm at run",
+    "time and its dependencies from its own manifest, so nothing here",
+    "records either."
+  ],
+  "packages": [
+    {
+      "name": "support",
+      "suites": false
+    },
+    {
+      "name": "bnf",
+      "suites": true
+    },
+    {
+      "name": "abnf",
+      "suites": true
+    },
+    {
+      "name": "ebnf",
+      "suites": true
+    },
+    {
+      "name": "gbnf",
+      "suites": true
+    },
+    {
+      "name": "debug",
+      "suites": true
+    },
+    {
+      "name": "railroad",
+      "suites": true
+    },
+    {
+      "name": "json",
+      "suites": true
+    },
+    {
+      "name": "jsonl",
+      "suites": true
+    },
+    {
+      "name": "jsonic",
+      "suites": true
+    },
+    {
+      "name": "jsonc",
+      "suites": true
+    },
+    {
+      "name": "json5",
+      "suites": true
+    },
+    {
+      "name": "yaml",
+      "suites": true
+    },
+    {
+      "name": "toml",
+      "suites": true
+    },
+    {
+      "name": "ini",
+      "suites": true
+    },
+    {
+      "name": "csv",
+      "suites": true
+    },
+    {
+      "name": "xml",
+      "suites": true
+    },
+    {
+      "name": "css",
+      "suites": true
+    },
+    {
+      "name": "c",
+      "suites": true
+    },
+    {
+      "name": "zon",
+      "suites": true
+    },
+    {
+      "name": "proto",
+      "suites": true
+    },
+    {
+      "name": "semver",
+      "suites": true
+    },
+    {
+      "name": "markdown",
+      "suites": true
+    },
+    {
+      "name": "feed",
+      "suites": true
+    },
+    {
+      "name": "chess",
+      "suites": true
+    },
+    {
+      "name": "expr",
+      "suites": true
+    },
+    {
+      "name": "directive",
+      "suites": true
+    },
+    {
+      "name": "hoover",
+      "suites": true
+    },
+    {
+      "name": "path",
+      "suites": true
+    },
+    {
+      "name": "multisource",
+      "suites": true
+    }
+  ]
+}

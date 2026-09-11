@@ -401,6 +401,38 @@ func TestReplacedChildPublishesFinalNode(t *testing.T) {
 	}
 }
 
+// The contract Child carries: it is the rule this rule PUSHED, and it stays
+// that rule even when that rule replaces itself. makeFold$'s own comment
+// depends on it ("the parent's r.child pointer stays on the FIRST
+// iteration"), and so does every precedence-climbing grammar.
+//
+// Publishing the replacement instead handed a parent the node of a rule it
+// never pushed: @tabnas/expr read `1+2*3` back as ["*",2,3] -- left operand
+// and operator dropped -- and 16 of its own tests plus 25 of @tabnas/c's went
+// red against an engine whose own suite stayed green. A rule that must
+// deliver a node upward across a replacement uses @fold$, which is what
+// replace-child.fixture.json now does.
+//
+// Shared with ts/test/builtins.test.js: same fixture, same expectation.
+func TestReplacementIsNotThePushersChild(t *testing.T) {
+	j := Make()
+	if err := j.Grammar(fixtureSpec(t, "child-pusher.fixture.json")); err != nil {
+		t.Fatalf("install fixture grammar: %v", err)
+	}
+	got, err := j.Parse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kids":[{"kids":[],"rule":"mid","src":""}],"rule":"top","src":""}`
+	if string(encoded) != want {
+		t.Fatalf("pusher's child:\n  got  %s\n  want %s", encoded, want)
+	}
+}
+
 func TestFailedRelexRestoresEarlierLookahead(t *testing.T) {
 	j := Make()
 	if err := j.Grammar(fixtureSpec(t, "relex-rollback.fixture.json")); err != nil {
