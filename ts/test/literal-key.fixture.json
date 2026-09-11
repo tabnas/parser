@@ -1,5 +1,6 @@
 {
   "v": 4,
+  "options": { "rule": { "start": "ver" } },
   "rule": {
     "ver": {
       "open": [

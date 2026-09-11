@@ -93,7 +93,10 @@ impl From<&Tabnas> for AltRefs {
 
 /// Builtin wire schema implemented by the Rust port. Schema v3 adds the
 /// `@fold$` tree action used by current BNF-family compiler output.
-pub const BUILTIN_SCHEMA_VERSION: u64 = 3;
+/// Schema v4 adds `@key$` `lit`, the key as a constant rather than read
+/// from a token, for grammars that declare their shape instead of
+/// delimiting it.
+pub const BUILTIN_SCHEMA_VERSION: u64 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarError(pub String);
@@ -754,7 +757,7 @@ fn validate_builtin_config(action: &str, config: &Value, label: &str) -> Result<
         "@capture$" => &[("rule", "string"), ("kind", "string")],
         "@fold$" => &[("cN", "non-negative integer")],
         "@object$" | "@array$" => &[("implicit", "boolean")],
-        "@key$" => &[("slot", "string"), ("from", "integer")],
+        "@key$" => &[("slot", "string"), ("from", "integer"), ("lit", "string")],
         "@setval$" => &[("slot", "string")],
         "@value$" => &[("from", "integer")],
         _ => return Ok(()),
