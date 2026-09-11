@@ -283,6 +283,13 @@ const makeKey$ = (cfg: KeyConfig): AltAction => (r: Rule) => {
 // member is a scalar, so this never has to guess which it is: the
 // fall-through exists so asking for src where no tree node was built
 // passes the value along rather than erasing it.
+// Strictly `true`, never merely truthy. Go reads this config through a
+// `v.(bool)` assertion and Rust's validator refuses a non-boolean
+// outright, so a serialized `{"src": "false"}` — reachable through
+// `grammar(JSON.parse(...))`, which bypasses the TS interface — would
+// otherwise switch src ON here and OFF there.
+const cfgTrue = (v: unknown): boolean => true === v
+
 const srcVal = (node: any): any =>
   (null != node && 'object' === typeof node && 'string' === typeof node.src)
     ? node.src : node
@@ -302,7 +309,7 @@ const makeSetval$ = (cfg: SetvalConfig): AltAction => (r: Rule, ctx: Context) =>
     if (ctx.cfg.map && ctx.cfg.map.ordered && !(key in n)) {
       recordKeyOrder(n, key)
     }
-    n[key] = cfg.src ? srcVal(r.child.node) : r.child.node
+    n[key] = cfgTrue(cfg.src) ? srcVal(r.child.node) : r.child.node
   }
 }
 
@@ -312,7 +319,7 @@ const makeSetval$ = (cfg: SetvalConfig): AltAction => (r: Rule, ctx: Context) =>
 // @setval$'s own `src`.
 const makePush$ = (cfg: PushConfig): AltAction => (r: Rule) => {
   if (undefined !== r.child.node && Array.isArray(r.node)) {
-    r.node.push(cfg.src ? srcVal(r.child.node) : r.child.node)
+    r.node.push(cfgTrue(cfg.src) ? srcVal(r.child.node) : r.child.node)
   }
 }
 

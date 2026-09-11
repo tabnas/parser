@@ -648,6 +648,50 @@ describe('builtins', () => {
         { major: '1', minor: '2', tags: ['3', '4'] })
     })
 
+    it('{src} must be the boolean true, not merely truthy', () => {
+      // A serialized grammar reaches the engine through
+      // `grammar(JSON.parse(...))` without passing the TS interface, so
+      // `{"src": "false"}` is expressible. Go reads this config with a
+      // `v.(bool)` assertion, so a truthiness test here would switch src
+      // ON in this port and OFF in that one for the same grammar.
+      const setval$ = builtinsSubpath.BUILTIN_CONFIG_FACTORY['@setval$']
+      const ctx = {
+        cfg: { info: { map: false, marker: '__info__' }, map: null },
+      }
+      const treeNode = { src: '7', kids: [] }
+      for (const bad of ['false', 'true', 1, {}, []]) {
+        const r = { node: {}, u: { key: 'x' }, child: { node: treeNode } }
+        setval$({ src: bad })(r, ctx)
+        assert.deepEqual(r.node.x, treeNode,
+          `src: ${JSON.stringify(bad)} must not enable source extraction`)
+      }
+      const ok = { node: {}, u: { key: 'x' }, child: { node: treeNode } }
+      setval$({ src: true })(ok, ctx)
+      assert.equal(ok.node.x, '7')
+    })
+
+    it('repeating a configured builtin binds the config every time', () => {
+      // Config used to be consumed the moment it was read, so the SECOND
+      // `@push$` found the key gone and silently took defaults — one
+      // element as its source text, the next as a raw tree node.
+      const j = new Tabnas()
+      j.grammar({
+        v: 5,
+        options: { rule: { start: 'top' } },
+        rule: {
+          top: { open: [{ p: 'e', a: '@array$' }] },
+          e: {
+            open: [{ p: 'n' }],
+            close: [{ a: ['@push$', '@push$'], k: { push$: { src: true } } }],
+          },
+          n: {
+            open: [{ s: '#NR', a: '@node$', k: { node$: { init: true, nterms: 1 } } }],
+          },
+        },
+      })
+      assert.deepEqual(j.parse('7'), ['7', '7'])
+    })
+
     it('@key$ {lit} names a member the input never spells', () => {
       // The key side of @setval$ used to be reachable only from a TOKEN,
       // which suits `{"a":1}` and suits nothing that DECLARES its shape:

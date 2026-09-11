@@ -243,6 +243,37 @@ TYPE rather than the guard: `number` in TypeScript, `*int` in Go, so a
 fractional multiplier is expressible only in TypeScript. Recorded in
 [`DIVERGENCE.md`](../../DIVERGENCE.md).
 
+### Value-Builder Config (`src`, schema v5): Aligned
+
+`@setval$` and `@push$` take `src` as of builtin schema v5: a member's
+value becomes the source text the tree builders accumulated into
+`node.src`, rather than the whole `{rule?, src, kids}` node. Omitting it
+assigns the node as-is, which is how a member that built its own value
+nests. Same semantics in both ports.
+
+`@push$` is config-bound for the first time at v5. Both ports bind it
+through their builtin-config factory, so `k.push$` is consumed at grammar
+load and never propagates into a child rule.
+
+The flag must be the **boolean** `true` in both, not merely truthy. Go
+reads it through a `v.(bool)` assertion; TypeScript tests `true === v`
+rather than truthiness for exactly this reason. A serialized
+`{"src": "false"}` reaches the engine through `grammar(JSON.parse(...))`
+without passing the TypeScript interface, and a truthiness test there
+would have switched src ON in TypeScript and OFF in Go for the same
+grammar.
+
+One binding detail was a real TypeScript-only bug rather than a
+difference, and is worth recording because the shape invites it: config
+is consumed only once EVERY action on the alternate has been bound.
+Binding eagerly broke an alternate naming the same configured builtin
+twice (`a: ["@push$", "@push$"]`) — the second bind found the key already
+deleted and silently took defaults, so one array element landed as its
+source text and the next as a raw tree node. Go already deferred
+consumption, so this was a divergence as well as a bug.
+
+Pinned by `ts/test/src-value.fixture.json`, which both suites run.
+
 ### `MapToOptions` carries only some options
 
 Not a divergence — an API gap here, recorded so it is not mistaken for
