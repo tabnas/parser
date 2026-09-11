@@ -931,13 +931,28 @@ type Rule struct {
 	// that failed. Re-running them would corrupt any that are not
 	// idempotent. Cleared as soon as it is honoured.
 	skipBefores bool
-	Node        any       // Value node this rule is building.
-	State       RuleState // Current phase: open ("o") or close ("c").
-	D           int       // Stack depth at which this rule was pushed.
-	Child       *Rule     // Rule pushed by this rule (NoRule if none).
-	Parent      *Rule     // Rule that pushed this rule (NoRule if none).
-	Prev        *Rule     // Rule this one replaced (NoRule if none).
-	Next        *Rule     // Rule to process after this one.
+	Node        any // Value node this rule is building.
+	// nodeSeeded reports that Node is still the container this rule was
+	// HANDED by its parent, rather than one an action allocated here.
+	//
+	// It exists because a Go slice is a value. @push$ grows a list into a
+	// new header, which has to be re-published to every rule still
+	// holding that same list — and "still holding it" is precisely "was
+	// seeded and never allocated". Slice identity cannot answer it: two
+	// distinct EMPTY slices share a data pointer, and a list is empty
+	// exactly when the first push needs to propagate. TypeScript and Rust
+	// need none of this; they hand out the same list object.
+	//
+	// Cleared by every builtin that assigns a NEW container or scalar,
+	// and NOT by the in-place grows (@push$, @setval$), which keep the
+	// container they were given.
+	nodeSeeded bool
+	State      RuleState // Current phase: open ("o") or close ("c").
+	D          int       // Stack depth at which this rule was pushed.
+	Child      *Rule     // Rule pushed by this rule (NoRule if none).
+	Parent     *Rule     // Rule that pushed this rule (NoRule if none).
+	Prev       *Rule     // Rule this one replaced (NoRule if none).
+	Next       *Rule     // Rule to process after this one.
 
 	// Generalized per-position matched tokens. O[i] holds the token
 	// matched at the i-th lookahead position during OPEN (mirroring C
@@ -1051,7 +1066,8 @@ func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
 	// helpers) — most rules in value-building grammars never touch them.
 	r := &Rule{
 		I: ctx.UI, Name: spec.Name, Spec: spec, Node: node,
-		State: OPEN, D: ctx.RSI,
+		nodeSeeded: node != nil && !IsUndefined(node),
+		State:      OPEN, D: ctx.RSI,
 		Child: NoRule, Parent: NoRule, Prev: NoRule, Next: NoRule,
 		O: nil, ON: 0, C: nil, CN: 0,
 		O0: NoToken, O1: NoToken, C0: NoToken, C1: NoToken,

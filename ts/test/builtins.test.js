@@ -644,6 +644,24 @@ describe('builtins', () => {
       assert.deepEqual(j.parse('1,2'), ['1', '2'])
     })
 
+    it('@push$ reaches the list\'s owner from any depth', () => {
+      // A right-recursive repetition helper inherits the list from the
+      // rule that allocated it and pushes from a NEW depth on every
+      // iteration, so a three-element list grows at three different
+      // depths. Free in this port: every holder has the same array
+      // OBJECT. Go copies the slice header and re-published it one hop,
+      // so only the innermost push landed anywhere the owner could see
+      // and `__start__`'s @bubble$ read the empty original.
+      //
+      // Same file as go/TestPushReachesTheListsOwnerFixtureParity.
+      const spec = require('./deep-push.fixture.json')
+      const j = new Tabnas()
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('1,2,3'), ['1', '2', '3'])
+      assert.deepEqual(j.parse('1'), ['1'],
+        'and an empty run contributes no element')
+    })
+
     it('@setval$/@push$ {src} take a member\'s value from its matched text', () => {
       // The tree builders accumulate every matched terminal into
       // `node.src`, and nothing could read it back out — so a member

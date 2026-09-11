@@ -313,6 +313,10 @@ would show the elements. Recorded rather than silently traded away; no
 grammar the compilers emit produces it, because a rule that allocates a
 list also pushes into it before replacing itself.
 
+**The empty-list case is no longer traded away.** It could not be settled
+by comparing slices, so it is settled by asking a different question —
+see the next entry, which subsumes it.
+
 A tempting fix that is WRONG, recorded so it is not tried again: making a
 parent's `Child` follow the replacement chain forward. TypeScript reads
 the PRE-replacement child deliberately — `child-pusher.fixture.json`
@@ -327,6 +331,50 @@ in a parent/child relationship, so the parent write-back already covered
 it.
 
 Pinned by `ts/test/push-replace.fixture.json`, which all three suites run.
+
+### `@push$` from any depth below the list's owner: Aligned (was a Go defect)
+
+The entry above re-published a grown list header to the PARENT and back
+along the replacement chain. Both are one hop from the push. A list can be
+grown arbitrarily deeper than that.
+
+A right-recursive repetition helper inherits the list from the rule that
+allocated it and pushes from a NEW depth on every iteration, so a
+three-element list grows at three different depths. Only the innermost
+push landed anywhere the owner could see; the owner kept the empty
+original. TypeScript and Rust hand out the same list object, so every
+holder sees every element and there is nothing to re-publish.
+
+`@push$` now also walks the SEEDING chain: from the pushing rule up
+through the rules that are still holding the container they were handed,
+stopping at the rule that allocated it. At each hop it follows the link
+the node actually came from — the replaced rule for an `r:`, the pusher
+otherwise. Following `Parent` alone walks past the replaced rule and out
+of the chain: a rule that replaces itself before pushing a helper
+(`list` → `list$step1`) has the replacement parented ABOVE the owner, so
+the list would reach everything except the rule whose value is read.
+
+`Rule.nodeSeeded` is what makes this decidable, and it is why this is a
+separate walk rather than a wider guard on `sameGrownList`. Slice identity
+cannot answer "is this rule still holding the list I grew?": two distinct
+EMPTY slices share a data pointer, and a list is empty exactly when the
+first push needs to propagate. `nodeSeeded` is set by `MakeRule` when a
+rule is handed a node, and cleared by every builtin that assigns a new
+container or scalar — so "still seeded" means "never allocated one of its
+own", which is the question. An unrelated list above the owner can
+therefore never be clobbered: the owner allocated, so the walk stops
+there.
+
+Go-only bookkeeping for a Go-only problem — an unexported field, no API
+or spec-format change, and nothing for the other ports to mirror.
+`TestPushReachesTheListsOwnerFromAnyDepth` and
+`TestPushStopsAtTheAllocatingRule` pin the two directions.
+
+Turned up by `; @array` over an ABNF list idiom
+(`list = item *( "," item )`), where the emitted helpers fill the
+annotated rule's array directly. Not specific to it: any grammar that
+accumulates a list more than one rule below where it was allocated hits
+the same thing.
 
 ### `MapToOptions` carries only some options
 

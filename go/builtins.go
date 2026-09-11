@@ -102,6 +102,7 @@ func cfgBool(v any) bool  { b, _ := v.(bool); return b }
 func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if cfgBool(cfg["init"]) {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
+		r.nodeSeeded = false
 	}
 	n, _ := r.Node.(map[string]any)
 	if n == nil {
@@ -121,6 +122,7 @@ func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if r.Node == nil {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
+		r.nodeSeeded = false
 	}
 	n, _ := r.Node.(map[string]any)
 	if n == nil || r.Child == nil {
@@ -158,6 +160,7 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinBubble(r *Rule, _ *Context) {
 	if r.Child != nil && r.Child.Node != Undefined {
 		r.Node = r.Child.Node
+		r.nodeSeeded = false
 	}
 }
 
@@ -206,6 +209,7 @@ func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
 		}
 	}
 	r.Node = Undefined
+	r.nodeSeeded = false
 }
 
 func asAnySlice(v any) []any {
@@ -276,17 +280,21 @@ func builtinProbePhase2(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"
 func builtinObjectCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.MapRef {
 		r.Node = MapRef{Val: make(map[string]any), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		r.nodeSeeded = false
 		return
 	}
 	if cfgBool(cfg["sort"]) {
 		r.Node = NewSortedMap()
+		r.nodeSeeded = false
 		return
 	}
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.PlainMap {
 		r.Node = map[string]any{}
+		r.nodeSeeded = false
 		return
 	}
 	r.Node = NewOrderedMap()
+	r.nodeSeeded = false
 }
 
 // @array$ — allocate a fresh empty array. With ListRef info on, allocate
@@ -294,14 +302,17 @@ func builtinObjectCfg(r *Rule, ctx *Context, cfg map[string]any) {
 func builtinArrayCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if ctx != nil && ctx.Cfg != nil && ctx.Cfg.ListRef {
 		r.Node = ListRef{Val: make([]any, 0), Implicit: cfgBool(cfg["implicit"]), Meta: make(map[string]any)}
+		r.nodeSeeded = false
 		return
 	}
 	r.Node = make([]any, 0)
+	r.nodeSeeded = false
 }
 
 // @reset$ — clear the parent-seeded node back to the no-value sentinel.
 func builtinReset(r *Rule, _ *Context) {
 	r.Node = Undefined
+	r.nodeSeeded = false
 }
 
 // @key$ — capture the matched key token's value into a (non-propagated)
@@ -429,6 +440,45 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 		if r.Parent != nil && r.Parent != NoRule {
 			r.Parent.Node = r.Node
 		}
+		// ...and on up the SEEDING chain. The parent hop above covers the
+		// json idiom, where the rule that allocates the list is the one
+		// that pushes into it or its immediate parent. A list can be
+		// grown arbitrarily deeper than that: a right-recursive repetition
+		// helper inherits the list and pushes from a new depth on every
+		// iteration, so a three-element list grows at three different
+		// depths and only the innermost push reached a rule still holding
+		// it. The rest kept a shorter one, and the rule that allocated the
+		// list — the one whose value is finally read — kept the empty
+		// original.
+		//
+		// nodeSeeded is what makes this decidable. Walking while a rule is
+		// still holding its parent's container stops at the rule that
+		// ALLOCATED the list, and goes no further: a rule that allocated
+		// one of its own is not holding this one, so an unrelated list
+		// above can never be clobbered. Slice identity could not answer
+		// it — two distinct empty slices share a data pointer, and a list
+		// is empty exactly when the first push needs to propagate, which
+		// is why sameGrownList declines on empty and why this is a
+		// separate walk rather than a wider guard on that one.
+		for cur := r; cur.nodeSeeded; {
+			// The rule this one was seeded FROM: the rule it replaced
+			// when it came from an `r:` (MakeRule is handed the replaced
+			// rule's node), otherwise the rule that pushed it. Following
+			// Parent alone walks past the replaced rule and out of the
+			// chain — `list` replaces itself with `list$step1` before
+			// pushing the repetition, and `list$step1`'s Parent is
+			// `list`'s parent, not `list`. The list would reach
+			// everything except the rule that allocated it.
+			src := cur.Prev
+			if src == nil || src == NoRule {
+				src = cur.Parent
+			}
+			if src == nil || src == NoRule {
+				break
+			}
+			src.Node = r.Node
+			cur = src
+		}
 		// ...and back along the replacement chain. A rule replaced via
 		// `r:` carries the chain on under a new Rule, and the parent's
 		// Child still refers to the rule that was REPLACED — so a parent
@@ -458,11 +508,13 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if r.Child != nil && !IsUndefined(r.Child.Node) {
 		r.Node = r.Child.Node
+		r.nodeSeeded = false
 		return
 	}
 	from := cfgInt(cfg["from"])
 	if from < 0 || from >= len(r.O) {
 		r.Node = Undefined
+		r.nodeSeeded = false
 		return
 	}
 	tok := r.O[from]
@@ -477,6 +529,7 @@ func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 		val = Text{Quote: quote, Str: str}
 	}
 	r.Node = val
+	r.nodeSeeded = false
 }
 
 // ---- Config binding (A1, ruling #120) -----------------------------
