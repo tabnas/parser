@@ -250,15 +250,29 @@ describe('builtins', () => {
       // pd_mark) — rule state that MUST propagate. They are absent from
       // the bound set rather than carved out of it, so nothing here has
       // to know about them.
+      //
+      // @push$ used to be listed here too, but only as a statement of
+      // fact — it had no config — not by this rule. It takes `src` as of
+      // schema v5, and binding is exactly right for it: the config key
+      // leaves `alt.k`, so `push$` never propagates into a child. The
+      // probe family's reason to stay out is untouched, and that is what
+      // this test is actually for.
       const { BUILTIN_CONFIG_FACTORY } = builtinsSubpath
       for (const ref of ['@probeInit$', '@probeDecide$', '@probePhase0$',
-        '@probePhase1$', '@probePhase2$', '@bubble$', '@reset$', '@push$']) {
+        '@probePhase1$', '@probePhase2$', '@bubble$', '@reset$']) {
         assert.equal(
           BUILTIN_CONFIG_FACTORY[ref],
           undefined,
           ref + ' takes no per-alternate config and must not be bound',
         )
       }
+      // ...and the converse for @push$, so this stays a statement about
+      // WHICH builtins bind rather than a list that quietly rots.
+      assert.equal(
+        typeof BUILTIN_CONFIG_FACTORY['@push$'],
+        'function',
+        '@push$ takes `src` as of schema v5 and must be bound',
+      )
     })
   })
 
@@ -612,6 +626,26 @@ describe('builtins', () => {
         '{"a":1}', '[1,2,3]', '{"a":{"b":[true,null,"x"]}}', '{"a":1,"b":2}']) {
         assert.deepEqual(build(input), JSON.parse(input), `build(${input})`)
       }
+    })
+
+    it('@setval$/@push$ {src} take a member\'s value from its matched text', () => {
+      // The tree builders accumulate every matched terminal into
+      // `node.src`, and nothing could read it back out — so a member
+      // whose value IS its matched text could only be assigned as the
+      // whole `{rule, src, kids}` node.
+      //
+      // One fixture covers all three cases a compiler has to emit:
+      // major/minor are scalars flattened by `setval src`; `tags` built
+      // its OWN value and is assigned whole (no `src`), which is what
+      // makes nesting work; its elements are flattened by `push src`.
+      //
+      // Same file as go/TestSrcValueFixtureParity and Rust's
+      // shared_src_value_grammar_fixture_executes_in_rust.
+      const spec = require('./src-value.fixture.json')
+      const j = new Tabnas()
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('1,2,3,4'),
+        { major: '1', minor: '2', tags: ['3', '4'] })
     })
 
     it('@key$ {lit} names a member the input never spells', () => {

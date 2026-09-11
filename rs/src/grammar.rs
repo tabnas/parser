@@ -95,8 +95,9 @@ impl From<&Tabnas> for AltRefs {
 /// `@fold$` tree action used by current BNF-family compiler output.
 /// Schema v4 adds `@key$` `lit`, the key as a constant rather than read
 /// from a token, for grammars that declare their shape instead of
-/// delimiting it.
-pub const BUILTIN_SCHEMA_VERSION: u64 = 4;
+/// delimiting it. Schema v5 adds `src` to `@setval$`/`@push$`, taking a
+/// member's value from the source text the tree builders accumulated.
+pub const BUILTIN_SCHEMA_VERSION: u64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarError(pub String);
@@ -624,6 +625,7 @@ fn parse_alt(
                 | "@array$"
                 | "@key$"
                 | "@setval$"
+                | "@push$"
                 | "@value$"
         ) {
             let key = action.trim_start_matches('@');
@@ -758,7 +760,8 @@ fn validate_builtin_config(action: &str, config: &Value, label: &str) -> Result<
         "@fold$" => &[("cN", "non-negative integer")],
         "@object$" | "@array$" => &[("implicit", "boolean")],
         "@key$" => &[("slot", "string"), ("from", "integer"), ("lit", "string")],
-        "@setval$" => &[("slot", "string")],
+        "@setval$" => &[("slot", "string"), ("src", "boolean")],
+        "@push$" => &[("src", "boolean")],
         "@value$" => &[("from", "integer")],
         _ => return Ok(()),
     };

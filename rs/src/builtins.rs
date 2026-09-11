@@ -102,6 +102,24 @@ fn ast_node(rule: String, kind: String) -> Value {
     Value::Object(node)
 }
 
+/// The accumulated source text of a tree node -- the `{rule?, src, kids}`
+/// shape `ast_node` builds -- or the node unchanged when it is not one.
+///
+/// "src" is how a member whose value IS its matched text gets that text:
+/// the tree builders already accumulate it, and nothing else could read it
+/// back out. A compiler emits "src" only where it already knows the member
+/// is a scalar, so this never has to guess which it is: the fall-through
+/// exists so asking for src where no tree node was built passes the value
+/// along rather than erasing it.
+fn src_val(node: Value) -> Value {
+    if let Value::Object(map) = &node {
+        if let Some(Value::String(source)) = map.get("src") {
+            return Value::String(source.clone());
+        }
+    }
+    node
+}
+
 fn append_src(node: &mut IndexMap<String, Value>, source: &str) {
     if let Some(Value::String(current)) = node.get_mut("src") {
         current.push_str(source);
@@ -362,12 +380,20 @@ pub(crate) fn run_builtin_action_with_info(
                 }
             };
             if let Some(Value::String(key)) = rule.u.get(&slot).cloned() {
-                map_insert(&mut rule.node.borrow_mut(), key, rule.child_node.clone());
+                let mut val = rule.child_node.clone();
+                if config_bool(config, "src") {
+                    val = src_val(val);
+                }
+                map_insert(&mut rule.node.borrow_mut(), key, val);
             }
         }
         "@push$" => {
             if !rule.child_node.is_undefined() {
-                list_push(&mut rule.node.borrow_mut(), rule.child_node.clone());
+                let mut val = rule.child_node.clone();
+                if config_bool(config, "src") {
+                    val = src_val(val);
+                }
+                list_push(&mut rule.node.borrow_mut(), val);
             }
         }
         "@map-bo" => {

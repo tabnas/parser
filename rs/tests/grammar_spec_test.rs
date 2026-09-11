@@ -467,6 +467,33 @@ fn shared_literal_key_grammar_fixture_executes_in_rust() {
 }
 
 #[test]
+fn shared_src_value_grammar_fixture_executes_in_rust() {
+    // Schema v5: a member whose value IS its matched text had no way to
+    // get it -- the tree builders accumulate the text into node.src, and
+    // no builtin could read it back out, so @setval$ could only assign the
+    // whole {rule, src, kids} node.
+    //
+    // One fixture covers all three cases a compiler has to emit:
+    //   - major/minor: scalar members, flattened to their src by setval src
+    //   - tags:        a member that built its OWN value, assigned whole
+    //                  (no src) -- this is what makes nesting work
+    //   - the tags elements: flattened by push src, the array counterpart
+    //
+    // Run by the TS and Go suites too, so a port that drops src is caught.
+    let source = include_str!("../../ts/test/src-value.fixture.json");
+    let mut parser = Tabnas::new();
+    parser.grammar_json(source).unwrap();
+    assert_eq!(
+        parser.parse("1,2,3,4").unwrap(),
+        Value::from_json(&serde_json::json!({
+            "major": "1",
+            "minor": "2",
+            "tags": ["3", "4"]
+        }))
+    );
+}
+
+#[test]
 fn replaced_child_publishes_its_final_node_to_the_parent() {
     let source = include_str!("../../ts/test/replace-child.fixture.json");
     let mut parser = Tabnas::new();
