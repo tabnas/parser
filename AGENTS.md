@@ -152,9 +152,9 @@ The steps, in order:
    ci/rust/run.sh                        # or at minimum: (cd rs && cargo build --locked)
    ```
 
-   **Build first** — `npm test` does not compile, so a bumped
-   `ts/src/tabnas.ts` is otherwise checked as stale `dist/`, or not at all
-   on a fresh checkout.
+   No separate build is needed: `ts/package.json` sets `pretest` to
+   `npm run build`, which npm runs automatically, so `npm test` compiles
+   `dist/` first. The explicit build above is redundant but harmless.
 5. Commit and push. **Bump in a reviewed PR** — that is the house
    convention and what `release.yml`'s own header describes. A direct push
    to `main` is a recovery path, not the normal one: CI still gates it, but
@@ -170,7 +170,8 @@ The steps, in order:
 
    ```bash
    V=x.y.z
-   git ls-remote --tags origin "refs/tags/ts/v$V" "refs/tags/go/v$V" | wc -l   # want 2
+   n=$(git ls-remote --tags origin "refs/tags/ts/v$V" "refs/tags/go/v$V" | wc -l)
+   [ "$n" = 2 ] || { echo "incomplete release: $n/2 tags"; exit 1; }
    ```
 
    `git ls-remote --tags origin | grep v$V` is not a check. `grep` exits 0
@@ -181,8 +182,13 @@ The steps, in order:
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
 (the "you forgot to bump" signal). It fails *open* on an already-published
-npm version, so a run that published and then died before tagging is
-repairable by re-dispatching.
+npm version, so a run that published and then died before tagging can be
+re-dispatched — **but only while `main` still points at the release commit.**
+The repair anchors new tags to an *existing* tag; if neither tag was written
+there is nothing to anchor to, and once `main` moves the anchor falls back to
+the new `HEAD` while the publish step skips the version already on npm. Both
+tags then name a commit npm never served, permanently for the Go module.
+Recover the original SHA and tag it by hand, or bump to the next patch.
 
 ### Releasing for a downstream consumer
 
@@ -212,9 +218,11 @@ consumer's own bump is not done until it has been checked against the
   go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod still has a replace'; exit 1; }
   GOWORK=off go test ./...
   ```
-- TypeScript: delete the gitignored `package-lock.json` first. It pins the
-  previous versions and `npm install` will happily keep them, so the suite
-  passes against the engine you were trying to replace.
+- TypeScript: deleting the gitignored `package-lock.json` is necessary and
+  **not sufficient** — it leaves `node_modules` exactly as it was, symlinked
+  siblings included. Remove `node_modules` and reinstall, which is what
+  actually reproduces the release runner:
+  `(cd ts && rm -f package-lock.json && rm -rf node_modules && npm install && npm test)`.
 
 Both of those have silently produced a green local run against the wrong
 version. See "Never commit the local wiring" below.
@@ -238,9 +246,10 @@ checkouts. None of that may reach a commit, and `git add -A` is how it does:
   diff them against the last release commit before pushing.
 - **A `go.work`.** Put it *outside* every repo (one level up, `use`ing each
   module) so no repo can track it. But know what it costs: **a workspace
-  resolves to the sibling directories and never consults `go.sum`**, so a
-  local run under it cannot tell you whether the versions a module
-  *declares* are sound. That is precisely how a broken `go.sum` passed
+  resolves to the sibling directories and does not validate the *declared
+  version* of any module it replaces**, so a local run under it cannot tell
+  you whether those versions are sound. (It still consults its members'
+  `go.sum` files for everything else, writing missing sums to `go.work.sum`.) That is precisely how a broken `go.sum` passed
   locally and failed in CI. Re-check with `GOWORK=off` **and** a `go.mod`
   with no `replace` left in it before you believe a dependency bump —
   either one alone still resolves to the sibling.
