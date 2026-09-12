@@ -1,0 +1,130 @@
+{
+  "v": 5,
+  "options": {
+    "rule": {
+      "start": "__start__"
+    }
+  },
+  "rule": {
+    "top": {
+      "open": [
+        {
+          "s": "#OB",
+          "p": "list",
+          "a": ["@object$", "@key$"],
+          "k": {
+            "key$": {
+              "lit": "items"
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "s": "#CB",
+          "a": "@setval$"
+        }
+      ]
+    },
+    "list": {
+      "open": [
+        {
+          "s": "#OS",
+          "p": "item",
+          "a": "@array$"
+        }
+      ],
+      "close": [
+        {
+          "r": "list$step1",
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "list$step1": {
+      "open": [
+        {
+          "p": "star"
+        }
+      ],
+      "close": [
+        {
+          "s": "#CS"
+        }
+      ]
+    },
+    "star": {
+      "open": [
+        {
+          "s": "#CA",
+          "b": 1,
+          "p": "star$alt0"
+        },
+        {}
+      ]
+    },
+    "star$alt0": {
+      "open": [
+        {
+          "s": "#CA",
+          "p": "item"
+        }
+      ],
+      "close": [
+        {
+          "r": "star$alt0$step1",
+          "a": "@push$",
+          "k": {
+            "push$": {
+              "src": true
+            }
+          }
+        }
+      ]
+    },
+    "star$alt0$step1": {
+      "open": [
+        {
+          "p": "star"
+        }
+      ]
+    },
+    "item": {
+      "open": [
+        {
+          "s": "#NR",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "nterms": 1
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$"
+        }
+      ]
+    },
+    "__start__": {
+      "open": [
+        {
+          "p": "top"
+        }
+      ],
+      "close": [
+        {
+          "s": "#ZZ",
+          "a": "@bubble$"
+        }
+      ]
+    }
+  }
+}

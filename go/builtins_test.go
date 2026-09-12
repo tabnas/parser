@@ -514,15 +514,33 @@ func TestNativeValueBuilders(t *testing.T) {
 		t.Errorf("@setval$: got %v", rs.Node)
 	}
 
-	// @push$ appends and re-publishes to parent (Go slice value-type)
-	parent := &Rule{}
-	rp := &Rule{Node: []any{1}, Parent: parent, Child: &Rule{Node: 2}}
+	// @push$ appends and re-publishes to a parent BUILDING INTO THE SAME
+	// container (Go slice value-type). The parent is the owner here, as
+	// it is in a real parse: a push seeds the child's owner from it.
+	parent := &Rule{Node: []any{1}}
+	rp := &Rule{Node: []any{1}, Parent: parent, nodeOwner: parent,
+		Child: &Rule{Node: 2}}
 	builtinPush(rp, nil)
 	if s, _ := rp.Node.([]any); len(s) != 2 || s[1] != 2 {
 		t.Errorf("@push$: got %v", rp.Node)
 	}
 	if ps, _ := parent.Node.([]any); len(ps) != 2 {
 		t.Errorf("@push$ parent re-publish: got %v", parent.Node)
+	}
+
+	// ...and leaves a parent building into a DIFFERENT container alone.
+	// An unconditional write-back overwrote the enclosing @object$'s map
+	// when a list was one of its members, and the enclosing list when one
+	// array nested in another.
+	mapParent := &Rule{Node: map[string]any{"a": 1}}
+	rpOwn := &Rule{Node: []any{}, Parent: mapParent, Child: &Rule{Node: 2}}
+	builtinPush(rpOwn, nil)
+	if m, isMap := mapParent.Node.(map[string]any); !isMap || m["a"] != 1 {
+		t.Errorf("@push$ clobbered a parent's own container: got %#v",
+			mapParent.Node)
+	}
+	if s, _ := rpOwn.Node.([]any); len(s) != 1 || s[0] != 2 {
+		t.Errorf("@push$ own list: got %v", rpOwn.Node)
 	}
 	// no-value child is skipped
 	rp2 := &Rule{Node: []any{1}, Parent: parent, Child: &Rule{Node: Undefined}}
@@ -608,10 +626,11 @@ func TestNativeValueBuildersInfo(t *testing.T) {
 		t.Errorf("@setval$ info: got %#v", rs.Node)
 	}
 
-	// @push$ appends into a ListRef via NodeListAppend and re-publishes.
-	parent := &Rule{}
+	// @push$ appends into a ListRef via NodeListAppend and re-publishes
+	// to a parent building into the same container.
+	parent := &Rule{Node: ListRef{Val: []any{1}, Meta: map[string]any{}}}
 	rp := &Rule{Node: ListRef{Val: []any{1}, Meta: map[string]any{}}, Parent: parent,
-		Child: &Rule{Node: 2}}
+		nodeOwner: parent, Child: &Rule{Node: 2}}
 	builtinPush(rp, nil)
 	prl, ok := rp.Node.(ListRef)
 	if !ok || len(prl.Val) != 2 || prl.Val[1] != 2 {
@@ -780,6 +799,42 @@ func TestPushReachesTheListsOwnerFixtureParity(t *testing.T) {
 	}
 	if want := []any{"1", "2", "3"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
 		t.Errorf("build: got %#v, want %#v", UnwrapUndefined(got), want)
+	}
+}
+
+// TestNestedContainerFixtureParity: a list that is a MEMBER of an object.
+//
+// @push$ re-published the grown slice header to r.Parent unconditionally,
+// so the enclosing @object$'s map was overwritten by the list and the
+// parse answered a list where an object was asked for. The same write
+// overwrote the enclosing list when one array nested in another.
+//
+// A Go slice is a value, so the header genuinely has to be re-published —
+// but only to a parent building into the SAME container. Ownership says
+// which: an inherited container gives parent and pusher the same holder,
+// a freshly allocated one resets the pusher's owner to itself.
+//
+// Same file as the TS `a list nested in an object keeps the object` case.
+func TestNestedContainerFixtureParity(t *testing.T) {
+	spec := fixtureSpec(t, "nested-container.fixture.json")
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	for _, c := range []struct {
+		in   string
+		want any
+	}{
+		{"{[1,2,3]}", map[string]any{"items": []any{"1", "2", "3"}}},
+		{"{[7]}", map[string]any{"items": []any{"7"}}},
+	} {
+		got, err := j.Parse(c.in)
+		if err != nil {
+			t.Fatalf("parse %s: %v", c.in, err)
+		}
+		if plain := omPlainify(UnwrapUndefined(got)); !reflect.DeepEqual(plain, c.want) {
+			t.Errorf("%s: got %#v, want %#v", c.in, plain, c.want)
+		}
 	}
 }
 

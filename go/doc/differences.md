@@ -378,6 +378,44 @@ from deeper in the chain would leave the allocator with a stale header.
 
 Go-only bookkeeping for a Go-only problem — an unexported field, no API
 or spec-format change, and nothing for the other ports to mirror.
+
+### `@push$` into a NESTED container: Aligned (was a Go defect)
+
+The two entries above are about reaching every rule that holds the list.
+This one is about the rules that hold something else.
+
+The container a value builder grows is not always the outermost one. A
+list can be a MEMBER of an object (`{a, b:[…]}`) or an element of another
+list (`[[…],[…]]`). `@push$` re-published the grown header to `r.Parent`
+UNCONDITIONALLY, so whatever the parent was holding was overwritten by
+the list:
+
+| grammar shape | TypeScript | Go, before |
+|---|---|---|
+| a list as one member of an object | `{"a":"ab","b":["1","2"]}` | `{"a":"ab"}` |
+| a list inside another list | `[["1","2"],["3"]]` | `["1",["1","2"],["3"]]` |
+| a list as an object's only member | `{"b":["1","2"]}` | `["1"]` |
+
+The third is the sharpest: not a damaged map but the wrong KIND of value,
+from a grammar that asked for an object.
+
+Free in TypeScript and Rust, where the enclosing map is a different
+object and nothing aliases it. The header still genuinely has to be
+re-published in Go — but only to a parent building into the SAME
+container, and ownership already answers which: an inherited container
+gives parent and pusher the same holder, while a freshly allocated one
+resets the pusher's owner to itself. The `Prev` walk beside it was
+already guarded (`sameGrownList`); the parent write-back was not guarded
+at all.
+
+Not specific to the value annotations that turned it up, and not specific
+to any compiler's output: any grammar nesting one value container inside
+another reaches it. It went unnoticed because every earlier fixture built
+ONE container — the json-builder oracle nests maps in maps and lists in
+lists through `@setval$`/`@push$` on the same rule, where the parent
+holds the container being grown.
+
+Pinned by `ts/test/nested-container.fixture.json`, which both suites run.
 `TestPushReachesTheListsOwnerFromAnyDepth`,
 `TestPushStopsAtTheAllocatingRule` and
 `TestLiftingAnInheritedListKeepsItsOwner` pin the directions separately;
