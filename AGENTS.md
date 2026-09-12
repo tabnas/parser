@@ -239,9 +239,11 @@ consumer's own bump is not done until it has been checked against the
   So assert the absence first, and only then believe the test run:
 
   ```bash
-  cd go
-  go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod still has a replace'; exit 1; }
-  GOWORK=off go test ./...
+  (
+    cd go
+    go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod still has a replace'; exit 1; }
+    GOWORK=off go test ./...
+  )
   ```
 - TypeScript: deleting the gitignored `package-lock.json` is necessary and
   **not sufficient** — it leaves `node_modules` exactly as it was, symlinked
