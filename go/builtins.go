@@ -450,7 +450,16 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 		before := owner.Node
 		owner.Node = NodeListAppend(owner.Node, val)
 		r.Node = owner.Node
-		if r.Parent != nil && r.Parent != NoRule {
+		// Only a parent BUILDING INTO THE SAME CONTAINER gets the grown
+		// header. An unconditional write overwrote whatever the parent
+		// held — the enclosing `@object$`'s map when a list is a member,
+		// or the enclosing list when one array nests in another — and a
+		// Go slice being a value made that silent rather than aliased.
+		// Ownership answers it where slice identity cannot: an inherited
+		// container gives parent and pusher the same holder, while a
+		// freshly allocated one resets the pusher's owner to itself.
+		if r.Parent != nil && r.Parent != NoRule &&
+			r.Parent.nodeHolder() == owner {
 			r.Parent.Node = owner.Node
 		}
 		// ...and back along the replacement chain. A rule replaced via

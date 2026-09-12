@@ -662,6 +662,25 @@ describe('builtins', () => {
         'and an empty run contributes no element')
     })
 
+    it('a list nested in an object keeps the object', () => {
+      // The container a value builder grows is not always the outermost
+      // one: a list can be a MEMBER of an object, or an element of
+      // another list. Free in this port, where every holder shares one
+      // array object and the enclosing map is untouched.
+      //
+      // Go copies the slice header on every append and has to re-publish
+      // it, and re-published to the parent UNCONDITIONALLY -- so the
+      // enclosing @object$'s map was overwritten by the list and the
+      // parse answered a list where an object was asked for.
+      //
+      // Same file as go/TestNestedContainerFixtureParity.
+      const spec = require('./nested-container.fixture.json')
+      const j = new Tabnas()
+      j.grammar(clone(spec))
+      assert.deepEqual(j.parse('{[1,2,3]}'), { items: ['1', '2', '3'] })
+      assert.deepEqual(j.parse('{[7]}'), { items: ['7'] })
+    })
+
     it('@setval$/@push$ {src} take a member\'s value from its matched text', () => {
       // The tree builders accumulate every matched terminal into
       // `node.src`, and nothing could read it back out — so a member
