@@ -170,14 +170,23 @@ The steps, in order:
 
    ```bash
    V=x.y.z
-   n=$(git ls-remote --tags origin "refs/tags/ts/v$V" "refs/tags/go/v$V" | wc -l)
-   [ "$n" = 2 ] || { echo "incomplete release: $n/2 tags"; exit 1; }
+   REL=$(git rev-parse origin/main)   # capture BEFORE dispatching
+   for T in "ts/v$V" "go/v$V"; do
+     S=$(git ls-remote origin "refs/tags/$T" | cut -f1)
+     [ -n "$S" ] || { echo "missing tag $T"; exit 1; }
+     [ "$S" = "$REL" ] || { echo "$T is $S, expected $REL"; exit 1; }
+   done
    ```
 
    `git ls-remote --tags origin | grep v$V` is not a check. `grep` exits 0
    if *either* ref matches, so it reports success in precisely the
    half-finished state — npm tag written, Go tag not — that a re-dispatch
-   exists to repair.
+   exists to repair. Counting the two refs is not enough either: an anchor
+   fallback writes *both* tags on a commit npm never served, and two wrong
+   tags count as two. Comparing each against the commit you released is
+   what catches that. The refs carry the commit directly — `release.yml`
+   uses `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no
+   `^{}` to peel.
 
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
