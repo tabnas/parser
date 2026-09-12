@@ -121,7 +121,10 @@ by hand is the orchestrator's path (`admin/publish.sh`), not yours.
 The steps, in order:
 
 1. Bump every version site (below) and regenerate the registry.
-2. Verify: `cd ts && npm test`, and `cd go && GOWORK=off go test ./...`.
+2. Verify: `(cd ts && npm run build && npm test)` and
+   `(cd go && GOWORK=off go test ./...)`. **Build first** — `npm test` does
+   not compile, so a bumped `ts/src/tabnas.ts` is otherwise checked as
+   stale `dist/`, or not at all on a fresh checkout.
 3. Commit and push to `main`. **The house convention is to bump in a
    reviewed PR**; a direct push to `main` works and CI will still gate it,
    but it is a deviation — say so if you take it.
@@ -145,8 +148,10 @@ When the release exists to unblock `bnf`, `abnf` or another sibling, the
 consumer's own bump is not done until it has been checked against the
 **published** artifact rather than a local checkout:
 
-- Go: `GOWORK=off go test ./...`, so the `require` in `go.mod` is what
-  resolves rather than a `go.work` or a `replace`.
+- Go: `(cd go && GOWORK=off go test ./...)` — from the repo root it fails
+  with `directory prefix . does not contain main module`, since the module
+  is rooted in `go/`. `GOWORK=off` is what makes the `require` in `go.mod`
+  resolve rather than a `go.work` or a `replace`.
 - TypeScript: delete the gitignored `package-lock.json` first. It pins the
   previous versions and `npm install` will happily keep them, so the suite
   passes against the engine you were trying to replace.
