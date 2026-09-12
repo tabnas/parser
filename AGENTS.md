@@ -101,15 +101,90 @@ all runtimes: `make build|test|clean` run the TS, Go, and Rust sides,
 
 ## Releasing
 
-Publishing is **tag-driven and runs in CI**, not locally: pushing a `ts/v*`
-tag fires `.github/workflows/release.yml`, which publishes to npm over GitHub
-OIDC trusted publishing (no token, provenance attached). A `go/v*` tag is the
-Go module release — the proxy serves it straight from the tag. Do not run a
+Publishing is **tag-driven and runs in CI**, not locally:
+`.github/workflows/release.yml` publishes to npm over GitHub OIDC trusted
+publishing (no token, provenance attached), and a `go/v*` tag is the Go
+module release — the proxy serves it straight from the tag. Do not run a
 local `npm publish` for a release: it goes out over a token and bypasses OIDC
 entirely.
 
+### Dispatch it; do not push the tag
+
+**Run the workflow with `workflow_dispatch` on `main`, with the `go` input
+true.** That is the path the workflow's own header calls normal, and it is
+the only one an agent can take: **a session's credentials cannot push tag
+refs — `git push origin ts/v…` fails with HTTP 403** while branch pushes from
+the same credentials succeed. It costs nothing, because the workflow creates
+both tags itself, atomically, *after* npm accepts the publish. Pushing a tag
+by hand is the orchestrator's path (`admin/publish.sh`), not yours.
+
+The steps, in order:
+
+1. Bump every version site (below) and regenerate the registry.
+2. Verify: `cd ts && npm test`, and `cd go && GOWORK=off go test ./...`.
+3. Commit and push to `main`. **The house convention is to bump in a
+   reviewed PR**; a direct push to `main` works and CI will still gate it,
+   but it is a deviation — say so if you take it.
+4. **Wait for `main` CI to go green on the bump commit.** The release
+   workflow does not run the test suite: it reads `main`, publishes it and
+   tags it. Nothing downstream of a dispatch will catch a broken bump, and
+   an npm version and a Go module tag are both immutable.
+5. Dispatch `release.yml` on `main` with `go: true`.
+6. Confirm: `npm view @tabnas/parser@<version> version`, and
+   `git ls-remote --tags origin | grep v<version>` for both tags.
+
+The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
+from any ref but `main`, and when every tag it would create already exists
+(the "you forgot to bump" signal). It fails *open* on an already-published
+npm version, so a run that published and then died before tagging is
+repairable by re-dispatching.
+
+### Releasing for a downstream consumer
+
+When the release exists to unblock `bnf`, `abnf` or another sibling, the
+consumer's own bump is not done until it has been checked against the
+**published** artifact rather than a local checkout:
+
+- Go: `GOWORK=off go test ./...`, so the `require` in `go.mod` is what
+  resolves rather than a `go.work` or a `replace`.
+- TypeScript: delete the gitignored `package-lock.json` first. It pins the
+  previous versions and `npm install` will happily keep them, so the suite
+  passes against the engine you were trying to replace.
+
+Both of those have silently produced a green local run against the wrong
+version. See "Never commit the local wiring" below.
+
 Two things about this repo's version have bitten a release. Both fail loudly,
 but only after you have already bumped, so know them before you start.
+
+### Never commit the local wiring
+
+Verifying a chain end to end means pointing this checkout at sibling
+checkouts. None of that may reach a commit, and `git add -A` is how it does:
+
+- **`replace` directives.** `go mod edit -replace …=/abs/path` is the right
+  way to test an unreleased sibling and the wrong thing to commit — the path
+  means nothing anywhere else. CI reports it as
+  `replacement directory /… does not exist`.
+- **`go.sum`, after the replace comes out.** While a `replace` is in place
+  the module resolves to a directory, so `go mod tidy` drops the sibling's
+  sums as unused. Reverting `go.mod` alone then leaves
+  `missing go.sum entry for module providing package …`. Revert both, and
+  diff them against the last release commit before pushing.
+- **A `go.work`.** Put it *outside* every repo (one level up, `use`ing each
+  module) so no repo can track it. But know what it costs: **a workspace
+  resolves to the sibling directories and never consults `go.sum`**, so a
+  local run under it cannot tell you whether the versions a module
+  *declares* are sound. That is precisely how a broken `go.sum` passed
+  locally and failed in CI. Re-check with `GOWORK=off` before you believe a
+  dependency bump.
+- **Scratch files.** Anything you wrote to measure something.
+
+Stage deliberately (`git add <path>`), and read `git status --short` before
+every commit. This matters more than usual on a PR whose CI is *expected*
+red for a known dependency: a new breakage hides inside the expected
+failure, and only a job that resolves modules directly — `clib` in the
+sibling repos — will report it as itself.
 
 **The shared engine version is declared in six places here, not three.** The usual three are
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
