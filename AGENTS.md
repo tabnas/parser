@@ -164,13 +164,22 @@ The steps, in order:
    workflow does not run the test suite: it reads `main`, publishes it and
    tags it. Nothing downstream of a dispatch will catch a broken bump, and
    an npm version and a Go module tag are both immutable.
-7. Dispatch `release.yml` on `main` with `go: true`.
+7. **Record the release commit, then dispatch.** The confirmation
+   below compares each tag against the commit you released, and a run
+   that publishes and then fails to tag can be followed by `main`
+   moving — so capture it *before* the dispatch, and read it from the
+   remote rather than a local ref that may be stale:
+
+   ```bash
+   REL=$(git ls-remote origin refs/heads/main | cut -f1)
+   ```
+
+   Then dispatch `release.yml` on `main` with `go: true`.
 8. Confirm `npm view @tabnas/parser@$V version`, and **query both tags
    exactly**:
 
    ```bash
    V=x.y.z
-   REL=$(git rev-parse origin/main)   # capture BEFORE dispatching
    for T in "ts/v$V" "go/v$V"; do
      S=$(git ls-remote origin "refs/tags/$T" | cut -f1)
      [ -n "$S" ] || { echo "missing tag $T"; exit 1; }
