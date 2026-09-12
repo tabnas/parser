@@ -94,10 +94,24 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 The repo-root [`Makefile`](Makefile) (adapted from voxgig/util) wraps
 all runtimes: `make build|test|clean` run the TS, Go, and Rust sides,
-`make reset` rebuilds from clean, and `make publish-go V=x.y.z` injects
-`V` into the `const VERSION` in `go/tabnas.go`, commits, and tags
-`go/vX.Y.Z`. `make publish-ts` publishes the TS package at its
-`package.json` version. (`make -C ts test` runs the TS suite alone.)
+and `make reset` rebuilds from clean. (`make -C ts test` runs the TS
+suite alone.)
+
+It also carries `publish-ts` and `publish-go`, which **predate
+`release.yml` and are not the release path for anyone** — not an agent,
+not a maintainer on a trusted machine. See "Releasing":
+
+- `publish-ts` runs a local `npm publish`, which goes out over a token and
+  bypasses the OIDC trusted publishing the workflow uses.
+- `publish-go V=x.y.z` breaks the version invariant. It `sed`s **only**
+  `go/tabnas.go`, then commits and tags — leaving `ts/package.json`,
+  `ts/src/tabnas.ts`, `rs/Cargo.toml`, `rs/src/lib.rs`, `rs/Cargo.lock`
+  and `schema/error-codes.json` on the previous version, which is the
+  exact state the `version.test.*` suites exist to reject. Its `test-go`
+  prerequisite also runs *before* the `sed`, so what it verifies is not
+  what it tags.
+
+They stay in the Makefile because removing them is a separate change.
 
 ## Releasing
 
@@ -120,21 +134,49 @@ by hand is the orchestrator's path (`admin/publish.sh`), not yours.
 
 The steps, in order:
 
-1. Bump every version site (below) and regenerate the registry.
-2. Verify: `(cd ts && npm run build && npm test)` and
-   `(cd go && GOWORK=off go test ./...)`. **Build first** — `npm test` does
-   not compile, so a bumped `ts/src/tabnas.ts` is otherwise checked as
-   stale `dist/`, or not at all on a fresh checkout.
-3. Commit and push to `main`. **The house convention is to bump in a
-   reviewed PR**; a direct push to `main` works and CI will still gate it,
-   but it is a deviation — say so if you take it.
-4. **Wait for `main` CI to go green on the bump commit.** The release
+1. Bump every version site (below).
+2. **Build, then regenerate the registry** — in that order:
+   `(cd ts && npm run build && npm run gen-registry)`. `gen-registry` runs
+   `tools/gen-error-codes.js`, which `require`s `../dist/tabnas.js`, so
+   regenerating before building stops the release at `MODULE_NOT_FOUND` on
+   any checkout where `ts/dist` is absent.
+3. **Regenerate the Rust lockfile:** `(cd rs && cargo update --workspace)`.
+   It rewrites one line — the root `tabnas` entry — and re-pins nothing
+   else. This is the version site that gets missed, because no GitHub
+   workflow reads it; see "The Rust lockfile is a version site" below.
+4. Verify all three runtimes, from a tree with no local wiring in it:
+
+   ```bash
+   (cd ts && npm run build && npm test)
+   (cd go && GOWORK=off go test ./...)   # only sound with no `replace` — see below
+   ci/rust/run.sh                        # or at minimum: (cd rs && cargo build --locked)
+   ```
+
+   **Build first** — `npm test` does not compile, so a bumped
+   `ts/src/tabnas.ts` is otherwise checked as stale `dist/`, or not at all
+   on a fresh checkout.
+5. Commit and push. **Bump in a reviewed PR** — that is the house
+   convention and what `release.yml`'s own header describes. A direct push
+   to `main` is a recovery path, not the normal one: CI still gates it, but
+   nothing reviews it, and step 7 then publishes that unreviewed commit
+   immutably. If you take it, say so.
+6. **Wait for `main` CI to go green on the bump commit.** The release
    workflow does not run the test suite: it reads `main`, publishes it and
    tags it. Nothing downstream of a dispatch will catch a broken bump, and
    an npm version and a Go module tag are both immutable.
-5. Dispatch `release.yml` on `main` with `go: true`.
-6. Confirm: `npm view @tabnas/parser@<version> version`, and
-   `git ls-remote --tags origin | grep v<version>` for both tags.
+7. Dispatch `release.yml` on `main` with `go: true`.
+8. Confirm `npm view @tabnas/parser@$V version`, and **query both tags
+   exactly**:
+
+   ```bash
+   V=x.y.z
+   git ls-remote --tags origin "refs/tags/ts/v$V" "refs/tags/go/v$V" | wc -l   # want 2
+   ```
+
+   `git ls-remote --tags origin | grep v$V` is not a check. `grep` exits 0
+   if *either* ref matches, so it reports success in precisely the
+   half-finished state — npm tag written, Go tag not — that a re-dispatch
+   exists to repair.
 
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
@@ -150,8 +192,26 @@ consumer's own bump is not done until it has been checked against the
 
 - Go: `(cd go && GOWORK=off go test ./...)` — from the repo root it fails
   with `directory prefix . does not contain main module`, since the module
-  is rooted in `go/`. `GOWORK=off` is what makes the `require` in `go.mod`
-  resolve rather than a `go.work` or a `replace`.
+  is rooted in `go/`.
+
+  **`GOWORK=off` disables the workspace and nothing else.** It does *not*
+  neutralise a `replace` in `go.mod`: a replacement with no version on the
+  left applies to every version, so the `require` still resolves to the
+  sibling directory and the run is green against the checkout you were
+  trying to stop using. Measured, with the published `v0.9.6` required:
+
+  ```
+  $ GOWORK=off go list -m github.com/tabnas/parser/go
+  github.com/tabnas/parser/go v0.9.6 => /…/parser/go
+  ```
+
+  So assert the absence first, and only then believe the test run:
+
+  ```bash
+  cd go
+  go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod still has a replace'; exit 1; }
+  GOWORK=off go test ./...
+  ```
 - TypeScript: delete the gitignored `package-lock.json` first. It pins the
   previous versions and `npm install` will happily keep them, so the suite
   passes against the engine you were trying to replace.
@@ -181,8 +241,9 @@ checkouts. None of that may reach a commit, and `git add -A` is how it does:
   resolves to the sibling directories and never consults `go.sum`**, so a
   local run under it cannot tell you whether the versions a module
   *declares* are sound. That is precisely how a broken `go.sum` passed
-  locally and failed in CI. Re-check with `GOWORK=off` before you believe a
-  dependency bump.
+  locally and failed in CI. Re-check with `GOWORK=off` **and** a `go.mod`
+  with no `replace` left in it before you believe a dependency bump —
+  either one alone still resolves to the sibling.
 - **Scratch files.** Anything you wrote to measure something.
 
 Stage deliberately (`git add <path>`), and read `git status --short` before
@@ -191,7 +252,7 @@ red for a known dependency: a new breakage hides inside the expected
 failure, and only a job that resolves modules directly — `clib` in the
 sibling repos — will report it as itself.
 
-**The shared engine version is declared in six places here, not three.** The usual three are
+**The shared engine version is declared in seven places here, not three.** The usual three are
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
 in `go/tabnas.go`; Rust adds `version` in `rs/Cargo.toml` and `pub const
 VERSION` in `rs/src/lib.rs`. Drift within each runtime is caught by
@@ -208,6 +269,29 @@ registry version "0.8.7" != engine VERSION "0.8.8"
 
 The fix is the one the test names: `cd ts && npm run gen-registry` (after
 `npm run build`), then commit the regenerated file with the bump.
+
+### The Rust lockfile is a version site
+
+The seventh is `rs/Cargo.lock`, and it is the one that gets missed, because
+it is *generated* rather than edited and **no GitHub workflow reads it** —
+nothing in `.github/workflows/` invokes the Rust gate, so CI stays green
+over a stale lock indefinitely.
+
+`ci/rust/run.sh` does read it, with `--locked` on build, test and clippy.
+Bumping `rs/Cargo.toml` without regenerating leaves the lock's root entry on
+the previous version, and `--locked` then refuses to run at all rather than
+silently updating:
+
+```
+error: cannot update the lock file /…/rs/Cargo.lock because --locked was passed to prevent this
+```
+
+`v0.9.6` shipped in exactly that state: the bump commit changed
+`rs/Cargo.toml` and `rs/src/lib.rs` and not `rs/Cargo.lock`. `cargo update
+--workspace` is the fix — it re-resolves only workspace members, so the diff
+is the single `tabnas` version line and no third-party pin moves. Note that
+the `make rs-*` targets do **not** pass `--locked`, so they update the lock
+underneath you and will not reproduce this; `ci/rust/run.sh` is the gate.
 
 **A red `main` CI can mean "this engine is not published yet", not "this
 engine is broken".** CI git-clones the downstream closure and builds each
