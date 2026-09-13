@@ -152,16 +152,23 @@ function paths() {
 
 describe('docs-style', () => {
 
-  test('the-gated-set-covers-the-readmes-and-both-ports', () => {
+  // Portable across the fleet: the repos differ in whether they carry a
+  // per-runtime doc set or document themselves in the READMEs alone, so
+  // this asserts what is true of any of them rather than one layout.
+  test('the-gated-set-is-reader-facing-and-covers-the-readmes', () => {
     const files = paths().map((p) => p.file)
-    Assert.ok(15 < files.length, `gated set is ${files.length} files`)
+    Assert.ok(0 < files.length, 'the gated set is not empty')
+
     for (const r of ['README.md', 'ts/README.md', 'go/README.md']) {
-      Assert.ok(files.includes(r), `${r} is gated`)
+      if (Fs.existsSync(Path.join(REPO, r))) {
+        Assert.ok(files.includes(r), `${r} exists and is gated`)
+      }
     }
-    Assert.ok(
-      files.some((f) => f.startsWith('ts/doc/')), 'the TS docs are gated')
-    Assert.ok(
-      files.some((f) => f.startsWith('go/doc/')), 'the Go docs are gated')
+
+    // Working documents are out by rule, not by accident.
+    const working = files.filter((f) => /feasibility|rust-port|BUGS|REVIEW|DIVERGENCE|STYLE-GUIDE|design/.test(f))
+    Assert.deepEqual(working, [],
+      `working documents must not be gated: ${working.join(', ')}`)
   })
 
 
@@ -227,10 +234,14 @@ describe('docs-style', () => {
   })
 
 
+  // A bold single-letter label is not a pronoun: c/README.md numbers its
+  // grammar sections `**A**` ... `**I**`, and the ninth is not first
+  // person. Labels are stripped before matching.
   test('first-person-singular-appears-nowhere', () => {
     const hits = []
     for (const { file, abs } of paths()) {
       prose(Fs.readFileSync(abs, 'utf8'))
+        .replace(/\*\*[A-Z]{1,2}\*\*/g, '')
         .split('\n')
         .forEach((line, i) => {
           if (/\b(I|I'\w+|me|my|mine)\b/.test(line)) {
