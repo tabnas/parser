@@ -215,8 +215,11 @@ The steps, in order:
    ```
 
    That is what shipped, and it is the value both tags must equal. If they
-   do, `$REL` is the stale one — captured from a `main` that had already
-   moved — and the release is sound. If they do not, the tags are wrong.
+   do not, the tags are wrong. If they do but `gitHead` is not `$REL`, the
+   tags are honest and `$REL` is the stale capture — `main` moved before
+   the run checked out — but what shipped is then a commit you never
+   cleared CI on, and `release.yml` runs no tests of its own. Confirm
+   `gitHead` is green on `main` before calling the release good.
 
    `go/v$V` is then the urgent half, and moving the tag does **not** fix
    it. `proxy.golang.org` caches a module version's content immutably, so
