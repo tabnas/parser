@@ -96,6 +96,13 @@ const CODE_SPAN = /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
 // (the bare warning sign, a check mark, an arrow) and it missed every
 // emoji built from a variation selector, a keycap, or a flag's regional
 // indicators, none of which sit in it.
+// A span that wraps once. CODE_SPAN stops at a newline, so that one was
+// left in the prose stream whole: the boolean NOT inside one counted as
+// an exclamation mark. One newline is the bound that keeps an unpaired
+// backtick from running away, and the newline itself is kept so a
+// reported line still points at the author's line.
+const CODE_WRAP = /(?<!`)(`+)(?!`)[^`\n]*\n[^`\n]*(?<!`)\1(?!`)/g
+
 const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
 
 // `I` is a pronoun only capitalised, because a lone lowercase `i` is
@@ -104,6 +111,12 @@ const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
 // which a single case-sensitive pattern missed. `I/O` is neither.
 const FIRST_I = /\b(?:I(?!\/)|I'\w+)\b/
 const FIRST_MY = /\b(?:me|my|mine)\b/i
+
+// Every exclamation mark except the two that are punctuation for
+// something else: the `!=` of an operator and the `!` that opens an
+// image. Asking for a word character before the mark, as this did,
+// scored `Really?!`, `Great!!` and `Voilà!` at nothing.
+const EXCLAMATION = /!(?![=[])/g
 
 function firstSingular(line) {
   return FIRST_I.test(line) || FIRST_MY.test(line)
@@ -161,6 +174,7 @@ function prose(md) {
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(CODE_SPAN, '')
+    .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, ''))
     .replace(/\]\([^)\s]*/g, '](')
     .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
 }
@@ -461,10 +475,10 @@ describe('docs-style', () => {
     const allowed = tutorials()
     const hits = []
     for (const { file, abs } of paths()) {
-      // A sentence-ending mark, not every `!` byte: `!=` is an
-      // operator and `![alt](src)` is an image.
+      // Not every `!` byte: `!=` is an operator and `![alt](src)` is
+      // an image.
       const n = (prose(Fs.readFileSync(abs, 'utf8'))
-        .match(/\w!(?=[*_"'’”)\]]*(?:\s|$))/gm) || []).length
+        .match(EXCLAMATION) || []).length
       if (0 === n) {
         continue
       }
@@ -522,6 +536,9 @@ describe('docs-style', () => {
     claim('x  y' === 'x `my` y'.replace(CODE_SPAN, ''), 'single-backtick span')
     claim('````not just```' === '````not just```'.replace(CODE_SPAN, ''),
       'a shorter closing run is not a code span')
+    claim('a \n b' === 'a `x !(y ==\nz)` b'.replace(CODE_SPAN, '')
+      .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, '')).replace(/ +/g, ' '),
+      'a span that wraps once is still a span')
     claim('an odd ` mark\nand my line' ===
       'an odd ` mark\nand my line'.replace(CODE_SPAN, ''),
       'an unpaired backtick does not swallow the next line')
@@ -546,11 +563,14 @@ describe('docs-style', () => {
     claim(firstSingular(label('Then **I** configured it.')),
       'a bold pronoun in prose is a pronoun')
 
-    // A sentence can end with a mark and then close its markup.
-    const bang = (s) => (s.match(/\w!(?=[*_"'’”)\]]*(?:\s|$))/gm) || []).length
+    // Every mark, and the two that are not one.
+    const bang = (s) => (s.match(EXCLAMATION) || []).length
     claim(1 === bang('It works **now!** Next'), 'mark before bold close')
     claim(1 === bang('He said "Done!" then'), 'mark before a quote')
     claim(1 === bang('It works! Next'), 'plain mark')
+    claim(1 === bang('Really?!'), 'mark after another mark')
+    claim(1 === bang('Voil\u00e0!'), 'mark after a non-ASCII letter')
+    claim(2 === bang('Great!!'), 'two marks are two marks')
     claim(0 === bang('if (a != b)'), '!= is an operator')
     claim(0 === bang('![alt](src)'), 'an image is not a mark')
 
