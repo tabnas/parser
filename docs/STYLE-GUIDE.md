@@ -217,7 +217,8 @@ reports nothing).
 **False singularity and crowned superlatives**:
 `the right way/answer/tool/question` · `the best thing you can do` ·
 `if I had to pick` · `what struck me` · `stuck with me` ·
-`struck a chord` · `hit a nerve` · `we've seen this movie`.
+`struck a chord` · `hit a nerve` · `we've seen this movie` ·
+`we've been here before`.
 
 **Reflective pose**: `sit with` · `worth exploring/considering/asking` ·
 `keeps coming back to` · `that's the tell` · `where I landed`.

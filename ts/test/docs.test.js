@@ -56,6 +56,39 @@ function loadBanned() {
 
 const BANNED = loadBanned()
 
+// An emptied reject.txt would leave `no-banned-phrases-in-prose` and
+// `the-guide-covers-every-banned-pattern` iterating nothing and passing.
+// A gate that checks nothing has to say so.
+if (0 === BANNED.length) {
+  throw new Error(`${REJECT} loaded no patterns; the phrase gate is off`)
+}
+
+// A code span's delimiter is a RUN of backticks, and the run length
+// decides where it ends. Stripping pairs of single backticks left the
+// contents of ``a `b` c`` in the prose stream, so a literal could fail
+// the pronoun or banned-phrase checks the guide exempts it from.
+const CODE_SPAN = /(`+)(?:[^`]|(?!\1)`)*\1/g
+
+// Emoji, not "any symbol in these blocks". The old range was wrong both
+// ways: it flagged the text-presentation symbols documentation uses
+// (the bare warning sign, a check mark, an arrow) and it missed every
+// emoji built from a variation selector, a keycap, or a flag's regional
+// indicators, none of which sit in it.
+const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
+
+// `I/O` is not a pronoun, and the other three are first person wherever
+// they fall, including the start of a sentence or a heading.
+const FIRST_SINGULAR = /\b(?:I(?!\/)|I'\w+)\b|\b(?:me|my|mine)\b/i
+
+
+// A bold LABEL opening a line or a list item is a heading, so `**I**`
+// there is an initial rather than a pronoun. The exemption used to
+// strip every bold one- or two-letter capital anywhere, which also
+// removed the pronoun from `**I** configured the parser`.
+function label(line) {
+  return line.replace(/^(\s*(?:[-*+]\s+|\d+\.\s+)?)\*\*[A-Z]{1,2}\*\*/, '$1')
+}
+
 const FENCE_OPEN = /^(\s{0,3})(`{3,}|~{3,})[ \t]*([^`\s]*)[^`]*$/
 
 function fenceCloser(fence) {
@@ -98,7 +131,7 @@ function prose(md) {
   return fenceless(md)
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/`[^`\n]*`/g, '')
+    .replace(CODE_SPAN, '')
     .replace(/\]\([^)\s]*/g, '](')
     .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
 }
@@ -353,10 +386,9 @@ describe('docs-style', () => {
     const hits = []
     for (const { file, abs } of paths()) {
       prose(Fs.readFileSync(abs, 'utf8'))
-        .replace(/\*\*[A-Z]{1,2}\*\*/g, '')
         .split('\n')
         .forEach((line, i) => {
-          if (/\b(I(?!\/)|I'\w+|me|my|mine)\b/.test(line)) {
+          if (FIRST_SINGULAR.test(label(line))) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
@@ -374,7 +406,7 @@ describe('docs-style', () => {
       // A sentence-ending mark, not every `!` byte: `!=` is an
       // operator and `![alt](src)` is an image.
       const n = (prose(Fs.readFileSync(abs, 'utf8'))
-        .match(/\w!(?=\s|$)/g) || []).length
+        .match(/\w!(?=[*_"'’”)\]]*(?:\s|$))/gm) || []).length
       if (0 === n) {
         continue
       }
@@ -403,7 +435,7 @@ describe('docs-style', () => {
       prose(Fs.readFileSync(abs, 'utf8'))
         .split('\n')
         .forEach((line, i) => {
-          if (/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(line)) {
+          if (EMOJI.test(line)) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
@@ -415,6 +447,52 @@ describe('docs-style', () => {
 
   // The guide claims two gates. If either name stops appearing the
   // claim has gone stale, and a reader following it lands nowhere.
+  // A check is a claim about what it rejects, and a clean run over
+  // well-written pages cannot tell a working rule from a broken one.
+  // Every case here is a defect a review found in these rules after
+  // they were installed in every repository in the fleet.
+  test('the-checks-catch-what-they-claim', () => {
+    const faults = []
+    const claim = (ok, what) => {
+      if (!ok) {
+        faults.push(what)
+      }
+    }
+
+    // A code span's delimiter is a RUN of backticks.
+    claim('' === '``a `b` c``'.replace(CODE_SPAN, ''), 'multi-backtick span')
+    claim('x  y' === 'x `my` y'.replace(CODE_SPAN, ''), 'single-backtick span')
+
+    // Emoji, not "symbol in these blocks".
+    for (const text of ['\u26A0', '\u2713', '\u2194', '\u2020']) {
+      claim(!EMOJI.test(text), `text-presentation symbol ${text} is not emoji`)
+    }
+    for (const text of ['\u{1F680}', '1\uFE0F\u20E3', '\u{1F1EC}\u{1F1E7}',
+      '\u00A9\uFE0F', '\u2197\uFE0F']) {
+      claim(EMOJI.test(text), `${text} is emoji`)
+    }
+
+    // First person, wherever it falls.
+    claim(FIRST_SINGULAR.test('My parser is fast.'), 'My at a sentence start')
+    claim(FIRST_SINGULAR.test('Mine is faster.'), 'Mine at a sentence start')
+    claim(!FIRST_SINGULAR.test('The disk I/O is buffered.'), 'I/O is not a pronoun')
+    claim(!FIRST_SINGULAR.test(label('**I** the identifier column')),
+      'a bold label is a label')
+    claim(FIRST_SINGULAR.test(label('Then **I** configured it.')),
+      'a bold pronoun in prose is a pronoun')
+
+    // A sentence can end with a mark and then close its markup.
+    const bang = (s) => (s.match(/\w!(?=[*_"'’”)\]]*(?:\s|$))/gm) || []).length
+    claim(1 === bang('It works **now!** Next'), 'mark before bold close')
+    claim(1 === bang('He said "Done!" then'), 'mark before a quote')
+    claim(1 === bang('It works! Next'), 'plain mark')
+    claim(0 === bang('if (a != b)'), '!= is an operator')
+    claim(0 === bang('![alt](src)'), 'an image is not a mark')
+
+    Assert.deepEqual(faults, [],
+      `these rules no longer catch what they claim:\n${faults.join('\n')}`)
+  })
+
   test('the-style-guide-names-both-gates', () => {
     const guide = Fs.readFileSync(GUIDE, 'utf8')
     for (const name of [
@@ -426,14 +504,21 @@ describe('docs-style', () => {
   })
 
 
-  // Every pattern here is summarised in the guide. Checked by its
-  // literal prefix, the part before the first regex metacharacter, so
-  // `leverag(?:e|es|ed|ing)` is satisfied by "leverage" in the prose.
+  // Every pattern here is summarised in the guide, checked by running
+  // the pattern's OWN regex over it.
+  //
+  // This used to compare a literal stem: the part of the source before
+  // its first metacharacter, discarded when shorter than three
+  // characters. So every pattern BEGINNING with a group left the check
+  // without a word: `(?:hits|lands|strikes) hardest` produced an empty
+  // stem and was dropped, along with `(?:hit|struck) a nerve`. Asking
+  // the regex is both simpler and exact, since a guide that quotes the
+  // phrase is quoting something the gate would catch.
   test('the-guide-covers-every-banned-pattern', () => {
-    const guide = Fs.readFileSync(GUIDE, 'utf8').toLowerCase()
+    const guide = Fs.readFileSync(GUIDE, 'utf8')
     const missing = BANNED
-      .map(([, src]) => src.split(/[([\\.?*+|]/)[0].trim())
-      .filter((stem) => 2 < stem.length && !guide.includes(stem.toLowerCase()))
+      .filter(([re]) => !new RegExp(re.source, 'i').test(guide))
+      .map(([, src]) => src)
     Assert.deepEqual([...new Set(missing)], [],
       `banned patterns with no summary in the guide: ${missing.join(', ')}`)
   })
