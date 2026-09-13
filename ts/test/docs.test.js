@@ -79,7 +79,12 @@ if (0 === BANNED.length) {
 // decides where it ends. Stripping pairs of single backticks left the
 // contents of ``a `b` c`` in the prose stream, so a literal could fail
 // the pronoun or banned-phrase checks the guide exempts it from.
-const CODE_SPAN = /(`+)(?:[^`]|(?!\1)`)*\1/g
+//
+// It stops at a newline. Without that, an unpaired backtick runs to the
+// next one however many lines away and takes every newline between them
+// with it, gluing the page into one line that every per-line check then
+// reports.
+const CODE_SPAN = /(`+)(?:[^`\n]|(?!\1)`)*\1/g
 
 // Emoji, not "any symbol in these blocks". The old range was wrong both
 // ways: it flagged the text-presentation symbols documentation uses
@@ -88,9 +93,16 @@ const CODE_SPAN = /(`+)(?:[^`]|(?!\1)`)*\1/g
 // indicators, none of which sit in it.
 const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
 
-// `I/O` is not a pronoun, and the other three are first person wherever
-// they fall, including the start of a sentence or a heading.
-const FIRST_SINGULAR = /\b(?:I(?!\/)|I'\w+)\b|\b(?:me|my|mine)\b/i
+// `I` is a pronoun only capitalised, because a lone lowercase `i` is
+// the one in `i.e.` or an index. `me`, `my` and `mine` are pronouns
+// however they fall, the start of a sentence or a heading included,
+// which a single case-sensitive pattern missed. `I/O` is neither.
+const FIRST_I = /\b(?:I(?!\/)|I'\w+)\b/
+const FIRST_MY = /\b(?:me|my|mine)\b/i
+
+function firstSingular(line) {
+  return FIRST_I.test(line) || FIRST_MY.test(line)
+}
 
 
 // A bold LABEL opening a line or a list item is a heading, so `**I**`
@@ -429,7 +441,7 @@ describe('docs-style', () => {
       prose(Fs.readFileSync(abs, 'utf8'))
         .split('\n')
         .forEach((line, i) => {
-          if (FIRST_SINGULAR.test(label(line))) {
+          if (firstSingular(label(line))) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
@@ -503,6 +515,9 @@ describe('docs-style', () => {
     // A code span's delimiter is a RUN of backticks.
     claim('' === '``a `b` c``'.replace(CODE_SPAN, ''), 'multi-backtick span')
     claim('x  y' === 'x `my` y'.replace(CODE_SPAN, ''), 'single-backtick span')
+    claim('an odd ` mark\nand my line' ===
+      'an odd ` mark\nand my line'.replace(CODE_SPAN, ''),
+      'an unpaired backtick does not swallow the next line')
 
     // Emoji, not "symbol in these blocks".
     for (const text of ['\u26A0', '\u2713', '\u2194', '\u2020']) {
@@ -513,13 +528,15 @@ describe('docs-style', () => {
       claim(EMOJI.test(text), `${text} is emoji`)
     }
 
-    // First person, wherever it falls.
-    claim(FIRST_SINGULAR.test('My parser is fast.'), 'My at a sentence start')
-    claim(FIRST_SINGULAR.test('Mine is faster.'), 'Mine at a sentence start')
-    claim(!FIRST_SINGULAR.test('The disk I/O is buffered.'), 'I/O is not a pronoun')
-    claim(!FIRST_SINGULAR.test(label('**I** the identifier column')),
+    // First person, wherever it falls, and what merely looks like it.
+    claim(firstSingular('My parser is fast.'), 'My at a sentence start')
+    claim(firstSingular('Mine is faster.'), 'Mine at a sentence start')
+    claim(!firstSingular('The disk I/O is buffered.'), 'I/O is not a pronoun')
+    claim(!firstSingular('A lexer, i.e. a tokeniser.'), 'the i of i.e.')
+    claim(firstSingular('Then I ran it.'), 'a capital I is a pronoun')
+    claim(!firstSingular(label('**I** the identifier column')),
       'a bold label is a label')
-    claim(FIRST_SINGULAR.test(label('Then **I** configured it.')),
+    claim(firstSingular(label('Then **I** configured it.')),
       'a bold pronoun in prose is a pronoun')
 
     // A sentence can end with a mark and then close its markup.
