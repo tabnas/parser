@@ -199,7 +199,8 @@ mark machine-written prose.
 `lessons learned`.
 
 **Metaphor inflation**: `load-bearing` · `heavy lifting` ·
-`is doing the work` · `different physics` · `hits hardest` ·
+`is doing the work` · `different physics` · `rules of physics` ·
+`hits hardest` ·
 `quietly` (say `silently`, which is the term of art for a failure that
 reports nothing).
 

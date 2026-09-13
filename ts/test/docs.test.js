@@ -27,6 +27,11 @@ const { describe, test } = require('node:test')
 const { gatedDocs, tutorials } = require('../scripts/gated-docs.cjs')
 
 const REPO = Path.join(__dirname, '..', '..')
+// Patterns only, one per line, no comments. Vale has NO comment syntax
+// in a vocabulary file: a line beginning with `#` is compiled as a
+// pattern and then matches a bare `#` in prose, so `tabnas/bnf#13` was
+// reported as a banned phrase. The commentary lives in the style guide,
+// which `the-guide-covers-every-banned-pattern` holds to this file.
 const REJECT = Path.join(
   REPO, '.vale', 'styles', 'config', 'vocabularies', 'Tabnas', 'reject.txt')
 const GUIDE = Path.join(REPO, 'docs', 'STYLE-GUIDE.md')
@@ -298,19 +303,16 @@ describe('docs-style', () => {
   })
 
 
-  // A whole category added to reject.txt and missed by the guide leaves
-  // the reader's summary silently incomplete.
-  test('the-guide-summarises-every-banned-category', () => {
+  // Every pattern here is summarised in the guide. Checked by its
+  // literal prefix, the part before the first regex metacharacter, so
+  // `leverag(?:e|es|ed|ing)` is satisfied by "leverage" in the prose.
+  test('the-guide-covers-every-banned-pattern', () => {
     const guide = Fs.readFileSync(GUIDE, 'utf8').toLowerCase()
-    const missing = lf(Fs.readFileSync(REJECT, 'utf8'))
-      .split('\n')
-      .map((l) => l.match(/^#\s*-{2,}\s*(.+?)\s*-{2,}\s*$/))
-      .filter(Boolean)
-      .map((m) => m[1].trim())
-      .filter((cat) => !guide.includes(cat.toLowerCase()))
-    Assert.deepEqual(missing, [],
-      `reject.txt categories with no summary in the guide: ${
-        missing.join(', ')}`)
+    const missing = BANNED
+      .map(([, src]) => src.split(/[([\\.?*+|]/)[0].trim())
+      .filter((stem) => 2 < stem.length && !guide.includes(stem.toLowerCase()))
+    Assert.deepEqual([...new Set(missing)], [],
+      `banned patterns with no summary in the guide: ${missing.join(', ')}`)
   })
 
 })
