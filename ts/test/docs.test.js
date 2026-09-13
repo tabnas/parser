@@ -237,6 +237,9 @@ describe('docs-style', () => {
   // A bold single-letter label is not a pronoun: c/README.md numbers its
   // grammar sections `**A**` ... `**I**`, and the ninth is not first
   // person. Labels are stripped before matching.
+  //
+  // Nor is the I of `I/O`. A slash is a word boundary, so a plain \bI\b
+  // reads "disk I/O" as a pronoun; the lookahead excludes it.
   test('first-person-singular-appears-nowhere', () => {
     const hits = []
     for (const { file, abs } of paths()) {
@@ -244,7 +247,7 @@ describe('docs-style', () => {
         .replace(/\*\*[A-Z]{1,2}\*\*/g, '')
         .split('\n')
         .forEach((line, i) => {
-          if (/\b(I|I'\w+|me|my|mine)\b/.test(line)) {
+          if (/\b(I(?!\/)|I'\w+|me|my|mine)\b/.test(line)) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
