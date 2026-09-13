@@ -38,6 +38,7 @@ drift from the other:
 |---|---|---|
 | `make prose` (Vale) | `ci/workflows/docs.yml` (staged) | spelling, Google's conventions, and the banned list, at the levels set in `.vale.ini` |
 | `ts/test/docs.test.js` | `make test` | the banned list again, the no-em-dash rule, the first-person rules, the exclamation ration, and no emoji |
+| `ts/scripts/vale-counts.cjs` | `make prose` | that every count in `.vale.ini`, and the total below, are what Vale reports |
 
 The gated set is the reader-facing one: the language-neutral pages under
 `doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
@@ -65,8 +66,13 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 1928 alerts across 20 files at the commit
-that introduced the gate.
+a clean run over the gated set: 1178 alerts across 21 files. Those
+numbers were once asserted rather than measured, and the total in this
+sentence and the one in `.vale.ini` drifted apart by 750.
+`node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
+and fails on any difference; `--write` re-measures. A rule switched off
+is measured with it switched back on, because the count is the evidence
+for switching it off.
 
 **The Vale gate is staged, not yet wired.** `ci/workflows/docs.yml`
 follows this repository's convention for proposed workflows (see
