@@ -204,19 +204,33 @@ The steps, in order:
    uses `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no
    `^{}` to peel.
 
-   A mismatch has two causes, so read the dispatched run's `head_sha`
-   before concluding which. Equal to `$REL`: the run released the commit
-   you recorded and the *tag* is wrong — the anchor fallback above. Not
-   equal: `main` advanced between your capture and the run's checkout, so
-   the tag agrees with what shipped, but what shipped is not the commit
-   you cleared CI on. Both need looking at, which is why this check is
-   deliberately the conservative way round.
+   A mismatch has three causes and `head_sha` does not tell them apart —
+   the run's **publish step** does. A run that published always tags its
+   own checkout, because an existing tag on another commit makes the tags
+   step refuse unless the version is already on npm, and when it is, the
+   publish step skips. So read both steps' logs:
 
-   Do **not** make `head_sha` the thing you compare the tag against. It
-   is what recovers a lost `$REL`, never what the tag is measured against
-   — on a repair re-dispatch it is the *new* checkout, so a tag written
-   on that commit matches it while npm still serves the original, which
-   is the one case this check exists to catch.
+   - The publish step **published** — the tags are then at this run's
+     checkout, and `head_sha` differs from `$REL` because `main` advanced
+     between your capture and that checkout. The tags agree with what
+     shipped; what shipped is not the commit you cleared CI on.
+   - It **skipped** (`already on npm — skipping publish`) and the tags
+     step logged `repairing an earlier release: anchoring to …` — the
+     tags name the commit that release shipped from, and it is `$REL`
+     that is stale: you re-dispatched a version already released from an
+     older commit.
+   - It **skipped** with no such line — no tag survived to anchor the
+     repair, so the fallback took this run's `HEAD` and **both** tags now
+     name the repair checkout while npm still serves the original run's
+     build. This is the permanent Go-module corruption; recover the
+     original run's `head_sha` and fix the tags by hand.
+
+   So do **not** make `head_sha` the thing you compare the tags against.
+   It is what recovers a lost `$REL`, and — read with the publish step —
+   what tells you which case you are in; it is never what the tags are
+   measured against. In the third case they are written on this run's
+   `HEAD`, so they match it while npm still serves the original, which is
+   the one case this check exists to catch.
 
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
