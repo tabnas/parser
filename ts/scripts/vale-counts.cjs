@@ -11,7 +11,7 @@ const GUIDE = Path.join(REPO, 'docs', 'STYLE-GUIDE.md')
 const SCRATCH = Path.join(REPO, '.vale-counts.ini')
 
 const HITS = /\b(\d+)\s+hits?\b/g
-const SPAN = /\b(\d+)\s+alerts?\s+across\s+(\d+)\s+files?\b/
+const SPAN = /\b(\d+)(\s+alerts?\s+across\s+)(\d+)(\s+)(files?)\b/
 
 
 function vale(config, files) {
@@ -84,6 +84,9 @@ function blocks(ini) {
 }
 
 
+const noun = (n) => (1 === n ? 'file' : 'files')
+
+
 function edit(lines, edits) {
   for (const e of [...edits].sort((a, b) => b.line - a.line || b.col - a.col)) {
     const line = lines[e.line]
@@ -110,13 +113,17 @@ function report(write) {
       edits.push({ line, col, was: found[1], text: String(actual) })
     }
     for (const found of block.text.matchAll(new RegExp(SPAN, 'g'))) {
-      if (Number(found[1]) === total && Number(found[2]) === files) continue
-      wrong.push(`.vale.ini: claims ${found[1]} alerts across ${found[2]} files, Vale reports ${total} across ${files}`)
+      if (Number(found[1]) === total && Number(found[3]) === files &&
+        found[5] === noun(files)) continue
+      wrong.push(`.vale.ini: claims ${found[1]} alerts across ${found[3]} ${found[5]}, Vale reports ${total} across ${files} ${noun(files)}`)
       const [aLine, aCol] = block.at[found.index]
       edits.push({ line: aLine, col: aCol, was: found[1], text: String(total) })
-      const offset = found.index + found[0].lastIndexOf(found[2])
-      const [fLine, fCol] = block.at[offset]
-      edits.push({ line: fLine, col: fCol, was: found[2], text: String(files) })
+      let after = found.index + found[1].length + found[2].length
+      const [fLine, fCol] = block.at[after]
+      edits.push({ line: fLine, col: fCol, was: found[3], text: String(files) })
+      after += found[3].length + found[4].length
+      const [nLine, nCol] = block.at[after]
+      edits.push({ line: nLine, col: nCol, was: found[5], text: noun(files) })
     }
   }
   edit(lines, edits)
@@ -126,13 +133,11 @@ function report(write) {
   // came to disagree.
   let guide = Fs.existsSync(GUIDE) ? Fs.readFileSync(GUIDE, 'utf8') : null
   if (null != guide) {
-    for (const found of guide.match(new RegExp(SPAN, 'g')) || []) {
-      const parts = found.match(SPAN)
-      if (Number(parts[1]) === total && Number(parts[2]) === files) continue
-      wrong.push(`docs/STYLE-GUIDE.md: claims ${parts[1]} alerts across ${parts[2]} files, Vale reports ${total} across ${files}`)
-      guide = guide.split(found).join(
-        found.replace(SPAN, (m, a, f) => m.replace(a, String(total)).replace(` ${f} `, ` ${files} `)))
-    }
+    guide = guide.replace(new RegExp(SPAN, 'g'), (m, a, mid, f, gap, word) => {
+      if (Number(a) === total && Number(f) === files && word === noun(files)) return m
+      wrong.push(`${Path.basename(GUIDE)}: claims ${a} alerts across ${f} ${word}, Vale reports ${total} across ${files} ${noun(files)}`)
+      return `${total}${mid}${files}${gap}${noun(files)}`
+    })
   }
 
   if (write) {

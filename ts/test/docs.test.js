@@ -42,15 +42,27 @@ function lf(s) {
 }
 
 
-// The banned list, read from the file Vale reads. Comments and blank
-// lines out; every other line is a regex, matched case-insensitively on
-// word boundaries, exactly as Vale.Avoid matches it.
+// The banned list, read from the file Vale reads. Every line is a regex,
+// matched case-insensitively on word boundaries, exactly as Vale.Avoid
+// matches it.
+//
+// A `#` line is REFUSED rather than skipped. Vale has no comment syntax
+// in a vocabulary file, so it reads one as a pattern: a lone `#` became
+// a banned phrase and reported `tabnas/bnf#13` as an error. Skipping it
+// on this side only would leave the two halves banning different things,
+// which is the one thing sharing the file is for.
 function loadBanned() {
-  return lf(Fs.readFileSync(REJECT, 'utf8'))
+  const lines = lf(Fs.readFileSync(REJECT, 'utf8'))
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => '' !== l && !l.startsWith('#'))
-    .map((src) => [new RegExp(`\\b(?:${src})\\b`, 'gi'), src])
+    .filter((l) => '' !== l)
+  const comments = lines.filter((l) => l.startsWith('#'))
+  if (0 < comments.length) {
+    throw new Error(
+      `${REJECT} has comment lines, and Vale reads them as patterns: ` +
+      comments.join(' / '))
+  }
+  return lines.map((src) => [new RegExp(`\\b(?:${src})\\b`, 'gi'), src])
 }
 
 
@@ -137,6 +149,26 @@ function prose(md) {
 }
 
 
+// A line that OPENS a block is not a continuation of the line above it,
+// even with no blank line between them. Markdown puts list items and
+// table rows on adjacent lines, and joining those invented phrases that
+// span a cell boundary: a row ending in "worth" ahead of one opening
+// "noting" read as `worth noting`.
+const BLOCK = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\||`{3,}|~{3,})/
+
+
+// A line that OPENS a block is not a continuation of the line above it,
+// and Markdown needs no blank line between the two. `## Something worth`
+// followed by `noting this` joined into one string and reported
+// `worth noting`, a phrase neither line contains.
+//
+// A list item or a blockquote keeps its wrapped continuation lines. A
+// heading, a table row and a rule are one line each, so they close as
+// well as open.
+const OPENS = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\||`{3,}|~{3,})/
+const CLOSES = /^\s*(?:#{1,6} |\||(?:[-*_] *){3,}$)/
+
+
 // A paragraph, joined for matching, with each piece's physical line
 // kept so a hit can be reported where the author will find it.
 function logical(text) {
@@ -161,11 +193,20 @@ function logical(text) {
       flush()
       return
     }
+    if (BLOCK.test(line)) {
+      flush()
+    }
+    if (OPENS.test(line)) {
+      flush()
+    }
     const piece = line.trim().replace(/\s+/g, ' ')
     starts.push(at)
     lines.push(i + 1)
     pieces.push(piece)
     at += piece.length + 1
+    if (CLOSES.test(line)) {
+      flush()
+    }
   })
   flush()
 
@@ -489,18 +530,66 @@ describe('docs-style', () => {
     claim(0 === bang('if (a != b)'), '!= is an operator')
     claim(0 === bang('![alt](src)'), 'an image is not a mark')
 
+    // A typographic apostrophe is what a word processor, a website and
+    // most of these pages produce. `let'?s` matched `lets` and `let's`
+    // and walked straight past `let\u2019s`.
+    const banned = (text) => BANNED.some(([re]) => {
+      re.lastIndex = 0
+      return re.test(text)
+    })
+    claim(banned('so let\u2019s break it down'), 'a curly apostrophe')
+    claim(banned("so let's break it down"), 'a straight apostrophe')
+
+    // A block opener ends the paragraph above it.
+    const joined = logical('| a worth |\n| noting b |').map((p) => p.text)
+    claim(!joined.some((t) => /worth noting/.test(t)),
+      'a table row is not the row above wrapping')
+    claim(logical('worth\nnoting').some((t) => /worth noting/.test(t.text)),
+      'a wrapped paragraph still joins')
+
+    // A block opener is not the line above it wrapping, and a heading or
+    // a table row is one line whatever follows it.
+    const joins = (md, phrase) =>
+      logical(md).some((p) => p.text.includes(phrase))
+    claim(!joins('## Something worth\nnoting this', 'worth noting'),
+      'a heading is not the paragraph under it')
+    claim(!joins('| a | worth |\n| noting | b |', 'worth | | noting'),
+      'a table row is not the row above it')
+    claim(!joins('- one worth\n- noting two', 'worth - noting'),
+      'a list item is not the item above it')
+    claim(joins('a sentence worth\nnoting here', 'worth noting'),
+      'a wrapped paragraph still joins')
+    claim(joins('- an item worth\n  noting here', 'worth noting'),
+      'a wrapped list item still joins')
+
     Assert.deepEqual(faults, [],
       `these rules no longer catch what they claim:\n${faults.join('\n')}`)
   })
 
+  // The guide names the command that runs the Vale half, and the check
+  // is that the command EXISTS. `make prose` was in every copy of this
+  // list, including the repository that has no Makefile and runs its
+  // gate from npm.
   test('the-style-guide-names-both-gates', () => {
     const guide = Fs.readFileSync(GUIDE, 'utf8')
     for (const name of [
-      'make prose', 'ts/test/docs.test.js', 'ts/scripts/gated-docs.cjs',
+      'ts/test/docs.test.js', 'ts/scripts/gated-docs.cjs',
       '.vale.ini', 'reject.txt',
     ]) {
       Assert.ok(guide.includes(name), `the guide names ${name}`)
     }
+
+    const make = Path.join(REPO, 'Makefile')
+    const pkg = Path.join(REPO, 'ts', 'package.json')
+    const hasMake = Fs.existsSync(make) &&
+      /^prose:/m.test(Fs.readFileSync(make, 'utf8'))
+    const hasNpm = Fs.existsSync(pkg) &&
+      null != (JSON.parse(Fs.readFileSync(pkg, 'utf8')).scripts || {}).prose
+    Assert.ok(hasMake || hasNpm,
+      'neither a Makefile `prose` target nor an npm `prose` script')
+    const command = hasMake ? 'make prose' : 'npm run prose'
+    Assert.ok(guide.includes(command),
+      `the guide does not name ${command}, which is what runs Vale here`)
   })
 
 

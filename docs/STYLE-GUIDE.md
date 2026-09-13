@@ -188,6 +188,17 @@ banned. Add a phrase there and both pick it up. What follows is a
 reader's summary of it, not a second list; every phrase is shown as code
 so that quoting a banned phrase in this guide does not fail the gate.
 
+**That file holds patterns and nothing else.** Vale has no comment
+syntax in a vocabulary file: a `#` line is a pattern like any other, and
+a lone `#` bans the character, which reports `owner/repo#13` as an
+error. The Node half used to skip such lines, so a comment left the two
+gates banning different things; it now refuses to load a list that
+contains one. The section headings for these phrases live here instead.
+
+**Write an apostrophe as `['’]`.** A plain `'?` matches `lets` and
+`let's` and walks past `let’s`, which is what a word processor, a
+website, and most of these pages produce.
+
 It draws on two sources: the original house list, and
 [claudisms.ai](https://claudisms.ai/), a catalogue of the patterns that
 mark machine-written prose.
