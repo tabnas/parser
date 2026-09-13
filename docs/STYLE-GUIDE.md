@@ -44,7 +44,7 @@ The gated set is the reader-facing one: the language-neutral pages under
 three package READMEs. The Rust-port series, the feasibility reports and
 the defect ledgers are working documents, and they are out.
 
-**Three checks live in the local gate rather than in Vale, and the reason
+**Four checks live in the local gate rather than in Vale, and the reason
 is capability, not preference.**
 
 - The banned list is matched **across a line wrap**. These pages wrap
@@ -56,6 +56,12 @@ is capability, not preference.**
   and code spans, which a Vale rule cannot express.
 - **"We" is allowed in tutorials only**, and "I" nowhere. Vale cannot say
   "only in tutorials"; the local gate knows which page is which.
+- **Quoted output is held to the source it quotes.** The exemption above
+  is what makes this necessary: both halves of the gate strip fenced
+  blocks, so an edit inside one is invisible to them, and a page can
+  come to misquote the message it names with every check green. The
+  local gate reads the string literals out of the source tree and fails
+  when a page reproduces one without its punctuation.
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
@@ -268,7 +274,8 @@ that names a thing.
 
 - Do not use em dashes in prose. Use a comma, parentheses, a colon, or
   another sentence. Preserve punctuation in literal code and quoted
-  output, which the gate strips before checking.
+  output, which the gate strips before checking and then holds to the
+  source it came from.
 - In a list, separate the item from its gloss with a full stop, not a
   dash: `- \`tn.rule(name)\`. Returns the \`RuleSpec\` for that rule.`
 - A dash between a heading's number or label and its subject is a

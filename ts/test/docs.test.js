@@ -90,11 +90,17 @@ function fenceless(md) {
 }
 
 
+// A link TARGET is not prose. `](https://.../en-US/docs/...)` put the
+// letters `US` between word boundaries, and the first-person-plural
+// check read them as the pronoun. Vale skips link targets; so does this
+// now. The link TEXT stays, because that is prose a reader sees.
 function prose(md) {
   return fenceless(md)
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/`[^`\n]*`/g, '')
+    .replace(/\]\([^)\s]*/g, '](')
+    .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
 }
 
 
@@ -145,6 +151,68 @@ function lineAt(para, index) {
 }
 
 
+// Where a repository keeps code a page can quote. A short list rather
+// than a walk of the tree: node_modules and dist hold copies, and their
+// text is the source of nothing.
+const SOURCE_ROOTS = [
+  'ts/src', 'ts/scripts', 'src', 'lib', 'go', 'rs/src', 'scripts',
+]
+const SOURCE_EXT = /\.(ts|go|js|mjs|cjs|rs|abnf)$/
+// A test file is not what the program prints. hoover's tutorial walks
+// through the same mini-grammar its Go test does, comment for comment,
+// and that overlap is not a quotation of anything.
+const SOURCE_TEST = /(^|[._-])(test|spec)\.[^.]+$|_test\.[^.]+$/
+
+
+function sourceFiles(dir, out) {
+  if (undefined === dir) {
+    const all = []
+    for (const r of SOURCE_ROOTS) {
+      const abs = Path.join(REPO, r)
+      if (Fs.existsSync(abs) && Fs.statSync(abs).isDirectory()) {
+        sourceFiles(abs, all)
+      }
+    }
+    for (const n of Fs.readdirSync(REPO)) {
+      if (n.endsWith('.abnf')) {
+        all.push(Path.join(REPO, n))
+      }
+    }
+    return all
+  }
+  for (const e of Fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = Path.join(dir, e.name)
+    if (e.isDirectory()) {
+      if (!e.name.startsWith('.') && 'node_modules' !== e.name &&
+          'dist' !== e.name && 'dist-test' !== e.name && 'vendor' !== e.name &&
+          'test' !== e.name && 'tests' !== e.name) {
+        sourceFiles(abs, out)
+      }
+    }
+    else if (SOURCE_EXT.test(e.name) && !SOURCE_TEST.test(e.name)) {
+      out.push(abs)
+    }
+  }
+  return out
+}
+
+
+// One line, and no space around the dash, on both sides of the
+// comparison: the source holds the message on one line, the page wraps
+// it near 72 columns, and a wrap is not a difference in the text.
+function flat(s) {
+  return lf(s).replace(/\s+/g, ' ').replace(/ ?— ?/g, '—')
+}
+
+
+// Adjacent string literals are joined the way the compiler joins them,
+// so a message split over `'...' +` lines reads as the one string the
+// program actually emits.
+function sourceText(src) {
+  return flat(src.replace(/["'`]\s*\+\s*["'`]/g, '').replace(/\\n/g, ' '))
+}
+
+
 function paths() {
   return gatedDocs().map((file) => ({ file, abs: Path.join(REPO, file) }))
 }
@@ -152,16 +220,23 @@ function paths() {
 
 describe('docs-style', () => {
 
-  test('the-gated-set-covers-the-readmes-and-both-ports', () => {
+  // Portable across the fleet: the repos differ in whether they carry a
+  // per-runtime doc set or document themselves in the READMEs alone, so
+  // this asserts what is true of any of them rather than one layout.
+  test('the-gated-set-is-reader-facing-and-covers-the-readmes', () => {
     const files = paths().map((p) => p.file)
-    Assert.ok(15 < files.length, `gated set is ${files.length} files`)
+    Assert.ok(0 < files.length, 'the gated set is not empty')
+
     for (const r of ['README.md', 'ts/README.md', 'go/README.md']) {
-      Assert.ok(files.includes(r), `${r} is gated`)
+      if (Fs.existsSync(Path.join(REPO, r))) {
+        Assert.ok(files.includes(r), `${r} exists and is gated`)
+      }
     }
-    Assert.ok(
-      files.some((f) => f.startsWith('ts/doc/')), 'the TS docs are gated')
-    Assert.ok(
-      files.some((f) => f.startsWith('go/doc/')), 'the Go docs are gated')
+
+    // Working documents are out by rule, not by accident.
+    const working = files.filter((f) => /feasibility|rust-port|BUGS|REVIEW|DIVERGENCE|STYLE-GUIDE|design/.test(f))
+    Assert.deepEqual(working, [],
+      `working documents must not be gated: ${working.join(', ')}`)
   })
 
 
@@ -206,6 +281,47 @@ describe('docs-style', () => {
   })
 
 
+  // A fenced block is not prose, so both halves of the gate strip it
+  // before looking: `no-em-dashes-in-prose` runs over `prose()`, and
+  // Vale skips code blocks. An edit INSIDE one is therefore invisible
+  // to every other check here, and the pass that removed the em dashes
+  // rewrote three repositories' quoted error messages with the whole
+  // gate green. A page that shows what the program prints has to print
+  // what the program prints.
+  //
+  // Matched on BOTH sides of the dash. Prose that merely shares an
+  // opening phrase with a literal (lsp's README shares one with a
+  // generated banner) carries on differently, so its tail does not
+  // match and it is not a hit.
+  test('quoted-output-keeps-the-source-punctuation', () => {
+    const faults = []
+    const docs = paths().map((p) => (
+      { file: p.file, text: flat(Fs.readFileSync(p.abs, 'utf8')) }))
+
+    for (const abs of sourceFiles()) {
+      const text = sourceText(Fs.readFileSync(abs, 'utf8'))
+      for (let at = text.indexOf('—'); -1 !== at;
+        at = text.indexOf('—', at + 1)) {
+        const key = text.slice(Math.max(0, at - 40), at)
+        const tail = text.slice(at + 1, at + 41)
+        if (15 > key.length || 15 > tail.length) {
+          continue
+        }
+        for (const doc of docs) {
+          if (doc.text.includes(key + '—' + tail) ||
+              !doc.text.includes(key) || !doc.text.includes(tail)) {
+            continue
+          }
+          faults.push(`${doc.file}: quotes ${Path.relative(REPO, abs)}` +
+            ` without its em dash: ...${key.slice(-34)} — ${tail.slice(0, 34)}...`)
+        }
+      }
+    }
+
+    Assert.deepEqual(faults, [],
+      `quoted output rewritten (docs/STYLE-GUIDE.md):\n${faults.join('\n')}`)
+  })
+
   test('we-appears-only-in-tutorials', () => {
     const allowed = tutorials()
     const hits = []
@@ -227,13 +343,20 @@ describe('docs-style', () => {
   })
 
 
+  // A bold single-letter label is not a pronoun: c/README.md numbers its
+  // grammar sections `**A**` ... `**I**`, and the ninth is not first
+  // person. Labels are stripped before matching.
+  //
+  // Nor is the I of `I/O`. A slash is a word boundary, so a plain \bI\b
+  // reads "disk I/O" as a pronoun; the lookahead excludes it.
   test('first-person-singular-appears-nowhere', () => {
     const hits = []
     for (const { file, abs } of paths()) {
       prose(Fs.readFileSync(abs, 'utf8'))
+        .replace(/\*\*[A-Z]{1,2}\*\*/g, '')
         .split('\n')
         .forEach((line, i) => {
-          if (/\b(I|I'\w+|me|my|mine)\b/.test(line)) {
+          if (/\b(I(?!\/)|I'\w+|me|my|mine)\b/.test(line)) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
