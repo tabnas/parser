@@ -33,7 +33,7 @@ Controls whitespace handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable space recognition |
-| `Chars` | `string` | `" \t"` | Characters treated as space. **`""` means UNSET, not "none"** — it is the zero value and cannot be told from an absent field, so the default stays. Set `Lex` to `false` to turn space lexing off |
+| `Chars` | `string` | `" \t"` | Characters treated as space. **`""` means UNSET, not "none"**. It is the zero value and cannot be told from an absent field, so the default stays. Set `Lex` to `false` to turn space lexing off |
 
 ## `Line`
 
@@ -42,8 +42,8 @@ Controls line ending handling.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable line recognition |
-| `Chars` | `string` | `"\r\n"` | Line ending characters. **`""` means UNSET, not "none"** — see `Space.Chars`. Set `Lex` to `false` to turn line lexing off |
-| `RowChars` | `string` | `"\n"` | Characters that increment the row counter. **`""` means UNSET, not "none"** — see `String.Chars`. Affects reported positions |
+| `Chars` | `string` | `"\r\n"` | Line ending characters. **`""` means UNSET, not "none"**. See `Space.Chars`. Set `Lex` to `false` to turn line lexing off |
+| `RowChars` | `string` | `"\n"` | Characters that increment the row counter. **`""` means UNSET, not "none"**. See `String.Chars`. Affects reported positions |
 | `Single` | `*bool` | `false` | Separate token per newline |
 
 ## `Text`
@@ -106,13 +106,13 @@ Controls quoted string parsing.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Lex` | `*bool` | `true` | Enable string matching |
-| `Chars` | `string` | `"'\"\`` | Quote characters. **`""` means UNSET, not "none"** — it is the zero value, so the default quotes stay in force. TypeScript honours `chars: ''` and Go cannot; set `Lex` to `false` instead. See DIVERGENCE.md |
+| `Chars` | `string` | `"'\"\`` | Quote characters. **`""` means UNSET, not "none"**. It is the zero value, so the default quotes stay in force. TypeScript honours `chars: ''` and Go cannot; set `Lex` to `false` instead. See DIVERGENCE.md |
 | `MultiChars` | `string` | `` "`" `` | Multiline quote characters. **`""` means UNSET**, as for `Chars`. A character must also be in `Chars` to delimit a string at all |
-| `EscapeChar` | `string` | `"\\"` | Escape character. **`""` means UNSET, not "none"** — see `String.Chars`. Affects string-token content |
-| `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (e.g. `{"v": ""}` rejects `\v`) |
+| `EscapeChar` | `string` | `"\\"` | Escape character. **`""` means UNSET, not "none"**. See `String.Chars`. Affects string-token content |
+| `Escape` | `map[string]string` | (standard) | Escape sequence mappings. Map a key to `""` to remove a built-in escape (for example, `{"v": ""}` rejects `\v`) |
 | `AllowUnknown` | `*bool` | `true` | Allow unknown escape sequences |
 | `EscapeStrict` | `*bool` | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `AllowUnknown: false`, yields JSON-conformant escapes |
-| `AllowControl` | `*bool` | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded — they stay governed by `MultiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (e.g. JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
+| `AllowControl` | `*bool` | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded: they stay governed by `MultiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (for example, JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
 | `Abandon` | `*bool` | `false` | On error, return nil to let next matcher try |
 | `Replace` | `map[rune]string` | `nil` | Character replacements during scanning |
 
@@ -199,7 +199,7 @@ Controls security features.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `Key` | `*bool` | `true` | Block prototype-pollution keys (e.g. `__proto__`) |
+| `Key` | `*bool` | `true` | Block prototype-pollution keys (for example, `__proto__`) |
 
 ## Go-Only Options (`Info`)
 
@@ -221,7 +221,7 @@ Controls error message formatting (TS: `options.errmsg`).
 |---|---|---|---|
 | `Name` | `string` | `"tabnas"` | Header tag: `[name/code]: ...` |
 | `Suffix` | `any` | `true` | `bool` (standard internal block on/off), `string` (literal), or `func(code, src string) string` |
-| `Link` | `string` | `""` | Optional "see also" line (e.g. docs URL) in the standard suffix |
+| `Link` | `string` | `""` | Optional "see also" line (for example, docs URL) in the standard suffix |
 
 ## `Match`
 
@@ -254,15 +254,15 @@ Controls ANSI color codes in formatted error messages (TS:
 | Field | Type | Description |
 |---|---|---|
 | `Ender` | `[]string` | Additional characters that end text tokens |
-| `TokenSet` | `map[string][]string` | Customize named token sets (e.g. `VAL`, `KEY`); values are token names |
-| `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (e.g. `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
+| `TokenSet` | `map[string][]string` | Customize named token sets (for example, `VAL`, `KEY`); values are token names |
+| `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (for example, `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
 | `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook and `Recover` the opt-in error recovery (both below) |
 | `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
 | `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
 | `Tag` | `string` | Instance identifier tag, appended to the instance id and shown in the error suffix internal line. Unset defaults to `DefaultTag` (`"-"`), matching TS. `Merge` treats `"-"` as "no tag chosen" and rejects it |
 
-### `Parse.Recover` — multi-error recovery
+### `Parse.Recover`: multi-error recovery
 
 Off by default. With `Enabled`, a parse error no longer ends the parse:
 it is recorded, the lexer skips forward to a sync token, the rule stack
@@ -288,14 +288,14 @@ Sync points are derived from the grammar, not hard-coded: the leading
 tokens of close alternates whose `AltSpec.G` tags intersect
 `SyncGroups` (default `close`, `comma`, `end`). A grammar with no such
 tags falls back to the leading token of every close alternate on the
-rule stack, so recovery still works — less precisely. Tagging a
+rule stack, so recovery still works (less precisely). Tagging a
 grammar's close alternates is what sharpens it.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Turn recovery on |
 | `SyncGroups` | `["close","comma","end"]` | Group tags marking sync edges; a supplied slice REPLACES the default |
-| `SyncTokens` | none | Extra sync token names, e.g. `[]string{"#CA"}`; additive |
+| `SyncTokens` | none | Extra sync token names, for example, `[]string{"#CA"}`; additive |
 | `PopUntilValid` | `true` | Pop until a rule accepts the sync token, else pop exactly one |
 | `MaxSkip` | `64` | Cap tokens skipped per recovery |
 | `MaxRecoveries` | `32` | Cap recorded errors per parse |
@@ -309,7 +309,7 @@ unlexable word is one diagnostic however many characters it has, and
 two separate words are two. See `doc/differences.md` for the TS
 comparison.
 
-### `Parse.Budget` — cancellation
+### `Parse.Budget`: cancellation
 
 Off by default. Set both fields to enable it: the main rule loop calls
 `OnCheck` every `CheckEveryN` iterations, and a `false` return cancels
@@ -338,4 +338,4 @@ after `CheckEveryN` iterations, never before any work is done.
 Pick `CheckEveryN` for the cost of the check, not the resolution you
 want: a `time.Now()` call every iteration is measurable on a hot parse,
 while reading an atomic abort flag is not. Cancellation is an ordinary
-parse error — it is recorded in `ctx.Errs` like any other.
+parse error: it is recorded in `ctx.Errs` like any other.

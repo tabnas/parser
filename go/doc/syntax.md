@@ -24,8 +24,8 @@ tabnas maps parsed values to Go types:
 All numbers are returned as `float64`, matching `encoding/json`
 conventions. A number must be followed by a terminator (whitespace, a
 structural character, or end of input), so `123abc` is a single text
-value, not a number followed by text — the same behavior as the
-TypeScript runtime.
+value, not a number followed by text (the same behavior as the
+TypeScript runtime).
 
 ## Extended result types
 

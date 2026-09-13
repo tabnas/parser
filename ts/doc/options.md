@@ -2,7 +2,7 @@
 
 Options are passed to `new Tabnas(options)` (or to `tn.make(options)`
 to derive a child) to configure a parser instance. All fields are
-optional — unset fields use defaults. The complete option type is
+optional: unset fields use defaults. The complete option type is
 `TabnasOptions` (see `src/types.ts`); the default values are in
 `src/defaults.ts`.
 
@@ -27,7 +27,7 @@ their own merged options.
 new Tabnas({ plugins: [myGrammarPlugin, anotherPlugin] })
 ```
 
-`plugins` is consumed by the constructor — it's not stored back into
+`plugins` is consumed by the constructor: it's not stored back into
 `tn.options.plugins`. Per-plugin options live under `options.plugin`
 (below).
 
@@ -56,7 +56,7 @@ Controls recognition of fixed structural tokens (`{`, `}`, `[`, `]`,
 | `lex` | boolean | `true` | Enable fixed token recognition |
 | `token` | object | (built-in) | Map of token name to source string |
 
-A `token` entry set to `null` removes that token's fixed binding — this is
+A `token` entry set to `null` removes that token's fixed binding: this is
 how a dialect switches off part of the structural syntax (`@tabnas/csv`
 drops `#OB`, `#CB`, `#OS`, `#CS` and `#CL` in strict mode).
 
@@ -67,7 +67,7 @@ is how `@tabnas/csv` implements `field.separation`.
 **Matcher-owned tokens cannot be bound to a literal.** `#BD`, `#ZZ`,
 `#UK`, `#AA`, `#SP`, `#LN`, `#CM`, `#NR`, `#ST`, `#TX` and `#VL` are
 produced by the engine's matchers, not by a fixed spelling. Binding one
-does not replace its matcher — it adds a second producer for the same
+does not replace its matcher: it adds a second producer for the same
 token, and the two disagree about what the token means. The engine now
 rejects it with an explanatory error; previously it was accepted and the
 affected values silently vanished. To change how one of these is
@@ -116,7 +116,7 @@ Named groups of tokens, used by grammars and by `tn.tokenSet(name)`.
 | `oct` | boolean | `true` | Support `0o` octal |
 | `bin` | boolean | `true` | Support `0b` binary |
 | `sep` | string\|null | `"_"` | Digit separator character (null to disable) |
-| `exclude` | RegExp | — | Pattern to exclude from number matching |
+| `exclude` | RegExp | (none) | Pattern to exclude from number matching |
 
 ## `comment`
 
@@ -156,11 +156,11 @@ Set a definition to `false`/`null` to remove it.
 | `chars` | string | `` "'\"`" `` | Quote characters |
 | `multiChars` | string | `` "`" `` | Quote characters that allow multiline strings |
 | `escapeChar` | string | `"\\"` | Escape character |
-| `escape` | object | (standard) | Escape-sequence mappings. Map a key to `null` or `''` to remove a built-in escape (e.g. `{ v: null }` rejects `\v`) |
+| `escape` | object | (standard) | Escape-sequence mappings. Map a key to `null` or `''` to remove a built-in escape (for example, `{ v: null }` rejects `\v`) |
 | `allowUnknown` | boolean | `true` | Copy unknown escape sequences through (`\w` → `w`) |
 | `escapeStrict` | boolean | `false` | Restrict escapes to the standard set: disable the non-standard `\xHH` and `\u{…}` structural escapes (`\uXXXX` stays). With escape-map removals + `allowUnknown: false`, yields JSON.parse-conformant escapes |
-| `allowControl` | boolean | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded — they stay governed by `multiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (e.g. JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
-| `replace` | object | — | Character replacement map during scanning |
+| `allowControl` | boolean | `false` | Admit raw control characters (code point below `0x20`) inside a string body instead of failing with `unprintable`. Line-end characters are excluded: they stay governed by `multiChars`, so a raw newline in a single-line string is still an error. For grammars whose source-character rule permits them (for example, JSON5's `JSON5SourceCharacter`, which admits a literal tab) |
+| `replace` | object | (none) | Character replacement map during scanning |
 | `abandon` | boolean | `false` | On error, let the next matcher try instead of failing |
 
 ## `map`
@@ -168,7 +168,7 @@ Set a definition to `false`/`null` to remove it.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `extend` | boolean | `true` | Deep-merge duplicate keys |
-| `merge` | function | — | Custom merge for duplicates: `(prev, curr, rule, ctx) => result` |
+| `merge` | function | (none) | Custom merge for duplicates: `(prev, curr, rule, ctx) => result` |
 | `child` | boolean | `false` | Parse bare colon as a `child$` key |
 
 ## `list`
@@ -193,7 +193,7 @@ nodes carrying metadata (implicit flag, quote info, etc.).
 
 ## `value`
 
-Keyword values — source words that resolve to fixed JS values.
+Keyword values: source words that resolve to fixed JS values.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -227,7 +227,7 @@ Custom matcher tokens and pattern values.
 |---|---|---|---|
 | `lex` | boolean | `true` | Enable custom matchers |
 | `token` | object | `{}` | Map of token name to RegExp or matcher function |
-| `value` | object | — | Map of value name to `{ match, val? }` (RegExp must start with `^`) |
+| `value` | object | (none) | Map of value name to `{ match, val? }` (RegExp must start with `^`) |
 
 ```js
 new Tabnas({
@@ -252,7 +252,7 @@ Additional text-ending characters. String or string array. Default
 | `include` | string | `""` | Include only alternates with these group tags (comma-separated) |
 | `exclude` | string | `""` | Exclude alternates with these group tags (comma-separated) |
 
-### `rule.maxmul` — the runaway guard
+### `rule.maxmul`: the runaway guard
 
 `maxmul` scales the rule-iteration budget, the guard that stops a grammar
 that never terminates. The budget is
@@ -266,7 +266,7 @@ the multiplier alone:
 - **A non-positive or `NaN` multiplier selects the default `3`.** It is a
   nonsense setting, not a nonsense document, so it falls back rather than
   producing a zero or negative budget. Honoured literally it made the
-  guard reject valid input with `unexpected` — a syntax code for a
+  guard reject valid input with `unexpected`: a syntax code for a
   configuration value.
 - **The floor of 100 is absolute.** A small positive multiplier cannot
   take a short parse below 100 iterations. `maxmul` is a `number` here,
@@ -279,7 +279,7 @@ the multiplier alone:
 
 The Go port computes the same expression, including the floor and the
 coercion, and counts the same units. `rule.maxmul` is a `*int` there, so
-a fractional value is the one thing that does not survive the crossing —
+a fractional value is the one thing that does not survive the crossing:
 see [`DIVERGENCE.md`](../../DIVERGENCE.md).
 
 ## `lex`
@@ -295,12 +295,12 @@ The `match` registry maps each matcher name to its priority `order`
 and a `make` factory. Lower `order` runs first. See `src/defaults.ts`
 for the built-in registry.
 
-### `relex` — negotiated lexing
+### `relex`: negotiated lexing
 
 A character several matchers could claim is cut to one token when it is
 first lexed, and the pushback buffer keeps that identity as the token is
 offered to later alternates and later rules. An alternate that needed
-the same character to be a *different* — equally valid — token
+the same character to be a *different* (equally valid) token
 therefore fails.
 
 With `relex` on, a token-type mismatch is not final: the engine re-cuts
@@ -315,8 +315,8 @@ const tn = new Tabnas({ lex: { relex: true } })
 Off by default, and worth leaving off unless the grammar needs it.
 Grammars written for a tokenising lexer distinguish their terminals
 lexically and never contest a character. It is **scannerless**
-notations — GBNF and friends, where the grammar describes input one
-character at a time — that routinely do: `@tabnas/gbnf` sets this.
+notations (GBNF and friends, where the grammar describes input one
+character at a time) that routinely do: `@tabnas/gbnf` sets this.
 
 Turning it on cannot make the parser accept something a grammar
 excludes. Every alternate still requires exactly the tokens it names,
@@ -333,7 +333,7 @@ attempts one bounded re-lex first.
 | `recover` | object | see below | Opt-in error recovery (multi-error collection) |
 | `budget` | object | see below | Opt-in parse budget / cancellation |
 
-### `recover` — error recovery
+### `recover`: error recovery
 
 Off by default: fail-fast behaviour is unchanged. With
 `parse.recover.enabled: true`, `parse()` returns `{ value, errors }`
@@ -353,20 +353,20 @@ single recorded error whose `recovered.skipped` counts the region.
 |---|---|---|---|
 | `enabled` | boolean | `false` | Turn recovery on; `parse()` then returns `{ value, errors }` |
 | `syncGroups` | string[]\|null | `null` (= `['close','comma','end']`) | `AltSpec.g` tags marking close alternates as sync edges. An array REPLACES the engine set entirely |
-| `syncTokens` | string[] | `[]` | Extra explicit sync token names (e.g. `['#CA']`) |
+| `syncTokens` | string[] | `[]` | Extra explicit sync token names (for example, `['#CA']`) |
 | `popUntilValid` | boolean | `true` | Pop the rule stack until a rule's close state accepts the sync token |
 | `maxSkip` | number | `64` | Cap on tokens skipped per recovery |
 | `maxRecoveries` | number | `32` | Cap on recorded errors per parse; beyond it the parse gives up (still returning `{ value, errors }`) |
 | `suppress` | number | `4` | Errors within this many consumed tokens of the previous recovery are dropped as cascades |
 
-### `budget` — cancellation and deadlines
+### `budget`: cancellation and deadlines
 
 Off by default. When `checkEveryN` is positive, the main rule loop
 invokes `onCheck(ctx)` every N iterations; returning `false` cancels
 the parse with a `cancel` error (in recovery mode the parse returns
 `{ value, errors }` with the cancel error recorded). The callback runs
-on the parsing thread — a host wanting in-flight cancellation from
-another thread has `onCheck` read a flag that thread sets (e.g. a
+on the parsing thread: a host wanting in-flight cancellation from
+another thread has `onCheck` read a flag that thread sets (for example, a
 `SharedArrayBuffer` cell), or simply enforces a deadline via closure
 state.
 
@@ -419,7 +419,7 @@ Controls error-message framing.
 |---|---|---|---|
 | `name` | string | `"tabnas"` | Prefix shown as `[name/code]` |
 | `suffix` | boolean\|string\|function | `true` | Append the internal-diagnostics line (`true`), or a custom suffix |
-| `link` | string | — | A "see also" line (e.g. a docs URL) shown when `suffix` is `true` |
+| `link` | string | (none) | A "see also" line (for example, a docs URL) shown when `suffix` is `true` |
 
 ## `color`
 
@@ -445,9 +445,9 @@ afterwards has no effect.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `defaults$` | boolean | `true` | If `false`, skip merging the built-in defaults — start from a blank options bag |
+| `defaults$` | boolean | `true` | If `false`, skip merging the built-in defaults, starting from a blank options bag |
 | `standard$` | boolean | `true` | If `false`, skip registering the standard tokens (read by `configure`) |
-| `grammar$` | boolean | — | Reserved for plugins to opt out of registering grammar |
+| `grammar$` | boolean | (none) | Reserved for plugins to opt out of registering grammar |
 
 `tn.empty(opts)` is shorthand for `new Tabnas({ defaults$: false,
 standard$: false, grammar$: false, ...opts })`.
@@ -457,4 +457,4 @@ standard$: false, grammar$: false, ...opts })`.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `config.modify` | object | `{}` | Named `(config, options) => void` hooks run after `configure` |
-| `parser.start` | function | — | Supply a custom parser entry point, replacing the built-in parser |
+| `parser.start` | function | (none) | Supply a custom parser entry point, replacing the built-in parser |

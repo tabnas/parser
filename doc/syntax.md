@@ -14,7 +14,7 @@ Every example below shows `input → result` using JSON for the result.
 ## Superset of JSON
 
 All standard JSON parses unchanged. The rules below are *relaxations*
-layered on top — each can be turned off through [options](../go/doc/options.md).
+layered on top. Each can be turned off through [options](../go/doc/options.md).
 
 ## Objects
 
@@ -112,7 +112,7 @@ false             → false
 null              → null
 ```
 
-Custom keyword sets can be configured (e.g. `yes`/`no`); see the
+Custom keyword sets can be configured (for example, `yes`/`no`); see the
 options reference.
 
 ## Empty and whitespace-only input
@@ -129,6 +129,6 @@ Each relaxation is controlled by an option, so the same engine can be
 configured anywhere from strict JSON to maximally lenient. Restricting a
 grammar to the `json` group (the `rule.include: "json"` option) together
 with the strict number/string/comment options produces a strict-JSON
-parser that rejects every relaxation above — see the strict-JSON test
+parser that rejects every relaxation above. See the strict-JSON test
 fixtures for a worked example. The [options reference](../go/doc/options.md)
 lists the full set of toggles.

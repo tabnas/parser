@@ -1,23 +1,23 @@
 # Differences from TypeScript
 
-> **Looking for parity?** This is a PORTING guide — packaging, API shape,
+> **Looking for parity?** This is a PORTING guide: packaging, API shape,
 > Go-specific helpers, plugin surface. Most of it describes how to write
 > the same program twice, not places the two engines disagree.
 >
-> For "will these engines produce the same result for my input?", read
+> For "will these engines produce the same result for your input?", read
 > [`DIVERGENCE.md`](../../DIVERGENCE.md) at the repository root, which is
 > the single record of behavioural divergence and is deliberately short.
 
 The TypeScript version is the authoritative implementation. The Go version is
-a faithful port of the engine behavior — same packaging (grammar-free
-engine), same lexer structure, same error model — with deliberate Go-only
+a faithful port of the engine behavior (same packaging (grammar-free
+engine), same lexer structure, same error model) with deliberate Go-only
 additions for Go client code, listed below.
 
 ## Packaging: Aligned (Grammar-Free Engine)
 
 Both runtimes are grammar-free engines that ship no grammar. In each, a
 grammar (including strict JSON) arrives via a plugin, and the
-strict-JSON grammar lives only as a test fixture — `ts/test/json-plugin.ts`
+strict-JSON grammar lives only as a test fixture: `ts/test/json-plugin.ts`
 in TypeScript, `go/jsonplugin_test.go` (`package tabnas`, test-only) in
 Go. The Go engine is `github.com/tabnas/parser/go` (package `tabnas`):
 
@@ -46,8 +46,8 @@ and `ts/test/utility.test.js` (grammar from `ts/test/json-plugin.ts`); Go
 runs them from `go/spec_test.go` and `go/utility_spec_test.go` (grammar
 from `go/jsonplugin_test.go`).
 
-Fixtures exercising *relaxed* grammar syntax — bare text, unquoted keys,
-implicit structure — used to sit in `test/spec/` too, unexecuted, since
+Fixtures exercising *relaxed* grammar syntax (bare text, unquoted keys,
+implicit structure) used to sit in `test/spec/` too, unexecuted, since
 the strict-JSON test grammar rejects them by design and this engine ships
 no grammar. They now live only in the grammar's own repo
 ([`tabnas/jsonic`](https://github.com/tabnas/jsonic), `test/spec/`),
@@ -59,14 +59,14 @@ These affect parse output for the same input.
 
 ### Negotiated Lexing (`lex.relex`)
 
-Aligned. Both runtimes carry the opt-in lexer option — `lex: { relex: true }`
-in TS, `Options.Lex.Relex` in Go — and it is **off by default** in both.
+Aligned. Both runtimes carry the opt-in lexer option (`lex: { relex: true }`
+in TS, `Options.Lex.Relex` in Go) and it is **off by default** in both.
 
 When set, a token-type mismatch in the alternate loop is no longer final:
 the engine re-cuts the buffered token's source span constrained to the tins
 the alternate itself names (`Lex.relex` / `Lex.Relex`), instead of failing
 the alternate outright. Under it a `#BD` token is also a soft failure a
-later alternate may renegotiate rather than an immediate throw — and when
+later alternate may renegotiate rather than an immediate throw, and when
 no alternate can use it, the SAME diagnostic is raised, at the same token.
 
 The mechanism is the same on both sides: save point + token queue, re-cut
@@ -75,7 +75,7 @@ paths, restore on failure, plus the mismatch hook in the alternate loop.
 Per-runtime notes:
 
 - **The want filter.** `match` and `fixed` filter per candidate, so
-  longest-match-wins still holds *among wanted candidates* — a shorter
+  longest-match-wins still holds *among wanted candidates*: a shorter
   wanted token can beat a longer unwanted one, which is the point. A
   single-tin builtin (space, line, string, comment, number, text) is
   skipped when its tin is not wanted. Value matchers are skipped outright:
@@ -83,40 +83,40 @@ Per-runtime notes:
 - **Custom matchers are speculated,** not skipped: their token identity is
   opaque, so the only way to learn whether one can serve the request is to
   run it and put the cursor back if what it produced is not wanted.
-- **⚠ differs (cosmetic).** Go's fixed-token dispatch table is a
+- **Differs (cosmetic).** Go's fixed-token dispatch table is a
   whole-config summary, so under a want the fixed matcher falls through to
   the candidate list rather than trusting the table's single-byte answer.
   Same result, one array load slower on the renegotiation path only.
-- **⚠ differs (cosmetic).** TS preserves a recut token's attached
+- **Differs (cosmetic).** TS preserves a recut token's attached
   `ignored` token; Go's token carries no such field (its lexer skips
   ignored tokens in `Lex.Next` rather than attaching them), so there is
   nothing to preserve.
 - **Both runtimes skip rule-position gating under a want,
   deliberately.** Go's match matcher makes a two-pass
   `positionExpected` scan; TS makes the same two passes over its token
-  column (`ts/src/lexer.ts` makeMatchMatcher — position-expected
+  column (`ts/src/lexer.ts` makeMatchMatcher, position-expected
   matchers first, eager-only ones second). Under a want that scan is
-  dead in both — the alternate's own tin list is the gate — so neither
+  dead in both (the alternate's own tin list is the gate) so neither
   runs it and neither makes the second pass. No behavioural effect, and
   it matters: computing it anyway walked every alternate's slot-0 tins
   for every candidate token, costing 25–98x on scannerless grammars with
   many alternates (the llama.cpp GBNF corpus via `@tabnas/gbnf`:
   `json.gbnf` went 26.9ms → 273µs per parse of an 8-character input). Do
-  not "restore parity" by reinstating the scan on the want path — there
+  not "restore parity" by reinstating the scan on the want path: there
   is nothing on either side to be parity with.
 
   Until the TS lexer gained its second pass, the two orders differed and
   the difference was observable: an eager matcher earlier in tin order
   beat a position-expected one later in TS but not in Go. That entry has
-  been retired; `TestEagerPrecedenceMatchesTS` (go/lexslotgate_test.go)
+  been retired; `TestEagerPrecedenceMatchesTS` (`go/lexslotgate_test.go`)
   and `match-tokens-expected-at-slot-win-over-earlier-eager`
-  (ts/test/cover-lex.test.js) now pin the shared behaviour.
+  (`ts/test/cover-lex.test.js`) now pin the shared behaviour.
 
   The eager pass also yields to a FIXED literal the slot expects and
   that it cannot out-cut, in all three runtimes. Ties go to the literal;
   an eager matcher that cuts further still wins, so a keyword cannot
   truncate a longer word. Without it a character class containing a
-  literal the grammar also uses swallowed it — `num = "0" / posdigit
+  literal the grammar also uses swallowed it: `num = "0" / posdigit
   *digit` beside `digit = %x30-39` rejected `0.0.0` in Go (whose emitter
   has always marked classes eager) and would have in TS the moment the
   bnf emitter did the same. Pinned by
@@ -131,7 +131,7 @@ It cannot widen the accepted language. A recut is returned only when its
 tin is in the alternate's OWN list, so every position still requires
 exactly what it always required; a wrong re-cut fails the parse rather
 than satisfying anything. A `#BD` token never satisfies a position, not
-even a wildcard one — without that, `#AA` would make the deferred throw
+even a wildcard one. Without that, `#AA` would make the deferred throw
 into an acceptance.
 
 Practical impact is confined to **scannerless** front-ends. Grammars
@@ -139,7 +139,7 @@ written for a tokenising lexer distinguish their terminals lexically and
 never contest a character, so the default is identical in both runtimes
 for every ABNF and EBNF grammar in the shared fixtures. What needs the
 option is the GBNF corpus (`tabnas/gbnf`), where two terminals may claim
-the same character — `arithmetic.gbnf`'s `ws ::= [ \t\n]*` against a
+the same character: `arithmetic.gbnf`'s `ws ::= [ \t\n]*` against a
 literal `"\n"`, `json.gbnf`'s quote inside a string body against the
 closing quote, `c.gbnf`'s keywords inside identifier classes.
 
@@ -192,7 +192,7 @@ Aligned. By default both lexers reject any control character (code point
 below `0x20`) inside a string body with `unprintable`. `string.allowControl`
 (`Options.String.AllowControl` in Go) relaxes that: control characters are
 admitted verbatim as ordinary body text. Line-end characters are deliberately
-NOT covered — they stay governed by `multiChars`, so a raw newline inside a
+NOT covered: they stay governed by `multiChars`, so a raw newline inside a
 single-line string is still an error with the option set. The option exists
 because some grammars' source-character rules admit raw control chars (JSON5's
 `JSON5SourceCharacter` permits a literal tab); the default keeps the strict
@@ -206,7 +206,7 @@ Pinned cross-runtime by the shared fixture `test/spec/lex-string-control.tsv`
 
 Both implementations short-circuit exact empty-string input (`""`) before the
 lexer or the rule loop is built, and return `lex.emptyResult` /
-`Lex.EmptyResult` — default `undefined`/`nil` — or raise `unexpected` when
+`Lex.EmptyResult` (default `undefined`/`nil`) or raise `unexpected` when
 `lex.empty` / `Lex.Empty` is false. This is aligned, and it is the *only* path
 for `""`: the rule-iteration budget (which is proportional to source length,
 and so zero for a zero-length source) is never reached, so a grammar whose
@@ -220,10 +220,10 @@ The runaway guard is `2 * ruleCount * len(src) * 2 * rule.maxmul`, floored
 at `100`, with a non-positive multiplier coerced to the default `3`, in
 **both** ports.
 
-`srcLen` is counted in **UTF-16 code units** in both — free in
+`srcLen` is counted in **UTF-16 code units** in both: free in
 TypeScript, one non-decoding pass (`utf16Len`) here.
 
-This subsection previously recorded a difference — Go coerced and floored,
+This subsection previously recorded a difference: Go coerced and floored,
 TypeScript honoured `rule.maxmul: 0` literally and rejected valid input
 with `unexpected`. It was a divergence by this document's own heading
 ("These affect parse output for the same input"), filed here rather than
@@ -267,7 +267,7 @@ One binding detail was a real TypeScript-only bug rather than a
 difference, and is worth recording because the shape invites it: config
 is consumed only once EVERY action on the alternate has been bound.
 Binding eagerly broke an alternate naming the same configured builtin
-twice (`a: ["@push$", "@push$"]`) — the second bind found the key already
+twice (`a: ["@push$", "@push$"]`): the second bind found the key already
 deleted and silently took defaults, so one array element landed as its
 source text and the next as a raw tree node. Go already deferred
 consumption, so this was a divergence as well as a bug.
@@ -283,8 +283,7 @@ the rule that was REPLACED, so it reads that rule's node.
 
 TypeScript and Rust get this free: the replacement is handed the same list
 OBJECT, and pushing mutates it in place, so the stale pointer sees every
-element. A Go slice is a value — `NodeListAppend` returns a new header —
-so the replaced rule kept the list as it stood before the replacement, and
+element. A Go slice is a value (`NodeListAppend` returns a new header), so the replaced rule kept the list as it stood before the replacement, and
 the parent read it. `["1"]` here, `["1","2"]` there, from the same
 serialized grammar.
 
@@ -293,7 +292,7 @@ reason; the replacement direction was simply never covered. It now walks
 the `Prev` chain too, updating only rules that actually held the list this
 push grew (`sameGrownList`: same length AND same backing array), so a
 replacement that allocated a fresh container of its own cannot clobber the
-one it replaced — which is what `child-pusher.fixture.json` pins, and what
+one it replaced, which is what `child-pusher.fixture.json` pins, and what
 TypeScript does.
 
 Info mode wraps a list in a `ListRef`, so the comparison unwraps
@@ -306,26 +305,25 @@ zero-length slices the same (or no) data pointer, so an EMPTY list cannot
 be told apart from another empty one. The propagation therefore declines
 on an empty list rather than guessing: a replacement that allocated its
 own empty list before its first push must not overwrite the list of the
-rule it replaced, because TypeScript would not. The mirror-image case — a
+rule it replaced, because TypeScript would not. The mirror-image case (a
 rule that allocated a list, was replaced before anything went into it, and
-is then read by a parent — keeps the empty list here where TypeScript
+is then read by a parent) keeps the empty list here where TypeScript
 would show the elements. Recorded rather than silently traded away; no
 grammar the compilers emit produces it, because a rule that allocates a
 list also pushes into it before replacing itself.
 
 **The empty-list case is no longer traded away.** It could not be settled
-by comparing slices, so it is settled by asking a different question —
-see the next entry, which subsumes it.
+by comparing slices, so it is settled by asking a different question. See the next entry, which subsumes it.
 
 A tempting fix that is WRONG, recorded so it is not tried again: making a
 parent's `Child` follow the replacement chain forward. TypeScript reads
-the PRE-replacement child deliberately — `child-pusher.fixture.json`
-returns a `mid` kid, not the `alt` that replaced it — so following it
+the PRE-replacement child deliberately (`child-pusher.fixture.json`
+returns a `mid` kid, not the `alt` that replaced it) so following it
 forward diverges from TypeScript rather than aligning with it.
 
 Not specific to the value annotations that turned it up: `@push$` + `r:` +
 a parent read is reachable by any grammar. It went unnoticed because the
-json-builder fixture — the array oracle for every port — uses the OTHER
+json-builder fixture (the array oracle for every port) uses the OTHER
 idiom, where the allocating rule and the pushing rule are different rules
 in a parent/child relationship, so the parent write-back already covered
 it.
@@ -349,13 +347,13 @@ Every rule now knows which rule holds the authoritative copy of the
 container it is building into: `Rule.nodeOwner`, seeded down from the
 parent on a push and from the REPLACED rule on an `r:`, and reset to nil
 by every builtin that allocates a new container or scalar. `@push$` grows
-that rule's list and writes it back there — one write, whatever the
+that rule's list and writes it back there: one write, whatever the
 depth.
 
 The seeding has to follow the link the node actually came from. A rule
 that replaces itself before pushing a helper (`list` → `list$step1`) has
 the replacement parented ABOVE the owner, so inheriting through `Parent`
-alone would skip `list` — the list would reach everything except the rule
+alone would skip `list`: the list would reach everything except the rule
 whose value is read.
 
 Naming the owner rather than searching for it is also what keeps this
@@ -364,7 +362,7 @@ the list, which is reachable from untrusted input: measured over this
 fixture, 1600 elements took 32.8 ms walking and 4.0 ms with the owner,
 against 3.5 ms for the (incorrect) unfixed engine.
 
-Slice identity could not have answered "who still holds this?" — two
+Slice identity could not have answered "who still holds this?": two
 distinct EMPTY slices share a data pointer, and a list is empty exactly
 when the first push happens. That is the case this entry's predecessor
 recorded as traded away, and naming the owner removes the question rather
@@ -376,7 +374,7 @@ ownership. Claiming it would strand the rule that allocated the container
 whenever the child was still carrying an inherited one, and a later push
 from deeper in the chain would leave the allocator with a stale header.
 
-Go-only bookkeeping for a Go-only problem — an unexported field, no API
+Go-only bookkeeping for a Go-only problem: an unexported field, no API
 or spec-format change, and nothing for the other ports to mirror.
 
 ### `@push$` into a NESTED container: Aligned (was a Go defect)
@@ -401,7 +399,7 @@ from a grammar that asked for an object.
 
 Free in TypeScript and Rust, where the enclosing map is a different
 object and nothing aliases it. The header still genuinely has to be
-re-published in Go — but only to a parent building into the SAME
+re-published in Go, but only to a parent building into the SAME
 container, and ownership already answers which: an inherited container
 gives parent and pusher the same holder, while a freshly allocated one
 resets the pusher's owner to itself. The `Prev` walk beside it was
@@ -411,7 +409,7 @@ at all.
 Not specific to the value annotations that turned it up, and not specific
 to any compiler's output: any grammar nesting one value container inside
 another reaches it. It went unnoticed because every earlier fixture built
-ONE container — the json-builder oracle nests maps in maps and lists in
+ONE container: the json-builder oracle nests maps in maps and lists in
 lists through `@setval$`/`@push$` on the same rule, where the parent
 holds the container being grown.
 
@@ -429,7 +427,7 @@ the same thing.
 
 ### `MapToOptions` carries only some options
 
-Not a divergence — an API gap here, recorded so it is not mistaken for
+Not a divergence: an API gap here, recorded so it is not mistaken for
 one. `MapToOptions` (the path `SetOptionsText` and a shared options blob
 take) builds `Options` field by field, and a field it does not name is
 dropped in silence rather than refused. `rule.maxmul` was dropped that
@@ -441,7 +439,7 @@ The remaining numeric options take the same path and are still dropped:
 `rewind.history`, `error.recover`'s `maxSkip` / `maxRecoveries` /
 `suppress`, and `parse.budget.checkEveryN`. Set those on the `Options`
 struct directly. Unmarshalling JSON straight into `Options` is not a
-workaround for the fractional case — it rejects a fractional number
+workaround for the fractional case: it rejects a fractional number
 rather than truncating it.
 
 ### Token Consumption
@@ -462,7 +460,7 @@ not among them. A grammar that wants a quote to end text says so through
 
 Go's `textStopBase` used to test the string chars as well, which stopped a
 text run at the quote. That was the largest divergence class measured across
-the fleet — `a"b`, `x:a"b`, `{k:a"b}` and `[a"b]` all parsed in TS and were
+the fleet: `a"b`, `x:a"b`, `{k:a"b}` and `[a"b]` all parsed in TS and were
 parse errors here, and `ab"c"d` came back as `["ab","c","d"]` against
 `"ab\"c\"d"` there.
 
@@ -497,7 +495,7 @@ Both implementations now share the same error model:
 | `--internal: tag=...; rule=...; token=...; plugins=...--` block | yes | yes |
 | Instance tag when unset | `'-'` (`defaults.ts`) | `'-'` (`DefaultTag`, applied in `Make`) |
 | Custom bad-token error code | `tkn.err` wins over `unexpected` | `tkn.Err` wins over `unexpected` |
-| Source file name in `--> file:row:col` | `meta.fileName` | `ParseMeta` meta `"fileName"` |
+| Source filename in `--> file:row:col` | `meta.fileName` | `ParseMeta` meta `"fileName"` |
 | ANSI colors | `options.color` | `Options.Color` |
 | Source site extract with caret | yes | yes |
 
@@ -522,9 +520,9 @@ Full custom matchers (with lexer ordering control) are available in both via
 
 ### Matcher `check` Hooks
 
-Aligned. All eight built-in matchers accept a pre-match `check` hook —
+Aligned. All eight built-in matchers accept a pre-match `check` hook:
 `fixed`, `match`, `space`, `line`, `text`, `number`, `comment`, `string`
-(`FixedCheck`, `MatchCheck`, ... on the Go `LexConfig`). Returning
+(`FixedCheck`, `MatchCheck` and the rest on the Go `LexConfig`). Returning
 `{done: true, token}` / `&LexCheckResult{Done: true, Token: t}` claims the
 match; returning nothing falls through to the normal matcher.
 
@@ -532,7 +530,7 @@ TS previously declared and consulted `string.check` and `comment.check`
 but never copied them out of the options, so those two hooks were dead
 there while Go honoured all eight. Both runtimes now wire all eight, and a
 matcher carrying a `check` opts out of TS's first-char dispatch table so
-the hook runs for every input character, not just the ones the matcher
+the hook runs for every input character, rather than only the ones the matcher
 would normally claim.
 
 ## Plugin Differences
@@ -542,7 +540,7 @@ would normally claim.
 | Plugin signature | `(tabnas, opts?) => void \| Tabnas` | `func(j *Tabnas, opts map[string]any) error` |
 | Plugin failure | throw | returned `error` |
 | Rule definer | `(rs: RuleSpec, p: Parser) => void \| RuleSpec` | `func(rs *RuleSpec, p *Parser)` (no replacement return) |
-| RuleSpec alternate/action lists | private; mutated via methods | private; mutated via methods (`AddOpen`/`PrependOpen`/`ModifyOpen`/`ClearOpen`, `AddBO`/`PrependBO`/`ClearActions`, `Fnref`) and read via getters (`OpenAlts`/`CloseAlts`/`Actions`/`HasBO…`) — aligned with TS; direct field assignment is no longer possible |
+| RuleSpec alternate/action lists | private; mutated via methods | private; mutated via methods (`AddOpen`/`PrependOpen`/`ModifyOpen`/`ClearOpen`, `AddBO`/`PrependBO`/`ClearActions`, `Fnref`) and read via getters (`OpenAlts`/`CloseAlts`/`Actions`/`HasBO…`), aligned with TS; direct field assignment is no longer possible |
 | Funcref `@x/append` vs plain `@x` | same slot (`fr['@x/append'] ?? fr['@x']`) | same slot (aligned) |
 | Funcref dedup | by function identity | by function pointer (Go has no per-closure identity; reuse stable ref values) |
 | State actions raising errors | Return an error `Token` | Set `ctx.ParseErr` (same effect: parse halts with the error) |
@@ -560,17 +558,17 @@ Differences:
 | Area | TypeScript | Go |
 |---|---|---|
 | Signature / failure | `merge(other): Tabnas`, throws | `Merge(other *Tabnas) (*Tabnas, error)`, never panics |
-| Named-action (fnref) renaming | fnref keys renamed `@x` → `@<tag>:x` (`$`-builtins kept) | none — Go persists no fnref map (`Grammar()` Ref maps are transient); lifecycle action slices carry the wired handlers |
-| "Non-default" option detection | compared against the shared defaults tree — an explicitly-set default value still merges cleanly | nil/zero field = default; a field explicitly set to the default value on both sides with different values still conflicts (indistinguishable from intent) |
-| Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`) — each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer) — the natural Go equivalent of source equality | 
+| Named-action (fnref) renaming | fnref keys renamed `@x` → `@<tag>:x` (`$`-builtins kept) | none. Go persists no fnref map (`Grammar()` Ref maps are transient); lifecycle action slices carry the wired handlers |
+| "Non-default" option detection | compared against the shared defaults tree, an explicitly-set default value still merges cleanly | nil/zero field = default; a field explicitly set to the default value on both sides with different values still conflicts (indistinguishable from intent) |
+| Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`): each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer), the natural Go equivalent of source equality | 
 | Conditioned-alt dedupe | only when the condition is reference-equal (or absent) | never (a condition cannot be proven identical across closures); unconditioned duplicates are unreachable, so both rules are behavior-safe |
 | Option conflict paths | TS option names (`lex.match.same.make`) | lowercased Go field names, which coincide for most paths (`rule.maxmul`, `lex.match.same.make`) |
 
 ## Deep Option Merge (`util.deep` / `Deep`)
 
-Aligned on opaque values. A value that is not a plain object/array —
-a `RegExp` in TS, a struct with no exported fields (`*regexp.Regexp`,
-`time.Time`, ...) in Go — **replaces** the base rather than being merged
+Aligned on opaque values. A value that is not a plain object/array,
+a `RegExp` in TS or a struct with no exported fields (`*regexp.Regexp`,
+`time.Time` and so on) in Go, **replaces** the base rather than being merged
 into it. Merging into such a value cannot copy anything: TS's `for..in`
 over a `RegExp` yields no keys (so the parent pattern silently survived a
 child override), and Go's reflective field merge skipped every unexported
@@ -588,20 +586,20 @@ These are available only in the Go version. They exist for Go client code
 (typed access to parse metadata) and are intentionally kept. The examples
 below install a grammar (`myGrammar`) that honours the `Info` options and
 parse strict JSON; `Implicit` is `false` for braces/brackets and would be
-`true` only for a grammar that creates containers implicitly (e.g. a
+`true` only for a grammar that creates containers implicitly (for example, a
 relaxed `a:1` → map).
 
 ### `GrammarSpecFromJSON` and the C ABI (`go/clib`)
 
 Go-only, and needed only because Go is typed. `GrammarSpecFromJSON`
-turns a serialized spec — `{"options":…, "rule":…, "v":N}` — into a
+turns a serialized spec (`{"options":…, "rule":…, "v":N}`) into a
 `*GrammarSpec`. TypeScript needs no equivalent: a parsed JSON object is
 already structurally a `GrammarSpec` there, so `tn.grammar(JSON.parse(s))`
 just works.
 
 It is exported rather than left a test helper because it is the only way
-a caller outside Go reaches the engine, which is what `go/clib` — the
-C-ABI shared library — is built on. That library exists so languages
+a caller outside Go reaches the engine, which is what `go/clib` (the
+C-ABI shared library) is built on. That library exists so languages
 with no tabnas port can use the engine (Python via `ctypes` is the
 motivating case); it stays grammar-agnostic, taking a serialized spec
 and answering whether input parses. See [`../clib/README.md`](../clib/README.md).
@@ -609,7 +607,7 @@ and answering whether input parses. See [`../clib/README.md`](../clib/README.md)
 One trap it removes: passing the whole serialized document as
 `GrammarSpec{OptionsMap: …}` looks right and `Grammar()` returns no
 error, but the rule block is never read, so the engine installs no rules
-and every later parse quietly returns nothing.
+and every later parse silently returns nothing.
 
 ### `Info.Text` Option (`TextInfo`)
 
@@ -666,21 +664,21 @@ A serialized grammar carries a regex terminal as `@/pattern/flags` (or
 `@~/pattern/flags` for the eager form). That string is **shared** between
 the runtimes, and it holds **JavaScript's** flags, because TypeScript
 writes them natively. Go therefore lowers them to RE2 rather than passing
-them through — copying them verbatim into an inline `(?flags)` group is
+them through: copying them verbatim into an inline `(?flags)` group is
 wrong twice over: RE2 rejects most of them outright, and accepts one with
 an entirely different meaning.
 
 | flag | Go | why |
 |---|---|---|
 | `i` `m` `s` | kept | same meaning in both engines |
-| `u` | **dropped** | RE2 needs no equivalent — it is natively rune-based, which is what `u` asks JavaScript to be |
+| `u` | **dropped** | RE2 needs no equivalent, being natively rune-based, which is what `u` asks JavaScript to be |
 | `g` `y` `d` | dropped | they govern the JS matcher's statefulness and output (`lastIndex`, sticky, match indices), not the language matched; the engine calls `FindString` once per position |
 | `v` | **refused** | unlike `u` it changes what a class MEANS (set operations, string literals inside classes), so it is not a no-op |
 | anything else | refused | see `U` below |
 
 ### Why dropping `u` is sound
 
-`u` is not cosmetic in TypeScript — without it a JS regex is **UTF-16
+`u` is not cosmetic in TypeScript: without it a JS regex is **UTF-16
 code-unit** based, and an astral character is two units. It is also not
 confined to emoji grammars: a negated class (`[^\n]`) and `.` both need it,
 because the complement of any set contains astral code points. The
@@ -690,17 +688,17 @@ behaviour. Measured, case by case:
 | pattern | input | RE2 | JS `u` | JS without `u` |
 |---|---|---|---|---|
 | `^[a-z]$` | `q` | match | match | match |
-| `^[\u{1F600}-\u{1F64F}]$` | 😀 | match | match | **does not compile** |
-| `^[^\n]$` | 😀 | match | match | **no** |
-| `^.$` | 😀 | match | match | **no** |
-| `^.{2}$` | 😀 | no | no | **match** |
-| `^.{2}$` | 😀😀 | match | match | **no** |
-| `^[^\n]{2}$` | 😀 | no | no | **match** |
+| `^[\u{1F600}-\u{1F64F}]$` | `😀` | match | match | **does not compile** |
+| `^[^\n]$` | `😀` | match | match | **no** |
+| `^.$` | `😀` | match | match | **no** |
+| `^.{2}$` | `😀` | no | no | **match** |
+| `^.{2}$` | `😀😀` | match | match | **no** |
+| `^[^\n]{2}$` | `😀` | no | no | **match** |
 
 RE2 agrees with JS-**with**-`u` on every row and differs from JS-without
 on five. In particular `.` consumes one astral character whole, and
 `.{2}` correspondingly does **not** accept a single astral character as
-two — a real bug once fixed on the TypeScript side, and the one this
+two, a real bug once fixed on the TypeScript side, and the one this
 translation must not reintroduce.
 
 Both halves of that table are pinned, so this is an agreement between the
@@ -710,7 +708,7 @@ answers.
 
 ### Why an unknown flag is refused rather than ignored
 
-RE2 accepts `(?U)` — and it means *swap greedy*. A letter passed through
+RE2 accepts `(?U)`, and it means *swap greedy*. A letter passed through
 because it was unrecognised could therefore change the language a grammar
 matches, silently. Refusing is the safe default, and it is not silent
 either: an unbuildable serialized regex leaves the original `@/…/` string
@@ -727,7 +725,7 @@ Both predate the flag question and are independent of `u`:
   rather than JS `i` alone.
 
 A shared grammar that depends on either will differ between the runtimes,
-which makes these DIVERGENCES rather than porting notes — this file is a
+which makes these DIVERGENCES rather than porting notes: this file is a
 porting guide, and a different parse result for the same input belongs in
 the parity record. They are now recorded in
 [`DIVERGENCE.md`](../../DIVERGENCE.md) under "Regex dialect in serialized
@@ -757,12 +755,12 @@ characters (TS counts 2, Go counts 1).
 
 ## Error Delivery and the No-Panic Guarantee
 
-TypeScript throws `TabnasError`; Go returns errors — and the Go API
+TypeScript throws `TabnasError`; Go returns errors, and the Go API
 guarantees it **never panics**:
 
 - Parsing wraps a recover guard that converts a panic (including one
   from a plugin callback or a custom matcher) into an `"internal"`-code
-  `*TabnasError` — with **one deliberate exception**. A non-nil
+  `*TabnasError`, with **one deliberate exception**. A non-nil
   `*TabnasError` keeps its own code, because an action raising one is
   reporting a defect in the INPUT, not an engine bug, and relabelling it
   would leave a grammar unable to diagnose what it parses. That mirrors
@@ -771,7 +769,7 @@ guarantees it **never panics**:
 
   The preserved error is rebuilt through the normal error funnel, so it
   arrives with the source excerpt, tag, hint and rule context every other
-  error carries — a plugin can populate only the exported fields.
+  error carries: a plugin can populate only the exported fields.
 
   A typed **nil** (`var te *TabnasError; panic(te)`) is not a usable
   error and still becomes `"internal"`.
@@ -806,14 +804,14 @@ predictable:
 ## `options.tokenSet`
 
 Both runtimes accept a `tokenSet` option and apply it identically from
-either construction path — `Make(opts)` and `SetOptions(opts)` are
+either construction path: `Make(opts)` and `SetOptions(opts)` are
 equivalent, as are TS `new Tabnas(opts)` and `tabnas.options(opts)`.
 How the value combines with the built-in set differs:
 
 | Area | TypeScript | Go |
 |---|---|---|
 | Type | `{ [name: string]: (string \| null)[] }` | `map[string][]string` |
-| Combination with the default set | index-wise deep merge with `defaults.tokenSet`, so `{ KEY: ['#ST'] }` yields `[#ST, #NR, #ST, #VL]`; shortening a set needs explicit `null` padding (`['#ST', null, null, null]`) | replacement — `{"KEY": {"#ST"}}` yields `[#ST]`. Go's `Options` carries no `tokenSet` defaults to merge against (the defaults live in the config's `KeySet`/`ValSet`/`IgnoreSet`) |
+| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` yields `[#ST, #NR, #ST, #VL]`; shortening a set needs explicit `null` padding (`['#ST', null, null, null]`) | replacement: `{"KEY": {"#ST"}}` yields `[#ST]`. Go's `Options` carries no `tokenSet` defaults to merge against (the defaults live in the config's `KeySet`/`ValSet`/`IgnoreSet`) |
 | "Drop this entry" marker | `null` | `""` (an empty name is skipped) |
 
 Both runtimes late-bind token-set references in rule alternates, so an
@@ -830,20 +828,20 @@ expects it) reads the same late-bound slots, so adding a custom token to
 A TS `GrammarSpec.rule` object keeps insertion order for free; a Go map
 has none. Go therefore records declaration order explicitly:
 
-- `RuleSpec.Def` — a monotonically increasing definition index stamped
+- `RuleSpec.Def`. A monotonically increasing definition index stamped
   when the spec is first created (`(*Tabnas).Rule`, `Grammar`,
   `GrammarText`, `MakeRuleSpec`). Redefining an existing rule does not
   renumber it. Zero means the spec was built as a bare struct literal.
-- `(*Tabnas).Rules() []*RuleSpec` and `(*Tabnas).RuleNames() []string` —
-  the grammar in declaration order. Unstamped specs sort last, by name,
+- `(*Tabnas).Rules() []*RuleSpec` and `(*Tabnas).RuleNames() []string`.
+  The grammar in declaration order. Unstamped specs sort last, by name,
   so the result is always deterministic. `RSM()` remains unordered.
-- `GrammarSpec.RuleOrder []string` — declares the order of the `Rule`
+- `GrammarSpec.RuleOrder []string`. Declares the order of the `Rule`
   map's entries. Without it, `Grammar()` applies rules in sorted-name
   order (deterministic, but alphabetical rather than as-declared).
   `GrammarText` fills it in automatically from the source text's key
   order, so text grammars need not supply it.
 
-## Per-parse error list — `ctx.errs` (TS) / `ctx.Errs` (Go)
+## Per-parse error list: `ctx.errs` (TS) / `ctx.Errs` (Go)
 
 Both runtimes carry a per-parse error list, appended at each error's
 CONSTRUCTION site, so the error the parse reports is also the last
@@ -855,8 +853,8 @@ The shapes differ because the error channels do:
 | | TypeScript | Go |
 |---|---|---|
 | Field | `ctx.errs: TabnasError[]` | `ctx.Errs []*TabnasError` |
-| Recorded by | the `TabnasError` constructor, so every raise site — engine or plugin — records for free | `ctx.recordErr`, called at each engine construction site (`makeErrorIn`, plus the two `Lex.Next` raises and the deferred relex raise) |
-| Guard | `try/catch` — a frozen array must not mask the error | a nil-safe receiver — a `Lex` built without a `Context` has no list |
+| Recorded by | the `TabnasError` constructor, so every raise site (engine or plugin) records for free | `ctx.recordErr`, called at each engine construction site (`makeErrorIn`, plus the two `Lex.Next` raises and the deferred relex raise) |
+| Guard | `try/catch`, since a frozen array must not mask the error | a nil-safe receiver, since a `Lex` built without a `Context` has no list |
 
 `ctx.ParseErr` is unchanged and remains the grammar-facing error TOKEN
 that halts the parse (documented in `doc/plugins.md`): it is a single
@@ -865,8 +863,8 @@ grammar repos rely on. `Errs` is additive and never replaces it.
 
 One gap, deliberate: Go rejects an empty source in `parseInternal`
 before any `Context` exists, so that one error cannot be recorded
-(TS records it). It is unobservable today — no `Context` is reachable
-— but the Go equivalent of TS's `{ value, errors }` result must
+(TS records it). It is unobservable today (no `Context` is reachable)
+but the Go equivalent of TS's `{ value, errors }` result must
 synthesize a one-element list there.
 
 ## Error recovery (`options.parse.recover`)
@@ -900,11 +898,11 @@ signalling lexer failure through a different channel than TS:
 - **The lexer latches `Lex.Err`, and caches the `#ZZ` it answers while
   latched.** Clearing only the error leaves that cached end token in
   place, so every later fetch still reports end-of-source and recovery
-  syncs on EOF — silently abandoning the rest of the document.
+  syncs on EOF, silently abandoning the rest of the document.
   Recovery clears both.
 - **On unlexable input the lexer used to set `Lex.Err` and return
   `#ZZ`**, claiming end-of-source with source still ahead of the scan
-  point — which ended recovery at the first bad character and abandoned
+  point, which ended recovery at the first bad character and abandoned
   the rest of the document. With recovery on, the lexer now hands the
   `#BD` token to the parser instead, exactly the deferral it already
   made for negotiated lexing, and exactly the condition TS defers on
@@ -942,7 +940,7 @@ Verified against TS on `{"a":true blah blip,"b":1}`:
 | `suppress: 8` | 1 error, `{"a":true,"b":1}` | 1 error, `{"a":true,"b":1}` |
 
 Beyond `MaxSkip` the run gives up like any other over-long recovery,
-and beyond `MaxRecoveries` the parse gives up — Go checks that cap
+and beyond `MaxRecoveries` the parse gives up: Go checks that cap
 before recording rather than after, so the list does not overshoot.
 
 The one remaining difference on these inputs is the `undefined`/`nil`
@@ -967,7 +965,7 @@ one test per iteration. Pinned by `ts/test/budget.test.js` and
 The callback signature is the one real difference. TS accepts
 `boolean | void`, so a checker that only observes can return nothing;
 Go has no undefined, so an observer returns `true`. Both halves of the
-option are required in both runtimes — an interval with no checker, or
+option are required in both runtimes: an interval with no checker, or
 a checker with no interval, leaves the hook off rather than
 half-enabled.
 
@@ -980,7 +978,7 @@ fail-fast, returns it directly.
 
 Both runtimes carry the third subscriber kind: it fires AFTER each rule
 pass, with the matched tokens recorded on the rule and the state
-transition applied, so it can report what the pass actually did — which
+transition applied, so it can report what the pass actually did, which
 the pre-process event cannot. This is the span-bearing structural
 stream an outline provider is built from. Pinned by
 `ts/test/ruledone.test.js` and `go/ruledone_test.go`.
@@ -995,12 +993,12 @@ stream an outline provider is built from. Pinned by
 **The subscription is its own method in Go, and that is forced.** TS's
 `sub()` takes an options object, so a new event is a new key. Go's
 `Sub(lexSub, ruleSub)` is positional and public, and every sibling Go
-grammar repo calls it — widening it would break all of them for an
+grammar repo calls it, and widening it would break all of them for an
 event most do not use. Same constraint class as `ctx.ParseErr`.
 
 `Alt` is nil only when the rule state had no alternates at all. When it
 had some and none matched, `Alt` is non-nil with just `Err` set,
-mirroring TS's distinction between a null `_dalt` and a failed one —
+mirroring TS's distinction between a null `_dalt` and a failed one:
 collapsing the two would make a grammar hole read as a syntax error.
 The `G` slice is a fresh copy on every event: `AltSpec.G` is live
 grammar configuration and a consumer must not reach it through the
@@ -1009,7 +1007,7 @@ payload.
 One gap, and it closes with A2: `Forced` marks a close synthesized by
 error recovery, so it is always false in Go until Go has recovery.
 
-## Lex-event retraction on unrelex — both runtimes
+## Lex-event retraction on unrelex: both runtimes
 
 Under negotiated lexing, both runtimes re-announce the RESTORED token
 to lex subscribers when a speculative recut is undone, so a
@@ -1020,7 +1018,7 @@ actually proceeded with. Pinned by `ts/test/lexevents.test.js` and
 The consumer contract (documented in `ts/doc/api.md` under `tn.sub`)
 is identical in both: process events in order, keep the newest per
 source position, and let each kept token's span shadow older events
-inside its extent — which is what retracts the interior events an
+inside its extent, which is what retracts the interior events an
 abandoned speculation fired.
 
 **One unit difference, and it matters to consumers doing the span
@@ -1032,7 +1030,7 @@ already must for diagnostics.
 
 ## Continuations API (`tn.continuations(src)` / `Continuations`)
 
-Both runtimes answer what tokens could legally follow a prefix — the
+Both runtimes answer what tokens could legally follow a prefix: the
 completion primitive of the unified-LSP design. Pinned by
 `ts/test/continuations.test.js` and `go/continuations_test.go`, whose
 expectations were checked against the OTHER runtime on the same
@@ -1046,8 +1044,8 @@ prefixes rather than restating each engine's own output.
 
 **Go has no `tcol`**, the lookahead table TS collates at normalize
 time, and does not need one: `AltSpec.S` already holds the per-position
-tins, so every set here — a rule's openers, its close-leading tokens,
-an alternate's next position — is read straight off the alternates.
+tins, so every set here (a rule's openers, its close-leading tokens,
+an alternate's next position) is read straight off the alternates.
 `closeInfoOf` does the same for recovery. The information is identical;
 only the intermediate table is absent.
 
@@ -1064,7 +1062,7 @@ Shared semantics:
 - **Pop closure.** While a rule can close on anything, its parent's
   close continuations are legal here too.
 - **Push closure.** An alternate fully matched at the query position is
-  about to push another rule, so that rule's openers are legal — which
+  about to push another rule, so that rule's openers are legal, which
   is why `[1,` offers the next element's value starters as well as `]`.
 - **Prefixes that parse still answer**, with `#ZZ` included to mean
   "stopping here is legal". It is a sentinel, not something a user
@@ -1078,5 +1076,5 @@ The set is an over-approximation in both: conditions and counters may
 still reject a listed token.
 
 The diagnostic `expected[]` field deliberately keeps its position-0
-semantics in BOTH runtimes — it is pinned by the shared diagnostic.tsv
+semantics in BOTH runtimes: it is pinned by the shared diagnostic.tsv
 parity fixtures, and the improved computation lives in this API only.

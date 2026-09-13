@@ -125,7 +125,7 @@ See [`make()`](api.md#tnmakeoptions).
 
 `a.merge(b)` builds a new instance carrying both grammars; the
 originals are untouched and the operation is commutative. Give each
-instance a distinct `tag` — it identifies the grammar, prefixes its
+instance a distinct `tag`: it identifies the grammar, prefixes its
 named actions in the result, and breaks ordering ties.
 
 ```js
@@ -151,7 +151,7 @@ See [`merge()`](api.md#tnmergeother) for the exact ordering rules.
 
 `tn.sub({ lex, rule })` registers observers that fire as the parse
 runs. Multiple subscriptions are allowed and fire in registration
-order. Observers cannot change the parse — they just watch.
+order. Observers cannot change the parse: they just watch.
 
 ```js
 tn.sub({

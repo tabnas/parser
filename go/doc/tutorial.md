@@ -1,9 +1,9 @@
 # Tutorial: your first parser (Go)
 
-tabnas ships no grammar, so there is nothing to "turn on" — you teach
+tabnas ships no grammar, so there is nothing to "turn on". You teach
 the engine one token and one rule, watch it parse, then extend it once.
 This walks you from nothing to a working parse and an error you can
-read. Follow it in order — each step builds on the last.
+read. Follow it in order: each step builds on the last.
 
 For a recipe-style index of individual tasks, see the
 [how-to guide](guide.md). For exhaustive signatures, see the
@@ -43,7 +43,7 @@ func main() {
 
 The bare instance knows how to *lex* (split text into tokens) but has
 no rule that says what to *do* with them, so this returns an error. The
-API never panics — every failure comes back as an `error`. Adding a
+API never panics: every failure comes back as an `error`. Adding a
 grammar is the whole point.
 
 ## 3. Define one token and one rule
@@ -76,7 +76,7 @@ func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
 
 Two things happened here:
 
-- The `Fixed` option registered a **fixed token** — an exact source
+- The `Fixed` option registered a **fixed token**. An exact source
   string. `"hello"` in the input now lexes as the token named `#HI`.
 - `j.Rule("val", ...)` modified the start rule. Each rule has an
   **open** phase holding a list of **alternates**. The one alternate
@@ -140,15 +140,15 @@ func helloGrammar(j *tabnas.Tabnas, _ map[string]any) error {
 ```
 
 The parser tries each open alternate in order and takes the first whose
-token sequence matches. That ordering — first match wins, no
-backtracking — is the model you design grammars around. How far ahead an
+token sequence matches. That ordering (first match wins, no
+backtracking) is the model you design grammars around. How far ahead an
 alternate looks is up to the alternate: it declares the token sequence
 it needs and the engine collates lookahead to the deepest one the rule
 declares.
 
 ## 6. Catch an error
 
-When the input does not match, `Parse` returns an `error` — it never
+When the input does not match, `Parse` returns an `error`: it never
 panics. Parse something the grammar rejects and read the structured
 detail:
 
@@ -172,15 +172,15 @@ if errors.As(err, &te) {
 ```
 
 `err.Error()` prints a formatted, colorized message with a caret
-pointing at the source location and an explanatory hint — useful for
+pointing at the source location and an explanatory hint, useful for
 end users. The `*tabnas.TabnasError` fields (`Code`, `Row`, `Col`,
 `Hint`, …) are for your code to branch on.
 
 ## Where to go next
 
-- [How-to guide](guide.md) — focused recipes for individual tasks.
-- [Plugin guide](plugins.md) — structure a grammar plugin properly,
+- [How-to guide](guide.md). Focused recipes for individual tasks.
+- [Plugin guide](plugins.md). Structure a grammar plugin properly,
   including a worked strict-JSON example.
-- [Options reference](options.md) — every configuration field.
-- [API reference](api.md) — every type, function, and method.
-- [Concepts](concepts.md) — how the engine fits together and why.
+- [Options reference](options.md). Every configuration field.
+- [API reference](api.md). Every type, function, and method.
+- [Concepts](concepts.md). How the engine fits together and why.

@@ -4,6 +4,10 @@ Everything in this folder is runnable locally today; nothing is wired
 into `.github/` yet. The proposed workflows live in `workflows/` —
 review them and move them to `.github/workflows/` to activate.
 
+`workflows/docs.yml` is the prose gate (Vale over the reader-facing
+pages, see `docs/STYLE-GUIDE.md`). It needs no sibling checkouts and no
+secrets; `make prose` runs the same check locally.
+
 Layout assumption (matches the existing build.yml convention): sibling
 checkouts next to this repo — `<root>/parser`, `<root>/json`,
 `<root>/jsonic` (override the root with `TABNAS_ROOT`).

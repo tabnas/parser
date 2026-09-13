@@ -1,12 +1,12 @@
 # Concepts
 
 Background on how the TypeScript engine is put together, and why. This
-is understanding-oriented reading, not a task list — for steps see the
+is understanding-oriented reading, not a task list. For steps see the
 [tutorial](tutorial.md) and [how-to guides](guide.md), and for exact
 signatures see the [API](api.md) and [options](options.md) references.
 
-The engine model — grammar-as-plugin, the lexer/parser split, the
-open/close rule machinery, grammar-declared lookahead, instance derivation —
+The engine model (grammar-as-plugin, the lexer/parser split, the
+open/close rule machinery, grammar-declared lookahead, instance derivation)
 is shared by both runtimes and described once in
 [../../doc/architecture.md](../../doc/architecture.md). This document
 covers only what is specific to the TypeScript port.
@@ -16,7 +16,7 @@ covers only what is specific to the TypeScript port.
 In TypeScript the engine is a class, `Tabnas`. A parser is an
 instance, created with `new Tabnas(options)` and configured by plugins.
 Methods (`parse`, `use`, `rule`, `make`, …) hang off the instance, and
-plugins may decorate instances with extra properties — the class
+plugins may decorate instances with extra properties: the class
 carries an index signature so TypeScript tolerates that.
 
 This is the main shape difference from the Go port, which is
@@ -46,21 +46,21 @@ separate members to keep in sync.
 
 `tn.make(options)` derives a child by constructing a new instance with
 the current one as parent. The child does not copy the parent's rules
-verbatim — it inherits the merged options, then **re-runs every plugin
+verbatim: it inherits the merged options, then **re-runs every plugin
 the parent registered** against the child's options, and finally
 applies `rule.include` / `rule.exclude` filtering.
 
 Re-running matters because grammar can be option-conditional: an
 alternate that only exists when `list.child` is set must be
 re-evaluated for the child, not copied from a parent that had the flag
-off. This is why plugins must be idempotent — they run again on every
+off. This is why plugins must be idempotent: they run again on every
 derived instance.
 
 ## The scan-spec lexer
 
 The lexer is matcher-based (one matcher per token kind, run in priority
-order). The simpler matchers — space, line, string bodies, comment
-tails — share a small **scan-spec driver**: a table-driven state
+order). The simpler matchers (space, line, string bodies, comment
+tails) share a small **scan-spec driver**: a table-driven state
 machine that walks bytes, classifies each, and emits position-tracking
 actions. The driver (`scan`), the spec builders (`buildCharRunSpec`,
 `buildLineRunSpec`, `buildStringBodySpec`), the `guardedMatcher`
@@ -71,8 +71,8 @@ authors can build custom matchers on the same primitives. The types
 
 ## Hash-private internals
 
-Each instance keeps its working state — parser, compiled config,
-plugin list, subscriptions — in a single ECMAScript hash-private field,
+Each instance keeps its working state (parser, compiled config,
+plugin list, subscriptions) in a single ECMAScript hash-private field,
 `#internal`. Being hash-private (not merely conventionally private), it
 is invisible to `for...in`, `Object.keys`, `JSON.stringify`, and
 tests: the instance presents only its public surface
@@ -89,9 +89,9 @@ the `error` / `hint` / `errmsg` options.
 
 Longer-form explorations live alongside this doc:
 
-- [LSP feasibility](lsp-feasibility.md) — language-server angles on the
+- [LSP feasibility](lsp-feasibility.md). Language-server angles on the
   engine.
-- [GBNF feasibility](gbnf-feasibility.md) — llama.cpp grammar
+- [GBNF feasibility](gbnf-feasibility.md). Llama.cpp grammar
   (constrained LLM decoding) angles on the engine.
 
 For the shared engine rationale, see

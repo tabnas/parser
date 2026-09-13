@@ -1,0 +1,143 @@
+# Words Vale's dictionary does not have, accepted by name.
+#
+# LISTED ONE BY ONE, never matched by suffix. A pattern like `\w+ise`
+# accepts any word ending in those letters, `madeupise` included, and
+# punches a hole through the gate this file exists to make usable.
+# Adding a stem by hand is the cost, and the cost is the point.
+#
+# CASE PAIRS ARE ONE ENTRY, WRITTEN AS A REGEX. Listing `Tabnas` and
+# `tabnas` as two plain lines does not accept both: Vale turns the pair
+# into a preference and reports "Did you really mean 'tabnas' instead of
+# 'Tabnas'". `[Tt]abnas` accepts the pair without ruling between them.
+
+# --- The engine and the grammars that sit on it ------------------------
+[Tt]abnas
+[Jj]sonic
+[Aa]bnf
+[Ee]bnf
+[Gg]bnf
+[Bb]nf
+[Jj]son
+[Jj]sonc
+[Jj]son5
+[Jj]sonl
+[Xx]ml
+[Tt]oml
+[Yy]aml
+[Zz]on
+[Cc]sv
+[Ii]ni
+[Ee]xpr
+[Mm]ultisource
+[Vv]oxgig
+
+# --- Parsing and lexing, the terms of art ------------------------------
+[Mm]atcher
+[Mm]atchers
+[Ll]ex
+[Ll]exes
+[Ll]exed
+[Ll]exing
+[Uu]nlexable
+[Ss]cannerless
+[Tt]okenise
+[Tt]okenising
+[Rr]elex
+[Ll]ookahead
+[Ee]nder
+[Ff]uncref
+[Ff]uncrefs
+[Ff]nref
+[Bb]uiltin
+[Bb]uiltins
+
+# --- General computing terms the dictionary lacks ----------------------
+[Rr]untime
+[Rr]untimes
+[Bb]oolean
+[Cc]onfig
+[Nn]amespace
+[Nn]amespacing
+[Pp]luggable
+[Ii]ndexable
+[Dd]eclaratively
+[Ss]erializable
+[Aa]ccessor
+[Aa]ccessors
+[Uu]nexported
+[Dd]edup
+[Dd]edupe
+[Dd]edups
+[Cc]anonicalise
+[Ll]owercased
+APIs
+[Nn]pm
+[Aa]rgs
+[Ss]tdin
+[Rr]epo
+[Ss]rc
+peerDependencies
+
+# --- More computing terms -----------------------------------------------
+[Ss]ubstring
+[Ss]uperset
+[Mm]ultiline
+[Tt]ruthy
+[Uu]ntrusted
+[Uu]ntyped
+[Uu]nexecuted
+[Uu]nbuildable
+[Uu]nprefixed
+[Tt]okenization
+[Uu]nmarshalling
+[Cc]ommutatively
+[Ss]tatefulness
+[Dd]estructure
+[Pp]ushback
+[Rr]esync
+[Ss]ubpath
+[Gg]etters
+[Dd]iagnostic
+[Bb]ool
+[Aa]rg
+[Cc]tx
+[Uu]til
+
+# --- Possessives the dictionary does not carry --------------------------
+#
+# Vale spell-checks `another's` as one token and does not know the
+# possessive of a word it otherwise accepts.
+another's
+diagnostic's
+TS
+TS's
+
+# --- Irish, from the worked example corpus -----------------------------
+#
+# The tutorial and the divergence notes parse a sample of Irish text, so
+# the words appear in prose that quotes the input. They are spelled the
+# way the corpus spells them.
+nAistrithe
+agus
+innill
+na
+comhartha
+ainm
+seo
+fiaclacha
+stiall
+uirthi
+bheag
+rialacha
+nua
+bogann
+dheis
+Nuair
+bhfuil
+riail
+eile
+le
+aici
+tagann
+chun
+suaimhnis

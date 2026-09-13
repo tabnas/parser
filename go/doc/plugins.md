@@ -76,8 +76,8 @@ _ = j.Use(jsonic) // dependency: provides the cell-value rules/tokens
 _ = j.Use(csv)    // builds on what jsonic registered
 ```
 
-A plugin can fail fast if a required dependency is missing — inspect the
-instance in its body (e.g. look up an expected token, or check
+A plugin can fail fast if a required dependency is missing: inspect the
+instance in its body (for example, look up an expected token, or check
 `j.RSM()` for a required rule) and return a clear `error` rather than
 producing a confusing parse failure later.
 
@@ -118,20 +118,20 @@ Token names use the `#XX` convention. Built-in tokens:
 | `#CS` | `]` | close square       |
 | `#CL` | `:` | colon              |
 | `#CA` | `,` | comma              |
-| `#NR` | —   | number             |
-| `#ST` | —   | string             |
-| `#TX` | —   | text               |
-| `#VL` | —   | value (keyword)    |
-| `#SP` | —   | space              |
-| `#LN` | —   | line ending        |
-| `#CM` | —   | comment            |
-| `#BD` | —   | bad (error)        |
-| `#ZZ` | —   | end of input       |
+| `#NR` | (none) | number             |
+| `#ST` | (none) | string             |
+| `#TX` | (none) | text               |
+| `#VL` | (none) | value (keyword)    |
+| `#SP` | (none) | space              |
+| `#LN` | (none) | line ending        |
+| `#CM` | (none) | comment            |
+| `#BD` | (none) | bad (error)        |
+| `#ZZ` | (none) | end of input       |
 
 ## Modifying rules
 
 Each rule has open/close alternate lists and bo/ao/bc/ac lifecycle action
-lists. These are **mutated through methods**, not by direct field access —
+lists. These are **mutated through methods**, not by direct field access.
 the lists are unexported on `RuleSpec`, matching the TypeScript runtime
 (where direct array assignment is likewise impossible). The methods:
 
@@ -171,7 +171,7 @@ func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 | `R`  | `string` | replace the current rule |
 | `B`  | `int` | backtrack: tokens to put back |
 | `C`  | `AltCond` | match condition |
-| `G`  | `string` | group tags (e.g. `"json"`, `"tabnas,map"`) |
+| `G`  | `string` | group tags (for example, `"json"`, `"tabnas,map"`) |
 | `H`  | `AltModifier` | modifier: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
 | `E`  | `AltError` | error function |
 | `PF` | `func(r *Rule, ctx *Context) string` | dynamic push |
@@ -179,11 +179,11 @@ func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 | `BF` | `func(r *Rule, ctx *Context) int` | dynamic backtrack |
 | `CD` | `map[string]any` | declarative condition, converted to `C` by `NormAlt` |
 | `N`  | `map[string]int` | increment named counters (setting `0` **resets**); **propagates** to child rules |
-| `U`  | `map[string]any` | custom props merged into `Rule.U`; **does NOT propagate** — per-rule scratch |
+| `U`  | `map[string]any` | custom props merged into `Rule.U`; **does NOT propagate**. Per-rule scratch |
 | `K`  | `map[string]any` | custom "**keep**" props merged into `Rule.K`; **propagates** via push and replace. Rule-scoped, not alternate-scoped |
 
 > **Which bags propagate.** `N` and `K` are inherited by child rules on
-> both push and replace; `U` is not. `K` is named for "keep" — its content
+> both push and replace; `U` is not. `K` is named for "keep": its content
 > is kept as the parse descends. Put per-rule scratch in `U` and anything
 > that must reach child rules in `K`. Picking the wrong bag fails silently.
 > See the root [`AGENTS.md`](../../AGENTS.md) section "Rule state".
@@ -214,16 +214,16 @@ says wherever it sits in the alternate list.
 So `Eq("k", 0)` is true both for a counter set to `0` and for one never set;
 use `Exist` / `CExist` when that difference matters.
 
-Only *counters* read as zero. A path that does not resolve at all — a nil rule,
-an unknown prop, `"n"` with no counter named — is genuine absence. The ordered
+Only *counters* read as zero. A path that does not resolve at all (a nil rule,
+an unknown prop, `"n"` with no counter named) is genuine absence. The ordered
 operators stay permissive there (they answer a question the rule cannot
 answer); `$eq` fails **closed**, because "equals x" cannot be satisfied by a
 value that is not there. Both match the TS port exactly.
 
-Conditions read the same paths as TS — counters (`n.*`), user and kept data
+Conditions read the same paths as TS: counters (`n.*`), user and kept data
 (`u.*`, `k.*`), identity (`d`, `i`, `name`, `state`, `node`), matched tokens
-(`o0.tin`, `c0.src`, ...), and the rule graph (`parent`, `child`, `prev`,
-`next`, recursively) — and compare against any scalar, not just integers:
+(`o0.tin`, `c0.src` and so on), and the rule graph (`parent`, `child`, `prev`,
+`next`, recursively), and compare against any scalar, integers included:
 
 ```go
 CD: map[string]any{"u.mode": tabnas.CEq("strict"), "o0.tin": tabnas.CGt(0)},
@@ -231,11 +231,11 @@ CD: map[string]any{"u.mode": tabnas.CEq("strict"), "o0.tin": tabnas.CGt(0)},
 
 > **Changed in 0.6.** Previously a missing counter made every comparison true,
 > so `Lt` and `Gt` both passed at once and a `CGte` guard fired before anything
-> had been counted. `Exist` / `CExist` are new in the same release — Go had no
+> had been counted. `Exist` / `CExist` are new in the same release: Go had no
 > `$exist` at all, so the "was it set?" question could not be asked.
 
 Note that `N` counters are applied when an alternate is **accepted**, while the
-condition is evaluated while matching it — so an alternate cannot read a counter
+condition is evaluated while matching it, so an alternate cannot read a counter
 it sets itself.
 
 ### State actions
@@ -268,7 +268,7 @@ error is returned.
 By default a later plugin's alternates and state actions are **appended**
 to earlier ones. To instead replace what earlier plugins contributed:
 
-- **Alternates** — `ModifyOpen` / `ModifyClose` with `Clear: true`, or
+- **Alternates**. `ModifyOpen` / `ModifyClose` with `Clear: true`, or
   `ClearOpen()` / `ClearClose()`, then re-add:
 
   ```go
@@ -285,7 +285,7 @@ to earlier ones. To instead replace what earlier plugins contributed:
   }}
   ```
 
-- **State actions** — `rs.ClearActions("bo", "ao", …)` (no args clears all
+- **State actions**. `rs.ClearActions("bo", "ao", …)` (no args clears all
   four phases) removes earlier actions; then register fresh ones.
   Declaratively, append `/replace` to the funcref name:
 
@@ -299,7 +299,7 @@ to earlier ones. To instead replace what earlier plugins contributed:
 
 `/replace` takes ownership of the phase: once replaced, the plain /
 `/prepend` / `/append` funcrefs for it are ignored, and the replacement
-wins deterministically across `Derive()`. All of this is opt-in —
+wins deterministically across `Derive()`. All of this is opt-in.
 existing grammars that use neither `Clear` nor `/replace` keep the append
 behavior unchanged.
 
@@ -308,7 +308,7 @@ behavior unchanged.
 The funcref suffixes match the TypeScript runtime:
 
 - `@<rule>-<phase>/append` and the plain `@<rule>-<phase>` are the **same
-  slot** — providing both installs one action (the `/append` entry wins),
+  slot**. Providing both installs one action (the `/append` entry wins),
   exactly as TS resolves `fr[base+'/append'] ?? fr[base]`. Use `/prepend`
   for a distinct front-inserted action.
 - A funcref already installed for a phase is **not** re-installed on a
@@ -317,7 +317,7 @@ The funcref suffixes match the TypeScript runtime:
   Go has no per-closure identity, so two *distinct* closures created from
   the same function literal share a code pointer and dedup as one. Register
   **stable, reused** `StateAction` / ref values across calls (as grammars
-  do) — the dependable pattern in both runtimes.
+  do), the dependable pattern in both runtimes.
 
 `RuleSpec.Fnref(ref)` installs lifecycle actions by funcref imperatively,
 mirroring the TS `rs.fnref(frm)` method, for code-built grammars that don't
@@ -345,7 +345,7 @@ j.SetOptions(tabnas.Options{Lex: &tabnas.LexOptions{
 fixed=2M … text=8M). Setting a spec under an existing name replaces it.
 For walking bytes inside a matcher, the scan-spec primitives (`Scan`,
 `BuildCharRunSpec`, `BuildLineRunSpec`, `BuildStringBodySpec`) are
-exported — see the [API reference](api.md#scan-primitives). Full
+exported. See the [API reference](api.md#scan-primitives). Full
 ordering, the `Lex` helper methods, and built-in priorities are listed
 in the [API reference](api.md#custom-matchers).
 

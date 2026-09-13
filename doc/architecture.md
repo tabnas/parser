@@ -1,7 +1,7 @@
 # Architecture
 
 This document explains how the tabnas engine is put together and why.
-It is background reading — for step-by-step instructions see the
+It is background reading. For step-by-step instructions see the
 tutorials, and for exact signatures see the reference docs. The design
 is shared by both runtimes; where they differ, see
 [differences from TypeScript](../go/doc/differences.md).
@@ -9,7 +9,7 @@ is shared by both runtimes; where they differ, see
 ## The engine is grammar-free
 
 tabnas is a parsing *engine*, not a parser for one particular language.
-The core ships no grammar at all. A grammar — even strict JSON — arrives
+The core ships no grammar at all. A grammar (even strict JSON) arrives
 as a **plugin** that registers tokens, rules, and matchers on an
 instance. This is the central design decision, and everything else
 follows from it:
@@ -40,7 +40,7 @@ order at each position; the first to produce a token wins.
 
 Matchers are configured, not hard-coded. Turning off the comment
 matcher, adding a quote character, or registering a regex-based token
-matcher are all option changes — the lexer rebuilds itself from the
+matcher are all option changes: the lexer rebuilds itself from the
 resolved configuration.
 
 The simpler matchers (space, line, the string body, comment tails) share
@@ -52,18 +52,18 @@ matchers on the same primitives.
 ### The parser (rules)
 
 The parser consumes tokens according to **rules**. Each rule has two
-phases — **open** and **close** — and each phase holds a list of
-**alternates**. An alternate matches a token pattern — one token, or as
-many as it declares — and, when it matches, can:
+phases (**open** and **close**), and each phase holds a list of
+**alternates**. An alternate matches a token pattern (one token, or as
+many as it declares) and, when it matches, can:
 
 - run an **action** that builds or mutates the result node,
-- **push** a child rule onto the stack (e.g. an object opens a `map` rule),
+- **push** a child rule onto the stack (for example, an object opens a `map` rule),
 - **replace** the current rule with a sibling,
 - **backtrack** a token so another rule can see it,
 - attach **conditions**, **counters**, and **group tags**.
 
-Four **state-action hooks** — before-open, after-open, before-close,
-after-close — let a rule run code at each phase boundary (for example,
+Four **state-action hooks**, before-open, after-open, before-close
+and after-close, let a rule run code at each phase boundary (for example,
 initialising a node to `{}` before its open phase).
 
 **Lookahead depth is set by the grammar, not by the engine.** Each
@@ -71,7 +71,7 @@ alternate declares how many token positions it needs (`sN`), and each
 rule collates its lookahead columns to the deepest declared across its
 alternates, per phase (`rules.ts`, `tcol`). The context's lookahead
 buffer (`ctx.t`) is seeded with two slots and grows as alternates ask
-for deeper positions via `t[i]`. There is no fixed limit — an earlier
+for deeper positions via `t[i]`. There is no fixed limit: an earlier
 version of the engine hard-coded two slots, and that restriction is
 gone. (`ctx.t0` / `t1` survive as deprecated aliases for the first two
 slots; new grammar code should index `t[i]` directly.)
@@ -80,7 +80,7 @@ This open/close, push/replace model is deliberately small and strictly
 deterministic: alternates are tried in order, the first match wins, and
 there is no backtracking search. That is what keeps parsing linear and
 predictable, and it is the main thing a grammar author has to design
-around — a grammar has to be resolvable without exploring alternatives,
+around: a grammar has to be resolvable without exploring alternatives,
 however far ahead it needs to look to do so.
 
 ## Instances and derivation
@@ -99,7 +99,7 @@ human-readable message with a source-context extract, and an optional
 hint. Messages and hints are templates with `{key}` placeholders, so
 they can be customised or localised. The difference is delivery:
 TypeScript throws, Go returns an `error` value (and the Go API never
-panics — internal failures are converted to error results).
+panics, since internal failures are converted to error results).
 
 ## Where to go next
 

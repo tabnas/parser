@@ -43,7 +43,7 @@ A strict-JSON grammar is just a grammar plugin that registers the
 every tabnas relaxation (unquoted keys, comments, trailing commas,
 hex/octal/binary numbers, single/backtick quotes, empty input) is
 rejected. The repository keeps a complete worked example as a test
-fixture in [`jsonplugin_test.go`](../jsonplugin_test.go) — read it as a
+fixture in [`jsonplugin_test.go`](../jsonplugin_test.go). Read it as a
 template for your own grammar:
 
 ```go
@@ -118,7 +118,7 @@ fmt.Println(tx.Quote, tx.Str)     // " x
 ```
 
 `Text.Quote` is the quote character (`""` for unquoted text). A grammar
-that creates containers implicitly (e.g. a relaxed `a:1`) reports
+that creates containers implicitly (for example, a relaxed `a:1`) reports
 `Implicit: true`; braces/brackets report `false`. See the
 [syntax reference](syntax.md#extended-result-types) for the full struct
 fields.
