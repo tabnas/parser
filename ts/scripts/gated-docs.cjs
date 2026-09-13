@@ -29,7 +29,7 @@ const EXTRA = ['go/doc/differences.md', 'go/doc/syntax.md']
 
 // npm and pkg.go.dev render these to somebody who has the package and
 // not the repository, so they are held to the same bar as the docs.
-const READMES = ['README.md', 'ts/README.md', 'go/README.md']
+const READMES = ['README.md', 'ts/README.md', 'go/README.md', 'rs/README.md']
 
 
 function exists(rel) {
