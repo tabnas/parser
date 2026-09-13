@@ -10,7 +10,7 @@
 
 A **pluggable parsing engine**: a configurable rule-based parser running
 over a configurable matcher-based lexer. The engine ships **no grammar**
-of its own — you bring the grammar as a plugin. tabnas grew out of the
+of its own: you bring the grammar as a plugin. tabnas grew out of the
 [jsonic](https://github.com/tabnas/jsonic) plugin: lenient JSON for
 humans (unquoted keys, implicit objects, comments, trailing commas, path
 diving), which is now just one grammar built on this engine.
@@ -28,13 +28,13 @@ a:b:c:1           →  {"a": {"b": {"c": 1}}}
 tabnas is a **rule-based parser** driven by a **matcher-based lexer**, and
 it is **grammar-agnostic**:
 
-- **Lexer** — tokens are produced by an ordered list of matchers (fixed
+- **Lexer**. Tokens are produced by an ordered list of matchers (fixed
   strings, spaces, lines, strings, comments, numbers, free text). Add or
   replace matchers to recognise new tokens.
-- **Parser** — a small rule machine. Each rule has `open` and `close`
+- **Parser**. A small rule machine. Each rule has `open` and `close`
   alternatives that match token sequences, push child rules, and build the
   result node. There is no fixed grammar baked in.
-- **Plugins** — a grammar is a plugin that registers tokens and rules.
+- **Plugins**. A grammar is a plugin that registers tokens and rules.
   Compose several plugins to parse a dialect.
 
 Here is a declarative grammar for integer
@@ -198,7 +198,7 @@ flowchart TD
 
 - **Dotted edge** = `p` push: `val` descends into the `add` loop (depth 0 → 1).
 - **Thick edges** = `r` replace: each `+` swaps `add` for the next `add` at the
-  *same* depth — the whole loop lives in one stack frame (no growth).
+  *same* depth, since the whole loop lives in one stack frame (no growth).
 - **Plain edge** = close & pop: end-of-source (`#ZZ`) ends the loop, popping
   back to `val`, which closes returning the total.
 
@@ -208,7 +208,7 @@ flowchart TD
 The same grammar can be written in standard
 [ABNF](https://www.rfc-editor.org/rfc/rfc5234) (RFC 5234) with the
 [`@tabnas/abnf`](https://github.com/tabnas/abnf) plugin, which compiles ABNF
-into engine rules. Not a similar grammar — *this* grammar: the same four
+into engine rules. Not a similar grammar, but *this* grammar: the same four
 productions the `describe()` dump above prints for the hand-written version.
 
 ```js
@@ -236,7 +236,7 @@ tn.parse('12+3+45').value  // => 60
 ```
 
 The same two actions, on the same two rules, as the hand-written grammar
-above — because the compiler emits the same shape. The tail self-reference
+above, because the compiler emits the same shape. The tail self-reference
 `[ PL add ]` compiles to the `r: 'add'` close-phase repeat the hand-written
 grammar declares, so `r.parent` is `val` for every repetition and the total
 lands on `val`'s node, where `parse` returns it.
@@ -249,8 +249,8 @@ for the rules behind both.
 
 Because both notations describe the same grammar, it round-trips.
 [`@tabnas/debug`](https://github.com/tabnas/debug) renders the live engine
-back to ABNF, and what comes out is what went in — character for character,
-re-compilable, not just readable:
+back to ABNF, and what comes out is what went in, character for character,
+re-compilable rather than merely readable:
 
 ```js
 const { Tabnas } = require('@tabnas/parser')
@@ -272,13 +272,13 @@ tn.debug.model().abnf === GRAMMAR  // => true
 ```
 
 And yes, [left recursion](https://github.com/tabnas/abnf#left-recursion) is
-supported — though a left-recursive rule is *rewritten* into iterative form to
+supported, though a left-recursive rule is *rewritten* into iterative form to
 run on the push-down engine, so unlike the grammar above it does not render
 back to the source it was written in.
 
 ## How extensibility works
 
-The engine ships no grammar, so everything — including JSON itself — arrives
+The engine ships no grammar, so everything (including JSON itself) arrives
 by extension. There are two composition mechanisms: **plugins** grow one
 instance's grammar in place, and **merging** combines two finished instances
 into a new one.
@@ -299,28 +299,28 @@ const tn = new Tabnas().use(Csv, { header: true })
 Inside, a plugin builds its grammar through the same three surfaces used in
 the addition example above:
 
-- **Options** — declare tokens: fixed strings (`fixed.token`), regex or
+- **Options**. Declare tokens: fixed strings (`fixed.token`), regex or
   function lexer matchers, custom lex matchers. Plugin-specific options are
   auto-namespaced under `plugin.<name>` and merged over the plugin's declared
   defaults.
-- **Rules** — `tn.rule(name, (rs) => ...)` creates a rule *or modifies an
+- **Rules**. `tn.rule(name, (rs) => ...)` creates a rule *or modifies an
   existing one*: append open/close alternates, attach actions and conditions,
   or clear what earlier plugins contributed. Alternates carry group tags
-  (`g:`), so a later plugin can insert before/after — or replace — a named
+  (`g:`), so a later plugin can insert before/after (or replace) a named
   group instead of blindly appending.
-- **Declarative grammars** — `tn.grammar({...})` applies a whole grammar
+- **Declarative grammars**. `tn.grammar({...})` applies a whole grammar
   spec at once; function-free specs are serializable and can reference
   engine builtins by name.
 
 Plugins compose in sequence: each `use()` sees the grammar left by its
-predecessors. That is how the ecosystem is layered — `jsonic` extends the
+predecessors. That is how the ecosystem is layered: `jsonic` extends the
 strict `json` grammar, and `csv`, `toml`, `yaml` extend `jsonic`. To
 customize without disturbing a shared instance, `tn.make()` forks a child
 that inherits config, plugins, and rules.
 
 ### Grammar merging
 
-Plugins compose *vertically* — each extends what came before. `merge()`
+Plugins compose *vertically*: each extends what came before. `merge()`
 composes *horizontally*: `const ab = a.merge(b)` returns a **new** instance
 combining two independently built grammars, leaving both originals
 untouched.
@@ -347,16 +347,16 @@ attributable. The exact semantics live in
 Every package depends only on others above it. Runtime (`prod`) dependencies on
 other tabnas packages are declared as **peerDependencies** (npm ≥ 7 / Node ≥ 20
 installs them automatically). `@tabnas/debug` (structured-output tests) and
-`@tabnas/railroad` (diagram generation) are **dev-only** in every package —
+`@tabnas/railroad` (diagram generation) are **dev-only** in every package:
 except `jsonic-cli`, which has no grammar to diagram (no `railroad`) and uses
 `@tabnas/debug` at runtime for its `--debug` flag (a prod peer).
 
 | Package | Description | Prod (peer) | Dev-only |
 | ------- | ----------- | ----------- | -------- |
-| [parser](https://github.com/tabnas/parser) | Pluggable parsing engine (rule machine + matcher lexer) | — | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
+| [parser](https://github.com/tabnas/parser) | Pluggable parsing engine (rule machine and matcher lexer) | (none) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [debug](https://github.com/tabnas/debug) | Trace logging and structured `describe()` / `model()` helpers | [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
 | [json](https://github.com/tabnas/json) | Strict-JSON grammar plugin | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
-| [jsonic](https://github.com/tabnas/jsonic) | Relaxed-JSON (jsonic) grammar — the callable façade | [debug](https://github.com/tabnas/debug), [json](https://github.com/tabnas/json), [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
+| [jsonic](https://github.com/tabnas/jsonic) | Relaxed-JSON (jsonic) grammar. The callable façade | [debug](https://github.com/tabnas/debug), [json](https://github.com/tabnas/json), [parser](https://github.com/tabnas/parser) | [railroad](https://github.com/tabnas/railroad) |
 | [jsonic-cli](https://github.com/tabnas/jsonic-cli) | The `jsonic` command-line interface (parses relaxed-JSON from args, files or stdin) | [debug](https://github.com/tabnas/debug), [jsonic](https://github.com/tabnas/jsonic) | [parser](https://github.com/tabnas/parser) |
 | [abnf](https://github.com/tabnas/abnf) | Compiles ABNF into engine rules (`@tabnas/abnf`) | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
 | [hoover](https://github.com/tabnas/hoover) | Whitespace / block-text lexer helper | [parser](https://github.com/tabnas/parser) | [debug](https://github.com/tabnas/debug), [railroad](https://github.com/tabnas/railroad) |
@@ -378,7 +378,7 @@ except `jsonic-cli`, which has no grammar to diagram (no `railroad`) and uses
 
 ## TypeScript is canonical; ports follow
 
-The **TypeScript implementation is the original and canonical** engine —
+The **TypeScript implementation is the original and canonical** engine.
 it defines the behaviour, the API shape, and the conformance fixtures. The
 **Go port follows that functionality**: same engine model, same grammar-free
 design, same layout, validated against the same shared fixtures. The Rust
@@ -391,26 +391,26 @@ authoritative unless a recorded decision says otherwise.
 
 | Runtime | Package / module | Start here |
 |---|---|---|
-| **TypeScript / JavaScript** — original & canonical | `@tabnas/parser` (npm) | [`ts/README.md`](ts/README.md) |
-| **Go** — port that follows the TS engine | `github.com/tabnas/parser/go` | [`go/README.md`](go/README.md) |
-| **Rust** — native engine slice | `rs/` workspace crate | [`rs/README.md`](rs/README.md) |
+| **TypeScript / JavaScript**. Original & canonical | `@tabnas/parser` (npm) | [`ts/README.md`](ts/README.md) |
+| **Go**. Port that follows the TS engine | `github.com/tabnas/parser/go` | [`go/README.md`](go/README.md) |
+| **Rust**. Native engine slice | `rs/` workspace crate | [`rs/README.md`](rs/README.md) |
 
 ## Documentation
 
 The docs are organised by what you are trying to do, symmetrically for both
 runtimes:
 
-- **Learning the basics** — tutorials walk you from an empty file to a
+- **Learning the basics**. Tutorials walk you from an empty file to a
   working parse: [TypeScript tutorial](ts/doc/tutorial.md) ·
   [Go tutorial](go/doc/tutorial.md).
-- **Getting a specific job done** — how-to recipes:
+- **Getting a specific job done**. How-to recipes:
   [TypeScript guides](ts/doc/guide.md) · [Go guides](go/doc/guide.md);
   plugin authoring [TS](ts/doc/plugins.md) · [Go](go/doc/plugins.md).
-- **Looking something up** — reference for every option, method, and rule:
+- **Looking something up**. Reference for every option, method, and rule:
   the shared [syntax reference](doc/syntax.md), plus per-language API
   ([TS](ts/doc/api.md) · [Go](go/doc/api.md)) and options
   ([TS](ts/doc/options.md) · [Go](go/doc/options.md)).
-- **Understanding how it works** — the shared
+- **Understanding how it works**. The shared
   [architecture](doc/architecture.md), and per-language concept notes
   ([TS](ts/doc/concepts.md) · [Go](go/doc/concepts.md)). Porting from TS to
   Go? See [differences](go/doc/differences.md).
@@ -420,7 +420,7 @@ runtimes:
 | Path | What it is |
 |---|---|
 | [`ts/`](ts/) | The canonical TypeScript engine (the `@tabnas/parser` npm package). |
-| [`go/`](go/) | The Go port (`github.com/tabnas/parser/go`) — grammar-free, same layout as TS. |
+| [`go/`](go/) | The Go port (`github.com/tabnas/parser/go`). Grammar-free, same layout as TS. |
 | [`rs/`](rs/) | The Rust lexer/rule-engine slice (`tabnas` crate); see its README for current scope. |
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
@@ -431,7 +431,7 @@ build, test, and contribution notes; start with [`AGENTS.md`](AGENTS.md).
 ## Legacy version
 
 The original project was [`jsonicjs/jsonic`](https://github.com/jsonicjs/jsonic)
-— now the **legacy version**. Its engine has been generalised into tabnas,
+It is now the **legacy version**. Its engine has been generalised into tabnas,
 and the relaxed-JSON grammar lives on as the
 [jsonic](https://github.com/tabnas/jsonic) plugin. New work should target
 tabnas and the `@tabnas/*` plugins.
@@ -446,6 +446,6 @@ This open source module is sponsored and supported by
 MIT. Copyright (c) 2013-2026 Richard Rodger.
 
 
-## Tábla na nAistrithe — “The Table of Transitions.” - (tabnas)
+## Tábla na nAistrithe: “The Table of Transitions.” - (tabnas)
 
 Is é Tábla na nAistrithe ainm an innill seo. Is gléas é déanta d’adhmad, de rothaí fiaclacha, de luamháin, agus de phionnaí. Tá stiall phár ann, agus comharthaí scríofa uirthi. Léann lámh bheag an innill comhartha amháin, féachann sí ar staid an innill, agus de réir rialacha Tábla na nAistrithe scríobhann sí comhartha nua, athraíonn sí a staid, agus bogann sí cearnóg amháin ar chlé nó ar dheis. Nuair nach bhfuil riail eile le leanúint aici, tagann Tábla na nAistrithe chun suaimhnis.

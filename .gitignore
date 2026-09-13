@@ -154,3 +154,9 @@ vite.config.ts.timestamp-*
 # their latest release, each with its own node_modules. Generated, large,
 # and re-fetched on demand -- never committed.
 ci/fleet/.work/
+
+# Vale's downloaded style packages. The vocabulary under
+# .vale/styles/config/ and the house rule under .vale/styles/Tabnas/ are
+# ours and ARE committed; Google/ arrives from the pinned URL in
+# .vale.ini via `vale sync`.
+/.vale/styles/Google/

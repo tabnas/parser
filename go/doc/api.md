@@ -44,10 +44,10 @@ Parse with metadata accessible in rule actions/conditions via
 ## Result types
 
 A JSON-style grammar maps the returned `any` to these concrete types:
-`*OrderedMap` (objects — an insertion-ordered map preserving source key
+`*OrderedMap` (objects, an insertion-ordered map preserving source key
 order; `Keys`/`Vals`, ordered `MarshalJSON`/`UnmarshalJSON`, `AsStringMap`),
 `[]any` (arrays), `float64` (numbers), `string` (strings), `bool`
-(booleans), `nil` (null / empty input) — the exact mapping is the
+(booleans), `nil` (null / empty input): the exact mapping is the
 grammar's choice. Set `Map.Plain: true` to get a plain unordered
 `map[string]any` instead (for consumers that track order themselves).
 With `Info` options enabled, values are wrapped in `Text`, `ListRef`,
@@ -88,9 +88,9 @@ alternates in the same order, and the same parse behavior. Returns an
 error (never panics) on conflicts.
 
 Both instances must carry distinct, non-empty `Tag` options; the
-result's tag is the sorted join (e.g. `"A~B"`).
+result's tag is the sorted join (for example, `"A~B"`).
 
-Options merge symmetrically — a field set on only one side (nil/zero
+Options merge symmetrically: a field set on only one side (nil/zero
 means "default") merges cleanly; a field set to different values on
 both sides errors with the option path (`merge: conflicting option
 values at rule.maxmul`). Custom tokens and fixed-token sources are
@@ -201,7 +201,7 @@ produce an error, never a panic. See the [plugin guide](plugins.md).
 `gs.Meta` is free-form tool metadata and is ignored here: it is neither
 read nor applied, so a spec carrying it installs exactly as one without
 it. `GrammarSpecFromJSON` preserves a serialised spec's top-level `meta`
-object into that field, so a caller holding the spec can read it back —
+object into that field, so a caller holding the spec can read it back:
 the BNF-family compilers record their synthetic-rule provenance under
 `meta.provenance`, which the language server reads to canonicalise
 generated rule names. Declared in `schema/grammar.schema.json`.
@@ -354,7 +354,7 @@ type RuleSub func(rule *Rule, ctx *Context)
 ```
 
 `LexSub` fires for **every** token the lexer produces, including tokens in
-the IGNORE set (whitespace, comments, line breaks) — the same stream the
+the IGNORE set (whitespace, comments, line breaks): the same stream the
 TypeScript runtime delivers. Filter on the token name if you only want
 grammar-significant tokens.
 
@@ -387,7 +387,7 @@ type RuleDoneAlt struct {
 ```
 
 Because `State` is the state *before* the pass, open and close events
-for one rule can be paired by `rule.I` — which is how you recover
+for one rule can be paired by `rule.I`, which is how you recover
 balanced source spans:
 
 ```go
@@ -413,7 +413,7 @@ had some and none matched, `Alt` is non-nil with just `Err` set. The
 `G` slice is a fresh copy per event, so mutating it cannot reach the
 grammar.
 
-`Forced` is always false until Go gains error recovery — only recovery
+`Forced` is always false until Go gains error recovery: only recovery
 synthesizes a close.
 
 ## Completion
@@ -421,7 +421,7 @@ synthesizes a close.
 ### `(*Tabnas) Continuations(src string) ([]Tin, []string)`
 
 The tokens that could legally continue `src`, treating it as a
-**prefix** — the completion primitive of the unified-LSP design.
+**prefix**. The completion primitive of the unified-LSP design.
 Returns the tins and their `#`-names, both sorted by tin.
 
 ```go
@@ -431,7 +431,7 @@ tins, names := j.Continuations(`{"a"`)
 
 The computation is **path-aware**: each alternate contributes only the
 position it is actually waiting on, so a sibling alternate whose own
-prefix never matched adds nothing. It is widened two ways — a **pop
+prefix never matched adds nothing. It is widened two ways: a **pop
 closure** (while a rule can close on anything, its parent's close
 continuations are legal here too) and a **push closure** (an alternate
 fully matched at this position is about to push another rule, so that
@@ -442,7 +442,7 @@ A prefix that parses completely still answers. Permissive grammars read
 most mid-edit input as a complete document, and reporting nothing there
 would leave completion empty exactly where an editor asks for it. `#ZZ`
 is included whenever the prefix parses, meaning "stopping here is
-legal" — it is a sentinel rather than something a user types, so a
+legal": it is a sentinel rather than something a user types, so a
 completion provider should drop it from the item list and read it as
 "this document is already valid".
 
@@ -495,7 +495,7 @@ Common error codes: `unexpected`, `unterminated_string`,
 `unterminated_comment`, `invalid_unicode`, `invalid_ascii`,
 `unprintable`, `unknown_rule`, `end_of_source`, `cancel`, `internal`. The
 `internal` code marks a bug in tabnas or a plugin (a panic caught by
-the recover guard), not bad input — see
+the recover guard), not bad input. See
 [concepts](concepts.md#the-no-panic-guarantee).
 
 ## Helper pattern
@@ -511,8 +511,8 @@ tabnas.Options{Comment: &tabnas.CommentOptions{Lex: boolp(false)}}
 
 ## Grammar validation
 
-Pure functions that check a grammar held as **data** — a `*GrammarSpec` from
-the `Grammar()` / GrammarText path, a generator, or an editor — before any
+Pure functions that check a grammar held as **data**. A `*GrammarSpec` from
+the `Grammar()` / GrammarText path, a generator, or an editor. Before any
 parser exists. They report problems instead of returning errors, so one pass
 can collect everything wrong with a grammar rather than stopping at the first.
 
@@ -523,30 +523,30 @@ tags. A condition given as a function is opaque and is skipped.
 
 ### `ValidateAlts(alts []*AltSpec, label string) []string`
 
-`ValidateAlt` across a list, each problem prefixed with where it is — `label`
-names the list, e.g. `"val.open alt[0]: …"`.
+`ValidateAlt` across a list, each problem prefixed with where it is: `label`
+names the list, for example, `"val.open alt[0]: …"`.
 
 ### `ValidateGrammar(gs *GrammarSpec, known []string) []string`
 
 Every **dangling rule reference** in a whole spec: an alternate whose `P` or
 `R` names a rule nothing defines. This is the one check that needs the whole
-rule map in scope, so `ValidateAlt` cannot make it — and the reference is a
+rule map in scope, so `ValidateAlt` cannot make it, and the reference is a
 static typo the engine can otherwise only report at parse time, as
 `unknown_rule`, and only once an input reaches the alternate carrying it.
 
 - `known` names rules that already exist on the target instance, so a spec
   that **extends** a grammar can push to a rule it does not itself define.
   Pass `nil` to check a spec as a self-contained document.
-- A `nil` rule entry *removes* that rule, so referencing it dangles — even if
+- A `nil` rule entry *removes* that rule, so referencing it dangles, even if
   it was in `known`. `Clear: true` discards `known` entirely, since it wipes
   every rule on the instance.
 - A FuncRef (`"@name"`) and an empty slot are skipped: each yields its rule
   name at parse time, so no static check can follow it.
 
-Deliberately narrow — rule references only. Run `ValidateAlts` per list for
+Deliberately narrow: rule references only. Run `ValidateAlts` per list for
 the per-alternate checks; note those two runtimes word their group-tag
 message differently, which is why they are not folded in here. Problems are
-sorted **by UTF-16 code unit** (JavaScript's order, reproduced deliberately —
+sorted **by UTF-16 code unit** (JavaScript's order, reproduced deliberately:
 see `utf16Less`) and the rule name is quoted verbatim rather than with `%q`,
 so this function returns byte-identical output to TypeScript's
 `validateGrammar`.

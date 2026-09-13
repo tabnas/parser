@@ -1,8 +1,8 @@
-# Tutorial — your first parser
+# Tutorial: your first parser
 
 This walks you from an empty project to a working parser you wrote
-yourself. tabnas ships no grammar, so there is nothing to "turn on" —
-you teach the engine one token and one rule, watch it parse, then
+yourself. tabnas ships no grammar, so there is nothing to "turn on".
+You teach the engine one token and one rule, watch it parse, then
 extend it once. Follow it top to bottom; every step builds on the
 last.
 
@@ -30,7 +30,7 @@ whole point: a grammar is something you add.
 
 ## Define one token and one rule
 
-A grammar is a plugin — a function that receives the instance and
+A grammar is a plugin: a function that receives the instance and
 configures it. The smallest useful grammar recognises a single word.
 
 ```js
@@ -93,15 +93,15 @@ tn.parse('bye')                       // 'farewell'
 ```
 
 The parser tries each open alternate in order and takes the first whose
-token sequence matches. That ordering — first match wins, no backtracking —
+token sequence matches. That ordering (first match wins, no backtracking)
 is the model you design grammars around. How far ahead an alternate looks is
 up to the alternate: it declares the token sequence it needs, and the engine
 collates lookahead to the deepest one the rule declares.
 
 ## Where to go next
 
-- [How-to guides](guide.md) — recipes for keywords, custom matchers,
+- [How-to guides](guide.md). Recipes for keywords, custom matchers,
   error handling, child instances, and events.
-- [Writing plugins](plugins.md) — structure a grammar plugin properly.
-- [API reference](api.md) — every method and property.
-- [Concepts](concepts.md) — why the engine is split this way.
+- [Writing plugins](plugins.md). Structure a grammar plugin properly.
+- [API reference](api.md). Every method and property.
+- [Concepts](concepts.md). Why the engine is split this way.

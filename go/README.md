@@ -4,7 +4,7 @@ Version: 0.1.22
 
 A pluggable parsing engine: a rule-based parser over a configurable
 matcher-based lexer, exposed as the `tabnas.Tabnas` type. The package
-ships **no grammar** of its own — every grammar is a plugin that you
+ships **no grammar** of its own: every grammar is a plugin that you
 (or another package) supply, matching the canonical TypeScript package.
 
 This is a Go port of the [TypeScript reference](../ts/); both runtimes
@@ -53,7 +53,7 @@ func main() {
 }
 ```
 
-Full UTF-8 support (keys, values, escapes — including astral-plane
+Full UTF-8 support (keys, values, escapes, including astral-plane
 characters and JSON surrogate pairs), and the API never panics: every
 failure is a returned `error`, even for arbitrary malformed byte input.
 For a complete, non-trivial grammar, see the strict-JSON test fixture at
@@ -63,22 +63,22 @@ For a complete, non-trivial grammar, see the strict-JSON test fixture at
 
 Learning and reference, by purpose:
 
-- [Tutorial](doc/tutorial.md) — start here: `go get` to a working
+- [Tutorial](doc/tutorial.md). Start here: `go get` to a working
   parse and one customization.
-- [How-to guide](doc/guide.md) — focused recipes for individual tasks.
-- [API reference](doc/api.md) — every type, function, and method.
-- [Options reference](doc/options.md) — every configuration field.
-- [Syntax reference](doc/syntax.md) — Go result types.
-- [Plugin guide](doc/plugins.md) — authoring grammars and matchers.
-- [Concepts](doc/concepts.md) — how the engine fits together and the
+- [How-to guide](doc/guide.md). Focused recipes for individual tasks.
+- [API reference](doc/api.md). Every type, function, and method.
+- [Options reference](doc/options.md). Every configuration field.
+- [Syntax reference](doc/syntax.md). Go result types.
+- [Plugin guide](doc/plugins.md). Authoring grammars and matchers.
+- [Concepts](doc/concepts.md). How the engine fits together and the
   no-panic guarantee.
-- [Differences from TypeScript](doc/differences.md) — for those who
+- [Differences from TypeScript](doc/differences.md). For those who
   use both runtimes.
 
 Shared, language-neutral docs:
 
-- [Syntax specification](../doc/syntax.md) — the syntax reference.
-- [Architecture](../doc/architecture.md) — the engine design.
+- [Syntax specification](../doc/syntax.md). The syntax reference.
+- [Architecture](../doc/architecture.md). The engine design.
 
 ## License
 

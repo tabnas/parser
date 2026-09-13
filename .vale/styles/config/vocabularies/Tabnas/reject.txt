@@ -1,0 +1,84 @@
+worth noting
+important to note
+it cannot be overstated
+at its core
+when it comes to
+let'?s break it down
+here'?s where it gets interesting
+because it matters
+delve
+dive into
+robust
+seamless(?:ly)?
+comprehensive(?:ly)?
+holistic
+intricate
+leverag(?:e|es|ed|ing)
+foster(?:s|ed|ing)?
+shed(?:s|ding)? light on
+pav(?:e|es|ed|ing) the way
+pivotal
+transformative
+game.chang(?:er|ing)
+cutting.edge
+groundbreaking
+testament to
+paradigm shift
+realm
+landscape (?:of|for)
+navigat(?:e|es|ed|ing)
+unpack(?:s|ed|ing)?
+lean(?:s|ing)? (?:in)?to
+throughline
+double.click on
+mature setup
+north star
+key takeaways
+best practices
+at the end of the day
+pressure.test
+right.size
+strategic imperative
+three things to (?:know|understand)
+dispatches from
+best operators
+lessons learned
+load.bearing
+heavy lifting
+is doing the work
+different physics
+rules of physics
+(?:hits|lands|strikes) hardest
+quietly
+not just
+not only .{0,40}\bbut\b
+it'?s not about
+the whole game
+the entire point
+the only thing that (?:matters|changed)
+the right (?:way|answer|tool|question)
+the best thing you can do
+if I had to pick
+what (?:struck|got) me
+stuck with me
+struck a chord
+(?:hit|struck) a nerve
+we'?ve seen this movie
+we'?ve been here before
+sit with
+worth (?:exploring|considering|a look|asking|talking about)
+keeps? coming back to
+that'?s the tell
+where I landed
+most people
+everyone I'?ve worked with
+a lot of folks
+nobody I know
+honest(y|ly)?
+let'?s explore
+now let'?s turn to
+moving on to
+in today'?s rapidly evolving
+reflecting a broader trend
+marking a significant shift
+great question

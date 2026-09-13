@@ -1,6 +1,6 @@
 # Writing Plugins
 
-A plugin is how grammar (and tooling) gets into tabnas — the package
+A plugin is how grammar (and tooling) gets into tabnas: the package
 itself is grammar-free. A plugin adds tokens, registers matchers,
 modifies rules, hooks events, or decorates the instance. This is a
 how-to: for the full method and option signatures, follow the links
@@ -36,7 +36,7 @@ const p = new Tabnas()
   .use(debugPlugin)
 ```
 
-Or pass plugins at construction time — same effect, applied in order:
+Or pass plugins at construction time. The effect is the same, applied in order:
 
 ```js
 const p = new Tabnas({ plugins: [jsonGrammar, csvGrammar, debugPlugin] })
@@ -45,7 +45,7 @@ const p = new Tabnas({ plugins: [jsonGrammar, csvGrammar, debugPlugin] })
 Plugins should be idempotent (or guard against re-application) because
 `tn.make()` derives a child by re-running every plugin the parent has
 registered, against the child's merged options. That re-run is what
-makes option-conditional alternates (e.g. `list.child`) work — the
+makes option-conditional alternates (for example, `list.child`) work: the
 plugin's grammar registration sees the child's settings, not the
 parent's.
 
@@ -64,8 +64,8 @@ const p = new Tabnas()
   .use(csv)      // builds on what jsonic registered
 ```
 
-A plugin can fail fast if a required dependency is missing — inspect the
-instance (e.g. `tn.token('#…')` or the rule set) in its body and throw a
+A plugin can fail fast if a required dependency is missing: inspect the
+instance (for example, `tn.token('#…')` or the rule set) in its body and throw a
 clear error rather than producing a confusing parse failure later.
 
 ### TypeScript signature
@@ -124,16 +124,16 @@ Token names conventionally use `#XX` form. Standard tokens:
 | `#CS` | `]` | Close square |
 | `#CL` | `:` | Colon |
 | `#CA` | `,` | Comma |
-| `#NR` | — | Number |
-| `#ST` | — | String |
-| `#TX` | — | Text (unquoted) |
-| `#VL` | — | Value (keyword) |
-| `#SP` | — | Space |
-| `#LN` | — | Line |
-| `#CM` | — | Comment |
-| `#BD` | — | Bad (error) |
-| `#ZZ` | — | End |
-| `#AA` | — | Any (wildcard) |
+| `#NR` | (none) | Number |
+| `#ST` | (none) | String |
+| `#TX` | (none) | Text (unquoted) |
+| `#VL` | (none) | Value (keyword) |
+| `#SP` | (none) | Space |
+| `#LN` | (none) | Line |
+| `#CM` | (none) | Comment |
+| `#BD` | (none) | Bad (error) |
+| `#ZZ` | (none) | End |
+| `#AA` | (none) | Any (wildcard) |
 
 ## Modifying Rules
 
@@ -159,7 +159,7 @@ existing alternate list. Pass `mods` to control merge behaviour:
 | Mod | Effect |
 |---|---|
 | `{ append: true }` | Append at the end (default). |
-| `{ clear: true }` | Empty the existing alternates first, then add the new ones — a later plugin can replace a rule's alternates outright. |
+| `{ clear: true }` | Empty the existing alternates first, then add the new ones: a later plugin can replace a rule's alternates outright. |
 | `{ delete: [i, …] }` | Remove the listed indices before appending. |
 | `{ move: [from, to, …] }` | Reorder existing alternates. |
 
@@ -169,7 +169,7 @@ By default a later plugin's alternates and lifecycle actions are
 **appended** to earlier ones (see [State Actions](#state-actions)). To
 instead replace what earlier plugins contributed:
 
-- **Alternates** — pass `{ clear: true }` to `rs.open` / `rs.close`, or
+- **Alternates**. Pass `{ clear: true }` to `rs.open` / `rs.close`, or
   use `rs.clearOpen()` / `rs.clearClose()` then re-add:
 
   ```js
@@ -182,7 +182,7 @@ instead replace what earlier plugins contributed:
   tn.grammar({ rule: { val: { open: { alts: [...], inject: { clear: true } } } } })
   ```
 
-- **Lifecycle actions** — `rs.clearActions('bo', 'ao', …)` (no args clears
+- **Lifecycle actions**. `rs.clearActions('bo', 'ao', …)` (no args clears
   all four phases) removes earlier actions for those phases; then register
   fresh ones. Declaratively, append `/replace` to the funcref name:
 
@@ -194,28 +194,28 @@ instead replace what earlier plugins contributed:
 `/replace` takes ownership of the phase: once a phase is replaced, plain
 / `/prepend` / `/append` funcrefs for it are ignored, and the replacement
 wins deterministically across `tn.make()` re-derivation. All of this is
-opt-in — existing grammars that use neither `clear` nor `/replace` keep
+opt-in: existing grammars that use neither `clear` nor `/replace` keep
 the append behavior unchanged.
 
 ### Alternate Spec Fields
 
 | Field | Description |
 |---|---|
-| `s` | Token pattern to match — array of token-name strings (or arrays of names for OR-of-tokens), or a space-separated string. Its length sets the lookahead depth for this alternate; there is no fixed ceiling. |
+| `s` | Token pattern to match: an array of token-name strings (or arrays of names for OR-of-tokens), or a space-separated string. Its length sets the lookahead depth for this alternate; there is no fixed ceiling. |
 | `a` | Action: `(rule, ctx) => void` (also accepts a `@funcref` string). |
 | `p` | Push a new rule onto the stack by name (creates a child). |
 | `r` | Replace the current rule with another by name (creates a sibling). |
 | `b` | Backtrack: number of tokens to put back. |
 | `g` | Group tag(s). Used by `rule.include` / `rule.exclude` filtering. |
-| `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters — see [Counter conditions](#counter-conditions). |
+| `c` | Condition: function returning true to allow the alt, or an object matched against `rule.n` counters, see [Counter conditions](#counter-conditions). |
 | `n` | Increment named counters by these amounts (setting `0` **resets**). Counters **propagate** to child rules (push and replace). |
-| `u` | Custom data attached to the rule's `u` bag. **Does NOT propagate** — `u` is per-rule scratch. |
+| `u` | Custom data attached to the rule's `u` bag. **Does NOT propagate**. `u` is per-rule scratch. |
 | `k` | Custom data attached to the rule's `k` ("**keep**") bag. **Propagates** to child rules via push and replace. Rule-scoped, not alternate-scoped: it merges into `rule.k` before the action and accumulates across alternates. |
 | `h` | Modifier: `(rule, ctx, alt, next) => alt`. |
 | `e` | Error: `(rule, ctx, alt) => Token | undefined`. |
 
 > **Which bags propagate.** `n` and `k` are inherited by child rules on
-> both push and replace; `u` is not. `k` is named for "keep" — its content
+> both push and replace; `u` is not. `k` is named for "keep": its content
 > is kept as the parse descends. Put per-rule scratch in `u` and anything
 > that must reach child rules in `k`. Picking the wrong bag fails silently.
 > See the root [`AGENTS.md`](../../AGENTS.md) section "Rule state".
@@ -242,24 +242,24 @@ counted nothing, so exactly one of `<`, `=`, `>` holds and a guard means what
 it says wherever it sits in the alternate list.
 
 Because of that, `eq('k', 0)` is true both for a counter set to `0` and for one
-never set. Use `exist` / `$exist` when the difference matters — it is the only
+never set. Use `exist` / `$exist` when the difference matters: it is the only
 form that does not coerce.
 
-Only *counters* read as zero. A path that does not resolve at all — an absent
-`o0`, a `u.*` you never set — is genuine absence, and numeric comparisons on it
+Only *counters* read as zero. A path that does not resolve at all (an absent
+`o0`, a `u.*` you never set) is genuine absence, and numeric comparisons on it
 stay permissive rather than inventing a value the rule cannot supply.
 
 > **Changed in 0.6.** Previously an unset counter compared as **true against
 > every helper**, so `lt('k',n)` and `gt('k',n)` were both true and a
 > `$gte` guard fired before anything had been counted. A grammar that relied on
-> that — an alternate gated on `{ 'n.k': { $gt: 0 } }` matching while `k` was
-> still unset — now wants `{ 'n.k': { $exist: false } }`. In the same release
+> that (an alternate gated on `{ 'n.k': { $gt: 0 } }` matching while `k` was
+> still unset) now wants `{ 'n.k': { $exist: false } }`. In the same release
 > `$exist` became usable declaratively: it was implemented but not listed as a
 > known operator, so it was silently dropped, which left the alternate
 > *unconditional*.
 
 Note that `n` counters are applied when an alternate is **accepted**, while `c`
-is evaluated while matching it — so an alternate cannot read a counter it sets
+is evaluated while matching it, so an alternate cannot read a counter it sets
 itself.
 
 ### State Actions
@@ -268,10 +268,10 @@ Each rule has four hook points:
 
 | Hook | When |
 |---|---|
-| `bo` | Before-open — before open alternates are tried. |
-| `ao` | After-open — after an open alternate matches. |
-| `bc` | Before-close — before close alternates are tried. |
-| `ac` | After-close — after a close alternate matches. |
+| `bo` | Before open alternates are tried. |
+| `ao` | After an open alternate matches. |
+| `bc` | Before close alternates are tried. |
+| `ac` | After a close alternate matches. |
 
 Register via the chainable API:
 
@@ -305,7 +305,7 @@ tn.parse('2024-01-15')              // Date(2024-01-15)
 The regex must be anchored with `^`. For full control, register a
 matcher function under `match.token`, or build one on the shared
 scan-spec primitives exposed via `Tabnas.util` (`scan`,
-`guardedMatcher`, `buildCharRunSpec`, …) — see the
+`guardedMatcher`, `buildCharRunSpec`, …). See the
 [utility reference](api.md#tabnasutil-static) and the matchers in
 `src/lexer.ts`.
 
@@ -342,18 +342,18 @@ tn.options({ tokenSet: { MYSET: ['#TX', '#NR'] } })
 Instead of registering rules imperatively, a plugin can describe them
 as data via `tn.grammar(spec)`. Function fields are supplied as
 `@funcref` strings resolved against `spec.ref`. This is how the
-strict-JSON fixture is written — see
+strict-JSON fixture is written. See
 [`test/json-plugin.ts`](../test/json-plugin.ts) and
 [`tn.grammar`](api.md#tngrammarspec-settings).
 
 ## Example: a tiny CSV plugin
 
-Build on the bare engine — a CSV grammar replaces the standard rules
+Build on the bare engine: a CSV grammar replaces the standard rules
 entirely. A complete, runnable version of this grammar (with the
 `csvcont` / `rowcont` continuations filled in) lives in
 [`test/csv-grammar.test.js`](../test/csv-grammar.test.js); the plugin
-entry points shown above — `use`, custom tokens, rule modification,
-custom matchers, and `sub` — are unit-tested in
+entry points shown above (`use`, custom tokens, rule modification,
+custom matchers, and `sub`) are unit-tested in
 [`test/plugin.test.js`](../test/plugin.test.js).
 
 ```js
@@ -401,4 +401,4 @@ Apply with `tn.use(csvPlugin)` on a bare instance, or via the
 If you ship a plugin as its own npm package, the convention is
 `tabnas-<name>` or `@<scope>/tabnas-<name>` (as the companion
 `@tabnas/abnf` and `@tabnas/debug` packages do). The package itself
-holds no grammar — yours is the grammar.
+holds no grammar: yours is the grammar.

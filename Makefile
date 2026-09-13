@@ -5,7 +5,7 @@
 # repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
-        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset
+        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset prose
 
 all: build test
 
@@ -73,3 +73,11 @@ reset:
 	cd ts && npm run reset
 	cd go && go clean -cache && go build ./... && go test -v ./...
 	cd rs && cargo clean && cargo build --all-targets && cargo test --all-targets
+
+# The prose gate (see docs/STYLE-GUIDE.md). Vale over the reader-facing
+# pages, at the levels set in .vale.ini, on the same file list
+# ts/test/docs.test.js reads. Requires `vale` on PATH and one
+# `vale sync` to fetch the pinned Google package; CI does both in
+# .github/workflows/docs.yml. Warnings are advisory, errors fail.
+prose:
+	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)

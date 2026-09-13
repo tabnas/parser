@@ -5,17 +5,17 @@ The engine ships two families of `$`-suffixed builtin function references
 `grammar()` load so a serialized, function-free `GrammarSpec` can reference
 them by name:
 
-- **Tree builders** (`@node$`, `@capture$`, `@bubble$`) — rebuild the
+- **Tree builders** (`@node$`, `@capture$`, `@bubble$`). Rebuild the
   `{rule, src, kids}` *syntax* tree (used by the ABNF compiler).
 - **Native-value builders** (`@object$`, `@array$`, `@key$`, `@setval$`,
-  `@push$`, `@value$`, `@reset$`) — build the *parsed value itself*
+  `@push$`, `@value$`, `@reset$`). Build the *parsed value itself*
   (objects / arrays / scalars), the way the `@tabnas/json` grammar does.
 
 A grammar whose rules thread a node from parent to child (the engine seeds
 a pushed child's node from the parent) can assemble plain objects/arrays
 with the native-value builders as **alt actions** (`a:`).
 
-## Where builtin config lives — and what it inherits
+## Where builtin config lives: and what it inherits
 
 **A builtin's config is bound when the GRAMMAR LOADS, and does not live in
 any rule state at all.** You still *declare* it in an alternate's `k`,
@@ -33,12 +33,12 @@ The rule that follows from this is the one to remember:
 > whatever any ancestor declared.
 
 This is ruling [#120](https://github.com/tabnas/parser/issues/120) as
-amended — A1. The ruling as first written standardised on rule-scoped
+amended, A1. The ruling as first written standardised on rule-scoped
 (`rule.k`) config for both runtimes; A1 removes the question instead, and
 the amendment is recorded on the issue. Before it, the two ports
 disagreed: TypeScript read the matched alternate's copy while Go read the
 rule's, so a parent that *declared* `k: {value$: {from: 1}}` without
-running the builtin handed it to a child running `@value$` bare — the
+running the builtin handed it to a child running `@value$` bare: the
 same function-free serialized grammar answered `4` in Go and `3` in
 TypeScript. Pinned now by `TestBuiltinConfigIsAlternateScoped` in both
 ports.
@@ -50,26 +50,26 @@ has left it.
 
 | bag | holds | inherited by a child rule? |
 |---|---|---|
-| `n` / `N` | named counters | **YES** — push and replace |
+| `n` / `N` | named counters | **YES**. Push and replace |
 | `u` / `U` | user props, per-rule scratch | **NO** |
-| `k` / `K` | **keep** props — your own data | **YES** — push and replace |
+| `k` / `K` | **keep** props, your own data | **YES**. Push and replace |
 
 So a `k` you set is visible to every rule pushed or replaced beneath it,
 in both runtimes (`ts/src/rules.ts:662-671`, `:686-695`;
 `go/rule.go:1224-1236`, `:1249-1261`). It is rule-scoped, not
 alternate-scoped: it accumulates across every alternate that fires. If you
-need a value to stay local to one rule, put it in `u` — which is exactly
+need a value to stay local to one rule, put it in `u`, which is exactly
 what `@key$` does (`r.u[cfg.slot || 'key']`), so a captured key cannot
 leak into child rules.
 
-A key of your own that happens to end in `$` — `k: {myTotal$: 1}` — is
+A key of your own that happens to end in `$` (`k: {myTotal$: 1}`) is
 ordinary user data and is left alone. The bound set is keyed by the ref a
 spec writes, never by a `$` suffix.
 
 **Go no longer deletes config keys after reading them.** The five value
 builders used to `delete(r.K, …)` immediately after a read, to stop config
 leaking into a child. That was containment for a design that no longer
-exists, and it was itself a third scoping regime — consumed-once in Go
+exists, and it was itself a third scoping regime: consumed-once in Go
 against alternate-scoped in TypeScript.
 
 | Builtin | Effect |
@@ -86,16 +86,16 @@ against alternate-scoped in TypeScript.
 grammar may declare `GrammarSpec.v` and the engine refuses one that needs a
 newer schema.
 
-**v4 adds `@key$ {lit}`** — the key as a CONSTANT rather than read from a
+**v4 adds `@key$ {lit}`**. The key as a CONSTANT rather than read from a
 token. A grammar that DECLARES its shape (`ver = major "," minor`, where the
 part names are in the grammar and no token carries them) has no key token for
 `@key$` to read, so the key side of `@setval$` was unreachable for it. The
 version bump is what makes that safe to depend on: a v3 engine handed a
-`lit`-using grammar would ignore the field and quietly build every member
+`lit`-using grammar would ignore the field and silently build every member
 under one empty key instead of failing, so `lit` must be able to say it needs
 a v4 engine.
 
-**v5 adds `src` to `@setval$` and `@push$`** — a member's value taken from
+**v5 adds `src` to `@setval$` and `@push$`**. A member's value taken from
 the source text the tree builders accumulated, rather than the whole
 `{rule?, src, kids}` node. `@node$`/`@capture$` already gather every matched
 terminal into `node.src`, but nothing could read it back out, so a member
@@ -110,7 +110,7 @@ emitting, and it always knows statically:
 | scalar (`maj = 1*DIGIT`) | `@setval$ {src: true}` | `"1"` |
 | builds its own value | `@setval$` | that object/array, nested |
 
-So nesting is not a special case — it is what *omitting* `src` already
+So nesting is not a special case: it is what *omitting* `src` already
 means. Same for `@push$`, which is why arrays behave identically.
 
 `@push$` takes per-alternate config for the first time at v5. It binds like
@@ -137,8 +137,8 @@ suites load it and assert the built value is byte-identical to
 Make the native-value builders **info-aware** so they handle the engine's
 own introspection node model, gated by `cfg.info`. This dissolves *all* of
 the json plugin's info closures on **both** engines (TS and Go fully adopt
-the builtins) and moves the info logic into the engine — where its types
-already live — instead of every JSON-family plugin re-hand-writing it.
+the builtins) and moves the info logic into the engine (where its types
+already live) instead of every JSON-family plugin re-hand-writing it.
 
 **Principle.** `MapRef`/`ListRef`/`Text` and `cfg.info` are **engine**
 value-model features (general introspection any grammar can enable), not
@@ -164,7 +164,7 @@ The marker is a non-enumerable property; string values become boxed
 **Representation split (by design):** Go encodes info by *swapping the node
 type* (a wrapper struct, metadata in struct fields); TS encodes it by *a
 hidden property on the plain node* (metadata in the key namespace). v2 has
-each engine's builders use *its own* carrier — `builtins.ts` and
+each engine's builders use *its own* carrier: `builtins.ts` and
 `builtins.go` are already separate, so this is per-engine internals behind
 one config gate.
 
@@ -180,7 +180,7 @@ func NodeListAppend(node any, val any) any           // ListRef.Val append | []a
 ```
 
 TS gets a small `markNode(node, marker, data)` helper (the
-`Object.defineProperty` the json plugin uses today — same arg order as the
+`Object.defineProperty` the json plugin uses today, with the same arg order as the
 plugin's `mark`).
 
 ### Per-builtin behaviour
@@ -201,7 +201,7 @@ All gated on `cfg.info.*`; **info-off behaviour is byte-identical to v1**
 **New config:** `@object$`/`@array$` gain optional `implicit` (default
 `false`).
 
-### The `Implicit` flag — static config, not a close hook
+### The `Implicit` flag: static config, not a close hook
 
 Today Go computes `Implicit` at *close* (`@map-bc`: `Implicit = !(O0.Tin ==
 OB)`). v2 makes it **static config on `@object$`/`@array$`**
@@ -228,13 +228,13 @@ runtime option, not declared in a grammar's `v`, so no bump is required.
 - **Go json:** drop `@val-bc` / `@map-bo` / `@map-bc` / `@list-bo` /
   `@list-bc` / `@pair-bc` / `@elem-bc` and `jsonMapSet`/`jsonListAppend`
   (promoted to the engine); the grammar mirrors TS.
-- Both become a grammar with **zero structure closures** — only the
+- Both become a grammar with **zero structure closures**. Only the
   strict-lexer options remain plugin config.
 
 ### Tests
 
 - **Value parity (info OFF):** the existing `json-builder.fixture.json`
-  pins TS↔Go byte-identical — unchanged.
+  pins TS↔Go byte-identical, unchanged.
 - **Info ON:** representations differ by design, so assert **per-engine**
   structure (TS: `__info__` property + key-drop + boxed-String quote; Go:
   `MapRef.Implicit` / `ListRef` / `Text.Quote`), plus the json suite as the
@@ -243,22 +243,22 @@ runtime option, not declared in a grammar's `v`, so no bump is required.
 ### Risks / edge cases
 
 1. **`info.text` scalars** have no container identity, so both engines wrap
-   the scalar (`Text` / boxed `String`). `@value$` does this inline — the
+   the scalar (`Text` / boxed `String`). `@value$` does this inline: the
    one builder whose output *type* changes under info (acceptable: a leaf,
    no children operate on it downstream).
-2. **Go value semantics** — `NodeMapSet`/`NodeListAppend` return the node
+2. **Go value semantics**. `NodeMapSet`/`NodeListAppend` return the node
    (value-copied); `@setval$`/`@push$` reassign `r.Node` and republish to
    `r.Parent`.
-3. **Marker-key-drop is TS-only** — Go's field-based metadata has no key
+3. **Marker-key-drop is TS-only**. Go's field-based metadata has no key
    collision.
 
 ### Scope & sequencing
 
-1. **Engine** — promote `NodeMapSet`/`NodeListAppend` (+ TS `markNode`);
+1. **Engine**. Promote `NodeMapSet`/`NodeListAppend` (+ TS `markNode`);
    make `@object$`/`@array$`/`@setval$`/`@push$`/`@value$` info-aware
    (config-gated); add the `implicit` config; engine info-on tests.
-2. **json TS** — drop the 4 info closures.
-3. **json Go** — drop the 7 closures + helpers; full builtin adoption.
-4. **jsonic** — the superset (merge/extend, implicit promotion), now with
+2. **json TS**. Drop the 4 info closures.
+3. **json Go**. Drop the 7 closures + helpers; full builtin adoption.
+4. **jsonic**. The superset (merge/extend, implicit promotion), now with
    info handled, on both engines → pure-data jsonic + the json5/jsonc/zon
    free-riders.

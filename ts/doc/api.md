@@ -1,6 +1,6 @@
 # API Reference
 
-tabnas exposes a single class — `Tabnas` — plus error and lexer
+tabnas exposes a single class (`Tabnas`) plus error and lexer
 helpers. The package ships **no grammar** of its own; every grammar
 arrives via a plugin.
 
@@ -18,13 +18,13 @@ const tn = new Tabnas({ plugins: [myGrammarPlugin] })
 tn.parse(src)
 ```
 
-`options` is a [`TabnasOptions`](options.md) object — every field is
+`options` is a [`TabnasOptions`](options.md) object: every field is
 optional and merges with the defaults. The `plugins` field is the only
 field that doesn't survive into `tn.options` after construction (it's
 consumed by the `use()` calls the constructor makes internally).
 
 For a bare instance with no defaults, no standard tokens, and no
-grammar — useful as a base for building a parser from scratch — use
+grammar (useful as a base for building a parser from scratch), use
 `tn.empty()`:
 
 ```js
@@ -41,12 +41,12 @@ Parse a string and return the result.
 tn.parse(src)                         // depends on the active grammar
 ```
 
-Non-string inputs are returned unchanged — handy when threading values
+Non-string inputs are returned unchanged, handy when threading values
 through plugin pipelines.
 
 `meta` passes arbitrary data to plugins and rule actions (read off
 `ctx.meta` inside actions). `parent_ctx` seeds the per-parse `Context`
-with extra fields — used by the test harness; rarely needed in user
+with extra fields, used by the test harness; rarely needed in user
 code.
 
 ### `ctx.errs`
@@ -57,7 +57,7 @@ so after a failed parse the thrown error is also
 `err.internal.ctx.errs[errs.length - 1]` (today, fail-fast, always the
 only entry). The list is strictly per-parse: every parse starts empty,
 `parent_ctx` seeding never carries a parent's entries across, and a
-clean parse leaves it empty. Recording is best-effort — a degenerate
+clean parse leaves it empty. Recording is best-effort: a degenerate
 context (missing or frozen `errs`) never prevents the error itself
 from being raised.
 
@@ -67,14 +67,14 @@ appends here and continues instead of throwing.
 
 ### `tn.continuations(src)`
 
-Legal-continuation tokens after parsing `src` as a prefix — the
+Legal-continuation tokens after parsing `src` as a prefix: the
 completion primitive of the unified-LSP design. Returns
 `{ tins, tokens }` (numeric tins and their `#`-names, sorted).
 
 The computation is **path-aware**: each alternate contributes only the
 position it is actually waiting on, so a sibling alternate whose own
 prefix never matched adds nothing (`{"a"` yields `['#CL']`, the colon,
-not key-starters). It is widened two ways — a **pop closure** (while a
+not key-starters). It is widened two ways: a **pop closure** (while a
 rule's close state has an empty catch-all alternate, the parent's
 close continuations are legal too) and a **push closure** (an
 alternate whose sequence is fully matched *and* whose backtrack leaves
@@ -90,9 +90,9 @@ captured at each end-of-source fetch, while the rule stack is still
 live, at the lookahead position actually being read; captures
 accumulate, because the first can belong to an alternate that is later
 rejected. `#ZZ` is then added unconditionally: the prefix parsed, so
-stopping here is legal — and the close rule may have consumed an end
+stopping here is legal, and the close rule may have consumed an end
 token that an earlier alternate had already buffered, which fires no
-second lexer event to capture. A finished document reports `['#ZZ']` —
+second lexer event to capture. A finished document reports `['#ZZ']`:
 precisely "only the end may follow". An empty capture means the same
 thing and is returned as such; only a document that produced no
 end-of-source event at all (an empty source with `lex.empty` enabled
@@ -104,7 +104,7 @@ completion provider should drop it from the item list and read it as
 "the document is valid as it stands".
 
 Two cases are deliberately silent. An alternate that stopped matching
-*before* the queried position contributes nothing — its next token
+*before* the queried position contributes nothing: its next token
 would have to replace something already typed rather than follow it.
 Neither does an alternate whose backtrack uses the function form
 (`b: (rule, ctx, alt) => n`): that resolves only while the alternate is
@@ -116,7 +116,7 @@ listed token. Runs on a lazily-created fail-fast sibling, so it works
 identically on recovery-enabled instances.
 
 Note: the structured diagnostic's `expected[]` field intentionally
-keeps its original position-0 semantics for now — it is pinned by the
+keeps its original position-0 semantics for now: it is pinned by the
 cross-runtime `diagnostic.tsv` parity fixtures, and changes there land
 with the Go parity phase.
 
@@ -125,8 +125,8 @@ with the Go parity phase.
 ### `tn.make(options?)`
 
 Derive a child instance with overridden options. The child inherits the
-parent's plugin list and re-runs each plugin against the merged options
-— so option-conditional grammar alternates get re-evaluated against the
+parent's plugin list and re-runs each plugin against the merged options,
+so option-conditional grammar alternates get re-evaluated against the
 child's settings.
 
 ```js
@@ -153,7 +153,7 @@ the same rule alternates in the same order, and the same parse
 behavior.
 
 Both instances must carry distinct, non-default `tag` options (throws
-otherwise). The result's tag is the sorted join, e.g. `'A~B'`.
+otherwise). The result's tag is the sorted join, for example, `'A~B'`.
 
 **Options** are deep merged commutatively: a value present in only one
 instance, equal in both, or differing only from the shared defaults
@@ -171,26 +171,26 @@ of a rule defined on both sides are interleaved deterministically
 1. at the first differing lookahead position, token-name order decides;
 2. when one token sequence is a prefix of the other, the longer sorts
    first (so empty-`s` catch-alls sort last);
-3. identical sequences order by complexity — presence of `c`, `e`,
+3. identical sequences order by complexity: presence of `c`, `e`,
    `h`, `b`, counters, `a`, `u`, `k`, `p`, `r`, more complex first;
 4. then by `g` group tags; a final tie falls to tag order.
 
-Alts that are *identical* are emitted once — the shared-base-plugin
+Alts that are *identical* are emitted once: the shared-base-plugin
 case, where both instances installed the same grammar plugin. Fields
 compare by reference or, since each plugin run creates fresh closures,
 by function source text; the source-based comparison applies only to
 unconditioned alts (where the duplicate is unreachable anyway, so the
-dedupe cannot change behavior). Lifecycle handlers dedupe the same way
-— note a handler whose behavior differs *only* through its closure
-environment (e.g. built by a shared helper factory on both sides)
+dedupe cannot change behavior). Lifecycle handlers dedupe the same way.
+Note a handler whose behavior differs *only* through its closure
+environment (for example, built by a shared helper factory on both sides)
 dedupes to one copy. Token references are translated by name into the
 merged instance's tin space; actions that captured raw tin *values*
 from their source instance are not translatable and should read tokens
 via `ctx.cfg` instead.
 
 **Named actions** (`@ref` entries in each rule's fnref map) are renamed
-with the source instance's tag — `@pairkey` from tag `A` becomes
-`@A:pairkey` — so the two grammars' names cannot collide. `$`-suffixed
+with the source instance's tag (`@pairkey` from tag `A` becomes
+`@A:pairkey`), so the two grammars' names cannot collide. `$`-suffixed
 engine builtins stay unprefixed. Already-installed lifecycle handlers
 (`bo`/`ao`/`bc`/`ac`) are carried as installed actions (concatenated in
 tag order, deduped by identity); the renamed `@<tag>:<rule>-<phase>`
@@ -208,7 +208,7 @@ b.rule('val', (rs) => rs.open([{ s: ['#TX', '#PC'] }]))
 const ab = a.merge(b)   // val: [TX AT], [TX PC] — parses both forms
 ```
 
-Caveats: merge is defined over the option trees and rule maps —
+Caveats: merge is defined over the option trees and rule maps:
 grammar state injected outside options (direct config mutation,
 hand-appended matchers) does not transfer. Merged instances are
 runtime artifacts: alt actions are carried as resolved functions, so
@@ -242,12 +242,12 @@ form of the options). Useful for debugging.
 
 Access or modify grammar rules.
 
-- `tn.rule()` — returns the full `RuleSpec` map.
-- `tn.rule(name)` — returns the `RuleSpec` for that rule name.
-- `tn.rule(name, definer)` — calls `definer(rs, parser)` to modify or
+- `tn.rule()`. Returns the full `RuleSpec` map.
+- `tn.rule(name)`. Returns the `RuleSpec` for that rule name.
+- `tn.rule(name, definer)`. Calls `definer(rs, parser)` to modify or
   create the rule. Use `rs.open([...])` / `rs.close([...])` to add
   alternates, and `bo` / `ao` / `bc` / `ac` for the state-action hooks.
-- `tn.rule(name, null)` — delete a rule.
+- `tn.rule(name, null)`. Delete a rule.
 
 ```js
 tn.rule('val', (rs) => {
@@ -262,7 +262,7 @@ state-action field lists.
 
 ### `tn.grammar(spec, settings?)`
 
-Apply a `GrammarSpec` — a JSON-shaped declarative representation of
+Apply a `GrammarSpec`: a JSON-shaped declarative representation of
 rule definitions, with function fields supplied as `@funcref` strings
 resolved against `spec.ref`. Used by plugins that ship grammar as data
 rather than code. `settings.rule.alt.g` appends group tags to every
@@ -289,7 +289,7 @@ Two consequences worth knowing:
 `spec.meta` is free-form tool metadata, and the engine ignores it: it is
 neither read nor stored, so a spec carrying it installs exactly as one
 without it. It exists so a serialised grammar can carry facts *about*
-itself for whoever holds the spec — the BNF-family compilers record their
+itself for whoever holds the spec: the BNF-family compilers record their
 synthetic-rule provenance under `meta.provenance`, which the language
 server reads to canonicalise generated rule names. It is declared in
 `schema/grammar.schema.json`, so a spec that uses it still validates.
@@ -340,7 +340,7 @@ function foo(tn, opts) { /* … */ }
 tn.use(foo, { x: 1 })
 ```
 
-Plugins can return a wrapped instance (e.g. a `Proxy`) — `use()` will
+Plugins can return a wrapped instance (for example, a `Proxy`), and `use()` will
 return whatever the plugin returns, falling back to the instance:
 
 ```js
@@ -380,22 +380,22 @@ event that a later failure retracts by re-announcing the RESTORED
 token. The reconciliation contract for consumers reconstructing "the
 tokens the parse used" (semantic tokens): process events in order,
 keep the **newest event per source position**, and let each kept
-token's **span shadow** any older events inside `[sI, sI + len)` —
+token's **span shadow** any older events inside `[sI, sI + len)`,
 a restored longer token thereby shadows stale events fired at interior
 positions during the abandoned speculation.
 
-`rule` fires **before** each rule pass — the rule has not matched
+`rule` fires **before** each rule pass: the rule has not matched
 anything yet. `ruleDone` fires **after** the pass: the matched tokens
 are recorded on `rule.o` / `rule.c` (so `rule.o0.sI`-style spans are
 readable), the state transition has been applied, and `done`
-(`RuleDone`) carries `{ state, alt, forced? }` — `state` is the pass
+(`RuleDone`) carries `{ state, alt, forced? }`: `state` is the pass
 that ran (`'o'`/`'c'`), `alt` snapshots the matched alternate's
 routing (`b` backtrack count, `g` group tags, `p` pushed rule, `r`
 replacement rule, `err` failure token), and `forced: true` marks a
 close notification synthesized for a rule force-popped during error
 recovery. Structural consumers (outline, folding) pair open/close by `rule.i`
 instance id. A rule replaced via `alt.r` **on its open pass** never
-closes itself — its replacement continues. A replacement on a **close
+closes itself. Its replacement continues. A replacement on a **close
 pass** is different: that event *is* the rule's real close (the
 strict-JSON `pair`/`elem` continuation loops work this way), so only
 open-pass replacements are treated as non-closing.
@@ -424,14 +424,14 @@ for things the public API doesn't surface; user code rarely needs it.
 Bag of helpers for plugin authors. Also reachable per-instance via
 `tn.util`. Members:
 
-- **Object / merge** — `deep`, `clone`, `keys`, `values`, `entries`,
+- **Object / merge**. `deep`, `clone`, `keys`, `values`, `entries`,
   `omap`, `clean`, `prop`.
-- **Regex / text** — `regexp`, `escre`, `charset`, `mesc`, `srcfmt`,
+- **Regex / text**. `regexp`, `escre`, `charset`, `mesc`, `srcfmt`,
   `str`, `tokenize`.
-- **Config** — `configure`, `parserwrap`, `badlex`, `makelog`.
-- **Error** — `errdesc`, `errinject`, `errmsg`, `errsite`,
+- **Config**. `configure`, `parserwrap`, `badlex`, `makelog`.
+- **Error**. `errdesc`, `errinject`, `errmsg`, `errsite`,
   `strinject`, `trimstk`.
-- **Lex scan primitives** — `scan`, `guardedMatcher`,
+- **Lex scan primitives**. `scan`, `guardedMatcher`,
   `buildCharRunSpec`, `buildLineRunSpec`, `buildStringBodySpec`, and
   the scan-spec constants `CONSUME`, `IS_ROW`, `CI_RESET`, `STOP`,
   `STATE_MASK`. These drive the table-driven matcher state machine;
@@ -440,7 +440,7 @@ Bag of helpers for plugin authors. Also reachable per-instance via
 
 ### Constants
 
-`OPEN`, `CLOSE`, `BEFORE`, `AFTER`, `EMPTY`, `SKIP`, `S` — exported as
+`OPEN`, `CLOSE`, `BEFORE`, `AFTER`, `EMPTY`, `SKIP`, `S`, exported as
 both named exports and `Tabnas.X` static members. Used in rule
 definitions and state actions. `SKIP` is the deep-merge sentinel that
 preserves the base value.
@@ -483,7 +483,7 @@ enumerable fields:
 |---|---|
 | `code` | Error code (`'unexpected'`, `'unterminated_string'`, …). |
 | `message` | Formatted, multi-line message including a source-context extract. |
-| `details` | Structured details (e.g. `{ state: 'open' }`); may be empty. |
+| `details` | Structured details (for example, `{ state: 'open' }`); may be empty. |
 | `lineNumber` | Row of the offending token (1-based). |
 | `columnNumber` | Column of the offending token (1-based). |
 | `fileName` | From `meta.fileName`, if supplied to `parse()`. |
@@ -496,8 +496,8 @@ options](options.md#error). Error-code keys come from
 
 ## Grammar validation
 
-Pure functions that check a grammar held as **data** — a `GrammarSpec` from
-the `grammar()` / GrammarText path, a generator, or an editor — before any
+Pure functions that check a grammar held as **data**. A `GrammarSpec` from
+the `grammar()` / GrammarText path, a generator, or an editor. Before any
 parser exists. They report problems instead of throwing, so one pass can
 collect everything wrong with a grammar rather than stopping at the first.
 
@@ -516,8 +516,8 @@ tags. A condition given as a function is opaque and is skipped.
 validateAlts(alts: any[], label?: string): string[]
 ```
 
-`validateAlt` across a list, each problem prefixed with where it is —
-`label` names the list, e.g. `"val.open alt[0]: …"`.
+`validateAlt` across a list, each problem prefixed with where it is:
+`label` names the list, for example, `"val.open alt[0]: …"`.
 
 ### `validateGrammar(spec, known?)`
 
@@ -527,20 +527,20 @@ validateGrammar(spec: any, known?: string[] | Set<string>): string[]
 
 Every **dangling rule reference** in a whole spec: an alternate whose `p` or
 `r` names a rule nothing defines. This is the one check that needs the whole
-rule map in scope, so `validateAlt` cannot make it — and the reference is a
+rule map in scope, so `validateAlt` cannot make it, and the reference is a
 static typo the engine can otherwise only report at parse time, as
 `unknown_rule`, and only once an input reaches the alternate carrying it.
 
 - `known` names rules that already exist on the target instance, so a spec
   that **extends** a grammar can push to a rule it does not itself define.
   Omit it to check a spec as a self-contained document.
-- A `null` rule entry *removes* that rule, so referencing it dangles — even
+- A `null` rule entry *removes* that rule, so referencing it dangles, even
   if it was in `known`. `clear: true` discards `known` entirely, since it
   wipes every rule on the instance.
 - A FuncRef (`@name`), a `false` slot and an absent slot are skipped: each
   yields its rule name at parse time, so no static check can follow it.
 
-Deliberately narrow — rule references only. Run `validateAlts` per list for
+Deliberately narrow: rule references only. Run `validateAlts` per list for
 the per-alternate checks. Problems are labelled as `validateAlts` labels them
 and sorted **by UTF-16 code unit**, and the Go port reproduces both exactly,
 so the two runtimes return the same list in the same order.
