@@ -214,20 +214,24 @@ The steps, in order:
    npm view @tabnas/parser@$V gitHead
    ```
 
-   That is what shipped, and it is the value both tags must equal. If they
-   do not, the tags are wrong. If they do but `gitHead` is not `$REL`, the
-   tags are honest and `$REL` is the stale capture — `main` moved before
-   the run checked out — but what shipped is then a commit you never
-   cleared CI on, and `release.yml` runs no tests of its own. Confirm
-   `gitHead` is green on `main` before calling the release good.
+   That is what shipped, and it is the value each tag must equal — check
+   them one at a time, because the two recoveries differ. If both match
+   but `gitHead` is not `$REL`, the tags are honest and `$REL` is the
+   stale capture — `main` moved before the run checked out — but what
+   shipped is then a commit you never cleared CI on, and `release.yml`
+   runs no tests of its own. Confirm `gitHead` is green on `main` before
+   calling the release good.
 
-   `go/v$V` is then the urgent half, and moving the tag does **not** fix
-   it. `proxy.golang.org` caches a module version's content immutably, so
-   once anything has fetched `v$V` that content is what consumers get for
-   good, and a corrected tag only makes Git and the proxy disagree. You
-   cannot find out whether that has happened without causing it — asking
-   the proxy is itself a fetch. So treat a wrong `go/v$V` as spent: leave
-   it, and release the next patch from the right commit.
+   A wrong `ts/v$V` simply moves: npm resolves from the registry, so the
+   tag is a signpost and nothing reads it. A wrong `go/v$V` does not.
+   `proxy.golang.org` caches a module version's content immutably, so once
+   anything has fetched `v$V` that content is what consumers get for good,
+   and a corrected tag only makes Git and the proxy disagree — and you
+   cannot find out whether it has been fetched without causing it, because
+   asking the proxy is itself a fetch. Leave that tag where it is and
+   release the next patch from the right commit, carrying `retract v$V` in
+   its `go/go.mod`: the cached content stays, but `go get` stops selecting
+   the bad version and reports it as retracted.
 
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
