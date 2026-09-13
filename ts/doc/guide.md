@@ -162,5 +162,5 @@ tn.sub({
 tn.parse(src)
 ```
 
-See [`sub()`](api.md#tnsub-lex-rule-) and, for plugin-side logging,
+See [`sub()`](api.md#tnsub-lex-rule-ruledone-) and, for plugin-side logging,
 [subscribing to events](plugins.md#subscribing-to-events).
