@@ -90,11 +90,17 @@ function fenceless(md) {
 }
 
 
+// A link TARGET is not prose. `](https://.../en-US/docs/...)` put the
+// letters `US` between word boundaries, and the first-person-plural
+// check read them as the pronoun. Vale skips link targets; so does this
+// now. The link TEXT stays, because that is prose a reader sees.
 function prose(md) {
   return fenceless(md)
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/`[^`\n]*`/g, '')
+    .replace(/\]\([^)\s]*/g, '](')
+    .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
 }
 
 
