@@ -204,6 +204,20 @@ The steps, in order:
    uses `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no
    `^{}` to peel.
 
+   A mismatch has two causes, so read the dispatched run's `head_sha`
+   before concluding which. Equal to `$REL`: the run released the commit
+   you recorded and the *tag* is wrong — the anchor fallback above. Not
+   equal: `main` advanced between your capture and the run's checkout, so
+   the tag agrees with what shipped, but what shipped is not the commit
+   you cleared CI on. Both need looking at, which is why this check is
+   deliberately the conservative way round.
+
+   Do **not** make `head_sha` the thing you compare the tag against. It
+   is what recovers a lost `$REL`, never what the tag is measured against
+   — on a repair re-dispatch it is the *new* checkout, so a tag written
+   on that commit matches it while npm still serves the original, which
+   is the one case this check exists to catch.
+
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
 (the "you forgot to bump" signal). It fails *open* on an already-published
