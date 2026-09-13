@@ -204,33 +204,27 @@ The steps, in order:
    uses `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no
    `^{}` to peel.
 
-   A mismatch has three causes and `head_sha` does not tell them apart —
-   the run's **publish step** does. A run that published always tags its
-   own checkout, because an existing tag on another commit makes the tags
-   step refuse unless the version is already on npm, and when it is, the
-   publish step skips. So read both steps' logs:
+   A mismatch means the tags and `$REL` disagree, and the run's own logs
+   cannot settle which is wrong: a repair re-dispatch adopts whatever tag
+   it finds, so `repairing an earlier release: anchoring to …` proves only
+   that a tag predated the run, never that that tag was right. Ask npm
+   instead — it records the commit the tarball was built from:
 
-   - The publish step **published** — the tags are then at this run's
-     checkout, and `head_sha` differs from `$REL` because `main` advanced
-     between your capture and that checkout. The tags agree with what
-     shipped; what shipped is not the commit you cleared CI on.
-   - It **skipped** (`already on npm — skipping publish`) and the tags
-     step logged `repairing an earlier release: anchoring to …` — the
-     tags name the commit that release shipped from, and it is `$REL`
-     that is stale: you re-dispatched a version already released from an
-     older commit.
-   - It **skipped** with no such line — no tag survived to anchor the
-     repair, so the fallback took this run's `HEAD` and **both** tags now
-     name the repair checkout while npm still serves the original run's
-     build. This is the permanent Go-module corruption; recover the
-     original run's `head_sha` and fix the tags by hand.
+   ```bash
+   npm view @tabnas/parser@$V gitHead
+   ```
 
-   So do **not** make `head_sha` the thing you compare the tags against.
-   It is what recovers a lost `$REL`, and — read with the publish step —
-   what tells you which case you are in; it is never what the tags are
-   measured against. In the third case they are written on this run's
-   `HEAD`, so they match it while npm still serves the original, which is
-   the one case this check exists to catch.
+   That is what shipped, and it is the value both tags must equal. If they
+   do, `$REL` is the stale one — captured from a `main` that had already
+   moved — and the release is sound. If they do not, the tags are wrong.
+
+   `go/v$V` is then the urgent half, and moving the tag does **not** fix
+   it. `proxy.golang.org` caches a module version's content immutably, so
+   once anything has fetched `v$V` that content is what consumers get for
+   good, and a corrected tag only makes Git and the proxy disagree. You
+   cannot find out whether that has happened without causing it — asking
+   the proxy is itself a fetch. So treat a wrong `go/v$V` as spent: leave
+   it, and release the next patch from the right commit.
 
 The workflow fails closed on a stale `schema/error-codes.json`, on a dispatch
 from any ref but `main`, and when every tag it would create already exists
