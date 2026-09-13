@@ -11,6 +11,9 @@ const GUIDE = Path.join(REPO, 'docs', 'STYLE-GUIDE.md')
 const SCRATCH = Path.join(REPO, '.vale-counts.ini')
 
 const HITS = /\b(\d+)\s+hits?\b/g
+const DEMOTED = /^(?:warning|suggestion|NO)$/
+// HITS carries the `g` flag, and `test` on one of those moves lastIndex.
+const HAS_HITS = /\b\d+\s+hits?\b/
 const SPAN = /\b(\d+)(\s+alerts?\s+across\s+)(\d+)(\s+)(files?)\b/
 
 
@@ -69,17 +72,27 @@ function join(entries) {
 }
 
 
+// A rule, not a setting: StylesPath and MinAlertLevel take a level-like
+// word and are not demotions.
+const SETTING = /^(?:StylesPath|MinAlertLevel|Vocab|Packages|BasedOnStyles)$/
+
 function blocks(ini) {
   const found = []
   let block = []
   ini.split('\n').forEach((line, index) => {
     if (line.startsWith('#')) return block.push({ line, index })
-    const rule = line.match(/^([\w.]+)\s*=/)
-    if (rule && 0 < block.length) found.push({ rule: rule[1], ...join(block) })
-    else if (0 < block.length) found.push({ rule: null, ...join(block) })
+    const rule = line.match(/^([\w.]+)\s*=\s*(\S+)\s*$/)
+    if (rule && !SETTING.test(rule[1])) {
+      found.push({ rule: rule[1], level: rule[2], ...join(block), assigned: index })
+    }
+    else if (0 < block.length) {
+      found.push({ rule: null, level: null, ...join(block), assigned: index })
+    }
     block = []
   })
-  if (0 < block.length) found.push({ rule: null, ...join(block) })
+  if (0 < block.length) {
+    found.push({ rule: null, level: null, ...join(block), assigned: null })
+  }
   return found
 }
 
@@ -102,7 +115,17 @@ function report(write) {
   const lines = ini.split('\n')
   const edits = []
 
+  const insert = []
   for (const block of blocks(ini)) {
+    // A demoted rule with no count at all is the oversight the header
+    // warns about, and a check that validates only the counts it finds
+    // cannot see one.
+    if (null != block.rule && DEMOTED.test(block.level) &&
+      !HAS_HITS.test(block.text)) {
+      const actual = byRule.get(block.rule) || 0
+      wrong.push(`${block.rule}: demoted to ${block.level} with no recorded count; Vale reports ${actual}`)
+      insert.push({ at: block.assigned, text: `# ${actual} ${1 === actual ? 'hit' : 'hits'}.` })
+    }
     for (const found of block.text.matchAll(HITS)) {
       if (null == block.rule) continue
       const claimed = Number(found[1])
@@ -127,6 +150,9 @@ function report(write) {
     }
   }
   edit(lines, edits)
+  for (const one of [...insert].sort((a, b) => b.at - a.at)) {
+    lines.splice(one.at, 0, one.text)
+  }
   ini = lines.join('\n')
 
   // The guide repeats the header total in prose, which is how the two

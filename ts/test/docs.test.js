@@ -84,7 +84,12 @@ if (0 === BANNED.length) {
 // next one however many lines away and takes every newline between them
 // with it, gluing the page into one line that every per-line check then
 // reports.
-const CODE_SPAN = /(`+)(?:[^`\n]|(?!\1)`)*\1/g
+//
+// Both runs must be MAXIMAL. `(`+)` backtracks, so four opening
+// backticks against three closing ones shrank to a run of three and ate
+// the fourth as content: ````not just``` is prose by CommonMark, and
+// the phrase in it vanished from the prose stream.
+const CODE_SPAN = /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
 
 // Emoji, not "any symbol in these blocks". The old range was wrong both
 // ways: it flagged the text-presentation symbols documentation uses
@@ -177,8 +182,8 @@ const BLOCK = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\||`{3,}|~{3,})/
 // A list item or a blockquote keeps its wrapped continuation lines. A
 // heading, a table row and a rule are one line each, so they close as
 // well as open.
-const OPENS = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\||`{3,}|~{3,})/
-const CLOSES = /^\s*(?:#{1,6} |\||(?:[-*_] *){3,}$)/
+const OPENS = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\|[^|]*\||`{3,}|~{3,})/
+const CLOSES = /^\s*(?:#{1,6} |\|[^|]*\||(?:[-*_] *){3,}$)/
 
 
 // A paragraph, joined for matching, with each piece's physical line
@@ -515,6 +520,8 @@ describe('docs-style', () => {
     // A code span's delimiter is a RUN of backticks.
     claim('' === '``a `b` c``'.replace(CODE_SPAN, ''), 'multi-backtick span')
     claim('x  y' === 'x `my` y'.replace(CODE_SPAN, ''), 'single-backtick span')
+    claim('````not just```' === '````not just```'.replace(CODE_SPAN, ''),
+      'a shorter closing run is not a code span')
     claim('an odd ` mark\nand my line' ===
       'an odd ` mark\nand my line'.replace(CODE_SPAN, ''),
       'an unpaired backtick does not swallow the next line')
@@ -574,6 +581,8 @@ describe('docs-style', () => {
       'a table row is not the row above it')
     claim(!joins('- one worth\n- noting two', 'worth - noting'),
       'a list item is not the item above it')
+    claim(joins('| This explanation is worth\nnoting here', 'worth noting'),
+      'one pipe is a sentence, not a table row')
     claim(joins('a sentence worth\nnoting here', 'worth noting'),
       'a wrapped paragraph still joins')
     claim(joins('- an item worth\n  noting here', 'worth noting'),

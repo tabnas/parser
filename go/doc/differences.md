@@ -559,7 +559,7 @@ Differences:
 |---|---|---|
 | Signature / failure | `merge(other): Tabnas`, throws | `Merge(other *Tabnas) (*Tabnas, error)`, never panics |
 | Named-action (fnref) renaming | fnref keys renamed `@x` → `@<tag>:x` (`$`-builtins kept) | none. Go persists no fnref map (`Grammar()` Ref maps are transient); lifecycle action slices carry the wired handlers |
-| "Non-default" option detection | compared against the shared defaults tree, an explicitly-set default value still merges cleanly | nil/zero field = default; a field explicitly set to the default value on both sides with different values still conflicts (indistinguishable from intent) |
+| "Non-default" option detection | compared against the shared defaults tree, an explicitly set default value still merges cleanly | nil/zero field = default; a field explicitly set to the default value on both sides with different values still conflicts (indistinguishable from intent) |
 | Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`): each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer), the natural Go equivalent of source equality | 
 | Conditioned-alt dedupe | only when the condition is reference-equal (or absent) | never (a condition cannot be proven identical across closures); unconditioned duplicates are unreachable, so both rules are behavior-safe |
 | Option conflict paths | TS option names (`lex.match.same.make`) | lowercased Go field names, which coincide for most paths (`rule.maxmul`, `lex.match.same.make`) |
