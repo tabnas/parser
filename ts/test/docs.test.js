@@ -179,7 +179,8 @@ function prose(md) {
     .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, ''))
     .replace(/\]\([^)\s]*/g, '](')
     .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
-    .replace(/<?\bhttps?:\/\/[^\s)>\]]+>?/g, '')
+    .replace(/<https?:\/\/[^\s<>]*>/g, '')
+    .replace(/\bhttps?:\/\/[^\s<>)\]]*[^\s<>)\]!.,;:?*_"']/g, '')
 }
 
 
@@ -579,6 +580,8 @@ describe('docs-style', () => {
     claim(0 === bang(prose('Read <https://host/a!b>.')),
       'an autolink is not prose')
     claim(0 === bang(prose('Read https://host/a!b today.')), 'nor a bare URL')
+    claim(1 === bang(prose('Read https://host/a!')),
+      'the mark ending the sentence after one still counts')
     claim(0 === bang(prose('Text ``a ` !\nb`` more.')),
       'a wrapped span holding a shorter run is still a span')
 
