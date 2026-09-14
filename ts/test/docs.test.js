@@ -101,7 +101,8 @@ const CODE_SPAN = /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
 // an exclamation mark. One newline is the bound that keeps an unpaired
 // backtick from running away, and the newline itself is kept so a
 // reported line still points at the author's line.
-const CODE_WRAP = /(?<!`)(`+)(?!`)[^`\n]*\n[^`\n]*(?<!`)\1(?!`)/g
+const CODE_WRAP =
+  /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*\n(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
 
 const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
 
@@ -168,7 +169,8 @@ function fenceless(md) {
 // A link TARGET is not prose. `](https://.../en-US/docs/...)` put the
 // letters `US` between word boundaries, and the first-person-plural
 // check read them as the pronoun. Vale skips link targets; so does this
-// now. The link TEXT stays, because that is prose a reader sees.
+// now, in the bracketed, angled and bare forms. The link TEXT stays,
+// because that is prose a reader sees.
 function prose(md) {
   return fenceless(md)
     .replace(/^---\n[\s\S]*?\n---\n/, '')
@@ -177,6 +179,7 @@ function prose(md) {
     .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, ''))
     .replace(/\]\([^)\s]*/g, '](')
     .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
+    .replace(/<?\bhttps?:\/\/[^\s)>\]]+>?/g, '')
 }
 
 
@@ -573,6 +576,11 @@ describe('docs-style', () => {
     claim(2 === bang('Great!!'), 'two marks are two marks')
     claim(0 === bang('if (a != b)'), '!= is an operator')
     claim(0 === bang('![alt](src)'), 'an image is not a mark')
+    claim(0 === bang(prose('Read <https://host/a!b>.')),
+      'an autolink is not prose')
+    claim(0 === bang(prose('Read https://host/a!b today.')), 'nor a bare URL')
+    claim(0 === bang(prose('Text ``a ` !\nb`` more.')),
+      'a wrapped span holding a shorter run is still a span')
 
     // A typographic apostrophe is what a word processor, a website and
     // most of these pages produce. `let'?s` matched `lets` and `let's`
