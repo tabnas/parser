@@ -205,6 +205,13 @@ function report(write) {
       wrong.push(`${Path.basename(GUIDE)}: claims ${a} alerts across ${f} ${word}, Vale reports ${total} across ${files} ${noun(files)}`)
       return `${total}${mid}${files}${gap}${noun(files)}`
     })
+    if (null != terms) {
+      guide = guide.replace(new RegExp(TERMS, 'g'), (m, n, rest) => {
+        if (Number(n) === terms) return m
+        wrong.push(`${Path.basename(GUIDE)}: claims ${n} domain terms, the vocabulary accepts ${terms}`)
+        return `${terms}${rest}`
+      })
+    }
   }
 
   if (write) {
