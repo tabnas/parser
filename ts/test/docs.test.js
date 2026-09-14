@@ -129,7 +129,7 @@ function firstSingular(line) {
 // strip every bold one- or two-letter capital anywhere, which also
 // removed the pronoun from `**I** configured the parser`.
 function label(line) {
-  return line.replace(/^(\s*(?:[-*+]\s+|\d+\.\s+)?)\*\*[A-Z]{1,2}\*\*/, '$1')
+  return line.replace(/^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)\*\*[A-Z]{1,2}\*\*/, '$1')
 }
 
 const FENCE_OPEN = /^(\s{0,3})(`{3,}|~{3,})[ \t]*([^`\s]*)[^`]*$/
@@ -592,6 +592,10 @@ describe('docs-style', () => {
       re.lastIndex = 0
       return re.test(text)
     })
+    claim(!/\*\*I\*\*/.test(label('1) **I** the column')),
+      'a parenthesised list label is a label too')
+    claim(/\*\*I\*\*/.test(label('Then **I** ran it')),
+      'a bold pronoun mid-sentence is not a label')
     claim(banned('so let\u2019s break it down'), 'a curly apostrophe')
     claim(banned("so let's break it down"), 'a straight apostrophe')
 
@@ -636,14 +640,22 @@ describe('docs-style', () => {
       Assert.ok(guide.includes(name), `the guide names ${name}`)
     }
 
+    // Naming a command that exists is not the claim. The claim is that
+    // running it runs Vale, and an emptied or repointed recipe still
+    // has the name.
     const make = Path.join(REPO, 'Makefile')
     const pkg = Path.join(REPO, 'ts', 'package.json')
-    const hasMake = Fs.existsSync(make) &&
-      /^prose:/m.test(Fs.readFileSync(make, 'utf8'))
-    const hasNpm = Fs.existsSync(pkg) &&
-      null != (JSON.parse(Fs.readFileSync(pkg, 'utf8')).scripts || {}).prose
+    const target = Fs.existsSync(make)
+      ? (/^prose:[^\n]*\n((?:[ \t][^\n]*\n|\n)*)/m
+        .exec(Fs.readFileSync(make, 'utf8')) || [])[1]
+      : null
+    const script = Fs.existsSync(pkg)
+      ? (JSON.parse(Fs.readFileSync(pkg, 'utf8')).scripts || {}).prose
+      : null
+    const hasMake = null != target && /vale/i.test(target)
+    const hasNpm = null != script && /vale/i.test(script)
     Assert.ok(hasMake || hasNpm,
-      'neither a Makefile `prose` target nor an npm `prose` script')
+      'neither a Makefile `prose` target nor an npm `prose` script runs Vale')
     const command = hasMake ? 'make prose' : 'npm run prose'
     Assert.ok(guide.includes(command),
       `the guide does not name ${command}, which is what runs Vale here`)
