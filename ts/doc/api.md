@@ -112,7 +112,7 @@ being matched, so the handover point is unknown here, and a missing
 completion beats a wrong one.
 
 Over-approximation caveat: conditions and counters may still reject a
-listed token. Runs on a lazily-created fail-fast sibling, so it works
+listed token. Runs on a lazily created fail-fast sibling, so it works
 identically on recovery-enabled instances.
 
 Note: the structured diagnostic's `expected[]` field intentionally

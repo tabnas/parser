@@ -42,19 +42,95 @@ function lf(s) {
 }
 
 
-// The banned list, read from the file Vale reads. Comments and blank
-// lines out; every other line is a regex, matched case-insensitively on
-// word boundaries, exactly as Vale.Avoid matches it.
+// The banned list, read from the file Vale reads. Every line is a regex,
+// matched case-insensitively on word boundaries, exactly as Vale.Avoid
+// matches it.
+//
+// A `#` line is REFUSED rather than skipped. Vale has no comment syntax
+// in a vocabulary file, so it reads one as a pattern: a lone `#` became
+// a banned phrase and reported `tabnas/bnf#13` as an error. Skipping it
+// on this side only would leave the two halves banning different things,
+// which is the one thing sharing the file is for.
 function loadBanned() {
-  return lf(Fs.readFileSync(REJECT, 'utf8'))
+  const lines = lf(Fs.readFileSync(REJECT, 'utf8'))
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => '' !== l && !l.startsWith('#'))
-    .map((src) => [new RegExp(`\\b(?:${src})\\b`, 'gi'), src])
+    .filter((l) => '' !== l)
+  const comments = lines.filter((l) => l.startsWith('#'))
+  if (0 < comments.length) {
+    throw new Error(
+      `${REJECT} has comment lines, and Vale reads them as patterns: ` +
+      comments.join(' / '))
+  }
+  return lines.map((src) => [new RegExp(`\\b(?:${src})\\b`, 'gi'), src])
 }
 
 
 const BANNED = loadBanned()
+
+// An emptied reject.txt would leave `no-banned-phrases-in-prose` and
+// `the-guide-covers-every-banned-pattern` iterating nothing and passing.
+// A gate that checks nothing has to say so.
+if (0 === BANNED.length) {
+  throw new Error(`${REJECT} loaded no patterns; the phrase gate is off`)
+}
+
+// A code span's delimiter is a RUN of backticks, and the run length
+// decides where it ends. Stripping pairs of single backticks left the
+// contents of ``a `b` c`` in the prose stream, so a literal could fail
+// the pronoun or banned-phrase checks the guide exempts it from.
+//
+// It stops at a newline. Without that, an unpaired backtick runs to the
+// next one however many lines away and takes every newline between them
+// with it, gluing the page into one line that every per-line check then
+// reports.
+//
+// Both runs must be MAXIMAL. `(`+)` backtracks, so four opening
+// backticks against three closing ones shrank to a run of three and ate
+// the fourth as content: ````not just``` is prose by CommonMark, and
+// the phrase in it vanished from the prose stream.
+const CODE_SPAN = /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
+
+// Emoji, not "any symbol in these blocks". The old range was wrong both
+// ways: it flagged the text-presentation symbols documentation uses
+// (the bare warning sign, a check mark, an arrow) and it missed every
+// emoji built from a variation selector, a keycap, or a flag's regional
+// indicators, none of which sit in it.
+// A span that wraps once. CODE_SPAN stops at a newline, so that one was
+// left in the prose stream whole: the boolean NOT inside one counted as
+// an exclamation mark. One newline is the bound that keeps an unpaired
+// backtick from running away, and the newline itself is kept so a
+// reported line still points at the author's line.
+const CODE_WRAP =
+  /(?<!`)(`+)(?!`)(?:[^`\n]|(?!\1)`)*\n(?:[^`\n]|(?!\1)`)*(?<!`)\1(?!`)/g
+
+const EMOJI = /\p{Emoji_Presentation}|\uFE0F|\u20E3|[\u{1F1E6}-\u{1F1FF}]/u
+
+// `I` is a pronoun only capitalised, because a lone lowercase `i` is
+// the one in `i.e.` or an index. `me`, `my` and `mine` are pronouns
+// however they fall, the start of a sentence or a heading included,
+// which a single case-sensitive pattern missed. `I/O` is neither.
+const FIRST_I = /\b(?:I(?!\/)|I'\w+)\b/
+const FIRST_MY = /\b(?:me|my|mine)\b/i
+
+// Every exclamation mark except the two that are punctuation for
+// something else: the `!=` of an operator and the `!` that opens an
+// image. Asking for a word character before the mark, as this did,
+// scored `Really?!`, `Great!!` and `Voilà!` at nothing.
+const EXCLAMATION = /!(?![=[])/g
+
+function firstSingular(line) {
+  return FIRST_I.test(line) || FIRST_MY.test(line)
+}
+
+
+// A bold LABEL opening a line or a list item is a heading, so `**I**`
+// there is an initial rather than a pronoun. The exemption used to
+// strip every bold one- or two-letter capital anywhere, which also
+// removed the pronoun from `**I** configured the parser`.
+function label(line) {
+  return line.replace(/^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)\*\*[A-Z]{1,2}\*\*/, '$1')
+}
 
 const FENCE_OPEN = /^(\s{0,3})(`{3,}|~{3,})[ \t]*([^`\s]*)[^`]*$/
 
@@ -93,15 +169,39 @@ function fenceless(md) {
 // A link TARGET is not prose. `](https://.../en-US/docs/...)` put the
 // letters `US` between word boundaries, and the first-person-plural
 // check read them as the pronoun. Vale skips link targets; so does this
-// now. The link TEXT stays, because that is prose a reader sees.
+// now, in the bracketed, angled and bare forms. The link TEXT stays,
+// because that is prose a reader sees.
 function prose(md) {
   return fenceless(md)
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/`[^`\n]*`/g, '')
+    .replace(CODE_SPAN, '')
+    .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, ''))
     .replace(/\]\([^)\s]*/g, '](')
     .replace(/^\[[^\]]+\]:\s*\S+/gm, '')
+    .replace(/<https?:\/\/[^\s<>]*>/g, '')
+    .replace(/\bhttps?:\/\/[^\s<>)\]]*[^\s<>)\]!.,;:?*_"']/g, '')
 }
+
+
+// A line that OPENS a block is not a continuation of the line above it,
+// even with no blank line between them. Markdown puts list items and
+// table rows on adjacent lines, and joining those invented phrases that
+// span a cell boundary: a row ending in "worth" ahead of one opening
+// "noting" read as `worth noting`.
+const BLOCK = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\||`{3,}|~{3,})/
+
+
+// A line that OPENS a block is not a continuation of the line above it,
+// and Markdown needs no blank line between the two. `## Something worth`
+// followed by `noting this` joined into one string and reported
+// `worth noting`, a phrase neither line contains.
+//
+// A list item or a blockquote keeps its wrapped continuation lines. A
+// heading, a table row and a rule are one line each, so they close as
+// well as open.
+const OPENS = /^\s*(?:[-*+] |\d+[.)] |#{1,6} |>|\|[^|]*\||`{3,}|~{3,})/
+const CLOSES = /^\s*(?:#{1,6} |\|[^|]*\||(?:[-*_] *){3,}$)/
 
 
 // A paragraph, joined for matching, with each piece's physical line
@@ -128,11 +228,20 @@ function logical(text) {
       flush()
       return
     }
+    if (BLOCK.test(line)) {
+      flush()
+    }
+    if (OPENS.test(line)) {
+      flush()
+    }
     const piece = line.trim().replace(/\s+/g, ' ')
     starts.push(at)
     lines.push(i + 1)
     pieces.push(piece)
     at += piece.length + 1
+    if (CLOSES.test(line)) {
+      flush()
+    }
   })
   flush()
 
@@ -353,10 +462,9 @@ describe('docs-style', () => {
     const hits = []
     for (const { file, abs } of paths()) {
       prose(Fs.readFileSync(abs, 'utf8'))
-        .replace(/\*\*[A-Z]{1,2}\*\*/g, '')
         .split('\n')
         .forEach((line, i) => {
-          if (/\b(I(?!\/)|I'\w+|me|my|mine)\b/.test(line)) {
+          if (firstSingular(label(line))) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
@@ -371,10 +479,10 @@ describe('docs-style', () => {
     const allowed = tutorials()
     const hits = []
     for (const { file, abs } of paths()) {
-      // A sentence-ending mark, not every `!` byte: `!=` is an
-      // operator and `![alt](src)` is an image.
+      // Not every `!` byte: `!=` is an operator and `![alt](src)` is
+      // an image.
       const n = (prose(Fs.readFileSync(abs, 'utf8'))
-        .match(/\w!(?=\s|$)/g) || []).length
+        .match(EXCLAMATION) || []).length
       if (0 === n) {
         continue
       }
@@ -403,7 +511,7 @@ describe('docs-style', () => {
       prose(Fs.readFileSync(abs, 'utf8'))
         .split('\n')
         .forEach((line, i) => {
-          if (/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(line)) {
+          if (EMOJI.test(line)) {
             hits.push(`${file}:${i + 1}: ${line.trim()}`)
           }
         })
@@ -415,25 +523,160 @@ describe('docs-style', () => {
 
   // The guide claims two gates. If either name stops appearing the
   // claim has gone stale, and a reader following it lands nowhere.
+  // A check is a claim about what it rejects, and a clean run over
+  // well-written pages cannot tell a working rule from a broken one.
+  // Every case here is a defect a review found in these rules after
+  // they were installed in every repository in the fleet.
+  test('the-checks-catch-what-they-claim', () => {
+    const faults = []
+    const claim = (ok, what) => {
+      if (!ok) {
+        faults.push(what)
+      }
+    }
+
+    // A code span's delimiter is a RUN of backticks.
+    claim('' === '``a `b` c``'.replace(CODE_SPAN, ''), 'multi-backtick span')
+    claim('x  y' === 'x `my` y'.replace(CODE_SPAN, ''), 'single-backtick span')
+    claim('````not just```' === '````not just```'.replace(CODE_SPAN, ''),
+      'a shorter closing run is not a code span')
+    claim('a \n b' === 'a `x !(y ==\nz)` b'.replace(CODE_SPAN, '')
+      .replace(CODE_WRAP, (m) => m.replace(/[^\n]/g, '')).replace(/ +/g, ' '),
+      'a span that wraps once is still a span')
+    claim('an odd ` mark\nand my line' ===
+      'an odd ` mark\nand my line'.replace(CODE_SPAN, ''),
+      'an unpaired backtick does not swallow the next line')
+
+    // Emoji, not "symbol in these blocks".
+    for (const text of ['\u26A0', '\u2713', '\u2194', '\u2020']) {
+      claim(!EMOJI.test(text), `text-presentation symbol ${text} is not emoji`)
+    }
+    for (const text of ['\u{1F680}', '1\uFE0F\u20E3', '\u{1F1EC}\u{1F1E7}',
+      '\u00A9\uFE0F', '\u2197\uFE0F']) {
+      claim(EMOJI.test(text), `${text} is emoji`)
+    }
+
+    // First person, wherever it falls, and what merely looks like it.
+    claim(firstSingular('My parser is fast.'), 'My at a sentence start')
+    claim(firstSingular('Mine is faster.'), 'Mine at a sentence start')
+    claim(!firstSingular('The disk I/O is buffered.'), 'I/O is not a pronoun')
+    claim(!firstSingular('A lexer, i.e. a tokeniser.'), 'the i of i.e.')
+    claim(firstSingular('Then I ran it.'), 'a capital I is a pronoun')
+    claim(!firstSingular(label('**I** the identifier column')),
+      'a bold label is a label')
+    claim(firstSingular(label('Then **I** configured it.')),
+      'a bold pronoun in prose is a pronoun')
+
+    // Every mark, and the two that are not one.
+    const bang = (s) => (s.match(EXCLAMATION) || []).length
+    claim(1 === bang('It works **now!** Next'), 'mark before bold close')
+    claim(1 === bang('He said "Done!" then'), 'mark before a quote')
+    claim(1 === bang('It works! Next'), 'plain mark')
+    claim(1 === bang('Really?!'), 'mark after another mark')
+    claim(1 === bang('Voil\u00e0!'), 'mark after a non-ASCII letter')
+    claim(2 === bang('Great!!'), 'two marks are two marks')
+    claim(0 === bang('if (a != b)'), '!= is an operator')
+    claim(0 === bang('![alt](src)'), 'an image is not a mark')
+    claim(0 === bang(prose('Read <https://host/a!b>.')),
+      'an autolink is not prose')
+    claim(0 === bang(prose('Read https://host/a!b today.')), 'nor a bare URL')
+    claim(1 === bang(prose('Read https://host/a!')),
+      'the mark ending the sentence after one still counts')
+    claim(0 === bang(prose('Text ``a ` !\nb`` more.')),
+      'a wrapped span holding a shorter run is still a span')
+
+    // A typographic apostrophe is what a word processor, a website and
+    // most of these pages produce. `let'?s` matched `lets` and `let's`
+    // and walked straight past `let\u2019s`.
+    const banned = (text) => BANNED.some(([re]) => {
+      re.lastIndex = 0
+      return re.test(text)
+    })
+    claim(!/\*\*I\*\*/.test(label('1) **I** the column')),
+      'a parenthesised list label is a label too')
+    claim(/\*\*I\*\*/.test(label('Then **I** ran it')),
+      'a bold pronoun mid-sentence is not a label')
+    claim(banned('so let\u2019s break it down'), 'a curly apostrophe')
+    claim(banned("so let's break it down"), 'a straight apostrophe')
+
+    // A block opener ends the paragraph above it.
+    const joined = logical('| a worth |\n| noting b |').map((p) => p.text)
+    claim(!joined.some((t) => /worth noting/.test(t)),
+      'a table row is not the row above wrapping')
+    claim(logical('worth\nnoting').some((t) => /worth noting/.test(t.text)),
+      'a wrapped paragraph still joins')
+
+    // A block opener is not the line above it wrapping, and a heading or
+    // a table row is one line whatever follows it.
+    const joins = (md, phrase) =>
+      logical(md).some((p) => p.text.includes(phrase))
+    claim(!joins('## Something worth\nnoting this', 'worth noting'),
+      'a heading is not the paragraph under it')
+    claim(!joins('| a | worth |\n| noting | b |', 'worth | | noting'),
+      'a table row is not the row above it')
+    claim(!joins('- one worth\n- noting two', 'worth - noting'),
+      'a list item is not the item above it')
+    claim(joins('| This explanation is worth\nnoting here', 'worth noting'),
+      'one pipe is a sentence, not a table row')
+    claim(joins('a sentence worth\nnoting here', 'worth noting'),
+      'a wrapped paragraph still joins')
+    claim(joins('- an item worth\n  noting here', 'worth noting'),
+      'a wrapped list item still joins')
+
+    Assert.deepEqual(faults, [],
+      `these rules no longer catch what they claim:\n${faults.join('\n')}`)
+  })
+
+  // The guide names the command that runs the Vale half, and the check
+  // is that the command EXISTS. `make prose` was in every copy of this
+  // list, including the repository that has no Makefile and runs its
+  // gate from npm.
   test('the-style-guide-names-both-gates', () => {
     const guide = Fs.readFileSync(GUIDE, 'utf8')
     for (const name of [
-      'make prose', 'ts/test/docs.test.js', 'ts/scripts/gated-docs.cjs',
+      'ts/test/docs.test.js', 'ts/scripts/gated-docs.cjs',
       '.vale.ini', 'reject.txt',
     ]) {
       Assert.ok(guide.includes(name), `the guide names ${name}`)
     }
+
+    // Naming a command that exists is not the claim. The claim is that
+    // running it runs Vale, and an emptied or repointed recipe still
+    // has the name.
+    const make = Path.join(REPO, 'Makefile')
+    const pkg = Path.join(REPO, 'ts', 'package.json')
+    const target = Fs.existsSync(make)
+      ? (/^prose:[^\n]*\n((?:[ \t][^\n]*\n|\n)*)/m
+        .exec(Fs.readFileSync(make, 'utf8')) || [])[1]
+      : null
+    const script = Fs.existsSync(pkg)
+      ? (JSON.parse(Fs.readFileSync(pkg, 'utf8')).scripts || {}).prose
+      : null
+    const hasMake = null != target && /vale/i.test(target)
+    const hasNpm = null != script && /vale/i.test(script)
+    Assert.ok(hasMake || hasNpm,
+      'neither a Makefile `prose` target nor an npm `prose` script runs Vale')
+    const command = hasMake ? 'make prose' : 'npm run prose'
+    Assert.ok(guide.includes(command),
+      `the guide does not name ${command}, which is what runs Vale here`)
   })
 
 
-  // Every pattern here is summarised in the guide. Checked by its
-  // literal prefix, the part before the first regex metacharacter, so
-  // `leverag(?:e|es|ed|ing)` is satisfied by "leverage" in the prose.
+  // Every pattern here is summarised in the guide, checked by running
+  // the pattern's OWN regex over it.
+  //
+  // This used to compare a literal stem: the part of the source before
+  // its first metacharacter, discarded when shorter than three
+  // characters. So every pattern BEGINNING with a group left the check
+  // without a word: `(?:hits|lands|strikes) hardest` produced an empty
+  // stem and was dropped, along with `(?:hit|struck) a nerve`. Asking
+  // the regex is both simpler and exact, since a guide that quotes the
+  // phrase is quoting something the gate would catch.
   test('the-guide-covers-every-banned-pattern', () => {
-    const guide = Fs.readFileSync(GUIDE, 'utf8').toLowerCase()
+    const guide = Fs.readFileSync(GUIDE, 'utf8')
     const missing = BANNED
-      .map(([, src]) => src.split(/[([\\.?*+|]/)[0].trim())
-      .filter((stem) => 2 < stem.length && !guide.includes(stem.toLowerCase()))
+      .filter(([re]) => !new RegExp(re.source, 'i').test(guide))
+      .map(([, src]) => src)
     Assert.deepEqual([...new Set(missing)], [],
       `banned patterns with no summary in the guide: ${missing.join(', ')}`)
   })

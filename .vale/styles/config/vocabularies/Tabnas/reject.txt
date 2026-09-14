@@ -3,8 +3,8 @@ important to note
 it cannot be overstated
 at its core
 when it comes to
-let'?s break it down
-here'?s where it gets interesting
+let['’]?s break it down
+here['’]?s where it gets interesting
 because it matters
 delve
 dive into
@@ -52,7 +52,7 @@ rules of physics
 quietly
 not just
 not only .{0,40}\bbut\b
-it'?s not about
+it['’]?s not about
 the whole game
 the entire point
 the only thing that (?:matters|changed)
@@ -63,22 +63,22 @@ what (?:struck|got) me
 stuck with me
 struck a chord
 (?:hit|struck) a nerve
-we'?ve seen this movie
-we'?ve been here before
+we['’]?ve seen this movie
+we['’]?ve been here before
 sit with
 worth (?:exploring|considering|a look|asking|talking about)
 keeps? coming back to
-that'?s the tell
+that['’]?s the tell
 where I landed
 most people
-everyone I'?ve worked with
+everyone I['’]?ve worked with
 a lot of folks
 nobody I know
 honest(y|ly)?
-let'?s explore
-now let'?s turn to
+let['’]?s explore
+now let['’]?s turn to
 moving on to
-in today'?s rapidly evolving
+in today['’]?s rapidly evolving
 reflecting a broader trend
 marking a significant shift
 great question

@@ -37,15 +37,27 @@ function exists(rel) {
 }
 
 
-// Repo-relative, sorted within each group, and filtered to what is
-// actually on disk so a renamed page fails as a missing gate rather
-// than as a crash.
+// Repo-relative, sorted within each group. A declared page that is not
+// on disk THROWS.
+//
+// This filtered instead, and the comment here claimed the filter made a
+// renamed page "fail as a missing gate". It did the opposite: the page
+// left the list, both halves of the gate carried on over what remained,
+// and the coverage test passed because it only counts what the list
+// returned. Deleting a page was the one way to stop it being checked.
 function gatedDocs() {
   const neutral = NEUTRAL.map((f) => `doc/${f}`)
   const ts = PER_RUNTIME.map((f) => `ts/doc/${f}`)
   const go = PER_RUNTIME.map((f) => `go/doc/${f}`)
 
-  return [...neutral, ...ts, ...go, ...EXTRA, ...READMES].filter(exists)
+  const declared = [...neutral, ...ts, ...go, ...EXTRA, ...READMES]
+  const gone = declared.filter((f) => !exists(f))
+  if (0 < gone.length) {
+    throw new Error(
+      'gated-docs.cjs: declared but not on disk: ' + gone.join(', ') +
+      '. Rename it here, or delete the entry deliberately.')
+  }
+  return declared
 }
 
 

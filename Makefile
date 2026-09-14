@@ -5,7 +5,8 @@
 # repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
-        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset prose
+        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset prose \
+        prose-counts
 
 all: build test
 
@@ -81,3 +82,9 @@ reset:
 # .github/workflows/docs.yml. Warnings are advisory, errors fail.
 prose:
 	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)
+	node ts/scripts/vale-counts.cjs
+
+# Re-measure the counts .vale.ini and docs/STYLE-GUIDE.md record, after
+# a change to the pages or the rules moves them.
+prose-counts:
+	node ts/scripts/vale-counts.cjs --write

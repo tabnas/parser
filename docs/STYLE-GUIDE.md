@@ -38,6 +38,7 @@ drift from the other:
 |---|---|---|
 | `make prose` (Vale) | `ci/workflows/docs.yml` (staged) | spelling, Google's conventions, and the banned list, at the levels set in `.vale.ini` |
 | `ts/test/docs.test.js` | `make test` | the banned list again, the no-em-dash rule, the first-person rules, the exclamation ration, and no emoji |
+| `ts/scripts/vale-counts.cjs` | `make prose` | that every count in `.vale.ini`, and the total below, are what Vale reports |
 
 The gated set is the reader-facing one: the language-neutral pages under
 `doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
@@ -65,8 +66,13 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 1928 alerts across 20 files at the commit
-that introduced the gate.
+a clean run over the gated set: 1176 alerts across 21 files. Those
+numbers were once asserted rather than measured, and the total in this
+sentence and the one in `.vale.ini` drifted apart by 750.
+`node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
+and fails on any difference; `--write` re-measures. A rule switched off
+is measured with it switched back on, because the count is the evidence
+for switching it off.
 
 **The Vale gate is staged, not yet wired.** `ci/workflows/docs.yml`
 follows this repository's convention for proposed workflows (see
@@ -182,6 +188,17 @@ banned. Add a phrase there and both pick it up. What follows is a
 reader's summary of it, not a second list; every phrase is shown as code
 so that quoting a banned phrase in this guide does not fail the gate.
 
+**That file holds patterns and nothing else.** Vale has no comment
+syntax in a vocabulary file: a `#` line is a pattern like any other, and
+a lone `#` bans the character, which reports `owner/repo#13` as an
+error. The Node half used to skip such lines, so a comment left the two
+gates banning different things; it now refuses to load a list that
+contains one. The section headings for these phrases live here instead.
+
+**Write an apostrophe as `['’]`.** A plain `'?` matches `lets` and
+`let's` and walks past `let’s`, which is what a word processor, a
+website, and most of these pages produce.
+
 It draws on two sources: the original house list, and
 [claudisms.ai](https://claudisms.ai/), a catalogue of the patterns that
 mark machine-written prose.
@@ -217,7 +234,8 @@ reports nothing).
 **False singularity and crowned superlatives**:
 `the right way/answer/tool/question` · `the best thing you can do` ·
 `if I had to pick` · `what struck me` · `stuck with me` ·
-`struck a chord` · `hit a nerve` · `we've seen this movie`.
+`struck a chord` · `hit a nerve` · `we've seen this movie` ·
+`we've been here before`.
 
 **Reflective pose**: `sit with` · `worth exploring/considering/asking` ·
 `keeps coming back to` · `that's the tell` · `where I landed`.
