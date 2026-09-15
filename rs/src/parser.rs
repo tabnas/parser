@@ -1923,30 +1923,34 @@ impl Parser {
                     let result = self.catch_callback("alternate error", src, || {
                         error_hook(&mut current_rule, &mut context)
                     });
-                    matched.e = result.map_err(|error| {
-                        self.attach_error(
-                            error,
-                            &current_rule,
-                            &stack,
-                            alts,
-                            Self::phase_token(&current_rule),
-                        )
-                    })?;
+                    matched.e = result
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .map(Box::new);
                 }
                 if let Some(error_hook) = alt.e_match.clone() {
                     context.set_rule(&current_rule);
                     let result = self.catch_callback("matched alternate error", src, || {
                         error_hook(&mut current_rule, &mut context, &mut matched)
                     });
-                    matched.e = result.map_err(|error| {
-                        self.attach_error(
-                            error,
-                            &current_rule,
-                            &stack,
-                            alts,
-                            Self::phase_token(&current_rule),
-                        )
-                    })?;
+                    matched.e = result
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .map(Box::new);
                 }
                 if let Some(route) = &alt.p_fn {
                     context.set_rule(&current_rule);
@@ -2094,7 +2098,7 @@ impl Parser {
                         g: matched.g.clone(),
                         p: matched.p.clone().unwrap_or_default(),
                         r: matched.r.clone().unwrap_or_default(),
-                        err: Some(token.clone()),
+                        err: Some((*token).clone()),
                     });
                     let error = self.attach_error(error, &current_rule, &stack, alts, Some(&token));
                     self.recover_error_pass(

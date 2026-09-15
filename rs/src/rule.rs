@@ -111,7 +111,12 @@ pub struct AltMatch {
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
     pub g: Vec<String>,
-    pub e: Option<Token>,
+    /// The alternate's error token, boxed. A `Token` is 248 bytes and this
+    /// record is moved twice per rule step, so carrying one inline made
+    /// `AltMatch` 560 bytes of which 248 were an error almost no alternate
+    /// raises. The box costs an allocation only on the error path, which
+    /// is already the expensive one.
+    pub e: Option<Box<Token>>,
     /// Canonical post-match modifier attached to the selected alternate.
     /// It remains visible to the modifier itself and later actions even
     /// though changing it after selection does not rerun the phase.
