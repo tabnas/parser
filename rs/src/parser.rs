@@ -64,7 +64,10 @@ struct ParseSite<'a> {
 }
 
 pub struct Parser {
-    pub options: Options,
+    /// Shared with the lexer, which never writes to them. Cloning a
+    /// whole `Options` was 22% of a small parse, and it was happening
+    /// twice.
+    pub options: Rc<Options>,
     pub rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token.
@@ -126,8 +129,23 @@ impl ExpectedTins {
 
 impl Parser {
     pub fn new(options: Options) -> Self {
+        let mut options = options;
+        // Sorted once here rather than once per lexer, which is what
+        // lets the lexer share these rather than copy them. TypeScript
+        // evaluates serialized token matchers in tin order; keep that
+        // deterministic even when callers assembled `Options` by
+        // mutating the public maps directly.
+        options
+            .match_tokens
+            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
+        options.match_values.sort_keys();
+        options.lex.matchers.sort_by(|name_a, left, name_b, right| {
+            left.order
+                .total_cmp(&right.order)
+                .then_with(|| name_a.cmp(name_b))
+        });
         Parser {
-            options,
+            options: Rc::new(options),
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
             names: HashMap::new(),
@@ -1317,7 +1335,7 @@ impl Parser {
             self.options.rewind.history,
             src,
             meta,
-            self.options.clone(),
+            (*self.options).clone(),
             self.instance.clone(),
         );
         if let Some(parent) = parent {
@@ -1352,7 +1370,7 @@ impl Parser {
             };
         }
 
-        let mut lexer = Lexer::new(src, self.options.clone());
+        let mut lexer = Lexer::with_shared(src, Rc::clone(&self.options));
 
         let start_name = self.options.rule.start.as_str();
         if !self.rules.contains_key(start_name) {
