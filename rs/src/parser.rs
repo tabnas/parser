@@ -19,6 +19,7 @@ use crate::{
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Continuations {
@@ -63,7 +64,7 @@ struct ParseSite<'a> {
 
 pub struct Parser {
     pub options: Options,
-    pub rules: IndexMap<String, RuleSpec>,
+    pub rules: IndexMap<String, Arc<RuleSpec>>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub matched_actions: HashMap<String, AltAction>,
@@ -93,7 +94,7 @@ impl Parser {
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
-        self.rules.insert(spec.name.clone(), spec);
+        self.rules.insert(spec.name.clone(), Arc::new(spec));
     }
 
     pub fn add_action(&mut self, name: String, action: Action) {
@@ -2963,7 +2964,7 @@ fn alt_has_sync_group(alt: &AltSpec, sync_groups: &[String]) -> bool {
 
 fn add_close_tins(
     rule: &Rule,
-    rules: &IndexMap<String, RuleSpec>,
+    rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
     tagged_only: bool,
     out: &mut BTreeSet<Tin>,
@@ -2986,7 +2987,7 @@ fn add_close_tins(
 fn compute_sync_tins(
     rule: &Rule,
     stack: &[Rule],
-    rules: &IndexMap<String, RuleSpec>,
+    rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
 ) -> BTreeSet<Tin> {
     let mut out = BTreeSet::new();
@@ -3014,7 +3015,7 @@ fn compute_sync_tins(
 fn accepts_close(
     rule: &Rule,
     tin: Tin,
-    rules: &IndexMap<String, RuleSpec>,
+    rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
 ) -> bool {
     rules.get(&rule.name).is_some_and(|spec| {
@@ -3027,7 +3028,7 @@ fn accepts_close(
 
 fn add_openers(
     name: &str,
-    rules: &IndexMap<String, RuleSpec>,
+    rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
     opened: &mut BTreeSet<String>,
     out: &mut BTreeSet<Tin>,
@@ -3056,7 +3057,7 @@ fn continuation_tins(
     context: &Context,
     rule: &Rule,
     stack: &[Rule],
-    rules: &IndexMap<String, RuleSpec>,
+    rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
     query_pos: usize,
     failed: Option<&[Tin]>,

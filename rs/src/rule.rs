@@ -1171,9 +1171,9 @@ impl Rule {
         }
     }
 
-    pub(crate) fn bind_spec(&mut self, spec: &RuleSpec) {
+    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>) {
         self.name.clone_from(&spec.name);
-        self.spec = Arc::new(spec.clone());
+        self.spec = Arc::clone(spec);
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.
         self.bo = true;
