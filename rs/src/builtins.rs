@@ -154,11 +154,11 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
 
 fn map_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.map {
-        Value::MapRef(MapRef {
+        Value::MapRef(Box::new(MapRef {
             value: IndexMap::new(),
             implicit,
             meta: IndexMap::new(),
-        })
+        }))
     } else {
         Value::Object(IndexMap::new())
     }
@@ -166,12 +166,12 @@ fn map_value(info: &InfoOptions, implicit: bool) -> Value {
 
 fn list_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.list {
-        Value::ListRef(ListRef {
+        Value::ListRef(Box::new(ListRef {
             value: Vec::new(),
             implicit,
             child: None,
             meta: IndexMap::new(),
-        })
+        }))
     } else {
         Value::Array(Vec::new())
     }

@@ -102,8 +102,12 @@ pub enum Value {
     Array(Vec<Value>),
     Object(IndexMap<String, Value>),
     Text(Text),
-    ListRef(ListRef),
-    MapRef(MapRef),
+    /// Boxed: a `ListRef` is 112 bytes and a `MapRef` 152, and an unboxed
+    /// variant sets the size of every `Value`, hence of every `Token` and
+    /// every `Rule`. Both are niche next to the scalars and containers the
+    /// parse loop moves constantly.
+    ListRef(Box<ListRef>),
+    MapRef(Box<MapRef>),
 }
 
 impl<'de> Deserialize<'de> for Value {

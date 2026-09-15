@@ -27,15 +27,15 @@ fn json_list_and_text_info_preserve_metadata_and_plain_json_shape() {
     parser.options.info.text = true;
 
     let value = parser.parse(r#"["hello",1]"#).unwrap();
-    let Value::ListRef(ListRef {
+    let Value::ListRef(list_ref) = &value else {
+        panic!("expected ListRef, got {value:?}");
+    };
+    let ListRef {
         value: items,
         implicit,
         child,
         meta,
-    }) = &value
-    else {
-        panic!("expected ListRef, got {value:?}");
-    };
+    } = list_ref.as_ref();
     assert!(!implicit);
     assert!(child.is_none());
     assert!(meta.is_empty());
@@ -71,10 +71,10 @@ fn serialized_info_options_and_bound_implicit_config_reach_builtins() {
     assert_eq!(parser.options.info.marker, "__meta__");
 
     let value = parser.parse("{}").unwrap();
-    let Value::MapRef(MapRef { implicit, .. }) = value else {
+    let Value::MapRef(map_ref) = value else {
         panic!("expected MapRef");
     };
-    assert!(implicit);
+    assert!(map_ref.implicit);
 }
 
 #[test]
