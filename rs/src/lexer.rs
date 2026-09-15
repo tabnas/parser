@@ -19,6 +19,7 @@ pub struct Lexer<'a> {
     ri: usize,
     ci: usize,
     options: Arc<Options>,
+    ignore_tins: Vec<crate::Tin>,
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
@@ -83,6 +84,7 @@ impl<'a> Lexer<'a> {
             idx: 0,
             ri: 1,
             ci: 1,
+            ignore_tins: options.ignore_tins(),
             options,
             err: None,
             end_reached: false,
@@ -405,7 +407,7 @@ impl<'a> Lexer<'a> {
 
             loop {
                 let token = self.next_raw(None)?;
-                if !self.options.is_ignored(token.tin) {
+                if !self.ignore_tins.contains(&token.tin) {
                     return Ok(token);
                 }
             }
@@ -447,7 +449,7 @@ impl<'a> Lexer<'a> {
     ) -> Result<Token, TabnasError> {
         loop {
             let token = self.next_raw_for_rule(rule, context)?;
-            if !self.options.is_ignored(token.tin) {
+            if !self.ignore_tins.contains(&token.tin) {
                 return Ok(token);
             }
         }

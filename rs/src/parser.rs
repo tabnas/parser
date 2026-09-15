@@ -68,6 +68,7 @@ pub struct Parser {
     /// whole `Options` was 22% of a small parse, and it was happening
     /// twice.
     pub options: Arc<Options>,
+    ignore_tins: Vec<Tin>,
     pub rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token.
@@ -138,6 +139,7 @@ impl Parser {
     /// ordered, shared with every other parse of the same grammar.
     pub fn from_shared(options: Arc<Options>) -> Self {
         Parser {
+            ignore_tins: options.ignore_tins(),
             options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
@@ -667,7 +669,7 @@ impl Parser {
                                     )
                                 })?;
                             }
-                            if self.options.is_ignored(token.tin) {
+                            if self.ignore_tins.contains(&token.tin) {
                                 continue;
                             }
                             for subscriber in &self.token_subscribers {
@@ -1295,7 +1297,7 @@ impl Parser {
                         ));
                     }
                 }
-                if !self.options.is_ignored(token.tin) {
+                if !self.ignore_tins.contains(&token.tin) {
                     break token;
                 }
             };

@@ -1366,6 +1366,14 @@ impl Options {
             .is_some_and(|ignored| ignored.contains(&tin))
     }
 
+    /// The ignore set, resolved once. `is_ignored` is asked for every
+    /// lookahead token, and hashing the literal `"IGNORE"` each time
+    /// cost more than the answer; the lexer and the parser each take a
+    /// copy when they are built.
+    pub(crate) fn ignore_tins(&self) -> Vec<Tin> {
+        self.token_set.get("IGNORE").cloned().unwrap_or_default()
+    }
+
     pub fn token(&self, name: &str) -> Option<Tin> {
         crate::token::name_to_tin(name).or_else(|| {
             let name = if name.starts_with('#') {
