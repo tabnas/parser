@@ -189,7 +189,12 @@ pub struct Context {
     #[cfg(debug_assertions)]
     rule_stack_shadow: Vec<Rc<RuleSnapshot>>,
     /// Retained consumed-token history, oldest first.
-    pub v: Vec<Token>,
+    /// A `VecDeque` because the history is trimmed from its front once
+    /// it outgrows `options.rewind.history`. As a `Vec` that trim moved
+    /// every retained token, which amortised to one `Token` memmove per
+    /// token consumed -- 1.8% of a parse, for a buffer nothing reads
+    /// unless a rewind happens.
+    pub v: VecDeque<Token>,
     /// Absolute number of tokens consumed minus tokens rewound.
     pub v_abs: usize,
     /// Current lookahead buffer, oldest first.
@@ -223,7 +228,7 @@ impl Context {
             rule_stack: Vec::new(),
             #[cfg(debug_assertions)]
             rule_stack_shadow: Vec::new(),
-            v: Vec::new(),
+            v: VecDeque::new(),
             v_abs: 0,
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
@@ -243,7 +248,7 @@ impl Context {
 
     /// Most recently consumed token.
     pub fn v1(&self) -> Option<&Token> {
-        self.v.last()
+        self.v.back()
     }
 
     /// Token consumed immediately before `v1`.
@@ -275,17 +280,17 @@ impl Context {
     }
 
     pub fn set_v1(&mut self, token: Token) {
-        if let Some(last) = self.v.last_mut() {
+        if let Some(last) = self.v.back_mut() {
             *last = token;
         } else {
-            self.v.push(token);
+            self.v.push_back(token);
         }
     }
 
     pub fn set_v2(&mut self, token: Token) {
         match self.v.len() {
-            0 => self.v.push(token),
-            1 => self.v.insert(0, token),
+            0 => self.v.push_back(token),
+            1 => self.v.push_front(token),
             length => self.v[length - 2] = token,
         }
     }
