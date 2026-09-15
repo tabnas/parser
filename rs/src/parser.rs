@@ -19,6 +19,7 @@ use crate::{
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1618,9 +1619,9 @@ impl Parser {
                     let mut candidate = current_rule.clone();
                     let tokens: Vec<Token> = context.t.iter().take(s_len).cloned().collect();
                     if is_open {
-                        candidate.o = tokens;
+                        candidate.o = Rc::new(tokens);
                     } else {
-                        candidate.c = tokens;
+                        candidate.c = Rc::new(tokens);
                     }
                     if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
                         || !conditions_match(&alt.c, &candidate, &stack)
@@ -1629,9 +1630,9 @@ impl Parser {
                     }
                     if alt_matches {
                         if is_open {
-                            current_rule.o = candidate.o.clone();
+                            current_rule.o = Rc::clone(&candidate.o);
                         } else {
-                            current_rule.c = candidate.c.clone();
+                            current_rule.c = Rc::clone(&candidate.c);
                         }
                         if let Some(condition) = &alt.c_fn {
                             context.set_rule(&current_rule);
@@ -1743,9 +1744,9 @@ impl Parser {
                 let matched_tokens: Vec<Token> =
                     context.t.iter().take(matched_count).cloned().collect();
                 if is_open {
-                    current_rule.o = matched_tokens;
+                    current_rule.o = Rc::new(matched_tokens);
                 } else {
-                    current_rule.c = matched_tokens;
+                    current_rule.c = Rc::new(matched_tokens);
                 }
 
                 // Compatibility modifier for the original two-argument Rust

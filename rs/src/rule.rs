@@ -1076,8 +1076,11 @@ pub struct Rule {
     pub n: HashMap<String, i32>,
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
-    pub o: Vec<Token>,
-    pub c: Vec<Token>,
+    /// Matched open and close tokens. Shared rather than owned: the parse
+    /// loop only ever replaces these wholesale, and a snapshot that copied
+    /// them copied every `Token`'s name and source text with them.
+    pub o: Rc<Vec<Token>>,
+    pub c: Rc<Vec<Token>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1102,8 +1105,11 @@ pub struct RuleSnapshot {
     pub n: HashMap<String, i32>,
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
-    pub o: Vec<Token>,
-    pub c: Vec<Token>,
+    /// Matched open and close tokens. Shared rather than owned: the parse
+    /// loop only ever replaces these wholesale, and a snapshot that copied
+    /// them copied every `Token`'s name and source text with them.
+    pub o: Rc<Vec<Token>>,
+    pub c: Rc<Vec<Token>>,
 }
 
 impl Rule {
@@ -1134,8 +1140,8 @@ impl Rule {
             n: HashMap::new(),
             u: HashMap::new(),
             k: HashMap::new(),
-            o: Vec::new(),
-            c: Vec::new(),
+            o: Rc::new(Vec::new()),
+            c: Rc::new(Vec::new()),
         }
     }
 
@@ -1166,8 +1172,8 @@ impl Rule {
             n: HashMap::new(),
             u: HashMap::new(),
             k: HashMap::new(),
-            o: Vec::new(),
-            c: Vec::new(),
+            o: Rc::new(Vec::new()),
+            c: Rc::new(Vec::new()),
         }
     }
 
@@ -1271,8 +1277,8 @@ impl Rule {
             n: self.n.clone(),
             u: self.u.clone(),
             k: self.k.clone(),
-            o: self.o.clone(),
-            c: self.c.clone(),
+            o: Rc::clone(&self.o),
+            c: Rc::clone(&self.c),
         })
     }
 
