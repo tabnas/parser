@@ -2,7 +2,6 @@
 
 use crate::value::Value;
 use crate::{Context, Rule};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -300,28 +299,6 @@ impl From<TokenText> for String {
     }
 }
 
-/// One shared handle per token identity. Token names come from a fixed
-/// registry, so the same half-dozen strings were being allocated once
-/// per token in the input. The cache is keyed by `tin` and checked
-/// against the name asked for, because a grammar may bind its own name
-/// to a tin; a mismatch just allocates, as before.
-pub(crate) fn interned_token_name(name: &str, tin: Tin) -> TokenText {
-    thread_local! {
-        static NAMES: RefCell<HashMap<Tin, TokenText>> = RefCell::new(HashMap::new());
-    }
-    NAMES.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        match cache.get(&tin) {
-            Some(shared) if *shared == name => shared.clone(),
-            _ => {
-                let shared = TokenText::from(name);
-                cache.insert(tin, shared.clone());
-                shared
-            }
-        }
-    })
-}
-
 /// A single lexical token produced by the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
@@ -378,7 +355,7 @@ impl Token {
         let src: TokenText = src.into();
         let len = src.len();
         Token {
-            name: interned_token_name(name.as_ref(), tin),
+            name: TokenText::from(name.as_ref()),
             tin,
             val,
             src,
