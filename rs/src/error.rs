@@ -196,7 +196,7 @@ impl TabnasError {
                 name: token.name.to_string(),
                 src: token.src.to_string(),
             };
-            self.details.clone_from(&token.use_data);
+            self.details.clone_from(token.use_data());
             self.why = if token.why.is_empty() {
                 token.err.to_string()
             } else {

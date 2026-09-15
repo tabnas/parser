@@ -134,7 +134,7 @@ fn same_tokens(left: &[Token], right: &[Token]) -> bool {
                 && left.err == right.err
                 && left.why == right.why
                 && left.val.deep_equal(&right.val)
-                && same_values(&left.use_data, &right.use_data)
+                && same_values(left.use_data(), right.use_data())
         })
 }
 

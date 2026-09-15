@@ -2351,7 +2351,7 @@ impl Parser {
                         .unwrap_or_else(Token::no_token);
                     token.bad("unknown_rule");
                     token
-                        .use_data
+                        .use_data_mut()
                         .insert("rulename".into(), Value::String(name.clone()));
                     let error = self.raised_token_error(
                         &token,

@@ -103,7 +103,7 @@ fn unknown_catalogue_entries_fall_back_and_interpolate_token_details() {
         let mut token = rule.o0()?.clone();
         token.bad("mystery_code");
         token
-            .use_data
+            .use_data_mut()
             .insert("what".into(), Value::String("it".into()));
         Some(token)
     });

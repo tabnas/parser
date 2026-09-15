@@ -115,7 +115,7 @@ fn core_runtime_values_have_stable_human_readable_forms() {
         )],
     );
     assert_eq!(
-        token.use_data["nested"],
+        token.use_data()["nested"],
         Value::Object(
             [
                 ("a".into(), Value::Number(1.0)),
