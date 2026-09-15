@@ -1192,6 +1192,19 @@ impl std::ops::Deref for Rule {
 
 /// Every write to a rule's shared state goes through here, which is
 /// what makes the copy happen on write rather than on snapshot.
+///
+/// The obvious next step — stop copying at all, so a snapshot aliases
+/// the live rule the way TypeScript's and Go's rule handles do — was
+/// measured here by making this return an aliasing pointer. It is
+/// faster where it works: a 512-character palindrome drops from 31.7M
+/// to 24.6M instructions, and a 16K-term adder from 72.7 ms to 57.8 ms.
+/// But `next_rule` and the parent and child links then point at rules
+/// that point back, and an `Rc` cycle is never freed: peak memory for
+/// the benchmark set goes from 71 MB to 1214 MB, and a 32K-character
+/// palindrome slows from 111 ms to 270 ms once the leak outweighs the
+/// saving. Doing it properly needs `Weak` on every back-reference and
+/// an upgrade on every traversal, which spends some of the same 1.3x
+/// it is chasing. Worth knowing before anyone tries it again.
 impl std::ops::DerefMut for Rule {
     fn deref_mut(&mut self) -> &mut RuleSnapshot {
         Rc::make_mut(&mut self.shared)
