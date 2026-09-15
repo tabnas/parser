@@ -1556,26 +1556,35 @@ impl<'a> Lexer<'a> {
     /// between digits; a leading or trailing separator makes the whole run
     /// fall through to text, matching the TypeScript regexp and Go scanner.
     fn scan_number_digits(&mut self, src: &mut String) -> (bool, bool) {
-        let separator = self.options.number.sep.clone();
+        // The run is measured before any of it is consumed. Advancing
+        // as it goes would hold `&mut self` across a read of
+        // `self.options.number.sep`, and the way that used to be settled
+        // was to clone the separator — an allocation and a free for
+        // every number in the input, for a value that cannot change
+        // while one number is being scanned.
         let run_start = self.idx;
         let mut saw_digit = false;
         let mut last_was_separator = false;
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() {
-                saw_digit = true;
-                last_was_separator = false;
-            } else if separator
-                .as_ref()
-                .is_some_and(|separator| separator.contains(ch))
-            {
-                last_was_separator = true;
-            } else {
-                break;
+        let mut end = run_start;
+        {
+            let separator = self.options.number.sep.as_deref();
+            while let Some(ch) = self.chars.get(end).copied() {
+                if ch.is_ascii_digit() {
+                    saw_digit = true;
+                    last_was_separator = false;
+                } else if separator.is_some_and(|separator| separator.contains(ch)) {
+                    last_was_separator = true;
+                } else {
+                    break;
+                }
+                end += 1;
             }
-            src.push(self.advance().expect("peeked number character"));
+        }
+        while self.idx < end {
+            src.push(self.advance().expect("scanned number character"));
         }
         let starts_with_separator = self.idx > run_start
-            && separator.as_ref().is_some_and(|separator| {
+            && self.options.number.sep.as_deref().is_some_and(|separator| {
                 self.chars[run_start..self.idx]
                     .first()
                     .is_some_and(|ch| separator.contains(*ch))
