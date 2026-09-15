@@ -883,29 +883,41 @@ fn alt_order_matches(
     if order.len() != named.len() + callbacks.len() + matched.len() {
         return false;
     }
-    let ordered_names = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Named(name) => Some(name),
-        _ => None,
-    });
-    let ordered_callbacks = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Context(callback) => Some(callback),
-        _ => None,
-    });
-    let ordered_matched = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Matched(callback) => Some(callback),
-        _ => None,
-    });
-    named.iter().eq(ordered_names)
-        && callbacks.len() == ordered_callbacks.clone().count()
-        && callbacks
-            .iter()
-            .zip(ordered_callbacks)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
-        && matched.len() == ordered_matched.clone().count()
-        && matched
-            .iter()
-            .zip(ordered_matched)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
+    // One pass. Written as three filtered views compared against their
+    // lists, this walked `order` five times over -- once per view plus a
+    // second walk of two of them to count -- and the parse loop asks this
+    // question once per rule step. Taking the next expected entry from
+    // whichever list a binding names says the same thing in one walk.
+    let (mut next_name, mut next_callback, mut next_matched) = (0, 0, 0);
+    for binding in order {
+        match binding {
+            AltActionBinding::Named(name) => {
+                if named.get(next_name) != Some(name) {
+                    return false;
+                }
+                next_name += 1;
+            }
+            AltActionBinding::Context(callback) => {
+                if !callbacks
+                    .get(next_callback)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_callback += 1;
+            }
+            AltActionBinding::Matched(callback) => {
+                if !matched
+                    .get(next_matched)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_matched += 1;
+            }
+        }
+    }
+    next_name == named.len() && next_callback == callbacks.len() && next_matched == matched.len()
 }
 
 fn prepare_alt_order(
@@ -971,29 +983,37 @@ fn order_matches(
     if order.len() != named.len() + callbacks.len() + states.len() {
         return false;
     }
-    let ordered_names = order.iter().filter_map(|binding| match binding {
-        ActionBinding::Named(name) => Some(name),
-        ActionBinding::Callback(_) | ActionBinding::State(_) => None,
-    });
-    let ordered_callbacks = order.iter().filter_map(|binding| match binding {
-        ActionBinding::Named(_) | ActionBinding::State(_) => None,
-        ActionBinding::Callback(callback) => Some(callback),
-    });
-    let ordered_states = order.iter().filter_map(|binding| match binding {
-        ActionBinding::State(callback) => Some(callback),
-        ActionBinding::Named(_) | ActionBinding::Callback(_) => None,
-    });
-    named.iter().eq(ordered_names)
-        && callbacks.len() == ordered_callbacks.clone().count()
-        && callbacks
-            .iter()
-            .zip(ordered_callbacks)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
-        && states.len() == ordered_states.clone().count()
-        && states
-            .iter()
-            .zip(ordered_states)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
+    // One pass, for the reason given on `alt_order_matches`.
+    let (mut next_name, mut next_callback, mut next_state) = (0, 0, 0);
+    for binding in order {
+        match binding {
+            ActionBinding::Named(name) => {
+                if named.get(next_name) != Some(name) {
+                    return false;
+                }
+                next_name += 1;
+            }
+            ActionBinding::Callback(callback) => {
+                if !callbacks
+                    .get(next_callback)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_callback += 1;
+            }
+            ActionBinding::State(callback) => {
+                if !states
+                    .get(next_state)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_state += 1;
+            }
+        }
+    }
+    next_name == named.len() && next_callback == callbacks.len() && next_state == states.len()
 }
 
 fn prepare_order(
