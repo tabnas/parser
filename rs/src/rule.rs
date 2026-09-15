@@ -1178,6 +1178,12 @@ pub struct Rule {
     shared: Rc<RuleSnapshot>,
     /// Not shared with snapshots, which do not carry it.
     pub parent_node: Option<Rc<RefCell<Value>>>,
+    /// The completed child's node, likewise not shared. A `Value` is 72
+    /// bytes, which was a third of a `RuleSnapshot`, and copy-on-write
+    /// copied all of it on the next write to any field. Nothing reads
+    /// this through a snapshot: every use in the engine and in the
+    /// plugin repos is `rule.child_node` on a live rule.
+    pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
 }
@@ -1224,7 +1230,6 @@ pub struct RuleSnapshot {
     pub ac: bool,
     pub need: i32,
     pub node: Rc<RefCell<Value>>,
-    pub child_node: Value,
     pub parent_rule: Option<Rc<RuleSnapshot>>,
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
@@ -1288,7 +1293,6 @@ impl Rule {
                 ac: true,
                 need: 0,
                 node: Rc::new(RefCell::new(initial_node)),
-                child_node: Value::Undefined,
                 parent_rule: None,
                 child_rule: None,
                 prev_rule: None,
@@ -1301,6 +1305,7 @@ impl Rule {
                 c: Rc::new(Vec::new()),
             }),
             parent_node: None,
+            child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
         }
@@ -1322,7 +1327,6 @@ impl Rule {
                 ac: true,
                 need: 0,
                 node,
-                child_node: Value::Undefined,
                 parent_rule: None,
                 child_rule: None,
                 prev_rule: None,
@@ -1335,6 +1339,7 @@ impl Rule {
                 c: Rc::new(Vec::new()),
             }),
             parent_node: None,
+            child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
         }

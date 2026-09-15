@@ -85,6 +85,8 @@ fn follow_stack(frames: &mut Vec<Rc<RuleSnapshot>>, stack: &[Rule]) {
 fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
     snapshot.i == rule.i
         && snapshot.d == rule.d
+        // `child_node` is deliberately absent: it lives on the rule
+        // rather than the snapshot, so there is nothing to compare.
         && snapshot.name == rule.name
         && snapshot.state == rule.state
         && snapshot.need == rule.need
@@ -92,7 +94,6 @@ fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
         && snapshot.ao == rule.ao
         && snapshot.bc == rule.bc
         && snapshot.ac == rule.ac
-        && snapshot.child_node.deep_equal(&rule.child_node)
         && snapshot.next_rule_name == rule.next_rule_name
         && snapshot.n == rule.n
         && same_values(&snapshot.u, &rule.u)
