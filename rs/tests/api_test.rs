@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tabnas::{AltSpec, RuleName, RuleSpec, Tabnas, Value, TIN_VL, TIN_ZZ};
+use tabnas::{AltSpec, Rule, RuleName, RuleSpec, RuleState, Tabnas, Value, TIN_VL, TIN_ZZ};
 
 #[test]
 fn test_parse_primitives() {
@@ -294,4 +295,52 @@ fn rules_of_one_name_share_a_single_copy_of_it() {
             .all(|pair| pair[0].as_str().as_ptr() == pair[1].as_str().as_ptr()),
         "every val rule should point at the same name"
     );
+}
+
+/// A rule shares its state with every snapshot taken of it, and copies
+/// on the next write instead — but only while a snapshot is still
+/// holding the current value. The parse loop snapshots a rule about
+/// seven times per input construct, so the difference between copying
+/// per snapshot and copying per write-after-snapshot is most of what
+/// the rule machinery costs.
+///
+/// A snapshot still has to keep the value it was taken at. Both halves
+/// are pinned here because either one alone is easy to get right.
+#[test]
+fn a_snapshot_shares_the_rule_until_the_rule_is_written_to() {
+    let mut rule = Rule::new("top", Value::Undefined);
+
+    let first = rule.snapshot();
+    let second = rule.snapshot();
+    assert!(
+        Rc::ptr_eq(&first, &second),
+        "snapshots with no write between them should be one allocation"
+    );
+
+    rule.state = RuleState::Close;
+    let third = rule.snapshot();
+    assert!(
+        !Rc::ptr_eq(&second, &third),
+        "a write while a snapshot is outstanding has to copy"
+    );
+    assert_eq!(
+        second.state,
+        RuleState::Open,
+        "the outstanding snapshot keeps the value it was taken at"
+    );
+    assert_eq!(third.state, RuleState::Close);
+
+    drop(first);
+    drop(second);
+    drop(third);
+    let held = rule.snapshot();
+    let before = Rc::as_ptr(&held);
+    drop(held);
+    rule.need = 3;
+    assert_eq!(
+        Rc::as_ptr(&rule.snapshot()),
+        before,
+        "with no snapshot outstanding, a write should not copy at all"
+    );
+    assert_eq!(rule.need, 3);
 }

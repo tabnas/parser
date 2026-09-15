@@ -1163,42 +1163,39 @@ impl From<RuleName> for String {
     }
 }
 
+/// A rule as the parse loop sees it.
+///
+/// Its state lives behind an `Rc` that it shares with every snapshot
+/// taken of it, so `snapshot()` is a pointer copy. The copy happens
+/// instead on the next write, and only while a snapshot is still
+/// holding the current value — so a rule that is snapshotted several
+/// times between writes pays for one copy, not several, and a rule
+/// nobody snapshotted pays for none. Reads and writes both go through
+/// `Deref`, so `rule.state` and `rule.state = ..` are unchanged at
+/// every call site.
 #[derive(Clone)]
 pub struct Rule {
-    pub i: usize,
-    pub d: usize,
-    pub name: RuleName,
-    /// Immutable snapshot of the grammar definition used to create this
-    /// runtime rule. Native callbacks can inspect it just like `rule.spec`
-    /// in the canonical engine without being able to mutate the parser's
-    /// installed grammar during a parse.
-    pub spec: Arc<RuleSpec>,
-    pub state: RuleState,
-    /// Per-instance lifecycle gates. Callbacks may turn these off to suppress
-    /// later lifecycle phases for this rule application.
-    pub bo: bool,
-    pub ao: bool,
-    pub bc: bool,
-    pub ac: bool,
-    pub(crate) skip_befores: bool,
-    pub need: i32,
-    pub node: Rc<RefCell<Value>>,
+    shared: Rc<RuleSnapshot>,
+    /// Not shared with snapshots, which do not carry it.
     pub parent_node: Option<Rc<RefCell<Value>>>,
-    pub child_node: Value,
+    pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
-    pub parent_rule: Option<Rc<RuleSnapshot>>,
-    pub child_rule: Option<Rc<RuleSnapshot>>,
-    pub prev_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule_name: Option<RuleName>,
-    pub n: Rc<HashMap<String, i32>>,
-    pub u: Rc<HashMap<String, Value>>,
-    pub k: Rc<HashMap<String, Value>>,
-    /// Matched open and close tokens. Shared rather than owned: the parse
-    /// loop only ever replaces these wholesale, and a snapshot that copied
-    /// them copied every `Token`'s name and source text with them.
-    pub o: Rc<Vec<Token>>,
-    pub c: Rc<Vec<Token>>,
+}
+
+impl std::ops::Deref for Rule {
+    type Target = RuleSnapshot;
+
+    fn deref(&self) -> &RuleSnapshot {
+        &self.shared
+    }
+}
+
+/// Every write to a rule's shared state goes through here, which is
+/// what makes the copy happen on write rather than on snapshot.
+impl std::ops::DerefMut for Rule {
+    fn deref_mut(&mut self) -> &mut RuleSnapshot {
+        Rc::make_mut(&mut self.shared)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1266,31 +1263,33 @@ impl Rule {
         let name: RuleName = name.into();
         let spec = Arc::new(RuleSpec::new(name.as_str()));
         Rule {
-            i: 0,
-            d: 0,
-            name,
-            spec,
-            state: RuleState::Open,
-            bo: true,
-            ao: true,
-            bc: true,
-            ac: true,
-            skip_befores: false,
-            need: 0,
-            node: Rc::new(RefCell::new(initial_node)),
+            shared: Rc::new(RuleSnapshot {
+                i: 0,
+                d: 0,
+                name,
+                spec,
+                state: RuleState::Open,
+                bo: true,
+                ao: true,
+                bc: true,
+                ac: true,
+                need: 0,
+                node: Rc::new(RefCell::new(initial_node)),
+                child_node: Value::Undefined,
+                parent_rule: None,
+                child_rule: None,
+                prev_rule: None,
+                next_rule: None,
+                next_rule_name: None,
+                n: empty_counters(),
+                u: empty_values(),
+                k: empty_values(),
+                o: Rc::new(Vec::new()),
+                c: Rc::new(Vec::new()),
+            }),
             parent_node: None,
-            child_node: Value::Undefined,
+            skip_befores: false,
             child_node_is_self: false,
-            parent_rule: None,
-            child_rule: None,
-            prev_rule: None,
-            next_rule: None,
-            next_rule_name: None,
-            n: empty_counters(),
-            u: empty_values(),
-            k: empty_values(),
-            o: Rc::new(Vec::new()),
-            c: Rc::new(Vec::new()),
         }
     }
 
@@ -1298,31 +1297,33 @@ impl Rule {
         let name: RuleName = name.into();
         let spec = Arc::new(RuleSpec::new(name.as_str()));
         Rule {
-            i: 0,
-            d: 0,
-            name,
-            spec,
-            state: RuleState::Open,
-            bo: true,
-            ao: true,
-            bc: true,
-            ac: true,
-            skip_befores: false,
-            need: 0,
-            node,
+            shared: Rc::new(RuleSnapshot {
+                i: 0,
+                d: 0,
+                name,
+                spec,
+                state: RuleState::Open,
+                bo: true,
+                ao: true,
+                bc: true,
+                ac: true,
+                need: 0,
+                node: node,
+                child_node: Value::Undefined,
+                parent_rule: None,
+                child_rule: None,
+                prev_rule: None,
+                next_rule: None,
+                next_rule_name: None,
+                n: empty_counters(),
+                u: empty_values(),
+                k: empty_values(),
+                o: Rc::new(Vec::new()),
+                c: Rc::new(Vec::new()),
+            }),
             parent_node: None,
-            child_node: Value::Undefined,
+            skip_befores: false,
             child_node_is_self: false,
-            parent_rule: None,
-            child_rule: None,
-            prev_rule: None,
-            next_rule: None,
-            next_rule_name: None,
-            n: empty_counters(),
-            u: empty_values(),
-            k: empty_values(),
-            o: Rc::new(Vec::new()),
-            c: Rc::new(Vec::new()),
         }
     }
 
@@ -1406,31 +1407,10 @@ impl Rule {
         self.n.contains_key(counter)
     }
 
+    /// The rule's state as it stands, shared rather than copied. The
+    /// copy, if one is still needed, happens on the rule's next write.
     pub fn snapshot(&self) -> Rc<RuleSnapshot> {
-        Rc::new(RuleSnapshot {
-            i: self.i,
-            d: self.d,
-            name: self.name.clone(),
-            spec: self.spec.clone(),
-            state: self.state,
-            bo: self.bo,
-            ao: self.ao,
-            bc: self.bc,
-            ac: self.ac,
-            need: self.need,
-            node: self.node.clone(),
-            child_node: self.child_node.clone(),
-            parent_rule: self.parent_rule.clone(),
-            child_rule: self.child_rule.clone(),
-            prev_rule: self.prev_rule.clone(),
-            next_rule: self.next_rule.clone(),
-            next_rule_name: self.next_rule_name.clone(),
-            n: Rc::clone(&self.n),
-            u: Rc::clone(&self.u),
-            k: Rc::clone(&self.k),
-            o: Rc::clone(&self.o),
-            c: Rc::clone(&self.c),
-        })
+        Rc::clone(&self.shared)
     }
 
     pub(crate) fn accept_child_node(&mut self, child: &Rule) {
