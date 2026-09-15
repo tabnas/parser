@@ -861,6 +861,14 @@ impl<'a> Lexer<'a> {
         // token needs is the one inside `Value::String`. Naming the match
         // as three owned values cost three `String` allocations per fixed
         // token, two of them freed again before the token was built.
+        // The first byte decides almost every entry. Asking `wants` and then
+        // `starts_with` of each fixed token in turn ran a tin lookup and a
+        // `memcmp` per token in the grammar per token in the input, and a
+        // grammar with fifty fixed tokens pays fifty of each to reject
+        // forty-nine. One byte answers the same question, and an empty
+        // source is kept out by its own check, which only entries that
+        // already matched the byte ever reach.
+        let first_byte = remaining.as_bytes().first().copied();
         let fixed = (self.options.fixed.lex && !fixed_skipped)
             .then(|| {
                 self.options
@@ -869,8 +877,9 @@ impl<'a> Lexer<'a> {
                     .values()
                     .enumerate()
                     .filter(|(_, token)| {
-                        self.wants(token.tin)
+                        token.source.as_bytes().first().copied() == first_byte
                             && !token.source.is_empty()
+                            && self.wants(token.tin)
                             && remaining.starts_with(&token.source)
                     })
                     .max_by_key(|(_, token)| token.source.len())
@@ -1235,8 +1244,11 @@ impl<'a> Lexer<'a> {
             .definitions
             .iter()
             .filter(|(_, definition)| {
-                definition.lex
+                // Same first-byte test as the fixed-token scan above.
+                definition.start.as_bytes().first().copied()
+                    == remaining.as_bytes().first().copied()
                     && !definition.start.is_empty()
+                    && definition.lex
                     && remaining.starts_with(&definition.start)
             })
             .collect();
