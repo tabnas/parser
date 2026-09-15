@@ -18,7 +18,7 @@ fn lex_subscribers_see_ignored_trivia_and_the_active_rule() {
         seen_subscriber
             .lock()
             .unwrap()
-            .push((token.name.clone(), rule.name.clone()));
+            .push((token.name.to_string(), rule.name.to_string()));
     });
     assert_eq!(parser.parse("a b").unwrap_err().code, "unexpected");
     assert!(seen
@@ -53,10 +53,11 @@ fn rule_subscribers_wrap_each_successful_rule_pass() {
     let before = Arc::new(Mutex::new(Vec::new()));
     let before_subscriber = before.clone();
     parser.subscribe_rules(move |rule, context| {
-        before_subscriber
-            .lock()
-            .unwrap()
-            .push((rule.name.clone(), rule.state, context.iteration));
+        before_subscriber.lock().unwrap().push((
+            rule.name.to_string(),
+            rule.state,
+            context.iteration,
+        ));
     });
 
     let done = Arc::new(Mutex::new(Vec::new()));

@@ -1693,15 +1693,16 @@ impl MergedInstall {
                 let rule = rule.materialize(&mut tabnas.options);
                 (rule.name.clone(), rule)
             })
-            .collect();
-        tabnas.actions = self.actions.clone();
-        tabnas.context_actions = self.context_actions.clone();
-        tabnas.matched_actions = self.matched_actions.clone();
-        tabnas.state_actions = self.state_actions.clone();
-        tabnas.token_subscribers = self.token_subscribers.clone();
-        tabnas.lex_subscribers = self.lex_subscribers.clone();
-        tabnas.rule_subscribers = self.rule_subscribers.clone();
-        tabnas.rule_done_subscribers = self.rule_done_subscribers.clone();
+            .collect::<indexmap::IndexMap<_, _>>()
+            .into();
+        tabnas.actions = self.actions.clone().into();
+        tabnas.context_actions = (self.context_actions.clone()).into();
+        tabnas.matched_actions = (self.matched_actions.clone()).into();
+        tabnas.state_actions = (self.state_actions.clone()).into();
+        tabnas.token_subscribers = (self.token_subscribers.clone()).into();
+        tabnas.lex_subscribers = (self.lex_subscribers.clone()).into();
+        tabnas.rule_subscribers = (self.rule_subscribers.clone()).into();
+        tabnas.rule_done_subscribers = (self.rule_done_subscribers.clone()).into();
         tabnas.alt_conditions = self.alt_conditions.clone();
         tabnas.alt_match_conditions = self.alt_match_conditions.clone();
         tabnas.alt_lexer_conditions = self.alt_lexer_conditions.clone();

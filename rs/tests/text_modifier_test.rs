@@ -92,7 +92,7 @@ fn imperative_text_modifiers_receive_live_lexer_rule_context_and_options() {
         Value::String("Bool(true)@val".into())
     );
 
-    let mut lexer = Lexer::new("true", parser.options.clone());
+    let mut lexer = Lexer::new("true", parser.config());
     assert_eq!(
         lexer.next_raw_token().unwrap().val,
         Value::String("Bool(true)@#NORULE".into())

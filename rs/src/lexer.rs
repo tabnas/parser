@@ -8,6 +8,7 @@ use crate::token::{
 use crate::value::Value;
 use regex::Regex;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 pub struct Lexer<'a> {
     src: &'a str,
@@ -17,7 +18,8 @@ pub struct Lexer<'a> {
     idx: usize,
     ri: usize,
     ci: usize,
-    options: Options,
+    options: Arc<Options>,
+    ignore_tins: Vec<crate::Tin>,
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
@@ -48,8 +50,31 @@ enum CheckFlow {
     Token(Box<Token>),
 }
 
+/// The result the lexer passes through its own internals.
+///
+/// `TabnasError` is 664 bytes, so `LexResult<Token>` is 664 bytes
+/// too: three times the token it carries, and moved on the SUCCESS path
+/// through every frame of the lexer chain. Boxing the error inside the
+/// engine makes those results the size of a token again, and costs an
+/// allocation only when there is an error to report, which is the path that
+/// is already building a 664-byte diagnostic.
+///
+/// The public entry points still hand back an unboxed `TabnasError`, so no
+/// caller of this crate sees the box.
+type LexResult<T> = Result<T, Box<TabnasError>>;
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
+        // A lexer built directly may be handed options nobody has
+        // ordered yet. The parser's own lexer comes through
+        // `with_shared`, whose options were ordered when they were
+        // prepared.
+        options.sort_for_lexing();
+        Self::with_shared(src, Arc::new(options))
+    }
+
+    /// Lex against options the parser already owns and has ordered.
+    pub(crate) fn with_shared(src: &'a str, options: Arc<Options>) -> Self {
         let mut chars = Vec::new();
         let mut byte_indices = Vec::new();
         for (b_idx, c) in src.char_indices() {
@@ -64,30 +89,6 @@ impl<'a> Lexer<'a> {
             None
         };
 
-        // TypeScript evaluates serialized token matchers in tin order. Keep
-        // that order deterministic even when callers assembled Options by
-        // mutating the public map directly.
-        options
-            .match_tokens
-            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
-        options.match_values.sort_keys();
-        options.lex.matchers.sort_by(|name_a, left, name_b, right| {
-            left.order
-                .total_cmp(&right.order)
-                .then_with(|| name_a.cmp(name_b))
-        });
-
-        let standalone = Some((
-            crate::Rule::new("#NORULE", Value::Undefined),
-            crate::Context::new(
-                options.rewind.history,
-                src,
-                Value::Undefined,
-                options.clone(),
-                crate::InstanceInfo::default(),
-            ),
-        ));
-
         Lexer {
             src,
             chars,
@@ -96,12 +97,13 @@ impl<'a> Lexer<'a> {
             idx: 0,
             ri: 1,
             ci: 1,
+            ignore_tins: options.ignore_tins(),
             options,
             err: None,
             end_reached: false,
             exclude_regex,
             want: None,
-            standalone,
+            standalone: None,
         }
     }
 
@@ -166,10 +168,10 @@ impl<'a> Lexer<'a> {
     /// Construct a token from a point captured before cursor advancement.
     pub fn token(
         &self,
-        name: impl Into<String>,
+        name: impl AsRef<str>,
         tin: crate::Tin,
         value: Value,
-        source: impl Into<String>,
+        source: impl Into<crate::TokenText>,
         point: Point,
     ) -> Token {
         Token::new(name, tin, value, source, point)
@@ -177,7 +179,7 @@ impl<'a> Lexer<'a> {
 
     /// Resolve or allocate a token identity in this lexer's configuration.
     pub fn token_tin(&mut self, name: impl Into<String>) -> crate::Tin {
-        self.options.register_token(name)
+        Arc::make_mut(&mut self.options).register_token(name)
     }
 
     /// Resolve a token identity back to its configured name.
@@ -192,7 +194,7 @@ impl<'a> Lexer<'a> {
             .peek()
             .map_or_else(String::new, |character| character.to_string());
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = why.into();
+        token.err = crate::TokenCode::from(why.into());
         token.why = token.err.clone();
         token
     }
@@ -218,7 +220,7 @@ impl<'a> Lexer<'a> {
                 .map_or_else(String::new, |character| character.to_string())
         };
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = why.into();
+        token.err = crate::TokenCode::from(why.into());
         token.why = token.err.clone();
         token
     }
@@ -308,7 +310,29 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Give any plugin matcher whose order is below `before` its turn.
+    ///
+    /// Nine sites in the lexer call this per token, once at each stage a
+    /// matcher is allowed to intervene. A grammar with no custom matcher,
+    /// which is most of them, was paying nine index lookups per token to be
+    /// told nine times that there is nothing to run. The guard is inline so
+    /// those sites skip the call itself; the walk stays out of line.
+    #[inline]
     fn run_custom_matchers(
+        &mut self,
+        index: &mut usize,
+        before: f64,
+        point: Point,
+        plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
+    ) -> Option<Token> {
+        if *index >= self.options.lex.matchers.len() {
+            return None;
+        }
+        self.run_remaining_custom_matchers(index, before, point, plugin)
+    }
+
+    #[inline(never)]
+    fn run_remaining_custom_matchers(
         &mut self,
         index: &mut usize,
         before: f64,
@@ -411,30 +435,33 @@ impl<'a> Lexer<'a> {
     /// Fetches the next non-IGNORE token (skipping spaces, lines, comments).
     pub fn next_token(&mut self) -> Result<Token, TabnasError> {
         let point = self.current_point();
-        match catch_unwind(AssertUnwindSafe(|| {
+        let result = match catch_unwind(AssertUnwindSafe(|| {
             if let Some(ref error) = self.err {
-                return Err(error.clone());
+                return Err(Box::new(error.clone()));
             }
 
             loop {
                 let token = self.next_raw(None)?;
-                if !self.options.is_ignored(token.tin) {
+                if !self.ignore_tins.contains(&token.tin) {
                     return Ok(token);
                 }
             }
         })) {
             Ok(result) => result,
             Err(payload) => self.record_panic(payload, "Lexer::next_token", point),
-        }
+        };
+        // The box is internal to the engine; a caller gets the error itself.
+        result.map_err(|error| *error)
     }
 
     /// Fetch the next token without discarding whitespace, line, or comment tokens.
     pub fn next_raw_token(&mut self) -> Result<Token, TabnasError> {
         let point = self.current_point();
-        match catch_unwind(AssertUnwindSafe(|| self.next_raw(None))) {
+        let result = match catch_unwind(AssertUnwindSafe(|| self.next_raw(None))) {
             Ok(result) => result,
             Err(payload) => self.record_panic(payload, "Lexer::next_raw_token", point),
-        }
+        };
+        result.map_err(|error| *error)
     }
 
     /// Fetch one token for an imperative parser callback, preserving ignored
@@ -444,7 +471,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         if let Some(token) = context.next_replay() {
             Ok(token)
         } else {
@@ -457,10 +484,10 @@ impl<'a> Lexer<'a> {
         &mut self,
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         loop {
             let token = self.next_raw_for_rule(rule, context)?;
-            if !self.options.is_ignored(token.tin) {
+            if !self.ignore_tins.contains(&token.tin) {
                 return Ok(token);
             }
         }
@@ -491,7 +518,7 @@ impl<'a> Lexer<'a> {
         payload: Box<dyn std::any::Any + Send>,
         api: &str,
         point: Point,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         let error = TabnasError::from_panic(
             payload,
             api,
@@ -502,7 +529,7 @@ impl<'a> Lexer<'a> {
             &self.options,
         );
         self.err = Some(error.clone());
-        Err(error)
+        Err(Box::new(error))
     }
 
     /// Fetch a raw token while restricting non-eager custom token matchers to
@@ -513,7 +540,7 @@ impl<'a> Lexer<'a> {
         expected_match_tins: &[crate::Tin],
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
     }
 
@@ -592,12 +619,23 @@ impl<'a> Lexer<'a> {
         self.want = None;
     }
 
-    fn next_raw(
-        &mut self,
-        expected_match_tins: Option<&[crate::Tin]>,
-    ) -> Result<Token, TabnasError> {
-        let Some((mut rule, mut context)) = self.standalone.take() else {
-            return self.next_raw_with(expected_match_tins, None);
+    fn next_raw(&mut self, expected_match_tins: Option<&[crate::Tin]>) -> LexResult<Token> {
+        // Only a lexer being driven directly needs these, and building
+        // them costs a whole `Options` clone. A parse reaches the lexer
+        // through `next_rule_token`, which brings the real rule and
+        // context with it, so it never wants them at all.
+        let (mut rule, mut context) = match self.standalone.take() {
+            Some(pair) => pair,
+            None => (
+                crate::Rule::new("#NORULE", Value::Undefined),
+                crate::Context::new(
+                    self.options.rewind.history,
+                    self.src,
+                    Value::Undefined,
+                    Arc::clone(&self.options),
+                    crate::InstanceInfo::default(),
+                ),
+            ),
         };
         let result = self.next_raw_with(expected_match_tins, Some((&mut rule, &mut context)));
         self.standalone = Some((rule, context));
@@ -627,13 +665,13 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
         plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         let result = self.next_raw_inner(expected_match_tins, plugin);
         match result {
             Ok(token) => Ok(token),
             Err(mut error) => {
                 error.apply_options(&self.options);
-                self.err = Some(error.clone());
+                self.err = Some((*error).clone());
                 Err(error)
             }
         }
@@ -643,7 +681,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
         mut plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         if self.end_reached {
             return Ok(Token::new(
                 "#ZZ",
@@ -852,28 +890,52 @@ impl<'a> Lexer<'a> {
             false
         };
         let remaining = &self.src[self.byte_position()..];
-        let fixed = (self.options.fixed.lex && !fixed_skipped).then(|| {
-            self.options
-                .fixed
-                .tokens
-                .values()
-                .filter(|token| {
-                    self.wants(token.tin)
-                        && !token.source.is_empty()
-                        && remaining.starts_with(&token.source)
-                })
-                .max_by_key(|token| token.source.len())
-                .map(|token| (token.name.clone(), token.tin, token.source.clone()))
-        });
-        if let Some(Some((name, tin, matched))) = fixed {
-            for _ in matched.chars() {
+        // The winner is carried out of the table as its position, not as a
+        // copy of its text. `Token::new` takes the name and the source text
+        // by reference and stores both inline, so the only owned copy the
+        // token needs is the one inside `Value::String`. Naming the match
+        // as three owned values cost three `String` allocations per fixed
+        // token, two of them freed again before the token was built.
+        // The first byte decides almost every entry. Asking `wants` and then
+        // `starts_with` of each fixed token in turn ran a tin lookup and a
+        // `memcmp` per token in the grammar per token in the input, and a
+        // grammar with fifty fixed tokens pays fifty of each to reject
+        // forty-nine. One byte answers the same question, and an empty
+        // source is kept out by its own check, which only entries that
+        // already matched the byte ever reach.
+        let first_byte = remaining.as_bytes().first().copied();
+        let fixed = (self.options.fixed.lex && !fixed_skipped)
+            .then(|| {
+                self.options
+                    .fixed
+                    .tokens
+                    .values()
+                    .enumerate()
+                    .filter(|(_, token)| {
+                        token.source.as_bytes().first().copied() == first_byte
+                            && !token.source.is_empty()
+                            && self.wants(token.tin)
+                            && remaining.starts_with(&token.source)
+                    })
+                    .max_by_key(|(_, token)| token.source.len())
+                    .map(|(index, token)| (index, token.source.chars().count()))
+            })
+            .flatten();
+        if let Some((index, source_chars)) = fixed {
+            for _ in 0..source_chars {
                 self.advance();
             }
+            let (_, token) = self
+                .options
+                .fixed
+                .tokens
+                .get_index(index)
+                .expect("index came from this table, which nothing writes to mid-parse");
             return Ok(Token::new(
-                name,
-                tin,
-                Value::String(matched.clone()),
-                matched,
+                &token.name,
+                token.tin,
+                Value::String(token.source.clone()),
+                token.source.as_str(),
                 pnt,
             ));
         }
@@ -974,7 +1036,7 @@ impl<'a> Lexer<'a> {
                 pnt.ci,
             );
             self.err = Some(err.clone());
-            return Err(err);
+            return Err(Box::new(err));
         }
 
         if let Some(token) =
@@ -1206,10 +1268,10 @@ impl<'a> Lexer<'a> {
             pnt.ci,
         );
         self.err = Some(err.clone());
-        Err(err)
+        Err(Box::new(err))
     }
 
-    fn match_comment(&mut self, pnt: Point) -> Result<Option<Token>, TabnasError> {
+    fn match_comment(&mut self, pnt: Point) -> LexResult<Option<Token>> {
         let remaining = &self.src[self.byte_position()..];
         let mut definitions: Vec<_> = self
             .options
@@ -1217,8 +1279,11 @@ impl<'a> Lexer<'a> {
             .definitions
             .iter()
             .filter(|(_, definition)| {
-                definition.lex
+                // Same first-byte test as the fixed-token scan above.
+                definition.start.as_bytes().first().copied()
+                    == remaining.as_bytes().first().copied()
                     && !definition.start.is_empty()
+                    && definition.lex
                     && remaining.starts_with(&definition.start)
             })
             .collect();
@@ -1258,7 +1323,7 @@ impl<'a> Lexer<'a> {
                 let token = matcher.run_imperative(self);
                 self.restore(saved);
                 self.want = wanted;
-                token.map(|token| token.src)
+                token.map(|token| token.src.to_string())
             });
             let remainder = &self.src[self.byte_position()..];
             let suffix =
@@ -1302,7 +1367,7 @@ impl<'a> Lexer<'a> {
                 pnt.ci,
             );
             self.err = Some(err.clone());
-            return Err(err);
+            return Err(Box::new(err));
         }
 
         if definition.eat_line && !terminated_by_suffix {
@@ -1323,7 +1388,7 @@ impl<'a> Lexer<'a> {
         )))
     }
 
-    fn match_number(&mut self, pnt: Point) -> Result<Option<Token>, TabnasError> {
+    fn match_number(&mut self, pnt: Point) -> LexResult<Option<Token>> {
         let start_idx = self.idx;
         let mut src = String::new();
 
@@ -1556,26 +1621,35 @@ impl<'a> Lexer<'a> {
     /// between digits; a leading or trailing separator makes the whole run
     /// fall through to text, matching the TypeScript regexp and Go scanner.
     fn scan_number_digits(&mut self, src: &mut String) -> (bool, bool) {
-        let separator = self.options.number.sep.clone();
+        // The run is measured before any of it is consumed. Advancing
+        // as it goes would hold `&mut self` across a read of
+        // `self.options.number.sep`, and the way that used to be settled
+        // was to clone the separator — an allocation and a free for
+        // every number in the input, for a value that cannot change
+        // while one number is being scanned.
         let run_start = self.idx;
         let mut saw_digit = false;
         let mut last_was_separator = false;
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() {
-                saw_digit = true;
-                last_was_separator = false;
-            } else if separator
-                .as_ref()
-                .is_some_and(|separator| separator.contains(ch))
-            {
-                last_was_separator = true;
-            } else {
-                break;
+        let mut end = run_start;
+        {
+            let separator = self.options.number.sep.as_deref();
+            while let Some(ch) = self.chars.get(end).copied() {
+                if ch.is_ascii_digit() {
+                    saw_digit = true;
+                    last_was_separator = false;
+                } else if separator.is_some_and(|separator| separator.contains(ch)) {
+                    last_was_separator = true;
+                } else {
+                    break;
+                }
+                end += 1;
             }
-            src.push(self.advance().expect("peeked number character"));
+        }
+        while self.idx < end {
+            src.push(self.advance().expect("scanned number character"));
         }
         let starts_with_separator = self.idx > run_start
-            && separator.as_ref().is_some_and(|separator| {
+            && self.options.number.sep.as_deref().is_some_and(|separator| {
                 self.chars[run_start..self.idx]
                     .first()
                     .is_some_and(|ch| separator.contains(*ch))
@@ -1583,7 +1657,7 @@ impl<'a> Lexer<'a> {
         (saw_digit, starts_with_separator || last_was_separator)
     }
 
-    fn match_string(&mut self, quote: char, pnt: Point) -> Result<Token, TabnasError> {
+    fn match_string(&mut self, quote: char, pnt: Point) -> LexResult<Token> {
         let quote_char = self.advance().unwrap();
         let mut out_str = String::new();
         let mut raw_src = String::new();
@@ -1628,7 +1702,7 @@ impl<'a> Lexer<'a> {
                     pnt.ci,
                 );
                 self.err = Some(err.clone());
-                return Err(err);
+                return Err(Box::new(err));
             }
 
             // Check for unprintable unescaped control characters in string (< 32)
@@ -1642,7 +1716,7 @@ impl<'a> Lexer<'a> {
                     self.current_point().ci,
                 );
                 self.err = Some(err.clone());
-                return Err(err);
+                return Err(Box::new(err));
             }
 
             if c == self.options.string.escape_char {
@@ -1686,7 +1760,7 @@ impl<'a> Lexer<'a> {
                                         esc_point.ci - 1,
                                     );
                                     self.err = Some(err.clone());
-                                    return Err(err);
+                                    return Err(Box::new(err));
                                 }
 
                                 let cp = match u32::from_str_radix(&hex, 16) {
@@ -1701,7 +1775,7 @@ impl<'a> Lexer<'a> {
                                             esc_point.ci - 1,
                                         );
                                         self.err = Some(err.clone());
-                                        return Err(err);
+                                        return Err(Box::new(err));
                                     }
                                 };
 
@@ -1736,7 +1810,7 @@ impl<'a> Lexer<'a> {
                                         esc_point.ci - 1,
                                     );
                                     self.err = Some(err.clone());
-                                    return Err(err);
+                                    return Err(Box::new(err));
                                 }
 
                                 let cp = u16::from_str_radix(&hex, 16).map_err(|_| {
@@ -1781,7 +1855,7 @@ impl<'a> Lexer<'a> {
                                     esc_point.ci - 1,
                                 );
                                 self.err = Some(err.clone());
-                                return Err(err);
+                                return Err(Box::new(err));
                             }
                             let byte = u8::from_str_radix(&hex, 16).expect("validated ASCII hex");
                             self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
@@ -1798,7 +1872,7 @@ impl<'a> Lexer<'a> {
                                     esc_point.ci - 1,
                                 );
                                 self.err = Some(err.clone());
-                                return Err(err);
+                                return Err(Box::new(err));
                             }
                             self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
                             out_str.push(other);
@@ -1814,7 +1888,7 @@ impl<'a> Lexer<'a> {
                         pnt.ci,
                     );
                     self.err = Some(err.clone());
-                    return Err(err);
+                    return Err(Box::new(err));
                 }
             } else {
                 self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
@@ -1832,7 +1906,7 @@ impl<'a> Lexer<'a> {
             pnt.ci,
         );
         self.err = Some(err.clone());
-        Err(err)
+        Err(Box::new(err))
     }
 
     fn flush_surrogate(&self, pending: &mut Option<u16>, out: &mut String) {

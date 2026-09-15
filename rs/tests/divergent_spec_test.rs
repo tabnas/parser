@@ -29,8 +29,8 @@ fn render_token(token: &Token, fields: &[JsonValue]) -> String {
     fields
         .iter()
         .map(|field| match field.as_str().unwrap_or_default() {
-            "name" => token.name.clone(),
-            "src" => token.src.clone(),
+            "name" => token.name.to_string(),
+            "src" => token.src.to_string(),
             "si" => token.si.to_string(),
             "ri" => token.ri.to_string(),
             "ci" => token.ci.to_string(),
@@ -49,7 +49,7 @@ fn lex_probe(input: &str, args: &JsonValue) -> String {
             return "INSTALL_ERROR".into();
         }
     }
-    let mut lexer = Lexer::new(input, tabnas.options);
+    let mut lexer = Lexer::new(input, tabnas.config());
     let at = args.get("at").and_then(JsonValue::as_u64).unwrap_or(0) as usize;
     let find = args.get("find").and_then(JsonValue::as_str);
     let fields = args["show"].as_array().expect("lex probe show array");

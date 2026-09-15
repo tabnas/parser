@@ -154,11 +154,11 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
 
 fn map_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.map {
-        Value::MapRef(MapRef {
+        Value::MapRef(Box::new(MapRef {
             value: IndexMap::new(),
             implicit,
             meta: IndexMap::new(),
-        })
+        }))
     } else {
         Value::Object(IndexMap::new())
     }
@@ -166,12 +166,12 @@ fn map_value(info: &InfoOptions, implicit: bool) -> Value {
 
 fn list_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.list {
-        Value::ListRef(ListRef {
+        Value::ListRef(Box::new(ListRef {
             value: Vec::new(),
             implicit,
             child: None,
             meta: IndexMap::new(),
-        })
+        }))
     } else {
         Value::Array(Vec::new())
     }
@@ -228,12 +228,12 @@ fn list_push(node: &mut Value, value: Value) {
 /// This keeps the original public helper stable for embedders. Parser-owned
 /// execution uses [`run_builtin_action_with_info`] with its configured options.
 pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -> bool {
-    let options = crate::Options::default();
+    let options = std::sync::Arc::new(crate::Options::default());
     let mut context = Context::new(
         options.rewind.history,
         "",
         Value::Undefined,
-        options,
+        std::sync::Arc::clone(&options),
         crate::InstanceInfo::default(),
     );
     run_builtin_action_with_info(name, rule, &mut context, config, &InfoOptions::default())
@@ -363,11 +363,12 @@ pub(crate) fn run_builtin_action_with_info(
             // text "maj" -- has no token for @key$ to read, so without
             // this the key side of @setval$ is unreachable for it.
             if let Some(lit) = config_str_opt(config, "lit") {
-                rule.u.insert(slot, Value::String(lit));
-            } else if let Some(token) =
-                config_index(config, "from").and_then(|index| rule.o.get(index))
+                rule.u_mut().insert(slot, Value::String(lit));
+            } else if let Some(value) = config_index(config, "from")
+                .and_then(|index| rule.o.get(index))
+                .map(|token| token.val.clone())
             {
-                rule.u.insert(slot, token.val.clone());
+                rule.u_mut().insert(slot, value);
             }
         }
         "@setval$" => {
@@ -409,9 +410,9 @@ pub(crate) fn run_builtin_action_with_info(
             if let Some(t0) = rule.o0() {
                 let key = match &t0.val {
                     Value::String(s) => s.clone(),
-                    _ => t0.src.clone(),
+                    _ => t0.src.to_string(),
                 };
-                rule.u.insert("key".to_string(), Value::String(key));
+                rule.u_mut().insert("key".to_string(), Value::String(key));
             }
         }
         "@pair-bc" => {

@@ -68,7 +68,7 @@ fn skip_bypasses_only_its_matcher_and_invalid_token_effects_do_not_advance() {
             }}"##,
         )
         .unwrap();
-    let token = Lexer::new(r#""comment"#, parser.options.clone())
+    let token = Lexer::new(r#""comment"#, parser.config())
         .next_raw_token()
         .unwrap();
     assert_eq!(
@@ -88,7 +88,7 @@ fn skip_bypasses_only_its_matcher_and_invalid_token_effects_do_not_advance() {
     invalid
         .grammar_json(r#"{"options":{"space":{"check":"@invalid"}}}"#)
         .unwrap();
-    let token = Lexer::new("!", invalid.options).next_raw_token().unwrap();
+    let token = Lexer::new("!", invalid.config()).next_raw_token().unwrap();
     assert_eq!((token.name.as_str(), token.src.as_str()), ("#TX", "!"));
 }
 

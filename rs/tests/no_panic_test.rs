@@ -62,7 +62,7 @@ fn lexer_callbacks_cannot_unwind_through_standalone_lexer() {
         .grammar_json(r#"{"options":{"lex":{"match":{"boom":{"order":0,"make":"@boom"}}}}}"#)
         .unwrap();
 
-    let mut lexer = Lexer::new("x", parser.options);
+    let mut lexer = Lexer::new("x", parser.config());
     let error = lexer.next_raw_token().unwrap_err();
     assert_eq!(error.code, "internal");
     assert!(error.src.contains("matcher exploded"));

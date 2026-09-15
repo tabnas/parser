@@ -90,9 +90,7 @@ fn invalid_function_match_span_is_ignored_without_advancing() {
         )
         .unwrap();
 
-    let token = Lexer::new("x", parser.options.clone())
-        .next_raw_token()
-        .unwrap();
+    let token = Lexer::new("x", parser.config()).next_raw_token().unwrap();
     assert_eq!((token.name.as_str(), token.src.as_str()), ("#TX", "x"));
     assert_eq!(parser.parse("x").unwrap(), Value::String("x".into()));
 }

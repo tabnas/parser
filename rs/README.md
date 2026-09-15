@@ -138,6 +138,55 @@ ignored. See
 gates; the implementation has intentionally advanced beyond that document's
 v0.1 scope.
 
+## Building a release that uses this
+
+The engine is a separate crate from whatever links it, so nothing in it
+can be inlined into your code unless your binary asks for that. Put this
+in the release profile of the crate that builds the final artefact:
+
+```toml
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+```
+
+`lto` is the one that matters and the one that is not on by default.
+Without it, `tabnas/measure` records this port as **1.10x to 1.15x
+slower on every case**: more than all but two of the twenty
+optimisations in the engine's own history are worth individually. Go's
+compiler inlines across packages within a binary by default and V8
+inlines across module boundaries at runtime, so this is the flag that
+puts a Rust consumer on the same footing rather than an unusual
+tuning.
+
+### Pick an allocator
+
+The other two ports of this engine bring their own: Go has the
+runtime's and TypeScript has V8's. A Rust binary takes whatever libc
+supplies unless it says otherwise, and this engine allocates heavily
+enough for that to matter. On glibc, `tabnas/measure` records
+**1.09x to 1.56x** between the system allocator and `mimalloc`, the
+larger end on the deeply nesting grammars.
+
+```toml
+[dependencies]
+mimalloc = "0.1"
+```
+
+```rust
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+`mimalloc` is what the measurement harness uses; `jemalloc` and others
+are reasonable too. The point is the choice, not the crate: leaving it
+to the platform is itself a choice, and on glibc it is an expensive
+one.
+
+A library cannot set a profile or an allocator for its consumers,
+which is why both of these are written down rather than configured.
+
 ## Development
 
 ```sh

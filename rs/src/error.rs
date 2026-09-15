@@ -193,14 +193,14 @@ impl TabnasError {
             self.col = token.ci;
             self.len = token.src.chars().count();
             self.token = ErrorToken {
-                name: token.name.clone(),
-                src: token.src.clone(),
+                name: token.name.to_string(),
+                src: token.src.to_string(),
             };
-            self.details.clone_from(&token.use_data);
+            self.details.clone_from(token.use_data());
             self.why = if token.why.is_empty() {
-                token.err.clone()
+                token.err.to_string()
             } else {
-                token.why.clone()
+                token.why.to_string()
             };
         }
     }

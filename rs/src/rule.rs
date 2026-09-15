@@ -111,7 +111,12 @@ pub struct AltMatch {
     pub u: HashMap<String, Value>,
     pub k: HashMap<String, Value>,
     pub g: Vec<String>,
-    pub e: Option<Token>,
+    /// The alternate's error token, boxed. A `Token` is 248 bytes and this
+    /// record is moved twice per rule step, so carrying one inline made
+    /// `AltMatch` 560 bytes of which 248 were an error almost no alternate
+    /// raises. The box costs an allocation only on the error path, which
+    /// is already the expensive one.
+    pub e: Option<Box<Token>>,
     /// Canonical post-match modifier attached to the selected alternate.
     /// It remains visible to the modifier itself and later actions even
     /// though changing it after selection does not rerun the phase.
@@ -878,29 +883,41 @@ fn alt_order_matches(
     if order.len() != named.len() + callbacks.len() + matched.len() {
         return false;
     }
-    let ordered_names = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Named(name) => Some(name),
-        _ => None,
-    });
-    let ordered_callbacks = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Context(callback) => Some(callback),
-        _ => None,
-    });
-    let ordered_matched = order.iter().filter_map(|binding| match binding {
-        AltActionBinding::Matched(callback) => Some(callback),
-        _ => None,
-    });
-    named.iter().eq(ordered_names)
-        && callbacks.len() == ordered_callbacks.clone().count()
-        && callbacks
-            .iter()
-            .zip(ordered_callbacks)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
-        && matched.len() == ordered_matched.clone().count()
-        && matched
-            .iter()
-            .zip(ordered_matched)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
+    // One pass. Written as three filtered views compared against their
+    // lists, this walked `order` five times over -- once per view plus a
+    // second walk of two of them to count -- and the parse loop asks this
+    // question once per rule step. Taking the next expected entry from
+    // whichever list a binding names says the same thing in one walk.
+    let (mut next_name, mut next_callback, mut next_matched) = (0, 0, 0);
+    for binding in order {
+        match binding {
+            AltActionBinding::Named(name) => {
+                if named.get(next_name) != Some(name) {
+                    return false;
+                }
+                next_name += 1;
+            }
+            AltActionBinding::Context(callback) => {
+                if !callbacks
+                    .get(next_callback)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_callback += 1;
+            }
+            AltActionBinding::Matched(callback) => {
+                if !matched
+                    .get(next_matched)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_matched += 1;
+            }
+        }
+    }
+    next_name == named.len() && next_callback == callbacks.len() && next_matched == matched.len()
 }
 
 fn prepare_alt_order(
@@ -966,29 +983,37 @@ fn order_matches(
     if order.len() != named.len() + callbacks.len() + states.len() {
         return false;
     }
-    let ordered_names = order.iter().filter_map(|binding| match binding {
-        ActionBinding::Named(name) => Some(name),
-        ActionBinding::Callback(_) | ActionBinding::State(_) => None,
-    });
-    let ordered_callbacks = order.iter().filter_map(|binding| match binding {
-        ActionBinding::Named(_) | ActionBinding::State(_) => None,
-        ActionBinding::Callback(callback) => Some(callback),
-    });
-    let ordered_states = order.iter().filter_map(|binding| match binding {
-        ActionBinding::State(callback) => Some(callback),
-        ActionBinding::Named(_) | ActionBinding::Callback(_) => None,
-    });
-    named.iter().eq(ordered_names)
-        && callbacks.len() == ordered_callbacks.clone().count()
-        && callbacks
-            .iter()
-            .zip(ordered_callbacks)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
-        && states.len() == ordered_states.clone().count()
-        && states
-            .iter()
-            .zip(ordered_states)
-            .all(|(left, right)| Arc::ptr_eq(left, right))
+    // One pass, for the reason given on `alt_order_matches`.
+    let (mut next_name, mut next_callback, mut next_state) = (0, 0, 0);
+    for binding in order {
+        match binding {
+            ActionBinding::Named(name) => {
+                if named.get(next_name) != Some(name) {
+                    return false;
+                }
+                next_name += 1;
+            }
+            ActionBinding::Callback(callback) => {
+                if !callbacks
+                    .get(next_callback)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_callback += 1;
+            }
+            ActionBinding::State(callback) => {
+                if !states
+                    .get(next_state)
+                    .is_some_and(|expected| Arc::ptr_eq(expected, callback))
+                {
+                    return false;
+                }
+                next_state += 1;
+            }
+        }
+    }
+    next_name == named.len() && next_callback == callbacks.len() && next_state == states.len()
 }
 
 fn prepare_order(
@@ -1045,46 +1070,183 @@ pub(crate) fn resolved_action_order(
     }
 }
 
+/// A rule's name.
+///
+/// Rules are pushed and popped for every construct in a parse, so the
+/// name is shared between a rule, its snapshots and whatever the next
+/// rule records, rather than being copied at each step. It still
+/// behaves like the `String` it replaced: compare it with a literal,
+/// print it, or take a `&str` from it.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RuleName(Arc<str>);
+
+impl RuleName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for RuleName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for RuleName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Keyed lookups borrow the name as a `str`, so `Hash` and `Eq` have to
+/// agree with `str`'s. Both reach `str` through the `Arc`, so they do.
+impl std::borrow::Borrow<str> for RuleName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Printed as the bare name, so a `{:?}` of a rule or a snapshot reads
+/// the way it did when this was a `String`.
+impl fmt::Debug for RuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl fmt::Display for RuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for RuleName {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for RuleName {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for RuleName {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<RuleName> for str {
+    fn eq(&self, other: &RuleName) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<RuleName> for &str {
+    fn eq(&self, other: &RuleName) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<RuleName> for String {
+    fn eq(&self, other: &RuleName) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl From<&str> for RuleName {
+    fn from(name: &str) -> Self {
+        RuleName(Arc::from(name))
+    }
+}
+
+impl From<String> for RuleName {
+    fn from(name: String) -> Self {
+        RuleName(Arc::from(name.as_str()))
+    }
+}
+
+impl From<&String> for RuleName {
+    fn from(name: &String) -> Self {
+        RuleName(Arc::from(name.as_str()))
+    }
+}
+
+impl From<Arc<str>> for RuleName {
+    fn from(name: Arc<str>) -> Self {
+        RuleName(name)
+    }
+}
+
+impl From<RuleName> for String {
+    fn from(name: RuleName) -> Self {
+        name.0.to_string()
+    }
+}
+
+/// A rule as the parse loop sees it.
+///
+/// Its state lives behind an `Rc` that it shares with every snapshot
+/// taken of it, so `snapshot()` is a pointer copy. The copy happens
+/// instead on the next write, and only while a snapshot is still
+/// holding the current value — so a rule that is snapshotted several
+/// times between writes pays for one copy, not several, and a rule
+/// nobody snapshotted pays for none. Reads and writes both go through
+/// `Deref`, so `rule.state` and `rule.state = ..` are unchanged at
+/// every call site.
 #[derive(Clone)]
 pub struct Rule {
-    pub i: usize,
-    pub d: usize,
-    pub name: String,
-    /// Immutable snapshot of the grammar definition used to create this
-    /// runtime rule. Native callbacks can inspect it just like `rule.spec`
-    /// in the canonical engine without being able to mutate the parser's
-    /// installed grammar during a parse.
-    pub spec: Arc<RuleSpec>,
-    pub state: RuleState,
-    /// Per-instance lifecycle gates. Callbacks may turn these off to suppress
-    /// later lifecycle phases for this rule application.
-    pub bo: bool,
-    pub ao: bool,
-    pub bc: bool,
-    pub ac: bool,
-    pub(crate) skip_befores: bool,
-    pub need: i32,
-    pub node: Rc<RefCell<Value>>,
+    shared: Rc<RuleSnapshot>,
+    /// Not shared with snapshots, which do not carry it.
     pub parent_node: Option<Rc<RefCell<Value>>>,
+    /// The completed child's node, likewise not shared. A `Value` is 72
+    /// bytes, which was a third of a `RuleSnapshot`, and copy-on-write
+    /// copied all of it on the next write to any field. Nothing reads
+    /// this through a snapshot: every use in the engine and in the
+    /// plugin repos is `rule.child_node` on a live rule.
     pub child_node: Value,
+    pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
-    pub parent_rule: Option<Rc<RuleSnapshot>>,
-    pub child_rule: Option<Rc<RuleSnapshot>>,
-    pub prev_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule_name: Option<String>,
-    pub n: HashMap<String, i32>,
-    pub u: HashMap<String, Value>,
-    pub k: HashMap<String, Value>,
-    pub o: Vec<Token>,
-    pub c: Vec<Token>,
+}
+
+impl std::ops::Deref for Rule {
+    type Target = RuleSnapshot;
+
+    fn deref(&self) -> &RuleSnapshot {
+        &self.shared
+    }
+}
+
+/// Every write to a rule's shared state goes through here, which is
+/// what makes the copy happen on write rather than on snapshot.
+///
+/// The obvious next step — stop copying at all, so a snapshot aliases
+/// the live rule the way TypeScript's and Go's rule handles do — was
+/// measured here by making this return an aliasing pointer. It is
+/// faster where it works: a 512-character palindrome drops from 31.7M
+/// to 24.6M instructions, and a 16K-term adder from 72.7 ms to 57.8 ms.
+/// But `next_rule` and the parent and child links then point at rules
+/// that point back, and an `Rc` cycle is never freed: peak memory for
+/// the benchmark set goes from 71 MB to 1214 MB, and a 32K-character
+/// palindrome slows from 111 ms to 270 ms once the leak outweighs the
+/// saving. Doing it properly needs `Weak` on every back-reference and
+/// an upgrade on every traversal, which spends some of the same 1.3x
+/// it is chasing. Worth knowing before anyone tries it again.
+impl std::ops::DerefMut for Rule {
+    fn deref_mut(&mut self) -> &mut RuleSnapshot {
+        Rc::make_mut(&mut self.shared)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct RuleSnapshot {
     pub i: usize,
     pub d: usize,
-    pub name: String,
+    pub name: RuleName,
     pub spec: Arc<RuleSpec>,
     pub state: RuleState,
     pub bo: bool,
@@ -1093,87 +1255,155 @@ pub struct RuleSnapshot {
     pub ac: bool,
     pub need: i32,
     pub node: Rc<RefCell<Value>>,
-    pub child_node: Value,
     pub parent_rule: Option<Rc<RuleSnapshot>>,
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule_name: Option<String>,
-    pub n: HashMap<String, i32>,
-    pub u: HashMap<String, Value>,
-    pub k: HashMap<String, Value>,
-    pub o: Vec<Token>,
-    pub c: Vec<Token>,
+    pub next_rule_name: Option<RuleName>,
+    pub n: Rc<HashMap<String, i32>>,
+    pub u: Rc<HashMap<String, Value>>,
+    pub k: Rc<HashMap<String, Value>>,
+    /// Matched open and close tokens. Shared rather than owned: the parse
+    /// loop only ever replaces these wholesale, and a snapshot that copied
+    /// them copied every `Token`'s name and source text with them.
+    pub o: Rc<Vec<Token>>,
+    pub c: Rc<Vec<Token>>,
+}
+
+/// One shared empty map per thread, so a rule that never writes to `n`,
+/// `u` or `k` costs no allocation for them. `Rc::make_mut` copies on the
+/// first write, which for an empty map is close to free.
+fn empty_counters() -> Rc<HashMap<String, i32>> {
+    thread_local! {
+        static EMPTY: Rc<HashMap<String, i32>> = Rc::new(HashMap::new());
+    }
+    EMPTY.with(Rc::clone)
+}
+
+fn empty_values() -> Rc<HashMap<String, Value>> {
+    thread_local! {
+        static EMPTY: Rc<HashMap<String, Value>> = Rc::new(HashMap::new());
+    }
+    EMPTY.with(Rc::clone)
+}
+
+/// The matched-token lists start empty and are replaced wholesale when an
+/// alternate matches, so every rule created allocated two `Rc` boxes for two
+/// vectors that never grew. Shared like the counter and value bags above.
+fn empty_tokens() -> Rc<Vec<Token>> {
+    thread_local! {
+        static EMPTY: Rc<Vec<Token>> = Rc::new(Vec::new());
+    }
+    EMPTY.with(Rc::clone)
 }
 
 impl Rule {
-    pub fn new(name: impl Into<String>, initial_node: Value) -> Self {
-        let name = name.into();
-        let spec = Arc::new(RuleSpec::new(name.clone()));
+    /// Mutable access to the per-rule counters and state. Copies only when
+    /// a snapshot is still holding the current value.
+    pub fn n_mut(&mut self) -> &mut HashMap<String, i32> {
+        Rc::make_mut(&mut self.n)
+    }
+
+    pub fn u_mut(&mut self) -> &mut HashMap<String, Value> {
+        Rc::make_mut(&mut self.u)
+    }
+
+    pub fn k_mut(&mut self) -> &mut HashMap<String, Value> {
+        Rc::make_mut(&mut self.k)
+    }
+
+    pub fn new(name: impl Into<RuleName>, initial_node: Value) -> Self {
+        let name: RuleName = name.into();
+        let spec = Arc::new(RuleSpec::new(name.as_str()));
         Rule {
-            i: 0,
-            d: 0,
-            name,
-            spec,
-            state: RuleState::Open,
-            bo: true,
-            ao: true,
-            bc: true,
-            ac: true,
-            skip_befores: false,
-            need: 0,
-            node: Rc::new(RefCell::new(initial_node)),
+            shared: Rc::new(RuleSnapshot {
+                i: 0,
+                d: 0,
+                name,
+                spec,
+                state: RuleState::Open,
+                bo: true,
+                ao: true,
+                bc: true,
+                ac: true,
+                need: 0,
+                node: Rc::new(RefCell::new(initial_node)),
+                parent_rule: None,
+                child_rule: None,
+                prev_rule: None,
+                next_rule: None,
+                next_rule_name: None,
+                n: empty_counters(),
+                u: empty_values(),
+                k: empty_values(),
+                o: empty_tokens(),
+                c: empty_tokens(),
+            }),
             parent_node: None,
             child_node: Value::Undefined,
+            skip_befores: false,
             child_node_is_self: false,
-            parent_rule: None,
-            child_rule: None,
-            prev_rule: None,
-            next_rule: None,
-            next_rule_name: None,
-            n: HashMap::new(),
-            u: HashMap::new(),
-            k: HashMap::new(),
-            o: Vec::new(),
-            c: Vec::new(),
         }
     }
 
-    pub fn with_shared_node(name: impl Into<String>, node: Rc<RefCell<Value>>) -> Self {
-        let name = name.into();
-        let spec = Arc::new(RuleSpec::new(name.clone()));
+    pub fn with_shared_node(name: impl Into<RuleName>, node: Rc<RefCell<Value>>) -> Self {
+        Self::bound(name.into(), node, None)
+    }
+
+    /// Build a rule already bound to its installed spec.
+    ///
+    /// An unbound rule reports its own name through `spec.name`, so building
+    /// one with no spec has to invent a placeholder `RuleSpec` carrying that
+    /// name: a `String` and an `Arc` box. Every push and replace in the parse
+    /// loop then bound the installed spec straight over the placeholder, so
+    /// both were allocated and freed once per rule step for nothing. The
+    /// placeholder is still built for a name that names no installed rule,
+    /// which is the case it exists for.
+    pub(crate) fn bound(
+        name: RuleName,
+        node: Rc<RefCell<Value>>,
+        installed: Option<&Arc<RuleSpec>>,
+    ) -> Self {
+        let spec = match installed {
+            Some(spec) => Arc::clone(spec),
+            None => Arc::new(RuleSpec::new(name.as_str())),
+        };
         Rule {
-            i: 0,
-            d: 0,
-            name,
-            spec,
-            state: RuleState::Open,
-            bo: true,
-            ao: true,
-            bc: true,
-            ac: true,
-            skip_befores: false,
-            need: 0,
-            node,
+            shared: Rc::new(RuleSnapshot {
+                i: 0,
+                d: 0,
+                name,
+                spec,
+                state: RuleState::Open,
+                bo: true,
+                ao: true,
+                bc: true,
+                ac: true,
+                need: 0,
+                node,
+                parent_rule: None,
+                child_rule: None,
+                prev_rule: None,
+                next_rule: None,
+                next_rule_name: None,
+                n: empty_counters(),
+                u: empty_values(),
+                k: empty_values(),
+                o: empty_tokens(),
+                c: empty_tokens(),
+            }),
             parent_node: None,
             child_node: Value::Undefined,
+            skip_befores: false,
             child_node_is_self: false,
-            parent_rule: None,
-            child_rule: None,
-            prev_rule: None,
-            next_rule: None,
-            next_rule_name: None,
-            n: HashMap::new(),
-            u: HashMap::new(),
-            k: HashMap::new(),
-            o: Vec::new(),
-            c: Vec::new(),
         }
     }
 
-    pub(crate) fn bind_spec(&mut self, spec: &RuleSpec) {
-        self.name.clone_from(&spec.name);
-        self.spec = Arc::new(spec.clone());
+    /// `name` arrives already shared: the parser interns one handle per
+    /// installed rule, so binding copies a pointer rather than the text.
+    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName) {
+        self.name = name;
+        self.spec = Arc::clone(spec);
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.
         self.bo = true;
@@ -1249,31 +1479,10 @@ impl Rule {
         self.n.contains_key(counter)
     }
 
+    /// The rule's state as it stands, shared rather than copied. The
+    /// copy, if one is still needed, happens on the rule's next write.
     pub fn snapshot(&self) -> Rc<RuleSnapshot> {
-        Rc::new(RuleSnapshot {
-            i: self.i,
-            d: self.d,
-            name: self.name.clone(),
-            spec: self.spec.clone(),
-            state: self.state,
-            bo: self.bo,
-            ao: self.ao,
-            bc: self.bc,
-            ac: self.ac,
-            need: self.need,
-            node: self.node.clone(),
-            child_node: self.child_node.clone(),
-            parent_rule: self.parent_rule.clone(),
-            child_rule: self.child_rule.clone(),
-            prev_rule: self.prev_rule.clone(),
-            next_rule: self.next_rule.clone(),
-            next_rule_name: self.next_rule_name.clone(),
-            n: self.n.clone(),
-            u: self.u.clone(),
-            k: self.k.clone(),
-            o: self.o.clone(),
-            c: self.c.clone(),
-        })
+        Rc::clone(&self.shared)
     }
 
     pub(crate) fn accept_child_node(&mut self, child: &Rule) {

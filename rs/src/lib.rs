@@ -13,7 +13,10 @@ mod merge;
 pub mod options;
 pub mod parser;
 pub mod rule;
+mod text;
 pub mod token;
+mod tracked;
+use crate::tracked::Tracked;
 pub mod utility;
 pub mod value;
 
@@ -41,13 +44,13 @@ pub use rule::{
     ActionBinding, AltAction, AltActionBinding, AltBack, AltBackWithMatch, AltCondition,
     AltConditionWithLexer, AltConditionWithLexerAndMatch, AltConditionWithMatch, AltError,
     AltErrorWithMatch, AltMatch, AltModifier, AltModifierWithMatch, AltNext, AltNextWithMatch,
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
-    StateAction,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleName, RuleSnapshot, RuleSpec,
+    RuleState, StateAction,
 };
 pub use token::{
-    name_to_tin, tin_name, Point, Tin, Token, TokenValFunc, TIN_AA, TIN_BD, TIN_CA, TIN_CB, TIN_CL,
-    TIN_CM, TIN_CS, TIN_LN, TIN_MAX, TIN_NR, TIN_OB, TIN_OS, TIN_SP, TIN_ST, TIN_TX, TIN_UK,
-    TIN_VL, TIN_ZZ,
+    name_to_tin, tin_name, Point, Tin, Token, TokenCode, TokenText, TokenValFunc, TIN_AA, TIN_BD,
+    TIN_CA, TIN_CB, TIN_CL, TIN_CM, TIN_CS, TIN_LN, TIN_MAX, TIN_NR, TIN_OB, TIN_OS, TIN_SP,
+    TIN_ST, TIN_TX, TIN_UK, TIN_VL, TIN_ZZ,
 };
 pub use value::{ListRef, MapRef, Text, Value};
 
@@ -203,21 +206,30 @@ pub struct Tabnas {
     /// Identifier of the instance this parser was derived from.
     pub parent_id: Option<String>,
     /// Resolved configuration used by the lexer and parser.
-    pub options: Options,
+    ///
+    /// Wrapped so that writing to it is noticed: the shared copy handed
+    /// to each parse is built once and reused until something takes a
+    /// mutable path to this. Reads and writes both work as they did.
+    pub options: Tracked<Options>,
+    /// The `options` a parse gets, prepared once. Cloning a thirty-field
+    /// `Options` per `parse()` call was 7% of a small parse.
+    prepared_options: PreparedOptions,
+    /// The whole assembled `Parser`, prepared once. See `PreparedParser`.
+    prepared_parser: PreparedParser,
     /// Accumulated option input before `config.modify` callbacks run. Keeping
     /// this separate prevents non-idempotent modifiers from compounding on
     /// each grammar overlay or derived instance.
     pub(crate) raw_options: Options,
-    pub rules: IndexMap<String, RuleSpec>,
-    pub actions: HashMap<String, Action>,
-    pub context_actions: HashMap<String, ContextAction>,
-    pub matched_actions: HashMap<String, AltAction>,
-    pub state_actions: HashMap<String, StateAction>,
-    pub token_subscribers: Vec<TokenSubscriber>,
-    pub lex_subscribers: Vec<LexSubscriber>,
-    pub rule_subscribers: Vec<RuleSubscriber>,
-    pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
-    pub plugins: Vec<Plugin>,
+    pub rules: Tracked<IndexMap<String, RuleSpec>>,
+    pub actions: Tracked<HashMap<String, Action>>,
+    pub context_actions: Tracked<HashMap<String, ContextAction>>,
+    pub matched_actions: Tracked<HashMap<String, AltAction>>,
+    pub state_actions: Tracked<HashMap<String, StateAction>>,
+    pub token_subscribers: Tracked<Vec<TokenSubscriber>>,
+    pub lex_subscribers: Tracked<Vec<LexSubscriber>>,
+    pub rule_subscribers: Tracked<Vec<RuleSubscriber>>,
+    pub rule_done_subscribers: Tracked<Vec<RuleDoneSubscriber>>,
+    pub plugins: Tracked<Vec<Plugin>>,
     pub plugin_options: IndexMap<String, Value>,
     /// Plugin-attached named values carried to derived instances.
     pub decorations: IndexMap<String, Decoration>,
@@ -280,17 +292,19 @@ impl Tabnas {
             id,
             parent_id: None,
             raw_options: options.clone(),
-            options,
-            rules: IndexMap::new(),
-            actions: HashMap::new(),
-            context_actions: HashMap::new(),
-            matched_actions: HashMap::new(),
-            state_actions: HashMap::new(),
-            token_subscribers: Vec::new(),
-            lex_subscribers: Vec::new(),
-            rule_subscribers: Vec::new(),
-            rule_done_subscribers: Vec::new(),
-            plugins: Vec::new(),
+            options: Tracked::new(options),
+            prepared_options: PreparedOptions::default(),
+            prepared_parser: PreparedParser::default(),
+            rules: Tracked::new(IndexMap::new()),
+            actions: Tracked::new(HashMap::new()),
+            context_actions: Tracked::new(HashMap::new()),
+            matched_actions: Tracked::new(HashMap::new()),
+            state_actions: Tracked::new(HashMap::new()),
+            token_subscribers: Tracked::new(Vec::new()),
+            lex_subscribers: Tracked::new(Vec::new()),
+            rule_subscribers: Tracked::new(Vec::new()),
+            rule_done_subscribers: Tracked::new(Vec::new()),
+            plugins: Tracked::new(Vec::new()),
             plugin_options,
             decorations: IndexMap::new(),
             alt_conditions: HashMap::new(),
@@ -440,7 +454,7 @@ impl Tabnas {
         let mut raw_options = if self.options.config_modify.is_empty() {
             // Direct typed option mutation is part of the native Rust API.
             // With no modifier-created delta, the public tree is the source.
-            self.options.clone()
+            self.options.peek().clone()
         } else {
             self.raw_options.clone()
         };
@@ -453,7 +467,7 @@ impl Tabnas {
         child.plugin_options = self.plugin_options.clone();
         child.decorations = self.decorations.clone();
         child.inherit_function_references(self);
-        for plugin in &self.plugins {
+        for plugin in self.plugins.iter() {
             let options = child
                 .plugin_options
                 .get(&plugin.name.to_lowercase())
@@ -558,7 +572,7 @@ impl Tabnas {
 
     /// Return an independent snapshot of the resolved configuration.
     pub fn config(&self) -> Options {
-        self.options.clone()
+        self.options.peek().clone()
     }
 
     /// Human-readable, deterministic description of this instance's public
@@ -599,7 +613,7 @@ impl Tabnas {
         }
 
         output.push_str("\n--- Rules ---\n");
-        for (name, rule) in &self.rules {
+        for (name, rule) in self.rules.iter() {
             let _ = writeln!(
                 output,
                 "  {name}: open={} close={} bo={} ao={} bc={} ac={}",
@@ -620,7 +634,7 @@ impl Tabnas {
         }
 
         let _ = writeln!(output, "\n--- Plugins: {} ---", self.plugins.len());
-        for plugin in &self.plugins {
+        for plugin in self.plugins.iter() {
             let _ = writeln!(output, "  {}", plugin.name);
         }
         output.push_str("\n--- Subscriptions ---\n");
@@ -724,7 +738,7 @@ impl Tabnas {
         modify: impl FnOnce(&mut Options),
     ) -> Result<&mut Self, PluginError> {
         let mut raw_options = if self.options.config_modify.is_empty() {
-            self.options.clone()
+            self.options.peek().clone()
         } else {
             self.raw_options.clone()
         };
@@ -732,7 +746,7 @@ impl Tabnas {
         let mut resolved = raw_options.clone();
         resolved.refresh_configuration().map_err(PluginError)?;
         self.raw_options = raw_options;
-        self.options = resolved;
+        *self.options = resolved;
         self.plugin_options = self.options.plugin.clone();
         self.emit_debug_config();
         Ok(self)
@@ -740,7 +754,7 @@ impl Tabnas {
 
     /// Installed plugins in application order.
     pub fn installed_plugins(&self) -> Vec<Plugin> {
-        self.plugins.clone()
+        self.plugins.peek().clone()
     }
 
     /// Attach an equality-comparable native value to this instance.
@@ -1424,8 +1438,30 @@ impl Tabnas {
             .parse_recover_for_with_context(self, src, meta, parent)
     }
 
-    fn parser(&self) -> Parser {
-        let mut p = Parser::new(self.options.clone());
+    /// The sum of every counter the assembled parser is built from.
+    /// Each only increases, so any change moves the total.
+    fn grammar_generation(&self) -> u64 {
+        self.options
+            .generation()
+            .wrapping_add(self.rules.generation())
+            .wrapping_add(self.actions.generation())
+            .wrapping_add(self.context_actions.generation())
+            .wrapping_add(self.matched_actions.generation())
+            .wrapping_add(self.state_actions.generation())
+            .wrapping_add(self.token_subscribers.generation())
+            .wrapping_add(self.lex_subscribers.generation())
+            .wrapping_add(self.rule_subscribers.generation())
+            .wrapping_add(self.rule_done_subscribers.generation())
+            .wrapping_add(self.plugins.generation())
+    }
+
+    fn parser(&self) -> Arc<Parser> {
+        self.prepared_parser
+            .get(self.grammar_generation(), || self.build_parser())
+    }
+
+    fn build_parser(&self) -> Parser {
+        let mut p = Parser::from_shared(self.prepared_options.get(&self.options));
         p.set_instance_info(InstanceInfo {
             id: self.id.clone(),
             parent_id: self.parent_id.clone(),
@@ -1440,28 +1476,28 @@ impl Tabnas {
         for spec in self.rules.values() {
             p.add_rule(spec.clone());
         }
-        for (name, action) in &self.actions {
+        for (name, action) in self.actions.iter() {
             p.add_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.context_actions {
+        for (name, action) in self.context_actions.iter() {
             p.add_context_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.matched_actions {
+        for (name, action) in self.matched_actions.iter() {
             p.add_matched_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.state_actions {
+        for (name, action) in self.state_actions.iter() {
             p.add_state_action(name.clone(), action.clone());
         }
-        for subscriber in &self.token_subscribers {
+        for subscriber in self.token_subscribers.iter() {
             p.add_token_subscriber(subscriber.clone());
         }
-        for subscriber in &self.lex_subscribers {
+        for subscriber in self.lex_subscribers.iter() {
             p.add_lex_subscriber(subscriber.clone());
         }
-        for subscriber in &self.rule_subscribers {
+        for subscriber in self.rule_subscribers.iter() {
             p.add_rule_subscriber(subscriber.clone());
         }
-        for subscriber in &self.rule_done_subscribers {
+        for subscriber in self.rule_done_subscribers.iter() {
             p.add_rule_done_subscriber(subscriber.clone());
         }
         p
@@ -1693,5 +1729,75 @@ pub(crate) fn merge_plugin_values(base: Value, overlay: Value) -> Value {
             )
         }
         (_, overlay) => overlay,
+    }
+}
+
+/// One shared `Options` per configuration, rebuilt when the
+/// configuration changes and shared by every parse until it does.
+///
+/// A `Mutex` rather than a `RefCell` because `Tabnas` is `Send + Sync`
+/// and should stay that way, and `Arc` rather than `Rc` for the same
+/// reason. Both are per `parse()` call, not per token, which is why
+/// the atomics do not show up.
+#[derive(Default)]
+struct PreparedOptions(std::sync::Mutex<Option<(u64, Arc<Options>)>>);
+
+impl PreparedOptions {
+    fn get(&self, options: &crate::tracked::Tracked<Options>) -> Arc<Options> {
+        let generation = options.generation();
+        let mut slot = self.0.lock().expect("prepared options lock");
+        if let Some((prepared_at, ref prepared)) = *slot {
+            if prepared_at == generation {
+                return Arc::clone(prepared);
+            }
+        }
+        let mut prepared_value = options.peek().clone();
+        prepared_value.sort_for_lexing();
+        let prepared = Arc::new(prepared_value);
+        *slot = Some((generation, Arc::clone(&prepared)));
+        prepared
+    }
+}
+
+/// A cloned instance prepares its own; it does not inherit the
+/// original's, which may already be stale for it.
+impl Clone for PreparedOptions {
+    fn clone(&self) -> Self {
+        PreparedOptions::default()
+    }
+}
+
+/// The assembled `Parser` for a configuration, prepared once and shared
+/// by every parse until the configuration changes.
+///
+/// This is only possible because a `Parser` is `Send + Sync`: it holds
+/// `Arc<Options>` and `Arc<RuleSpec>`, and its actions are already
+/// `Arc<dyn Fn .. + Send + Sync>`. An earlier attempt at this was
+/// abandoned when the parser still held `Rc`s, because caching one
+/// would have cost `Tabnas` its own `Sync` without saying so.
+///
+/// The key is the sum of the generations of every `Tracked` field the
+/// parser is built from. Summing is enough because each counter only
+/// ever increases, so any change moves the total.
+#[derive(Default)]
+struct PreparedParser(std::sync::Mutex<Option<(u64, Arc<Parser>)>>);
+
+impl PreparedParser {
+    fn get(&self, generation: u64, build: impl FnOnce() -> Parser) -> Arc<Parser> {
+        let mut slot = self.0.lock().expect("prepared parser lock");
+        if let Some((prepared_at, ref prepared)) = *slot {
+            if prepared_at == generation {
+                return Arc::clone(prepared);
+            }
+        }
+        let prepared = Arc::new(build());
+        *slot = Some((generation, Arc::clone(&prepared)));
+        prepared
+    }
+}
+
+impl Clone for PreparedParser {
+    fn clone(&self) -> Self {
+        PreparedParser::default()
     }
 }

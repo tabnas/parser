@@ -1344,10 +1344,34 @@ impl Options {
         options
     }
 
+    /// Put the serialized matchers in the order the lexer evaluates
+    /// them. TypeScript evaluates token matchers in tin order; keep
+    /// that deterministic even when callers assembled `Options` by
+    /// mutating the public maps directly. Done once per prepared
+    /// configuration rather than once per lexer.
+    pub(crate) fn sort_for_lexing(&mut self) {
+        self.match_tokens
+            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
+        self.match_values.sort_keys();
+        self.lex.matchers.sort_by(|name_a, left, name_b, right| {
+            left.order
+                .total_cmp(&right.order)
+                .then_with(|| name_a.cmp(name_b))
+        });
+    }
+
     pub fn is_ignored(&self, tin: Tin) -> bool {
         self.token_set
             .get("IGNORE")
             .is_some_and(|ignored| ignored.contains(&tin))
+    }
+
+    /// The ignore set, resolved once. `is_ignored` is asked for every
+    /// lookahead token, and hashing the literal `"IGNORE"` each time
+    /// cost more than the answer; the lexer and the parser each take a
+    /// copy when they are built.
+    pub(crate) fn ignore_tins(&self) -> Vec<Tin> {
+        self.token_set.get("IGNORE").cloned().unwrap_or_default()
     }
 
     pub fn token(&self, name: &str) -> Option<Tin> {

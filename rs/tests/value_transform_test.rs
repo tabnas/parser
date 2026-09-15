@@ -60,7 +60,7 @@ fn consuming_value_transform_advances_only_over_its_match() {
         )
         .unwrap();
 
-    let mut lexer = Lexer::new("@alpha-tail,", parser.options.clone());
+    let mut lexer = Lexer::new("@alpha-tail,", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().name, "#VL");
     assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");
     assert_eq!(lexer.next_raw_token().unwrap().name, "#CA");

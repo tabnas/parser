@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionError {
@@ -84,6 +85,8 @@ fn follow_stack(frames: &mut Vec<Rc<RuleSnapshot>>, stack: &[Rule]) {
 fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
     snapshot.i == rule.i
         && snapshot.d == rule.d
+        // `child_node` is deliberately absent: it lives on the rule
+        // rather than the snapshot, so there is nothing to compare.
         && snapshot.name == rule.name
         && snapshot.state == rule.state
         && snapshot.need == rule.need
@@ -91,7 +94,6 @@ fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
         && snapshot.ao == rule.ao
         && snapshot.bc == rule.bc
         && snapshot.ac == rule.ac
-        && snapshot.child_node.deep_equal(&rule.child_node)
         && snapshot.next_rule_name == rule.next_rule_name
         && snapshot.n == rule.n
         && same_values(&snapshot.u, &rule.u)
@@ -133,7 +135,7 @@ fn same_tokens(left: &[Token], right: &[Token]) -> bool {
                 && left.err == right.err
                 && left.why == right.why
                 && left.val.deep_equal(&right.val)
-                && same_values(&left.use_data, &right.use_data)
+                && same_values(left.use_data(), right.use_data())
         })
 }
 
@@ -170,9 +172,12 @@ pub struct Context {
     pub u: IndexMap<String, Value>,
     /// Errors recorded so far during recovery.
     pub errs: Vec<TabnasError>,
-    /// Resolved options for this parse. Each parse owns its snapshot, so
+    /// Resolved options for this parse. Shared with the parser and its
+    /// lexer, which is sound because nothing writes to them once a parse
+    /// has started. Each parse still gets the options as they stood when
+    /// it began, so
     /// callbacks cannot mutate the shared parser configuration.
-    pub options: Options,
+    pub options: Arc<Options>,
     /// Owning instance identity, installed plugins, and grammar names.
     pub instance: InstanceInfo,
     /// Snapshot of the current rule and its ancestor stack. The live rule is
@@ -185,7 +190,12 @@ pub struct Context {
     #[cfg(debug_assertions)]
     rule_stack_shadow: Vec<Rc<RuleSnapshot>>,
     /// Retained consumed-token history, oldest first.
-    pub v: Vec<Token>,
+    /// A `VecDeque` because the history is trimmed from its front once
+    /// it outgrows `options.rewind.history`. As a `Vec` that trim moved
+    /// every retained token, which amortised to one `Token` memmove per
+    /// token consumed -- 1.8% of a parse, for a buffer nothing reads
+    /// unless a rewind happens.
+    pub v: VecDeque<Token>,
     /// Absolute number of tokens consumed minus tokens rewound.
     pub v_abs: usize,
     /// Current lookahead buffer, oldest first.
@@ -204,7 +214,7 @@ impl Context {
         history_limit: Option<usize>,
         source: impl Into<String>,
         meta: Value,
-        options: Options,
+        options: Arc<Options>,
         instance: InstanceInfo,
     ) -> Self {
         Self {
@@ -219,7 +229,7 @@ impl Context {
             rule_stack: Vec::new(),
             #[cfg(debug_assertions)]
             rule_stack_shadow: Vec::new(),
-            v: Vec::new(),
+            v: VecDeque::new(),
             v_abs: 0,
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
@@ -239,7 +249,7 @@ impl Context {
 
     /// Most recently consumed token.
     pub fn v1(&self) -> Option<&Token> {
-        self.v.last()
+        self.v.back()
     }
 
     /// Token consumed immediately before `v1`.
@@ -271,17 +281,17 @@ impl Context {
     }
 
     pub fn set_v1(&mut self, token: Token) {
-        if let Some(last) = self.v.last_mut() {
+        if let Some(last) = self.v.back_mut() {
             *last = token;
         } else {
-            self.v.push(token);
+            self.v.push_back(token);
         }
     }
 
     pub fn set_v2(&mut self, token: Token) {
         match self.v.len() {
-            0 => self.v.push(token),
-            1 => self.v.insert(0, token),
+            0 => self.v.push_back(token),
+            1 => self.v.push_front(token),
             length => self.v[length - 2] = token,
         }
     }
