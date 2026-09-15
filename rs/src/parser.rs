@@ -1411,22 +1411,31 @@ impl Parser {
                 }
             }
 
-            let spec = match self.rules.get(&current_rule.name) {
-                Some(s) => s.clone(),
-                None => {
-                    let pnt = context
-                        .t
-                        .first()
-                        .map(|t| (t.pos, t.ri, t.ci))
-                        .unwrap_or((0, 1, 1));
-                    return Err(TabnasError::new(
-                        "unknown_rule",
-                        &current_rule.name,
-                        src,
-                        pnt.0,
-                        pnt.1,
-                        pnt.2,
-                    ));
+            // The rule already holds the spec it was bound to, and every
+            // route into a rule is checked against `self.rules` before the
+            // rule is built — so looking it up again here only re-hashed the
+            // name, once per iteration. The lookup stays as the guard for a
+            // rule that was never bound.
+            let spec = if current_rule.spec.name == *current_rule.name {
+                Arc::clone(&current_rule.spec)
+            } else {
+                match self.rules.get(&*current_rule.name) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let pnt = context
+                            .t
+                            .first()
+                            .map(|t| (t.pos, t.ri, t.ci))
+                            .unwrap_or((0, 1, 1));
+                        return Err(TabnasError::new(
+                            "unknown_rule",
+                            &current_rule.name,
+                            src,
+                            pnt.0,
+                            pnt.1,
+                            pnt.2,
+                        ));
+                    }
                 }
             };
 
