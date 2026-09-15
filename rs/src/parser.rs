@@ -2073,13 +2073,13 @@ impl Parser {
                         token.ri,
                         token.ci,
                     );
-                    let done_alt = RuleDoneAlt {
+                    let done_alt = (!self.rule_done_subscribers.is_empty()).then(|| RuleDoneAlt {
                         b: matched.b,
                         g: matched.g.clone(),
                         p: matched.p.clone().unwrap_or_default(),
                         r: matched.r.clone().unwrap_or_default(),
                         err: Some(token.clone()),
-                    };
+                    });
                     let error = self.attach_error(error, &current_rule, &stack, alts, Some(&token));
                     self.recover_error_pass(
                         error,
@@ -2088,7 +2088,7 @@ impl Parser {
                         } else {
                             RuleState::Close
                         },
-                        Some(done_alt),
+                        done_alt,
                         false,
                         src,
                         &mut current_rule,
@@ -2324,7 +2324,11 @@ impl Parser {
                 // resolve the transition only after the action sequence.
                 let push_name = matched.p.clone();
                 let replace_name = matched.r.clone();
-                let done_alt = Some(RuleDoneAlt {
+                // Only a ruleDone subscriber ever reads this, and it is
+                // cloned again at each of the transition arms below. A
+                // grammar with no subscriber was building and copying it
+                // several times per matched alternate for nobody.
+                let done_alt = (!self.rule_done_subscribers.is_empty()).then(|| RuleDoneAlt {
                     b: matched.b,
                     g: matched.g.clone(),
                     p: push_name.clone().unwrap_or_default(),
@@ -2703,13 +2707,14 @@ impl Parser {
                     };
                     let code = t0.as_ref().map_or("unexpected", deferred_error_code);
                     let error = TabnasError::new(code, src_token, src, si, ri, ci);
-                    let done_alt = (!alts.is_empty()).then(|| RuleDoneAlt {
-                        b: 0,
-                        g: Vec::new(),
-                        p: String::new(),
-                        r: String::new(),
-                        err: t0.clone(),
-                    });
+                    let done_alt = (!alts.is_empty() && !self.rule_done_subscribers.is_empty())
+                        .then(|| RuleDoneAlt {
+                            b: 0,
+                            g: Vec::new(),
+                            p: String::new(),
+                            r: String::new(),
+                            err: t0.clone(),
+                        });
                     let error = self.attach_error(error, &current_rule, &stack, alts, t0.as_ref());
                     self.recover_error_pass(
                         error,
