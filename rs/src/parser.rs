@@ -1335,7 +1335,7 @@ impl Parser {
             self.options.rewind.history,
             src,
             meta,
-            (*self.options).clone(),
+            Rc::clone(&self.options),
             self.instance.clone(),
         );
         if let Some(parent) = parent {

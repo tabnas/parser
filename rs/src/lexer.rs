@@ -603,7 +603,7 @@ impl<'a> Lexer<'a> {
                     self.options.rewind.history,
                     self.src,
                     Value::Undefined,
-                    (*self.options).clone(),
+                    Rc::clone(&self.options),
                     crate::InstanceInfo::default(),
                 ),
             ),

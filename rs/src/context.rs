@@ -170,9 +170,12 @@ pub struct Context {
     pub u: IndexMap<String, Value>,
     /// Errors recorded so far during recovery.
     pub errs: Vec<TabnasError>,
-    /// Resolved options for this parse. Each parse owns its snapshot, so
+    /// Resolved options for this parse. Shared with the parser and its
+    /// lexer, which is sound because nothing writes to them once a parse
+    /// has started. Each parse still gets the options as they stood when
+    /// it began, so
     /// callbacks cannot mutate the shared parser configuration.
-    pub options: Options,
+    pub options: Rc<Options>,
     /// Owning instance identity, installed plugins, and grammar names.
     pub instance: InstanceInfo,
     /// Snapshot of the current rule and its ancestor stack. The live rule is
@@ -204,7 +207,7 @@ impl Context {
         history_limit: Option<usize>,
         source: impl Into<String>,
         meta: Value,
-        options: Options,
+        options: Rc<Options>,
         instance: InstanceInfo,
     ) -> Self {
         Self {
