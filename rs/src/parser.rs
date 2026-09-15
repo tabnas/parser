@@ -2902,6 +2902,14 @@ impl Parser {
     }
 }
 
+/// Keep the best partial result the recovery path would return.
+///
+/// Ten sites in the parse loop call this, twelve times per input construct
+/// on the benchmark grammars, and outside recovery every one of them is a
+/// load and a branch wrapped in a call. The guard is inline so the call
+/// goes away; the search behind it stays out of line, because a parse that
+/// is recovering is not the one being measured.
+#[inline]
 fn update_partial(
     mode: &mut ParseMode<'_>,
     root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
@@ -2913,6 +2921,7 @@ fn update_partial(
     }
 }
 
+#[inline(never)]
 fn best_partial_value(
     root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
     current_rule: &Rule,
