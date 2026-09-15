@@ -192,7 +192,7 @@ fn native_token_and_rule_definer_helpers_expose_the_complete_instance_view() {
 
     tabnas.define_rule_with_parser("top", |rule, parser| {
         assert_eq!(parser.options.token("#CUSTOM"), Some(custom));
-        assert!(parser.rules.contains_key("top"));
+        assert!(parser.rules().contains_key("top"));
         rule.open.push(AltSpec {
             s: vec![vec![custom]],
             ..Default::default()

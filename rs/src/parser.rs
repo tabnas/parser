@@ -69,7 +69,18 @@ pub struct Parser {
     /// twice.
     pub options: Arc<Options>,
     ignore_tins: Vec<Tin>,
-    pub rules: IndexMap<String, Arc<RuleSpec>>,
+    /// Installed rules by name.
+    ///
+    /// Private, and read through [`Parser::rules`]. Two derived tables below
+    /// are keyed by the same names and are written only by `add_rule`; while
+    /// this was public an embedder could insert or replace a rule straight
+    /// into it, leaving those tables describing the rule that used to be
+    /// there. Lookahead would then gate the custom matchers on the previous
+    /// rule's token identities, or on none at all for a name that was never
+    /// installed, and a valid document could fail to parse. Before those
+    /// identities were derived once per rule instead of once per lookahead
+    /// there was nothing to go stale, so this hazard arrived with the table.
+    rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token.
     expected_tins: HashMap<String, ExpectedTins>,
@@ -154,6 +165,14 @@ impl Parser {
             rule_done_subscribers: Vec::new(),
             instance: InstanceInfo::default(),
         }
+    }
+
+    /// The installed rules, in declaration order.
+    ///
+    /// Read-only: every write goes through [`Parser::add_rule`], which is
+    /// what keeps the derived tables in step with it.
+    pub fn rules(&self) -> &IndexMap<String, Arc<RuleSpec>> {
+        &self.rules
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
@@ -3554,4 +3573,46 @@ fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
         _ => return None,
     };
     value_path(value, rest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `expected_tins` and `names` are derived from `rules` and keyed by the
+    /// same names, and `add_rule` is the only thing that writes any of the
+    /// three. That is the whole reason `rules` is private: while it was
+    /// public, an embedder inserting or replacing a rule straight into it
+    /// left the derived tables describing the rule that used to be there,
+    /// and lookahead went on gating the custom matchers on that rule's token
+    /// identities. This asserts the invariant a second write path would
+    /// break; making `add_rule` keep an existing entry instead of replacing
+    /// it fails the second assertion.
+    #[test]
+    fn replacing_a_rule_replaces_the_tables_derived_from_it() {
+        let mut parser = Parser::new(crate::Options::default());
+
+        let mut first = RuleSpec::new("val");
+        first.open.push(AltSpec {
+            s: vec![vec![crate::TIN_NR]],
+            ..Default::default()
+        });
+        parser.add_rule(first);
+        assert_eq!(parser.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
+        assert_eq!(&*parser.names["val"], "val");
+
+        let mut second = RuleSpec::new("val");
+        second.open.push(AltSpec {
+            s: vec![vec![crate::TIN_ST]],
+            ..Default::default()
+        });
+        parser.add_rule(second);
+
+        assert_eq!(parser.rules().len(), 1, "a replacement, not an addition");
+        assert_eq!(
+            parser.expected_tins["val"].at(true, 0),
+            [crate::TIN_ST],
+            "lookahead would still expect the replaced rule's tokens"
+        );
+    }
 }
