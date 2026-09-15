@@ -77,17 +77,6 @@ impl<'a> Lexer<'a> {
                 .then_with(|| name_a.cmp(name_b))
         });
 
-        let standalone = Some((
-            crate::Rule::new("#NORULE", Value::Undefined),
-            crate::Context::new(
-                options.rewind.history,
-                src,
-                Value::Undefined,
-                options.clone(),
-                crate::InstanceInfo::default(),
-            ),
-        ));
-
         Lexer {
             src,
             chars,
@@ -101,7 +90,7 @@ impl<'a> Lexer<'a> {
             end_reached: false,
             exclude_regex,
             want: None,
-            standalone,
+            standalone: None,
         }
     }
 
@@ -596,8 +585,22 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
     ) -> Result<Token, TabnasError> {
-        let Some((mut rule, mut context)) = self.standalone.take() else {
-            return self.next_raw_with(expected_match_tins, None);
+        // Only a lexer being driven directly needs these, and building
+        // them costs a whole `Options` clone. A parse reaches the lexer
+        // through `next_rule_token`, which brings the real rule and
+        // context with it, so it never wants them at all.
+        let (mut rule, mut context) = match self.standalone.take() {
+            Some(pair) => pair,
+            None => (
+                crate::Rule::new("#NORULE", Value::Undefined),
+                crate::Context::new(
+                    self.options.rewind.history,
+                    self.src,
+                    Value::Undefined,
+                    self.options.clone(),
+                    crate::InstanceInfo::default(),
+                ),
+            ),
         };
         let result = self.next_raw_with(expected_match_tins, Some((&mut rule, &mut context)));
         self.standalone = Some((rule, context));
