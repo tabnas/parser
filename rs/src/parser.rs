@@ -66,6 +66,9 @@ struct ParseSite<'a> {
 pub struct Parser {
     pub options: Options,
     pub rules: IndexMap<String, Arc<RuleSpec>>,
+    /// The token identities each rule can accept at each lookahead slot,
+    /// worked out once per installed rule rather than once per token.
+    expected_tins: HashMap<String, ExpectedTins>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub matched_actions: HashMap<String, AltAction>,
@@ -77,11 +80,53 @@ pub struct Parser {
     pub instance: InstanceInfo,
 }
 
+/// Per-slot accepted token identities for one rule, in each state.
+///
+/// This used to be derived on every lookahead: a map lookup, a `BTreeSet`
+/// built from the alternates, and a `Vec` collected out of it, once per
+/// token. None of it can change while a parse runs, so it is derived once
+/// when the rule is installed.
+#[derive(Debug, Default)]
+struct ExpectedTins {
+    open: Vec<Vec<Tin>>,
+    close: Vec<Vec<Tin>>,
+}
+
+impl ExpectedTins {
+    fn of(spec: &RuleSpec) -> Self {
+        Self {
+            open: Self::by_slot(&spec.open),
+            close: Self::by_slot(&spec.close),
+        }
+    }
+
+    fn by_slot(alts: &[AltSpec]) -> Vec<Vec<Tin>> {
+        let slots = alts.iter().map(|alt| alt.s.len()).max().unwrap_or(0);
+        (0..slots)
+            .map(|slot| {
+                let mut expected = BTreeSet::new();
+                for alt in alts {
+                    if let Some(tins) = alt.s.get(slot) {
+                        expected.extend(tins.iter().copied());
+                    }
+                }
+                expected.into_iter().collect()
+            })
+            .collect()
+    }
+
+    fn at(&self, is_open: bool, slot: usize) -> &[Tin] {
+        let slots = if is_open { &self.open } else { &self.close };
+        slots.get(slot).map(Vec::as_slice).unwrap_or_default()
+    }
+}
+
 impl Parser {
     pub fn new(options: Options) -> Self {
         Parser {
             options,
             rules: IndexMap::new(),
+            expected_tins: HashMap::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             matched_actions: HashMap::new(),
@@ -95,6 +140,8 @@ impl Parser {
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
+        self.expected_tins
+            .insert(spec.name.clone(), ExpectedTins::of(&spec));
         self.rules.insert(spec.name.clone(), Arc::new(spec));
     }
 
@@ -1098,22 +1145,11 @@ impl Parser {
         out.into_iter().collect()
     }
 
-    fn expected_match_tins(&self, rule: &Rule, slot: usize) -> Vec<Tin> {
-        let Some(spec) = self.rules.get(&rule.name) else {
-            return Vec::new();
-        };
-        let alts = if rule.state == RuleState::Open {
-            &spec.open
-        } else {
-            &spec.close
-        };
-        let mut expected = BTreeSet::new();
-        for alt in alts {
-            if let Some(tins) = alt.s.get(slot) {
-                expected.extend(tins.iter().copied());
-            }
-        }
-        expected.into_iter().collect()
+    fn expected_match_tins(&self, rule: &Rule, slot: usize) -> &[Tin] {
+        self.expected_tins
+            .get(&rule.name)
+            .map(|expected| expected.at(rule.state == RuleState::Open, slot))
+            .unwrap_or_default()
     }
 
     fn ensure_lookahead(
