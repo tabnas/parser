@@ -13,6 +13,7 @@ mod merge;
 pub mod options;
 pub mod parser;
 pub mod rule;
+mod text;
 pub mod token;
 pub mod utility;
 pub mod value;

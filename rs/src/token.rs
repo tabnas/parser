@@ -157,36 +157,12 @@ impl Eq for TokenValFunc {}
 /// identity, so lexing one costs nothing at all. It behaves like the
 /// `String` it replaced: compare it with a literal, print it, index
 /// it, or take a `&str` from it.
-#[derive(Clone)]
-pub struct TokenText(TextRepr);
-
-/// Most tokens are a handful of characters — a digit, a comma, a
-/// brace — so the text is held inline and a clone is a register copy.
-/// Sharing the long ones keeps their clones cheap too, but through an
-/// `Arc`, whose atomic refcount is what makes it the slower choice for
-/// the short ones: glibc serves a small allocation from a fast bin in
-/// less than an atomic read-modify-write costs.
-#[derive(Clone)]
-enum TextRepr {
-    Inline {
-        len: u8,
-        bytes: [u8; INLINE_CAPACITY],
-    },
-    Shared(Arc<str>),
-}
-
-const INLINE_CAPACITY: usize = 22;
+#[derive(Clone, Default)]
+pub struct TokenText(crate::text::InlineText);
 
 impl TokenText {
     pub fn as_str(&self) -> &str {
-        match &self.0 {
-            // SAFETY: `bytes[..len]` is only ever written from a `&str`,
-            // so it is whole, valid UTF-8.
-            TextRepr::Inline { len, bytes } => unsafe {
-                std::str::from_utf8_unchecked(&bytes[..*len as usize])
-            },
-            TextRepr::Shared(text) => text,
-        }
+        self.0.as_str()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -194,25 +170,7 @@ impl TokenText {
     }
 
     fn build(text: &str) -> Self {
-        if text.len() <= INLINE_CAPACITY {
-            let mut bytes = [0u8; INLINE_CAPACITY];
-            bytes[..text.len()].copy_from_slice(text.as_bytes());
-            TokenText(TextRepr::Inline {
-                len: text.len() as u8,
-                bytes,
-            })
-        } else {
-            TokenText(TextRepr::Shared(Arc::from(text)))
-        }
-    }
-}
-
-impl Default for TokenText {
-    fn default() -> Self {
-        TokenText(TextRepr::Inline {
-            len: 0,
-            bytes: [0u8; INLINE_CAPACITY],
-        })
+        TokenText(crate::text::InlineText::new(text))
     }
 }
 
@@ -332,7 +290,7 @@ impl From<&String> for TokenText {
 
 impl From<Arc<str>> for TokenText {
     fn from(text: Arc<str>) -> Self {
-        TokenText(TextRepr::Shared(text))
+        TokenText(crate::text::InlineText::shared(text))
     }
 }
 
