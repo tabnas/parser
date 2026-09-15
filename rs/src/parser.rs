@@ -1739,8 +1739,6 @@ impl Parser {
             }
 
             if let Some(idx) = matched_alt_idx {
-                let mut alt = alts[idx].clone();
-
                 // Copy matched tokens
                 let matched_tokens: Vec<Token> =
                     context.t.iter().take(matched_count).cloned().collect();
@@ -1754,12 +1752,20 @@ impl Parser {
                 // callback tier. It rewrites the source spec before dynamic
                 // fields are resolved. The full `h_match` callback below runs
                 // at the canonical point over the resolved AltMatch.
-                if let Some(modifier) = alt.h.clone() {
+                //
+                // Rewriting is the only thing here that needs an alternate of
+                // its own; everything below reads one. A grammar that
+                // declares no modifier — which is most of them, and both
+                // benchmark grammars — now borrows the installed alternate
+                // instead of copying it once per rule step.
+                let rewritten: AltSpec;
+                let alt: &AltSpec = if let Some(modifier) = alts[idx].h.clone() {
                     context.set_rule(&current_rule);
+                    let source = alts[idx].clone();
                     let result = self.catch_callback("alternate modifier", src, || {
-                        modifier(alt, &mut current_rule, &mut context)
+                        modifier(source, &mut current_rule, &mut context)
                     });
-                    alt = result.map_err(|error| {
+                    rewritten = result.map_err(|error| {
                         self.attach_error(
                             error,
                             &current_rule,
@@ -1768,7 +1774,10 @@ impl Parser {
                             Self::phase_token(&current_rule),
                         )
                     })?;
-                }
+                    &rewritten
+                } else {
+                    &alts[idx]
+                };
 
                 let mut matched = matched_seed;
                 matched.h = alt.h_match.clone();
