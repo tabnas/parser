@@ -164,7 +164,7 @@ fn rule_helpers_cover_second_tokens_counters_and_mutation() {
     assert!(rule.lte("missing", 0));
     assert!(rule.gte("missing", 0));
     assert!(!rule.exist("missing"));
-    rule.n.insert("count".into(), 2);
+    rule.n_mut().insert("count".into(), 2);
     assert!(rule.eq("count", 2));
     assert!(rule.gt("count", 1));
     assert!(rule.exist("count"));

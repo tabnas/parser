@@ -1073,9 +1073,9 @@ pub struct Rule {
     pub prev_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule_name: Option<String>,
-    pub n: HashMap<String, i32>,
-    pub u: HashMap<String, Value>,
-    pub k: HashMap<String, Value>,
+    pub n: Rc<HashMap<String, i32>>,
+    pub u: Rc<HashMap<String, Value>>,
+    pub k: Rc<HashMap<String, Value>>,
     /// Matched open and close tokens. Shared rather than owned: the parse
     /// loop only ever replaces these wholesale, and a snapshot that copied
     /// them copied every `Token`'s name and source text with them.
@@ -1102,9 +1102,9 @@ pub struct RuleSnapshot {
     pub prev_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule_name: Option<String>,
-    pub n: HashMap<String, i32>,
-    pub u: HashMap<String, Value>,
-    pub k: HashMap<String, Value>,
+    pub n: Rc<HashMap<String, i32>>,
+    pub u: Rc<HashMap<String, Value>>,
+    pub k: Rc<HashMap<String, Value>>,
     /// Matched open and close tokens. Shared rather than owned: the parse
     /// loop only ever replaces these wholesale, and a snapshot that copied
     /// them copied every `Token`'s name and source text with them.
@@ -1112,7 +1112,38 @@ pub struct RuleSnapshot {
     pub c: Rc<Vec<Token>>,
 }
 
+/// One shared empty map per thread, so a rule that never writes to `n`,
+/// `u` or `k` costs no allocation for them. `Rc::make_mut` copies on the
+/// first write, which for an empty map is close to free.
+fn empty_counters() -> Rc<HashMap<String, i32>> {
+    thread_local! {
+        static EMPTY: Rc<HashMap<String, i32>> = Rc::new(HashMap::new());
+    }
+    EMPTY.with(Rc::clone)
+}
+
+fn empty_values() -> Rc<HashMap<String, Value>> {
+    thread_local! {
+        static EMPTY: Rc<HashMap<String, Value>> = Rc::new(HashMap::new());
+    }
+    EMPTY.with(Rc::clone)
+}
+
 impl Rule {
+    /// Mutable access to the per-rule counters and state. Copies only when
+    /// a snapshot is still holding the current value.
+    pub fn n_mut(&mut self) -> &mut HashMap<String, i32> {
+        Rc::make_mut(&mut self.n)
+    }
+
+    pub fn u_mut(&mut self) -> &mut HashMap<String, Value> {
+        Rc::make_mut(&mut self.u)
+    }
+
+    pub fn k_mut(&mut self) -> &mut HashMap<String, Value> {
+        Rc::make_mut(&mut self.k)
+    }
+
     pub fn new(name: impl Into<String>, initial_node: Value) -> Self {
         let name = name.into();
         let spec = Arc::new(RuleSpec::new(name.clone()));
@@ -1137,9 +1168,9 @@ impl Rule {
             prev_rule: None,
             next_rule: None,
             next_rule_name: None,
-            n: HashMap::new(),
-            u: HashMap::new(),
-            k: HashMap::new(),
+            n: empty_counters(),
+            u: empty_values(),
+            k: empty_values(),
             o: Rc::new(Vec::new()),
             c: Rc::new(Vec::new()),
         }
@@ -1169,9 +1200,9 @@ impl Rule {
             prev_rule: None,
             next_rule: None,
             next_rule_name: None,
-            n: HashMap::new(),
-            u: HashMap::new(),
-            k: HashMap::new(),
+            n: empty_counters(),
+            u: empty_values(),
+            k: empty_values(),
             o: Rc::new(Vec::new()),
             c: Rc::new(Vec::new()),
         }
@@ -1274,9 +1305,9 @@ impl Rule {
             prev_rule: self.prev_rule.clone(),
             next_rule: self.next_rule.clone(),
             next_rule_name: self.next_rule_name.clone(),
-            n: self.n.clone(),
-            u: self.u.clone(),
-            k: self.k.clone(),
+            n: Rc::clone(&self.n),
+            u: Rc::clone(&self.u),
+            k: Rc::clone(&self.k),
             o: Rc::clone(&self.o),
             c: Rc::clone(&self.c),
         })

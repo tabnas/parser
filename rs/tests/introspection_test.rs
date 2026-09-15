@@ -418,7 +418,7 @@ fn the_rule_stack_describes_every_ancestor_at_its_current_state() {
             // with another frame's mark is a stale snapshot.
             descend.add_action(|rule, _context| {
                 let mark = rule.o.first().map_or(Value::Undefined, |o| o.val.clone());
-                rule.u.insert("mark".into(), mark);
+                rule.u_mut().insert("mark".into(), mark);
             });
             descend.add_action(record(seen.clone(), "open"));
             let mut close = AltSpec::default();
@@ -482,7 +482,7 @@ fn a_not_a_number_on_an_ancestor_does_not_look_like_drift() {
             ..Default::default()
         };
         descend.add_action(|rule, _context| {
-            rule.u.insert("mark".into(), Value::Number(f64::NAN));
+            rule.u_mut().insert("mark".into(), Value::Number(f64::NAN));
         });
         rule.add_open(descend)
             .add_open(AltSpec::default())
@@ -526,7 +526,7 @@ fn a_callback_writing_to_the_published_rule_stack_does_not_derail_the_parse() {
             let log = seen.clone();
             descend.add_action(move |rule, context| {
                 let mark = rule.o.first().map_or(Value::Undefined, |o| o.val.clone());
-                rule.u.insert("mark".into(), mark);
+                rule.u_mut().insert("mark".into(), mark);
                 log.lock().unwrap().push(
                     context
                         .rule_stack

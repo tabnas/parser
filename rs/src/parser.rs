@@ -2053,20 +2053,20 @@ impl Parser {
                 // Update counters n
                 for (k, v) in &matched.n {
                     if *v == 0 {
-                        current_rule.n.insert(k.clone(), 0);
+                        current_rule.n_mut().insert(k.clone(), 0);
                     } else {
-                        *current_rule.n.entry(k.clone()).or_insert(0) += *v;
+                        *current_rule.n_mut().entry(k.clone()).or_insert(0) += *v;
                     }
                 }
 
                 // Update user props u
                 for (k, v) in &matched.u {
-                    current_rule.u.insert(k.clone(), v.clone());
+                    current_rule.u_mut().insert(k.clone(), v.clone());
                 }
 
                 // Update keep props k
                 for (k, v) in &matched.k {
-                    current_rule.k.insert(k.clone(), v.clone());
+                    current_rule.k_mut().insert(k.clone(), v.clone());
                 }
 
                 let backtrack = matched.b;
@@ -2168,10 +2168,11 @@ impl Parser {
                     }
                     match act_name.as_str() {
                         "@probeInit$" => {
-                            current_rule.k.insert("pd_phase".into(), Value::Number(0.0));
                             current_rule
-                                .k
-                                .insert("pd_mark".into(), Value::Number(context.mark() as f64));
+                                .k_mut()
+                                .insert("pd_phase".into(), Value::Number(0.0));
+                            let mark = Value::Number(context.mark() as f64);
+                            current_rule.k_mut().insert("pd_mark".into(), mark);
                         }
                         "@probeDecide$" => {
                             let mark = current_rule.k.get("pd_mark").and_then(|value| {
@@ -2224,7 +2225,7 @@ impl Parser {
                             };
                             context.rewind(mark)?;
                             current_rule
-                                .k
+                                .k_mut()
                                 .insert("pd_phase".into(), Value::Number(phase));
                         }
                         _ => self
@@ -2341,8 +2342,8 @@ impl Parser {
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
                     child.parent_node = Some(current_rule.node.clone());
-                    child.n = current_rule.n.clone();
-                    child.k = current_rule.k.clone();
+                    child.n = Rc::clone(&current_rule.n);
+                    child.k = Rc::clone(&current_rule.k);
                     child.parent_rule = Some(current_rule.snapshot());
                     current_rule.next_rule_name = Some(push_name.clone());
                     current_rule.child_rule = Some(child.snapshot());
@@ -2393,8 +2394,8 @@ impl Parser {
                     next.d = current_rule.d;
                     next.parent_node = current_rule.parent_node.clone();
                     next.parent_rule = current_rule.parent_rule.clone();
-                    next.n = current_rule.n.clone();
-                    next.k = current_rule.k.clone();
+                    next.n = Rc::clone(&current_rule.n);
+                    next.k = Rc::clone(&current_rule.k);
                     current_rule.next_rule_name = Some(replace_name.clone());
                     current_rule.next_rule = Some(next.snapshot());
                     let after = self.run_after_actions(
