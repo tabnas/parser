@@ -50,6 +50,19 @@ enum CheckFlow {
     Token(Box<Token>),
 }
 
+/// The result the lexer passes through its own internals.
+///
+/// `TabnasError` is 664 bytes, so `LexResult<Token>` is 664 bytes
+/// too: three times the token it carries, and moved on the SUCCESS path
+/// through every frame of the lexer chain. Boxing the error inside the
+/// engine makes those results the size of a token again, and costs an
+/// allocation only when there is an error to report, which is the path that
+/// is already building a 664-byte diagnostic.
+///
+/// The public entry points still hand back an unboxed `TabnasError`, so no
+/// caller of this crate sees the box.
+type LexResult<T> = Result<T, Box<TabnasError>>;
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
         // A lexer built directly may be handed options nobody has
@@ -422,9 +435,9 @@ impl<'a> Lexer<'a> {
     /// Fetches the next non-IGNORE token (skipping spaces, lines, comments).
     pub fn next_token(&mut self) -> Result<Token, TabnasError> {
         let point = self.current_point();
-        match catch_unwind(AssertUnwindSafe(|| {
+        let result = match catch_unwind(AssertUnwindSafe(|| {
             if let Some(ref error) = self.err {
-                return Err(error.clone());
+                return Err(Box::new(error.clone()));
             }
 
             loop {
@@ -436,16 +449,19 @@ impl<'a> Lexer<'a> {
         })) {
             Ok(result) => result,
             Err(payload) => self.record_panic(payload, "Lexer::next_token", point),
-        }
+        };
+        // The box is internal to the engine; a caller gets the error itself.
+        result.map_err(|error| *error)
     }
 
     /// Fetch the next token without discarding whitespace, line, or comment tokens.
     pub fn next_raw_token(&mut self) -> Result<Token, TabnasError> {
         let point = self.current_point();
-        match catch_unwind(AssertUnwindSafe(|| self.next_raw(None))) {
+        let result = match catch_unwind(AssertUnwindSafe(|| self.next_raw(None))) {
             Ok(result) => result,
             Err(payload) => self.record_panic(payload, "Lexer::next_raw_token", point),
-        }
+        };
+        result.map_err(|error| *error)
     }
 
     /// Fetch one token for an imperative parser callback, preserving ignored
@@ -455,7 +471,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         if let Some(token) = context.next_replay() {
             Ok(token)
         } else {
@@ -468,7 +484,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         loop {
             let token = self.next_raw_for_rule(rule, context)?;
             if !self.ignore_tins.contains(&token.tin) {
@@ -502,7 +518,7 @@ impl<'a> Lexer<'a> {
         payload: Box<dyn std::any::Any + Send>,
         api: &str,
         point: Point,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         let error = TabnasError::from_panic(
             payload,
             api,
@@ -513,7 +529,7 @@ impl<'a> Lexer<'a> {
             &self.options,
         );
         self.err = Some(error.clone());
-        Err(error)
+        Err(Box::new(error))
     }
 
     /// Fetch a raw token while restricting non-eager custom token matchers to
@@ -524,7 +540,7 @@ impl<'a> Lexer<'a> {
         expected_match_tins: &[crate::Tin],
         rule: &mut crate::Rule,
         context: &mut crate::Context,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
     }
 
@@ -603,10 +619,7 @@ impl<'a> Lexer<'a> {
         self.want = None;
     }
 
-    fn next_raw(
-        &mut self,
-        expected_match_tins: Option<&[crate::Tin]>,
-    ) -> Result<Token, TabnasError> {
+    fn next_raw(&mut self, expected_match_tins: Option<&[crate::Tin]>) -> LexResult<Token> {
         // Only a lexer being driven directly needs these, and building
         // them costs a whole `Options` clone. A parse reaches the lexer
         // through `next_rule_token`, which brings the real rule and
@@ -652,13 +665,13 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
         plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         let result = self.next_raw_inner(expected_match_tins, plugin);
         match result {
             Ok(token) => Ok(token),
             Err(mut error) => {
                 error.apply_options(&self.options);
-                self.err = Some(error.clone());
+                self.err = Some((*error).clone());
                 Err(error)
             }
         }
@@ -668,7 +681,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
         mut plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
-    ) -> Result<Token, TabnasError> {
+    ) -> LexResult<Token> {
         if self.end_reached {
             return Ok(Token::new(
                 "#ZZ",
@@ -1023,7 +1036,7 @@ impl<'a> Lexer<'a> {
                 pnt.ci,
             );
             self.err = Some(err.clone());
-            return Err(err);
+            return Err(Box::new(err));
         }
 
         if let Some(token) =
@@ -1255,10 +1268,10 @@ impl<'a> Lexer<'a> {
             pnt.ci,
         );
         self.err = Some(err.clone());
-        Err(err)
+        Err(Box::new(err))
     }
 
-    fn match_comment(&mut self, pnt: Point) -> Result<Option<Token>, TabnasError> {
+    fn match_comment(&mut self, pnt: Point) -> LexResult<Option<Token>> {
         let remaining = &self.src[self.byte_position()..];
         let mut definitions: Vec<_> = self
             .options
@@ -1354,7 +1367,7 @@ impl<'a> Lexer<'a> {
                 pnt.ci,
             );
             self.err = Some(err.clone());
-            return Err(err);
+            return Err(Box::new(err));
         }
 
         if definition.eat_line && !terminated_by_suffix {
@@ -1375,7 +1388,7 @@ impl<'a> Lexer<'a> {
         )))
     }
 
-    fn match_number(&mut self, pnt: Point) -> Result<Option<Token>, TabnasError> {
+    fn match_number(&mut self, pnt: Point) -> LexResult<Option<Token>> {
         let start_idx = self.idx;
         let mut src = String::new();
 
@@ -1644,7 +1657,7 @@ impl<'a> Lexer<'a> {
         (saw_digit, starts_with_separator || last_was_separator)
     }
 
-    fn match_string(&mut self, quote: char, pnt: Point) -> Result<Token, TabnasError> {
+    fn match_string(&mut self, quote: char, pnt: Point) -> LexResult<Token> {
         let quote_char = self.advance().unwrap();
         let mut out_str = String::new();
         let mut raw_src = String::new();
@@ -1689,7 +1702,7 @@ impl<'a> Lexer<'a> {
                     pnt.ci,
                 );
                 self.err = Some(err.clone());
-                return Err(err);
+                return Err(Box::new(err));
             }
 
             // Check for unprintable unescaped control characters in string (< 32)
@@ -1703,7 +1716,7 @@ impl<'a> Lexer<'a> {
                     self.current_point().ci,
                 );
                 self.err = Some(err.clone());
-                return Err(err);
+                return Err(Box::new(err));
             }
 
             if c == self.options.string.escape_char {
@@ -1747,7 +1760,7 @@ impl<'a> Lexer<'a> {
                                         esc_point.ci - 1,
                                     );
                                     self.err = Some(err.clone());
-                                    return Err(err);
+                                    return Err(Box::new(err));
                                 }
 
                                 let cp = match u32::from_str_radix(&hex, 16) {
@@ -1762,7 +1775,7 @@ impl<'a> Lexer<'a> {
                                             esc_point.ci - 1,
                                         );
                                         self.err = Some(err.clone());
-                                        return Err(err);
+                                        return Err(Box::new(err));
                                     }
                                 };
 
@@ -1797,7 +1810,7 @@ impl<'a> Lexer<'a> {
                                         esc_point.ci - 1,
                                     );
                                     self.err = Some(err.clone());
-                                    return Err(err);
+                                    return Err(Box::new(err));
                                 }
 
                                 let cp = u16::from_str_radix(&hex, 16).map_err(|_| {
@@ -1842,7 +1855,7 @@ impl<'a> Lexer<'a> {
                                     esc_point.ci - 1,
                                 );
                                 self.err = Some(err.clone());
-                                return Err(err);
+                                return Err(Box::new(err));
                             }
                             let byte = u8::from_str_radix(&hex, 16).expect("validated ASCII hex");
                             self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
@@ -1859,7 +1872,7 @@ impl<'a> Lexer<'a> {
                                     esc_point.ci - 1,
                                 );
                                 self.err = Some(err.clone());
-                                return Err(err);
+                                return Err(Box::new(err));
                             }
                             self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
                             out_str.push(other);
@@ -1875,7 +1888,7 @@ impl<'a> Lexer<'a> {
                         pnt.ci,
                     );
                     self.err = Some(err.clone());
-                    return Err(err);
+                    return Err(Box::new(err));
                 }
             } else {
                 self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
@@ -1893,7 +1906,7 @@ impl<'a> Lexer<'a> {
             pnt.ci,
         );
         self.err = Some(err.clone());
-        Err(err)
+        Err(Box::new(err))
     }
 
     fn flush_surrogate(&self, pending: &mut Option<u16>, out: &mut String) {

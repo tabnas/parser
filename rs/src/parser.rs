@@ -1243,9 +1243,9 @@ impl Parser {
                                 } else {
                                     &spec.close
                                 };
-                                self.attach_error(error.clone(), rule, site.stack, alts, None)
+                                self.attach_error((*error).clone(), rule, site.stack, alts, None)
                             })
-                            .unwrap_or_else(|| error.clone());
+                            .unwrap_or_else(|| (*error).clone());
                         if self.options.lex.relex {
                             let mut token = error_token(&recovery_error);
                             for subscriber in &self.lex_subscribers {
@@ -1291,7 +1291,9 @@ impl Parser {
                                 None,
                             );
                         }
-                        return Err(error);
+                        // The lexer boxes its error internally; this is
+                        // the boundary back to the parser's own result.
+                        return Err(*error);
                     }
                 };
                 for subscriber in &self.lex_subscribers {
