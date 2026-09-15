@@ -63,10 +63,23 @@ impl From<ActionError> for TabnasError {
     }
 }
 
+/// Drop the frames that left the stack, snapshot the frames that arrived.
+fn follow_stack(frames: &mut Vec<Rc<RuleSnapshot>>, stack: &[Rule]) {
+    frames.truncate(stack.len());
+    for rule in &stack[frames.len()..] {
+        frames.push(rule.snapshot());
+    }
+}
+
 /// Debug-only equality between a retained snapshot and the rule it describes.
 /// It covers the state a snapshot copies by value; `node` is shared through
 /// an `Rc`, and the rule links are snapshots in their own right, so neither
 /// can drift.
+///
+/// Values go through `deep_equal` rather than `==`. A grammar may put a NaN
+/// on a rule, `Value` derives `PartialEq`, and NaN is not equal to itself,
+/// so `==` would report an unchanged frame as drifted and panic a debug
+/// build over a legitimate parse.
 #[cfg(debug_assertions)]
 fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
     snapshot.i == rule.i
@@ -78,17 +91,50 @@ fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
         && snapshot.ao == rule.ao
         && snapshot.bc == rule.bc
         && snapshot.ac == rule.ac
-        && snapshot.child_node == rule.child_node
+        && snapshot.child_node.deep_equal(&rule.child_node)
         && snapshot.next_rule_name == rule.next_rule_name
         && snapshot.n == rule.n
-        && snapshot.u == rule.u
-        && snapshot.k == rule.k
-        && snapshot.o == rule.o
-        && snapshot.c == rule.c
+        && same_values(&snapshot.u, &rule.u)
+        && same_values(&snapshot.k, &rule.k)
+        && same_tokens(&snapshot.o, &rule.o)
+        && same_tokens(&snapshot.c, &rule.c)
         && same_link(&snapshot.parent_rule, &rule.parent_rule)
         && same_link(&snapshot.child_rule, &rule.child_rule)
         && same_link(&snapshot.prev_rule, &rule.prev_rule)
         && same_link(&snapshot.next_rule, &rule.next_rule)
+}
+
+#[cfg(debug_assertions)]
+fn same_values(
+    left: &std::collections::HashMap<String, Value>,
+    right: &std::collections::HashMap<String, Value>,
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .all(|(key, value)| right.get(key).is_some_and(|other| value.deep_equal(other)))
+}
+
+/// `val_fn` is a callback and `ignored` is trivia the lexer attaches once;
+/// neither is state the parse loop revises, so the comparison stops at the
+/// fields a moved frame would show.
+#[cfg(debug_assertions)]
+fn same_tokens(left: &[Token], right: &[Token]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.name == right.name
+                && left.tin == right.tin
+                && left.src == right.src
+                && left.len == right.len
+                && left.si == right.si
+                && left.pos == right.pos
+                && left.ri == right.ri
+                && left.ci == right.ci
+                && left.err == right.err
+                && left.why == right.why
+                && left.val.deep_equal(&right.val)
+                && same_values(&left.use_data, &right.use_data)
+        })
 }
 
 /// The rule links are snapshots themselves, so identity is the question
@@ -133,6 +179,11 @@ pub struct Context {
     /// still supplied separately to callbacks so mutation remains explicit.
     pub rule: Option<Rc<RuleSnapshot>>,
     pub rule_stack: Vec<Rc<RuleSnapshot>>,
+    /// The same stack as the engine wrote it, kept only where debug
+    /// assertions are on. `rule_stack` is public and a callback may write to
+    /// it; this one is what the engine checks itself against.
+    #[cfg(debug_assertions)]
+    rule_stack_shadow: Vec<Rc<RuleSnapshot>>,
     /// Retained consumed-token history, oldest first.
     pub v: Vec<Token>,
     /// Absolute number of tokens consumed minus tokens rewound.
@@ -166,6 +217,8 @@ impl Context {
             instance,
             rule: None,
             rule_stack: Vec::new(),
+            #[cfg(debug_assertions)]
+            rule_stack_shadow: Vec::new(),
             v: Vec::new(),
             v_abs: 0,
             t: Vec::with_capacity(8),
@@ -258,25 +311,34 @@ impl Context {
     /// A frame is only ever mutated while it is the rule the loop is working
     /// on, and that rule is not in `stack` — it is passed separately and
     /// re-snapshotted every call. So a frame's snapshot, taken when the frame
-    /// was pushed, still describes it for as long as it stays buried, and the
-    /// stack only needs the frames that left dropped and the frames that
-    /// arrived added.
+    /// was pushed, still describes it for as long as it stays buried.
     ///
-    /// That is a claim about the whole parse loop, including its recovery
-    /// paths, so it is checked rather than asserted in prose: the debug
-    /// assertion below compares every retained frame against the live rule it
-    /// describes, on every call, and the test suite runs with debug
-    /// assertions on. A frame mutated in place — new `u`, a relinked
-    /// `child_rule` — fails it.
+    /// This is how the mature engines carry it. TypeScript writes
+    /// `ctx.rs[ctx.rsI++] = rule` and reads back `ctx.rs[--ctx.rsI]`; Go does
+    /// the same through `ctx.RS` and `ctx.RSI`. Neither rebuilds, and both
+    /// leave the stack as reachable from a callback as this one is. Rust was
+    /// the outlier, and being the outlier is what cost it the extra order.
+    ///
+    /// `rule_stack` is a public field, so a callback can write to it, and a
+    /// write that keeps the length is carried forward from here rather than
+    /// overwritten. That matches what a callback writing to `ctx.rs` gets
+    /// from the other two engines. It is also why the assertion below reads
+    /// `rule_stack_shadow` and not `rule_stack`: the claim being checked is
+    /// about the engine's own bookkeeping, and a debug build must not panic
+    /// because a callback reached into a field the engine publishes.
+    ///
+    /// That a buried frame does not move is a claim about the whole parse
+    /// loop, recovery paths included, so it is checked rather than asserted
+    /// in prose: the assertion compares every retained frame against the live
+    /// rule it describes, on every call, and the test suite runs with debug
+    /// assertions on.
     fn sync_rule_stack(&mut self, stack: &[Rule]) {
-        self.rule_stack.truncate(stack.len());
-        for rule in &stack[self.rule_stack.len()..] {
-            self.rule_stack.push(rule.snapshot());
-        }
+        follow_stack(&mut self.rule_stack, stack);
         #[cfg(debug_assertions)]
         {
+            follow_stack(&mut self.rule_stack_shadow, stack);
             debug_assert!(
-                self.rule_stack
+                self.rule_stack_shadow
                     .iter()
                     .zip(stack)
                     .all(|(snapshot, rule)| same_rule(snapshot, rule)),

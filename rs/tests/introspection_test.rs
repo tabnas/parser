@@ -455,3 +455,106 @@ fn the_rule_stack_describes_every_ancestor_at_its_current_state() {
         ],
     );
 }
+
+/// A grammar may legitimately compute a NaN and stash it on a rule. The
+/// engine's own bookkeeping must not treat that as the rule having changed
+/// underneath it: `Value` derives `PartialEq`, and NaN is not equal to
+/// itself, so a check written with `==` reports a frame as drifted when it
+/// is byte-identical.
+#[test]
+fn a_not_a_number_on_an_ancestor_does_not_look_like_drift() {
+    let mut tabnas = Tabnas::new();
+    tabnas.options.rule.start = "top".into();
+    tabnas.define_rule("top", |rule| {
+        rule.add_open(AltSpec {
+            p: Some("node".into()),
+            ..Default::default()
+        })
+        .add_close(AltSpec {
+            s: vec![vec![tabnas::TIN_ZZ]],
+            ..Default::default()
+        });
+    });
+    tabnas.define_rule("node", |rule| {
+        let mut descend = AltSpec {
+            s: vec![vec![TIN_NR]],
+            p: Some("node".into()),
+            ..Default::default()
+        };
+        descend.add_action(|rule, _context| {
+            rule.u.insert("mark".into(), Value::Number(f64::NAN));
+        });
+        rule.add_open(descend)
+            .add_open(AltSpec::default())
+            .add_close(AltSpec::default());
+    });
+
+    assert!(tabnas.parse("1 2 3").is_ok());
+}
+
+/// `context.rule_stack` is a public field, so a callback can write to it, as
+/// it can to `ctx.rs` in the TypeScript engine and `ctx.RS` in the Go one.
+/// None of the three sanitizes what a callback leaves there. What all three
+/// do guarantee is that the engine's own parse is unaffected, and a debug
+/// build must not panic over it either: the assertion that the stack tracks
+/// the parse loop is about the engine's bookkeeping, and a callback cannot
+/// reach that.
+#[test]
+fn a_callback_writing_to_the_published_rule_stack_does_not_derail_the_parse() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut tabnas = Tabnas::new();
+    tabnas.options.rule.start = "top".into();
+    tabnas.define_rule("top", |rule| {
+        rule.add_open(AltSpec {
+            p: Some("node".into()),
+            ..Default::default()
+        })
+        .add_close(AltSpec {
+            s: vec![vec![tabnas::TIN_ZZ]],
+            ..Default::default()
+        });
+    });
+    tabnas.define_rule("node", {
+        let seen = seen.clone();
+        move |rule| {
+            let mut descend = AltSpec {
+                s: vec![vec![TIN_NR]],
+                p: Some("node".into()),
+                ..Default::default()
+            };
+            let log = seen.clone();
+            descend.add_action(move |rule, context| {
+                let mark = rule.o.first().map_or(Value::Undefined, |o| o.val.clone());
+                rule.u.insert("mark".into(), mark);
+                log.lock().unwrap().push(
+                    context
+                        .rule_stack
+                        .iter()
+                        .map(|frame| match frame.u.get("mark") {
+                            Some(Value::Number(number)) => number.to_string(),
+                            _ => frame.name.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+                // Same length, different contents: the reverse leaves the
+                // engine no size change to notice.
+                context.rule_stack.reverse();
+            });
+            rule.add_open(descend)
+                .add_open(AltSpec::default())
+                .add_close(AltSpec::default());
+        }
+    });
+
+    // The parse result is the engine's own bookkeeping: three terms, each
+    // rule opened and closed in order, whatever the callback did to the
+    // published view on its way past.
+    assert!(tabnas.parse("1 2 3").is_ok());
+    assert_eq!(seen.lock().unwrap().len(), 3);
+    // The first callback runs before anything has been written, so it sees
+    // the real ancestry. The later ones inherit what their predecessor left,
+    // which is the same thing `ctx.rs` gives a TypeScript callback.
+    assert_eq!(seen.lock().unwrap()[0], "top");
+}
