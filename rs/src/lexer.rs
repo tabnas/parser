@@ -855,28 +855,43 @@ impl<'a> Lexer<'a> {
             false
         };
         let remaining = &self.src[self.byte_position()..];
-        let fixed = (self.options.fixed.lex && !fixed_skipped).then(|| {
-            self.options
-                .fixed
-                .tokens
-                .values()
-                .filter(|token| {
-                    self.wants(token.tin)
-                        && !token.source.is_empty()
-                        && remaining.starts_with(&token.source)
-                })
-                .max_by_key(|token| token.source.len())
-                .map(|token| (token.name.clone(), token.tin, token.source.clone()))
-        });
-        if let Some(Some((name, tin, matched))) = fixed {
-            for _ in matched.chars() {
+        // The winner is carried out of the table as its position, not as a
+        // copy of its text. `Token::new` takes the name and the source text
+        // by reference and stores both inline, so the only owned copy the
+        // token needs is the one inside `Value::String`. Naming the match
+        // as three owned values cost three `String` allocations per fixed
+        // token, two of them freed again before the token was built.
+        let fixed = (self.options.fixed.lex && !fixed_skipped)
+            .then(|| {
+                self.options
+                    .fixed
+                    .tokens
+                    .values()
+                    .enumerate()
+                    .filter(|(_, token)| {
+                        self.wants(token.tin)
+                            && !token.source.is_empty()
+                            && remaining.starts_with(&token.source)
+                    })
+                    .max_by_key(|(_, token)| token.source.len())
+                    .map(|(index, token)| (index, token.source.chars().count()))
+            })
+            .flatten();
+        if let Some((index, source_chars)) = fixed {
+            for _ in 0..source_chars {
                 self.advance();
             }
+            let (_, token) = self
+                .options
+                .fixed
+                .tokens
+                .get_index(index)
+                .expect("index came from this table, which nothing writes to mid-parse");
             return Ok(Token::new(
-                name,
-                tin,
-                Value::String(matched.clone()),
-                matched,
+                &token.name,
+                token.tin,
+                Value::String(token.source.clone()),
+                token.source.as_str(),
                 pnt,
             ));
         }

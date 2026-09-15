@@ -2338,8 +2338,12 @@ impl Parser {
                 // The canonical action receives the live match record. Its
                 // post-action p/r writes are a supported routing channel, so
                 // resolve the transition only after the action sequence.
-                let push_name = matched.p.clone();
-                let replace_name = matched.r.clone();
+                // Nothing below reads `matched.p` or `matched.r` again: the
+                // record's remaining readers take `b` and `g`. So the names
+                // move out of it rather than being copied, which is the
+                // second `String` each of them cost per rule step.
+                let push_name = matched.p.take();
+                let replace_name = matched.r.take();
                 // Only a ruleDone subscriber ever reads this, and it is
                 // cloned again at each of the transition arms below. A
                 // grammar with no subscriber was building and copying it
