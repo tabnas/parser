@@ -7,8 +7,8 @@ use crate::lexer::{Lexer, RelexCheckpoint};
 use crate::options::Options;
 use crate::rule::{
     resolved_action_order, resolved_alt_action_order, ActionBinding, AltActionBinding, AltMatch,
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
-    StateAction,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleName, RuleSnapshot, RuleSpec,
+    RuleState, StateAction,
 };
 use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_ZZ};
 use crate::value::Value;
@@ -69,6 +69,9 @@ pub struct Parser {
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token.
     expected_tins: HashMap<String, ExpectedTins>,
+    /// One shared copy of each installed rule's name, so pushing a rule
+    /// clones a pointer rather than reallocating the name per push.
+    names: HashMap<String, RuleName>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub matched_actions: HashMap<String, AltAction>,
@@ -127,6 +130,7 @@ impl Parser {
             options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
+            names: HashMap::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             matched_actions: HashMap::new(),
@@ -142,7 +146,19 @@ impl Parser {
     pub fn add_rule(&mut self, spec: RuleSpec) {
         self.expected_tins
             .insert(spec.name.clone(), ExpectedTins::of(&spec));
+        self.names
+            .insert(spec.name.clone(), RuleName::from(spec.name.as_str()));
         self.rules.insert(spec.name.clone(), Arc::new(spec));
+    }
+
+    /// The shared name for an installed rule. Names that no rule claims
+    /// still parse — the error path wants the name the grammar asked
+    /// for — so an unknown name gets its own allocation.
+    fn interned(&self, name: &str) -> RuleName {
+        match self.names.get(name) {
+            Some(shared) => shared.clone(),
+            None => RuleName::from(name),
+        }
     }
 
     pub fn add_action(&mut self, name: String, action: Action) {
@@ -442,8 +458,8 @@ impl Parser {
         alts: &[AltSpec],
         token: Option<&Token>,
     ) -> TabnasError {
-        let mut rule_stack: Vec<String> = stack.iter().map(|item| item.name.clone()).collect();
-        rule_stack.push(rule.name.clone());
+        let mut rule_stack: Vec<String> = stack.iter().map(|item| item.name.to_string()).collect();
+        rule_stack.push(rule.name.to_string());
         let expected = alts
             .iter()
             .filter_map(|alt| alt.s.first())
@@ -487,7 +503,7 @@ impl Parser {
         stack: &[Rule],
         token: Option<&Token>,
     ) -> TabnasError {
-        if let Some(spec) = self.rules.get(&rule.name) {
+        if let Some(spec) = self.rules.get(&*rule.name) {
             let alts = if rule.state == RuleState::Open {
                 &spec.open
             } else {
@@ -1147,7 +1163,7 @@ impl Parser {
 
     fn expected_match_tins(&self, rule: &Rule, slot: usize) -> &[Tin] {
         self.expected_tins
-            .get(&rule.name)
+            .get(&*rule.name)
             .map(|expected| expected.at(rule.state == RuleState::Open, slot))
             .unwrap_or_default()
     }
@@ -1188,7 +1204,7 @@ impl Parser {
                     Err(error) => {
                         let recovery_error = self
                             .rules
-                            .get(&rule.name)
+                            .get(&*rule.name)
                             .map(|spec| {
                                 let alts = if rule.state == RuleState::Open {
                                     &spec.open
@@ -1343,11 +1359,13 @@ impl Parser {
             return Ok(Value::Undefined);
         }
 
-        let mut current_rule = Rule::new(start_name, Value::Undefined);
+        let start_shared = self.interned(start_name);
+        let mut current_rule = Rule::new(start_shared.clone(), Value::Undefined);
         current_rule.bind_spec(
             self.rules
                 .get(start_name)
                 .expect("start rule existence was checked before construction"),
+            start_shared,
         );
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
@@ -1429,7 +1447,7 @@ impl Parser {
                             .unwrap_or((0, 1, 1));
                         return Err(TabnasError::new(
                             "unknown_rule",
-                            &current_rule.name,
+                            &*current_rule.name,
                             src,
                             pnt.0,
                             pnt.1,
@@ -2343,9 +2361,11 @@ impl Parser {
                 let completed_rule;
                 let mut completed_value = None;
                 if let Some(ref push_name) = push_name {
-                    let mut child = Rule::with_shared_node(push_name, current_rule.node.clone());
+                    let push_shared = self.interned(push_name);
+                    let mut child =
+                        Rule::with_shared_node(push_shared.clone(), current_rule.node.clone());
                     if let Some(child_spec) = self.rules.get(push_name) {
-                        child.bind_spec(child_spec);
+                        child.bind_spec(child_spec, push_shared.clone());
                     }
                     child.i = next_rule_id;
                     next_rule_id += 1;
@@ -2354,7 +2374,7 @@ impl Parser {
                     child.n = Rc::clone(&current_rule.n);
                     child.k = Rc::clone(&current_rule.k);
                     child.parent_rule = Some(current_rule.snapshot());
-                    current_rule.next_rule_name = Some(push_name.clone());
+                    current_rule.next_rule_name = Some(push_shared);
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
                     let after = self.run_after_actions(
@@ -2394,9 +2414,11 @@ impl Parser {
                     stack.push(current_rule);
                     current_rule = child;
                 } else if let Some(ref replace_name) = replace_name {
-                    let mut next = Rule::with_shared_node(replace_name, current_rule.node.clone());
+                    let replace_shared = self.interned(replace_name);
+                    let mut next =
+                        Rule::with_shared_node(replace_shared.clone(), current_rule.node.clone());
                     if let Some(next_spec) = self.rules.get(replace_name) {
-                        next.bind_spec(next_spec);
+                        next.bind_spec(next_spec, replace_shared.clone());
                     }
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -2405,7 +2427,7 @@ impl Parser {
                     next.parent_rule = current_rule.parent_rule.clone();
                     next.n = Rc::clone(&current_rule.n);
                     next.k = Rc::clone(&current_rule.k);
-                    current_rule.next_rule_name = Some(replace_name.clone());
+                    current_rule.next_rule_name = Some(replace_shared);
                     current_rule.next_rule = Some(next.snapshot());
                     let after = self.run_after_actions(
                         &spec,
@@ -3025,7 +3047,7 @@ fn add_close_tins(
     tagged_only: bool,
     out: &mut BTreeSet<Tin>,
 ) {
-    let Some(spec) = rules.get(&rule.name) else {
+    let Some(spec) = rules.get(&*rule.name) else {
         return;
     };
     for alt in &spec.close {
@@ -3074,7 +3096,7 @@ fn accepts_close(
     rules: &IndexMap<String, Arc<RuleSpec>>,
     options: &Options,
 ) -> bool {
-    rules.get(&rule.name).is_some_and(|spec| {
+    rules.get(&*rule.name).is_some_and(|spec| {
         spec.close.iter().any(|alt| {
             groups_enabled(alt, options)
                 && (alt.s.is_empty() || alt.s.first().is_some_and(|slot| slot_matches(slot, tin)))
@@ -3118,7 +3140,7 @@ fn continuation_tins(
     query_pos: usize,
     failed: Option<&[Tin]>,
 ) -> Vec<Tin> {
-    let Some(spec) = rules.get(&rule.name) else {
+    let Some(spec) = rules.get(&*rule.name) else {
         return Vec::new();
     };
     let state_alts = if rule.state == RuleState::Open {
@@ -3148,13 +3170,13 @@ fn continuation_tins(
     // tokens accepted by each parent are legal at the same point too.
     let mut close_rule = rule;
     let mut parent_index = stack.len();
-    while let Some(close_spec) = rules.get(&close_rule.name) {
+    while let Some(close_spec) = rules.get(&*close_rule.name) {
         if !has_empty_close(close_spec, options) || parent_index == 0 {
             break;
         }
         parent_index -= 1;
         let parent = &stack[parent_index];
-        if let Some(parent_spec) = rules.get(&parent.name) {
+        if let Some(parent_spec) = rules.get(&*parent.name) {
             lead_tins(&parent_spec.close, options, &mut out);
         }
         close_rule = parent;
@@ -3286,7 +3308,7 @@ fn condition_exists(rule: &Rule, ancestors: &[Rule], path: &[String]) -> bool {
     } else if path.first().map(String::as_str) == Some("next") {
         if let Some(next) = rule.next_rule.as_deref() {
             snapshot_condition_exists(next, &path[1..])
-        } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+        } else if rule.next_rule_name.as_deref() == Some(&*rule.name) {
             condition_exists(rule, ancestors, &path[1..])
         } else {
             false
@@ -3305,7 +3327,7 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
         "k" => map_path(&rule.k, rest),
         "d" if rest.is_empty() => Some(Value::Number(rule.d as f64)),
         "i" if rest.is_empty() => Some(Value::Number(rule.i as f64)),
-        "name" if rest.is_empty() => Some(Value::String(rule.name.clone())),
+        "name" if rest.is_empty() => Some(Value::String(rule.name.to_string())),
         "state" if rest.is_empty() => Some(Value::String(
             match rule.state {
                 RuleState::Open => "o",
@@ -3332,13 +3354,13 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
         "next" => {
             if let Some(next) = rule.next_rule.as_deref() {
                 resolve_snapshot_path(next, rest)
-            } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+            } else if rule.next_rule_name.as_deref() == Some(&*rule.name) {
                 resolve_condition_path(rule, ancestors, rest)
             } else {
                 None
             }
         }
-        "spec" if rest == ["name"] => Some(Value::String(rule.name.clone())),
+        "spec" if rest == ["name"] => Some(Value::String(rule.name.to_string())),
         _ => None,
     }
 }
@@ -3361,7 +3383,7 @@ fn snapshot_condition_exists(rule: &RuleSnapshot, path: &[String]) -> bool {
     } else if path.first().map(String::as_str) == Some("next") {
         if let Some(next) = rule.next_rule.as_deref() {
             snapshot_condition_exists(next, &path[1..])
-        } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+        } else if rule.next_rule_name.as_deref() == Some(&*rule.name) {
             snapshot_condition_exists(rule, &path[1..])
         } else {
             false
@@ -3380,7 +3402,7 @@ fn resolve_snapshot_path(rule: &RuleSnapshot, path: &[String]) -> Option<Value> 
         "k" => map_path(&rule.k, rest),
         "d" if rest.is_empty() => Some(Value::Number(rule.d as f64)),
         "i" if rest.is_empty() => Some(Value::Number(rule.i as f64)),
-        "name" if rest.is_empty() => Some(Value::String(rule.name.clone())),
+        "name" if rest.is_empty() => Some(Value::String(rule.name.to_string())),
         "state" if rest.is_empty() => Some(Value::String(
             match rule.state {
                 RuleState::Open => "o",
@@ -3404,13 +3426,13 @@ fn resolve_snapshot_path(rule: &RuleSnapshot, path: &[String]) -> Option<Value> 
         "next" => {
             if let Some(next) = rule.next_rule.as_deref() {
                 resolve_snapshot_path(next, rest)
-            } else if rule.next_rule_name.as_deref() == Some(rule.name.as_str()) {
+            } else if rule.next_rule_name.as_deref() == Some(&*rule.name) {
                 resolve_snapshot_path(rule, rest)
             } else {
                 None
             }
         }
-        "spec" if rest == ["name"] => Some(Value::String(rule.name.clone())),
+        "spec" if rest == ["name"] => Some(Value::String(rule.name.to_string())),
         _ => None,
     }
 }

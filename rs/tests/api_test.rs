@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tabnas::{AltSpec, RuleSpec, Tabnas, Value, TIN_VL, TIN_ZZ};
+use tabnas::{AltSpec, RuleName, RuleSpec, Tabnas, Value, TIN_VL, TIN_ZZ};
 
 #[test]
 fn test_parse_primitives() {
@@ -232,4 +233,65 @@ fn parse_prepare_empty_result_and_result_fail_are_honored() {
     assert_eq!(recovered.value, Some(Value::Number(1.0)));
     assert_eq!(recovered.errors.len(), 1);
     assert!(recovered.fatal.is_none());
+}
+
+/// `Rule.name` shares one handle per installed rule rather than holding
+/// its own `String`. That is meant to be invisible: a plugin compares it
+/// with a literal, prints it, or takes a `&str` from it exactly as
+/// before. This pins that surface, because losing any of it would break
+/// plugin sources for a change they should never have to see.
+#[test]
+fn a_rule_name_still_behaves_like_the_string_it_replaced() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut tn = Tabnas::make_json();
+    let subscriber_seen = seen.clone();
+    tn.subscribe_rules(move |rule, _context| {
+        assert_eq!(rule.name, "val");
+        assert_eq!(rule.name, "val".to_string());
+        assert_eq!("val", rule.name);
+        assert_ne!(rule.name, "map");
+        assert_eq!(rule.name.as_str(), "val");
+        assert_eq!(&rule.name[..1], "v");
+        assert_eq!(format!("{}", rule.name), "val");
+        assert_eq!(format!("{:?}", rule.name), "\"val\"");
+        assert_eq!(rule.name.to_string(), "val");
+        assert_eq!(String::from(rule.name.clone()), "val");
+        fn takes_a_str(name: &str) -> usize {
+            name.len()
+        }
+        assert_eq!(takes_a_str(&rule.name), 3);
+        subscriber_seen.lock().unwrap().push(rule.name.clone());
+    });
+
+    tn.parse("1").unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["val", "val"]);
+
+    // Borrowed as a `str`, so it keys a map the same way the name does.
+    let mut by_name: HashMap<RuleName, usize> = HashMap::new();
+    by_name.insert(RuleName::from("val"), 7);
+    assert_eq!(by_name.get("val"), Some(&7));
+}
+
+/// The sharing is the point: two rules of the same name must reach the
+/// same allocation, or pushing a rule is still copying its name.
+#[test]
+fn rules_of_one_name_share_a_single_copy_of_it() {
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let mut tn = Tabnas::make_json();
+    let collected = names.clone();
+    tn.subscribe_rules(move |rule, _context| {
+        if rule.name == "val" {
+            collected.lock().unwrap().push(rule.name.clone());
+        }
+    });
+
+    tn.parse("[1,2,3]").unwrap();
+    let names = names.lock().unwrap();
+    assert!(names.len() > 2, "expected several val rules, got {names:?}");
+    assert!(
+        names
+            .windows(2)
+            .all(|pair| pair[0].as_str().as_ptr() == pair[1].as_str().as_ptr()),
+        "every val rule should point at the same name"
+    );
 }

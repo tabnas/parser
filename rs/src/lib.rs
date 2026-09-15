@@ -41,8 +41,8 @@ pub use rule::{
     ActionBinding, AltAction, AltActionBinding, AltBack, AltBackWithMatch, AltCondition,
     AltConditionWithLexer, AltConditionWithLexerAndMatch, AltConditionWithMatch, AltError,
     AltErrorWithMatch, AltMatch, AltModifier, AltModifierWithMatch, AltNext, AltNextWithMatch,
-    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleSnapshot, RuleSpec, RuleState,
-    StateAction,
+    AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleName, RuleSnapshot, RuleSpec,
+    RuleState, StateAction,
 };
 pub use token::{
     name_to_tin, tin_name, Point, Tin, Token, TokenValFunc, TIN_AA, TIN_BD, TIN_CA, TIN_CB, TIN_CL,

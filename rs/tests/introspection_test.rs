@@ -265,7 +265,7 @@ fn context_exposes_live_rule_instance_plugins_and_ancestor_stack() {
                 context.instance.id.clone(),
                 context.instance.plugins.join(","),
                 context.instance.rule_names.join(","),
-                snapshot.name.clone(),
+                snapshot.name.to_string(),
                 snapshot
                     .o
                     .first()
@@ -533,7 +533,7 @@ fn a_callback_writing_to_the_published_rule_stack_does_not_derail_the_parse() {
                         .iter()
                         .map(|frame| match frame.u.get("mark") {
                             Some(Value::Number(number)) => number.to_string(),
-                            _ => frame.name.clone(),
+                            _ => frame.name.to_string(),
                         })
                         .collect::<Vec<_>>()
                         .join(" "),

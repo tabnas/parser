@@ -1045,11 +1045,129 @@ pub(crate) fn resolved_action_order(
     }
 }
 
+/// A rule's name.
+///
+/// Rules are pushed and popped for every construct in a parse, so the
+/// name is shared between a rule, its snapshots and whatever the next
+/// rule records, rather than being copied at each step. It still
+/// behaves like the `String` it replaced: compare it with a literal,
+/// print it, or take a `&str` from it.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RuleName(Arc<str>);
+
+impl RuleName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for RuleName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for RuleName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Keyed lookups borrow the name as a `str`, so `Hash` and `Eq` have to
+/// agree with `str`'s. Both reach `str` through the `Arc`, so they do.
+impl std::borrow::Borrow<str> for RuleName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Printed as the bare name, so a `{:?}` of a rule or a snapshot reads
+/// the way it did when this was a `String`.
+impl fmt::Debug for RuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl fmt::Display for RuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for RuleName {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for RuleName {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for RuleName {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<RuleName> for str {
+    fn eq(&self, other: &RuleName) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<RuleName> for &str {
+    fn eq(&self, other: &RuleName) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<RuleName> for String {
+    fn eq(&self, other: &RuleName) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl From<&str> for RuleName {
+    fn from(name: &str) -> Self {
+        RuleName(Arc::from(name))
+    }
+}
+
+impl From<String> for RuleName {
+    fn from(name: String) -> Self {
+        RuleName(Arc::from(name.as_str()))
+    }
+}
+
+impl From<&String> for RuleName {
+    fn from(name: &String) -> Self {
+        RuleName(Arc::from(name.as_str()))
+    }
+}
+
+impl From<Arc<str>> for RuleName {
+    fn from(name: Arc<str>) -> Self {
+        RuleName(name)
+    }
+}
+
+impl From<RuleName> for String {
+    fn from(name: RuleName) -> Self {
+        name.0.to_string()
+    }
+}
+
 #[derive(Clone)]
 pub struct Rule {
     pub i: usize,
     pub d: usize,
-    pub name: String,
+    pub name: RuleName,
     /// Immutable snapshot of the grammar definition used to create this
     /// runtime rule. Native callbacks can inspect it just like `rule.spec`
     /// in the canonical engine without being able to mutate the parser's
@@ -1072,7 +1190,7 @@ pub struct Rule {
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule_name: Option<String>,
+    pub next_rule_name: Option<RuleName>,
     pub n: Rc<HashMap<String, i32>>,
     pub u: Rc<HashMap<String, Value>>,
     pub k: Rc<HashMap<String, Value>>,
@@ -1087,7 +1205,7 @@ pub struct Rule {
 pub struct RuleSnapshot {
     pub i: usize,
     pub d: usize,
-    pub name: String,
+    pub name: RuleName,
     pub spec: Arc<RuleSpec>,
     pub state: RuleState,
     pub bo: bool,
@@ -1101,7 +1219,7 @@ pub struct RuleSnapshot {
     pub child_rule: Option<Rc<RuleSnapshot>>,
     pub prev_rule: Option<Rc<RuleSnapshot>>,
     pub next_rule: Option<Rc<RuleSnapshot>>,
-    pub next_rule_name: Option<String>,
+    pub next_rule_name: Option<RuleName>,
     pub n: Rc<HashMap<String, i32>>,
     pub u: Rc<HashMap<String, Value>>,
     pub k: Rc<HashMap<String, Value>>,
@@ -1144,9 +1262,9 @@ impl Rule {
         Rc::make_mut(&mut self.k)
     }
 
-    pub fn new(name: impl Into<String>, initial_node: Value) -> Self {
-        let name = name.into();
-        let spec = Arc::new(RuleSpec::new(name.clone()));
+    pub fn new(name: impl Into<RuleName>, initial_node: Value) -> Self {
+        let name: RuleName = name.into();
+        let spec = Arc::new(RuleSpec::new(name.as_str()));
         Rule {
             i: 0,
             d: 0,
@@ -1176,9 +1294,9 @@ impl Rule {
         }
     }
 
-    pub fn with_shared_node(name: impl Into<String>, node: Rc<RefCell<Value>>) -> Self {
-        let name = name.into();
-        let spec = Arc::new(RuleSpec::new(name.clone()));
+    pub fn with_shared_node(name: impl Into<RuleName>, node: Rc<RefCell<Value>>) -> Self {
+        let name: RuleName = name.into();
+        let spec = Arc::new(RuleSpec::new(name.as_str()));
         Rule {
             i: 0,
             d: 0,
@@ -1208,8 +1326,10 @@ impl Rule {
         }
     }
 
-    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>) {
-        self.name.clone_from(&spec.name);
+    /// `name` arrives already shared: the parser interns one handle per
+    /// installed rule, so binding copies a pointer rather than the text.
+    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName) {
+        self.name = name;
         self.spec = Arc::clone(spec);
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.

@@ -24,7 +24,7 @@ fn lazy_token_values_receive_and_mutate_the_live_rule_and_context() {
                     rule.u_mut().insert("lazy-ran".into(), Value::Bool(true));
                     context
                         .u
-                        .insert("lazy-ran".into(), Value::String(rule.name.clone()));
+                        .insert("lazy-ran".into(), Value::String(rule.name.to_string()));
                     seen.lock().unwrap().push((
                         rule.name.clone(),
                         context.source.clone(),
