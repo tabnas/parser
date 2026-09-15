@@ -160,8 +160,32 @@ inlines across module boundaries at runtime, so this is the flag that
 puts a Rust consumer on the same footing rather than an unusual
 tuning.
 
-A library cannot set a profile for its consumers, which is why this is
-written down rather than configured.
+### Pick an allocator
+
+The other two ports of this engine bring their own: Go has the
+runtime's and TypeScript has V8's. A Rust binary takes whatever libc
+supplies unless it says otherwise, and this engine allocates heavily
+enough for that to matter. On glibc, `tabnas/measure` records
+**1.09x to 1.56x** between the system allocator and `mimalloc`, the
+larger end on the deeply nesting grammars.
+
+```toml
+[dependencies]
+mimalloc = "0.1"
+```
+
+```rust
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+`mimalloc` is what the measurement harness uses; `jemalloc` and others
+are reasonable too. The point is the choice, not the crate: leaving it
+to the platform is itself a choice, and on glibc it is an expensive
+one.
+
+A library cannot set a profile or an allocator for its consumers,
+which is why both of these are written down rather than configured.
 
 ## Development
 
