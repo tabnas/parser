@@ -16,6 +16,7 @@ pub mod rule;
 mod text;
 pub mod token;
 mod tracked;
+use crate::tracked::Tracked;
 pub mod utility;
 pub mod value;
 
@@ -209,24 +210,26 @@ pub struct Tabnas {
     /// Wrapped so that writing to it is noticed: the shared copy handed
     /// to each parse is built once and reused until something takes a
     /// mutable path to this. Reads and writes both work as they did.
-    pub options: crate::tracked::Tracked<Options>,
+    pub options: Tracked<Options>,
     /// The `options` a parse gets, prepared once. Cloning a thirty-field
     /// `Options` per `parse()` call was 7% of a small parse.
     prepared_options: PreparedOptions,
+    /// The whole assembled `Parser`, prepared once. See `PreparedParser`.
+    prepared_parser: PreparedParser,
     /// Accumulated option input before `config.modify` callbacks run. Keeping
     /// this separate prevents non-idempotent modifiers from compounding on
     /// each grammar overlay or derived instance.
     pub(crate) raw_options: Options,
-    pub rules: IndexMap<String, RuleSpec>,
-    pub actions: HashMap<String, Action>,
-    pub context_actions: HashMap<String, ContextAction>,
-    pub matched_actions: HashMap<String, AltAction>,
-    pub state_actions: HashMap<String, StateAction>,
-    pub token_subscribers: Vec<TokenSubscriber>,
-    pub lex_subscribers: Vec<LexSubscriber>,
-    pub rule_subscribers: Vec<RuleSubscriber>,
-    pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
-    pub plugins: Vec<Plugin>,
+    pub rules: Tracked<IndexMap<String, RuleSpec>>,
+    pub actions: Tracked<HashMap<String, Action>>,
+    pub context_actions: Tracked<HashMap<String, ContextAction>>,
+    pub matched_actions: Tracked<HashMap<String, AltAction>>,
+    pub state_actions: Tracked<HashMap<String, StateAction>>,
+    pub token_subscribers: Tracked<Vec<TokenSubscriber>>,
+    pub lex_subscribers: Tracked<Vec<LexSubscriber>>,
+    pub rule_subscribers: Tracked<Vec<RuleSubscriber>>,
+    pub rule_done_subscribers: Tracked<Vec<RuleDoneSubscriber>>,
+    pub plugins: Tracked<Vec<Plugin>>,
     pub plugin_options: IndexMap<String, Value>,
     /// Plugin-attached named values carried to derived instances.
     pub decorations: IndexMap<String, Decoration>,
@@ -289,18 +292,19 @@ impl Tabnas {
             id,
             parent_id: None,
             raw_options: options.clone(),
-            options: crate::tracked::Tracked::new(options),
+            options: Tracked::new(options),
             prepared_options: PreparedOptions::default(),
-            rules: IndexMap::new(),
-            actions: HashMap::new(),
-            context_actions: HashMap::new(),
-            matched_actions: HashMap::new(),
-            state_actions: HashMap::new(),
-            token_subscribers: Vec::new(),
-            lex_subscribers: Vec::new(),
-            rule_subscribers: Vec::new(),
-            rule_done_subscribers: Vec::new(),
-            plugins: Vec::new(),
+            prepared_parser: PreparedParser::default(),
+            rules: Tracked::new(IndexMap::new()),
+            actions: Tracked::new(HashMap::new()),
+            context_actions: Tracked::new(HashMap::new()),
+            matched_actions: Tracked::new(HashMap::new()),
+            state_actions: Tracked::new(HashMap::new()),
+            token_subscribers: Tracked::new(Vec::new()),
+            lex_subscribers: Tracked::new(Vec::new()),
+            rule_subscribers: Tracked::new(Vec::new()),
+            rule_done_subscribers: Tracked::new(Vec::new()),
+            plugins: Tracked::new(Vec::new()),
             plugin_options,
             decorations: IndexMap::new(),
             alt_conditions: HashMap::new(),
@@ -463,7 +467,7 @@ impl Tabnas {
         child.plugin_options = self.plugin_options.clone();
         child.decorations = self.decorations.clone();
         child.inherit_function_references(self);
-        for plugin in &self.plugins {
+        for plugin in self.plugins.iter() {
             let options = child
                 .plugin_options
                 .get(&plugin.name.to_lowercase())
@@ -609,7 +613,7 @@ impl Tabnas {
         }
 
         output.push_str("\n--- Rules ---\n");
-        for (name, rule) in &self.rules {
+        for (name, rule) in self.rules.iter() {
             let _ = writeln!(
                 output,
                 "  {name}: open={} close={} bo={} ao={} bc={} ac={}",
@@ -630,7 +634,7 @@ impl Tabnas {
         }
 
         let _ = writeln!(output, "\n--- Plugins: {} ---", self.plugins.len());
-        for plugin in &self.plugins {
+        for plugin in self.plugins.iter() {
             let _ = writeln!(output, "  {}", plugin.name);
         }
         output.push_str("\n--- Subscriptions ---\n");
@@ -750,7 +754,7 @@ impl Tabnas {
 
     /// Installed plugins in application order.
     pub fn installed_plugins(&self) -> Vec<Plugin> {
-        self.plugins.clone()
+        self.plugins.peek().clone()
     }
 
     /// Attach an equality-comparable native value to this instance.
@@ -1434,7 +1438,29 @@ impl Tabnas {
             .parse_recover_for_with_context(self, src, meta, parent)
     }
 
-    fn parser(&self) -> Parser {
+    /// The sum of every counter the assembled parser is built from.
+    /// Each only increases, so any change moves the total.
+    fn grammar_generation(&self) -> u64 {
+        self.options
+            .generation()
+            .wrapping_add(self.rules.generation())
+            .wrapping_add(self.actions.generation())
+            .wrapping_add(self.context_actions.generation())
+            .wrapping_add(self.matched_actions.generation())
+            .wrapping_add(self.state_actions.generation())
+            .wrapping_add(self.token_subscribers.generation())
+            .wrapping_add(self.lex_subscribers.generation())
+            .wrapping_add(self.rule_subscribers.generation())
+            .wrapping_add(self.rule_done_subscribers.generation())
+            .wrapping_add(self.plugins.generation())
+    }
+
+    fn parser(&self) -> Arc<Parser> {
+        self.prepared_parser
+            .get(self.grammar_generation(), || self.build_parser())
+    }
+
+    fn build_parser(&self) -> Parser {
         let mut p = Parser::from_shared(self.prepared_options.get(&self.options));
         p.set_instance_info(InstanceInfo {
             id: self.id.clone(),
@@ -1450,28 +1476,28 @@ impl Tabnas {
         for spec in self.rules.values() {
             p.add_rule(spec.clone());
         }
-        for (name, action) in &self.actions {
+        for (name, action) in self.actions.iter() {
             p.add_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.context_actions {
+        for (name, action) in self.context_actions.iter() {
             p.add_context_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.matched_actions {
+        for (name, action) in self.matched_actions.iter() {
             p.add_matched_action(name.clone(), action.clone());
         }
-        for (name, action) in &self.state_actions {
+        for (name, action) in self.state_actions.iter() {
             p.add_state_action(name.clone(), action.clone());
         }
-        for subscriber in &self.token_subscribers {
+        for subscriber in self.token_subscribers.iter() {
             p.add_token_subscriber(subscriber.clone());
         }
-        for subscriber in &self.lex_subscribers {
+        for subscriber in self.lex_subscribers.iter() {
             p.add_lex_subscriber(subscriber.clone());
         }
-        for subscriber in &self.rule_subscribers {
+        for subscriber in self.rule_subscribers.iter() {
             p.add_rule_subscriber(subscriber.clone());
         }
-        for subscriber in &self.rule_done_subscribers {
+        for subscriber in self.rule_done_subscribers.iter() {
             p.add_rule_done_subscriber(subscriber.clone());
         }
         p
@@ -1738,5 +1764,40 @@ impl PreparedOptions {
 impl Clone for PreparedOptions {
     fn clone(&self) -> Self {
         PreparedOptions::default()
+    }
+}
+
+/// The assembled `Parser` for a configuration, prepared once and shared
+/// by every parse until the configuration changes.
+///
+/// This is only possible because a `Parser` is `Send + Sync`: it holds
+/// `Arc<Options>` and `Arc<RuleSpec>`, and its actions are already
+/// `Arc<dyn Fn .. + Send + Sync>`. An earlier attempt at this was
+/// abandoned when the parser still held `Rc`s, because caching one
+/// would have cost `Tabnas` its own `Sync` without saying so.
+///
+/// The key is the sum of the generations of every `Tracked` field the
+/// parser is built from. Summing is enough because each counter only
+/// ever increases, so any change moves the total.
+#[derive(Default)]
+struct PreparedParser(std::sync::Mutex<Option<(u64, Arc<Parser>)>>);
+
+impl PreparedParser {
+    fn get(&self, generation: u64, build: impl FnOnce() -> Parser) -> Arc<Parser> {
+        let mut slot = self.0.lock().expect("prepared parser lock");
+        if let Some((prepared_at, ref prepared)) = *slot {
+            if prepared_at == generation {
+                return Arc::clone(prepared);
+            }
+        }
+        let prepared = Arc::new(build());
+        *slot = Some((generation, Arc::clone(&prepared)));
+        prepared
+    }
+}
+
+impl Clone for PreparedParser {
+    fn clone(&self) -> Self {
+        PreparedParser::default()
     }
 }

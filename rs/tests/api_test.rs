@@ -429,3 +429,52 @@ fn configuration_changed_between_parses_takes_effect() {
         "clearing the start rule after a parse must be honoured"
     );
 }
+
+/// The assembled parser is prepared once and reused, so every input it
+/// is built from has to invalidate it. `options` is covered above;
+/// this covers the grammar itself, which is nine more public fields.
+#[test]
+fn grammar_changed_between_parses_takes_effect() {
+    let mut tn = Tabnas::new();
+    tn.options.rule.start = "top".into();
+    let mut top = RuleSpec::new("top");
+    top.open.push(AltSpec {
+        s: vec![vec![TIN_VL]],
+        ..Default::default()
+    });
+    tn.rule(top);
+    // The first parse is what primes the prepared parser.
+    tn.parse("true").unwrap();
+
+    // A rule added after the first parse.
+    let mut replacement = RuleSpec::new("top");
+    replacement.ao.push("count".into());
+    replacement.open.push(AltSpec {
+        s: vec![vec![TIN_VL]],
+        ..Default::default()
+    });
+    tn.rule(replacement);
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counted = seen.clone();
+    tn.action("count", move |_rule| {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    tn.parse("true").unwrap();
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "a rule and an action registered after the first parse must both be used"
+    );
+
+    // A subscriber added after a parse.
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let counted_tokens = tokens.clone();
+    tn.subscribe_tokens(move |_token| {
+        counted_tokens.fetch_add(1, Ordering::SeqCst);
+    });
+    tn.parse("true").unwrap();
+    assert!(
+        tokens.load(Ordering::SeqCst) > 0,
+        "a subscriber registered after a parse must be called"
+    );
+}

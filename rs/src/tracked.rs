@@ -64,6 +64,12 @@ impl<T> DerefMut for Tracked<T> {
     }
 }
 
+impl<T> From<T> for Tracked<T> {
+    fn from(value: T) -> Self {
+        Tracked::new(value)
+    }
+}
+
 impl<T: Clone> Clone for Tracked<T> {
     fn clone(&self) -> Self {
         // A clone starts its own count: whatever the original had
