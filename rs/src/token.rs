@@ -2,6 +2,7 @@
 
 use crate::value::Value;
 use crate::{Context, Rule};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -148,21 +149,236 @@ impl PartialEq for TokenValFunc {
 
 impl Eq for TokenValFunc {}
 
+/// A token's name or matched source text.
+///
+/// Tokens are cloned about six times per input construct, and each
+/// clone used to copy both of these strings. Sharing them makes a
+/// clone a pointer copy; names go further and are interned per token
+/// identity, so lexing one costs nothing at all. It behaves like the
+/// `String` it replaced: compare it with a literal, print it, index
+/// it, or take a `&str` from it.
+#[derive(Clone)]
+pub struct TokenText(TextRepr);
+
+/// Most tokens are a handful of characters — a digit, a comma, a
+/// brace — so the text is held inline and a clone is a register copy.
+/// Sharing the long ones keeps their clones cheap too, but through an
+/// `Arc`, whose atomic refcount is what makes it the slower choice for
+/// the short ones: glibc serves a small allocation from a fast bin in
+/// less than an atomic read-modify-write costs.
+#[derive(Clone)]
+enum TextRepr {
+    Inline {
+        len: u8,
+        bytes: [u8; INLINE_CAPACITY],
+    },
+    Shared(Arc<str>),
+}
+
+const INLINE_CAPACITY: usize = 22;
+
+impl TokenText {
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            // SAFETY: `bytes[..len]` is only ever written from a `&str`,
+            // so it is whole, valid UTF-8.
+            TextRepr::Inline { len, bytes } => unsafe {
+                std::str::from_utf8_unchecked(&bytes[..*len as usize])
+            },
+            TextRepr::Shared(text) => text,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    fn build(text: &str) -> Self {
+        if text.len() <= INLINE_CAPACITY {
+            let mut bytes = [0u8; INLINE_CAPACITY];
+            bytes[..text.len()].copy_from_slice(text.as_bytes());
+            TokenText(TextRepr::Inline {
+                len: text.len() as u8,
+                bytes,
+            })
+        } else {
+            TokenText(TextRepr::Shared(Arc::from(text)))
+        }
+    }
+}
+
+impl Default for TokenText {
+    fn default() -> Self {
+        TokenText(TextRepr::Inline {
+            len: 0,
+            bytes: [0u8; INLINE_CAPACITY],
+        })
+    }
+}
+
+impl Eq for TokenText {}
+
+impl PartialEq for TokenText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl std::hash::Hash for TokenText {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state)
+    }
+}
+
+impl PartialOrd for TokenText {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TokenText {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl std::ops::Deref for TokenText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for TokenText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for TokenText {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for TokenText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Printed as the bare text, so a `{:?}` of a token reads the way it
+/// did when these were `String`s.
+impl fmt::Debug for TokenText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl PartialEq<str> for TokenText {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for TokenText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for TokenText {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<TokenText> for str {
+    fn eq(&self, other: &TokenText) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<TokenText> for &str {
+    fn eq(&self, other: &TokenText) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<TokenText> for String {
+    fn eq(&self, other: &TokenText) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl From<&str> for TokenText {
+    fn from(text: &str) -> Self {
+        TokenText::build(text)
+    }
+}
+
+impl From<String> for TokenText {
+    fn from(text: String) -> Self {
+        TokenText::build(text.as_str())
+    }
+}
+
+impl From<&String> for TokenText {
+    fn from(text: &String) -> Self {
+        TokenText::build(text.as_str())
+    }
+}
+
+impl From<Arc<str>> for TokenText {
+    fn from(text: Arc<str>) -> Self {
+        TokenText(TextRepr::Shared(text))
+    }
+}
+
+impl From<TokenText> for String {
+    fn from(text: TokenText) -> Self {
+        text.as_str().to_string()
+    }
+}
+
+/// One shared handle per token identity. Token names come from a fixed
+/// registry, so the same half-dozen strings were being allocated once
+/// per token in the input. The cache is keyed by `tin` and checked
+/// against the name asked for, because a grammar may bind its own name
+/// to a tin; a mismatch just allocates, as before.
+pub(crate) fn interned_token_name(name: &str, tin: Tin) -> TokenText {
+    thread_local! {
+        static NAMES: RefCell<HashMap<Tin, TokenText>> = RefCell::new(HashMap::new());
+    }
+    NAMES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match cache.get(&tin) {
+            Some(shared) if *shared == name => shared.clone(),
+            _ => {
+                let shared = TokenText::from(name);
+                cache.insert(tin, shared.clone());
+                shared
+            }
+        }
+    })
+}
+
 /// A single lexical token produced by the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
-    pub name: String,
+    pub name: TokenText,
     pub tin: Tin,
     pub val: Value,
-    pub src: String,
+    pub src: TokenText,
     /// UTF-8 byte length of `src`, paired with the byte offset `si`.
     pub len: usize,
     pub si: usize,
     pub pos: usize,
     pub ri: usize,
     pub ci: usize,
-    pub err: String,
-    pub why: String,
+    pub err: TokenText,
+    pub why: TokenText,
     pub use_data: HashMap<String, Value>,
     /// Optional ignored trivia associated with this token. Negotiated
     /// re-lexing carries it to the replacement token.
@@ -175,17 +391,17 @@ pub struct Token {
 impl Default for Token {
     fn default() -> Self {
         Token {
-            name: String::new(),
+            name: TokenText::default(),
             tin: -1,
             val: Value::Undefined,
-            src: String::new(),
+            src: TokenText::default(),
             len: 0,
             si: 0,
             pos: 0,
             ri: 1,
             ci: 1,
-            err: String::new(),
-            why: String::new(),
+            err: TokenText::default(),
+            why: TokenText::default(),
             use_data: HashMap::new(),
             ignored: None,
             val_fn: None,
@@ -195,16 +411,16 @@ impl Default for Token {
 
 impl Token {
     pub fn new(
-        name: impl Into<String>,
+        name: impl AsRef<str>,
         tin: Tin,
         val: Value,
-        src: impl Into<String>,
+        src: impl Into<TokenText>,
         pnt: Point,
     ) -> Self {
-        let src = src.into();
+        let src: TokenText = src.into();
         let len = src.len();
         Token {
-            name: name.into(),
+            name: interned_token_name(name.as_ref(), tin),
             tin,
             val,
             src,
@@ -213,8 +429,8 @@ impl Token {
             pos: pnt.pos,
             ri: pnt.ri,
             ci: pnt.ci,
-            err: String::new(),
-            why: String::new(),
+            err: TokenText::default(),
+            why: TokenText::default(),
             use_data: HashMap::new(),
             ignored: None,
             val_fn: None,
@@ -225,17 +441,17 @@ impl Token {
         Token {
             // The canonical sentinel has no public token name; identity is
             // carried by tin -1 rather than a synthetic grammar token.
-            name: String::new(),
+            name: TokenText::default(),
             tin: -1,
             val: Value::Undefined,
-            src: String::new(),
+            src: TokenText::default(),
             len: 0,
             si: 0,
             pos: 0,
             ri: 1,
             ci: 1,
-            err: String::new(),
-            why: String::new(),
+            err: TokenText::default(),
+            why: TokenText::default(),
             use_data: HashMap::new(),
             ignored: None,
             val_fn: None,
@@ -247,7 +463,7 @@ impl Token {
     }
 
     pub fn bad(&mut self, err: &str) -> &mut Self {
-        self.err = err.to_string();
+        self.err = TokenText::from(err);
         self
     }
 
@@ -259,7 +475,7 @@ impl Token {
         err: &str,
         details: impl IntoIterator<Item = (String, Value)>,
     ) -> &mut Self {
-        self.err = err.to_string();
+        self.err = TokenText::from(err);
         for (key, value) in details {
             let previous = self.use_data.remove(&key).unwrap_or(Value::Undefined);
             self.use_data.insert(key, merge_detail(previous, value));

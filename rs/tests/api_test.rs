@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tabnas::{AltSpec, Rule, RuleName, RuleSpec, RuleState, Tabnas, Value, TIN_VL, TIN_ZZ};
+use tabnas::{
+    AltSpec, Rule, RuleName, RuleSpec, RuleState, Tabnas, TokenText, Value, TIN_VL, TIN_ZZ,
+};
 
 #[test]
 fn test_parse_primitives() {
@@ -343,4 +345,50 @@ fn a_snapshot_shares_the_rule_until_the_rule_is_written_to() {
         "with no snapshot outstanding, a write should not copy at all"
     );
     assert_eq!(rule.need, 3);
+}
+
+/// A token's text is held inline when it is short enough, which is
+/// what makes cloning a token cheap. The inline form reads its bytes
+/// back as UTF-8 without checking them, so the boundary between the
+/// two forms is pinned here: either side of the inline capacity, and
+/// multi-byte characters on both sides of it.
+#[test]
+fn token_text_reads_back_whatever_it_was_given() {
+    let cases = [
+        String::new(),
+        "1".to_string(),
+        "#NR".to_string(),
+        "a".repeat(21),
+        "a".repeat(22),
+        "a".repeat(23),
+        "a".repeat(200),
+        // Multi-byte, just inside and just outside the inline capacity.
+        "é".repeat(11),
+        "é".repeat(12),
+        "🙂".repeat(5),
+        "🙂".repeat(6),
+        "mixed é 🙂 text".to_string(),
+    ];
+    for case in cases {
+        let text = TokenText::from(case.as_str());
+        assert_eq!(text.as_str(), case, "as_str");
+        assert_eq!(&*text, case.as_str(), "deref");
+        assert_eq!(text.len(), case.len(), "byte length");
+        assert_eq!(text.is_empty(), case.is_empty(), "is_empty");
+        assert_eq!(text.to_string(), case, "display");
+        assert_eq!(format!("{text:?}"), format!("{case:?}"), "debug");
+        assert_eq!(text, case, "eq against String");
+        assert_eq!(text.clone(), text, "clone round-trips");
+        assert_eq!(text.chars().count(), case.chars().count(), "chars");
+    }
+
+    // Equality and hashing agree across the two representations.
+    let short = TokenText::from("x");
+    let long = TokenText::from("x".repeat(40).as_str());
+    assert_ne!(short, long);
+    let mut by_text: HashMap<TokenText, usize> = HashMap::new();
+    by_text.insert(short.clone(), 1);
+    by_text.insert(long.clone(), 2);
+    assert_eq!(by_text.get("x"), Some(&1));
+    assert_eq!(by_text.get("x".repeat(40).as_str()), Some(&2));
 }

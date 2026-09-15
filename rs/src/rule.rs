@@ -1321,7 +1321,7 @@ impl Rule {
                 bc: true,
                 ac: true,
                 need: 0,
-                node: node,
+                node,
                 child_node: Value::Undefined,
                 parent_rule: None,
                 child_rule: None,

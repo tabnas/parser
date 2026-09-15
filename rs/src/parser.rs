@@ -2684,7 +2684,7 @@ impl Parser {
                     }
                     let t0 = context.t.first().cloned();
                     let (src_token, si, ri, ci) = if let Some(t) = t0.as_ref() {
-                        (t.src.clone(), t.pos, t.ri, t.ci)
+                        (t.src.to_string(), t.pos, t.ri, t.ci)
                     } else {
                         (String::new(), src.len(), 1, 1)
                     };
@@ -2741,7 +2741,7 @@ impl Parser {
                     let token = context.t.first().cloned();
                     let (source, pos, row, col) = token.as_ref().map_or_else(
                         || (String::new(), src.chars().count(), 1, 1),
-                        |value| (value.src.clone(), value.pos, value.ri, value.ci),
+                        |value| (value.src.to_string(), value.pos, value.ri, value.ci),
                     );
                     let code = token.as_ref().map_or("unexpected", deferred_error_code);
                     let error = TabnasError::new(code, source, src, pos, row, col);
@@ -2807,7 +2807,7 @@ impl Parser {
                 } else {
                     "unexpected"
                 };
-                let error = TabnasError::new(code, &t0.src, src, t0.pos, t0.ri, t0.ci);
+                let error = TabnasError::new(code, &*t0.src, src, t0.pos, t0.ri, t0.ci);
                 let error = self.attach_error(
                     error,
                     &current_rule,
@@ -2839,7 +2839,14 @@ impl Parser {
             let error = token.map_or_else(
                 || TabnasError::new("unexpected", "", src, 0, 1, 1),
                 |token| {
-                    TabnasError::new("unexpected", &token.src, src, token.pos, token.ri, token.ci)
+                    TabnasError::new(
+                        "unexpected",
+                        &*token.src,
+                        src,
+                        token.pos,
+                        token.ri,
+                        token.ci,
+                    )
                 },
             );
             if mode.recovering {
@@ -2900,8 +2907,8 @@ fn error_token(error: &TabnasError) -> Token {
             ci: error.col,
         },
     );
-    token.err = error.code.clone();
-    token.why = error.code.clone();
+    token.err = crate::TokenText::from(error.code.as_str());
+    token.why = token.err.clone();
     token
 }
 
@@ -3480,19 +3487,19 @@ fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
     if path.is_empty() {
         let mut value = IndexMap::new();
         value.insert("tin".into(), Value::Number(token.tin as f64));
-        value.insert("name".into(), Value::String(token.name.clone()));
-        value.insert("src".into(), Value::String(token.src.clone()));
+        value.insert("name".into(), Value::String(token.name.to_string()));
+        value.insert("src".into(), Value::String(token.src.to_string()));
         value.insert("val".into(), token.val.clone());
-        value.insert("why".into(), Value::String(token.why.clone()));
+        value.insert("why".into(), Value::String(token.why.to_string()));
         return Some(Value::Object(value));
     }
     let (field, rest) = path.split_first()?;
     let value = match field.as_str() {
         "tin" => Value::Number(token.tin as f64),
-        "name" => Value::String(token.name.clone()),
-        "src" => Value::String(token.src.clone()),
+        "name" => Value::String(token.name.to_string()),
+        "src" => Value::String(token.src.to_string()),
         "val" => token.val.clone(),
-        "why" => Value::String(token.why.clone()),
+        "why" => Value::String(token.why.to_string()),
         _ => return None,
     };
     value_path(value, rest)

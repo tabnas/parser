@@ -29,8 +29,8 @@ fn render_token(token: &Token, fields: &[JsonValue]) -> String {
     fields
         .iter()
         .map(|field| match field.as_str().unwrap_or_default() {
-            "name" => token.name.clone(),
-            "src" => token.src.clone(),
+            "name" => token.name.to_string(),
+            "src" => token.src.to_string(),
             "si" => token.si.to_string(),
             "ri" => token.ri.to_string(),
             "ci" => token.ci.to_string(),

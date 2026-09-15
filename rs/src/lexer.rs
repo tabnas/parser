@@ -166,10 +166,10 @@ impl<'a> Lexer<'a> {
     /// Construct a token from a point captured before cursor advancement.
     pub fn token(
         &self,
-        name: impl Into<String>,
+        name: impl AsRef<str>,
         tin: crate::Tin,
         value: Value,
-        source: impl Into<String>,
+        source: impl Into<crate::TokenText>,
         point: Point,
     ) -> Token {
         Token::new(name, tin, value, source, point)
@@ -192,7 +192,7 @@ impl<'a> Lexer<'a> {
             .peek()
             .map_or_else(String::new, |character| character.to_string());
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = why.into();
+        token.err = crate::TokenText::from(why.into());
         token.why = token.err.clone();
         token
     }
@@ -218,7 +218,7 @@ impl<'a> Lexer<'a> {
                 .map_or_else(String::new, |character| character.to_string())
         };
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = why.into();
+        token.err = crate::TokenText::from(why.into());
         token.why = token.err.clone();
         token
     }
@@ -1258,7 +1258,7 @@ impl<'a> Lexer<'a> {
                 let token = matcher.run_imperative(self);
                 self.restore(saved);
                 self.want = wanted;
-                token.map(|token| token.src)
+                token.map(|token| token.src.to_string())
             });
             let remainder = &self.src[self.byte_position()..];
             let suffix =

@@ -18,7 +18,7 @@ fn lex_subscribers_see_ignored_trivia_and_the_active_rule() {
         seen_subscriber
             .lock()
             .unwrap()
-            .push((token.name.clone(), rule.name.to_string()));
+            .push((token.name.to_string(), rule.name.to_string()));
     });
     assert_eq!(parser.parse("a b").unwrap_err().code, "unexpected");
     assert!(seen

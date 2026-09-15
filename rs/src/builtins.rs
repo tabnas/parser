@@ -410,7 +410,7 @@ pub(crate) fn run_builtin_action_with_info(
             if let Some(t0) = rule.o0() {
                 let key = match &t0.val {
                     Value::String(s) => s.clone(),
-                    _ => t0.src.clone(),
+                    _ => t0.src.to_string(),
                 };
                 rule.u_mut().insert("key".to_string(), Value::String(key));
             }
