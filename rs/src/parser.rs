@@ -2405,11 +2405,11 @@ impl Parser {
                 let mut completed_value = None;
                 if let Some(ref push_name) = push_name {
                     let push_shared = self.interned(push_name);
-                    let mut child =
-                        Rule::with_shared_node(push_shared.clone(), current_rule.node.clone());
-                    if let Some(child_spec) = self.rules.get(push_name) {
-                        child.bind_spec(child_spec, push_shared.clone());
-                    }
+                    let mut child = Rule::bound(
+                        push_shared.clone(),
+                        current_rule.node.clone(),
+                        self.rules.get(push_name),
+                    );
                     child.i = next_rule_id;
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
@@ -2458,11 +2458,11 @@ impl Parser {
                     current_rule = child;
                 } else if let Some(ref replace_name) = replace_name {
                     let replace_shared = self.interned(replace_name);
-                    let mut next =
-                        Rule::with_shared_node(replace_shared.clone(), current_rule.node.clone());
-                    if let Some(next_spec) = self.rules.get(replace_name) {
-                        next.bind_spec(next_spec, replace_shared.clone());
-                    }
+                    let mut next = Rule::bound(
+                        replace_shared.clone(),
+                        current_rule.node.clone(),
+                        self.rules.get(replace_name),
+                    );
                     next.i = next_rule_id;
                     next_rule_id += 1;
                     next.d = current_rule.d;

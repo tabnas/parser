@@ -1262,6 +1262,16 @@ fn empty_values() -> Rc<HashMap<String, Value>> {
     EMPTY.with(Rc::clone)
 }
 
+/// The matched-token lists start empty and are replaced wholesale when an
+/// alternate matches, so every rule created allocated two `Rc` boxes for two
+/// vectors that never grew. Shared like the counter and value bags above.
+fn empty_tokens() -> Rc<Vec<Token>> {
+    thread_local! {
+        static EMPTY: Rc<Vec<Token>> = Rc::new(Vec::new());
+    }
+    EMPTY.with(Rc::clone)
+}
+
 impl Rule {
     /// Mutable access to the per-rule counters and state. Copies only when
     /// a snapshot is still holding the current value.
@@ -1301,8 +1311,8 @@ impl Rule {
                 n: empty_counters(),
                 u: empty_values(),
                 k: empty_values(),
-                o: Rc::new(Vec::new()),
-                c: Rc::new(Vec::new()),
+                o: empty_tokens(),
+                c: empty_tokens(),
             }),
             parent_node: None,
             child_node: Value::Undefined,
@@ -1312,8 +1322,27 @@ impl Rule {
     }
 
     pub fn with_shared_node(name: impl Into<RuleName>, node: Rc<RefCell<Value>>) -> Self {
-        let name: RuleName = name.into();
-        let spec = Arc::new(RuleSpec::new(name.as_str()));
+        Self::bound(name.into(), node, None)
+    }
+
+    /// Build a rule already bound to its installed spec.
+    ///
+    /// An unbound rule reports its own name through `spec.name`, so building
+    /// one with no spec has to invent a placeholder `RuleSpec` carrying that
+    /// name: a `String` and an `Arc` box. Every push and replace in the parse
+    /// loop then bound the installed spec straight over the placeholder, so
+    /// both were allocated and freed once per rule step for nothing. The
+    /// placeholder is still built for a name that names no installed rule,
+    /// which is the case it exists for.
+    pub(crate) fn bound(
+        name: RuleName,
+        node: Rc<RefCell<Value>>,
+        installed: Option<&Arc<RuleSpec>>,
+    ) -> Self {
+        let spec = match installed {
+            Some(spec) => Arc::clone(spec),
+            None => Arc::new(RuleSpec::new(name.as_str())),
+        };
         Rule {
             shared: Rc::new(RuleSnapshot {
                 i: 0,
@@ -1335,8 +1364,8 @@ impl Rule {
                 n: empty_counters(),
                 u: empty_values(),
                 k: empty_values(),
-                o: Rc::new(Vec::new()),
-                c: Rc::new(Vec::new()),
+                o: empty_tokens(),
+                c: empty_tokens(),
             }),
             parent_node: None,
             child_node: Value::Undefined,
