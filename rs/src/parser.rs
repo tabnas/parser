@@ -1619,6 +1619,9 @@ impl Parser {
             let mut matched_alt_idx: Option<usize> = None;
             let mut matched_count = 0;
             let mut matched_seed = AltMatch::default();
+            // The winning alternate's matched tokens, when they are known to
+            // still describe `context.t`. See the assignment below.
+            let mut matched_tokens: Option<Rc<Vec<Token>>> = None;
 
             for (idx, alt) in alts.iter().enumerate() {
                 if !groups_enabled(alt, &self.options) {
@@ -1806,6 +1809,18 @@ impl Parser {
                         matched_alt_idx = Some(idx);
                         matched_count = s_len;
                         matched_seed = candidate_match;
+                        // `tokens` is `context.t[..s_len]`, which is what the
+                        // matched-token copy after this loop rebuilds from
+                        // the same buffer. Between building it and here, the
+                        // only things holding a `&mut Context` are the two
+                        // condition callbacks, so without them the rebuild
+                        // cannot differ and the vector below is reused
+                        // instead of allocated and cloned a second time.
+                        // `break` leaves the loop before the relex undo, so
+                        // that cannot restore `context.t` underneath either.
+                        if alt.c_fn.is_none() && alt.c_match.is_none() {
+                            matched_tokens = Some(Rc::clone(&tokens));
+                        }
                         break;
                     }
                 }
@@ -1827,12 +1842,13 @@ impl Parser {
 
             if let Some(idx) = matched_alt_idx {
                 // Copy matched tokens
-                let matched_tokens: Vec<Token> =
-                    context.t.iter().take(matched_count).cloned().collect();
+                let matched_tokens = matched_tokens.unwrap_or_else(|| {
+                    Rc::new(context.t.iter().take(matched_count).cloned().collect())
+                });
                 if is_open {
-                    current_rule.o = Rc::new(matched_tokens);
+                    current_rule.o = matched_tokens;
                 } else {
-                    current_rule.c = Rc::new(matched_tokens);
+                    current_rule.c = matched_tokens;
                 }
 
                 // Compatibility modifier for the original two-argument Rust
