@@ -63,6 +63,49 @@ impl From<ActionError> for TabnasError {
     }
 }
 
+/// Debug-only equality between a retained snapshot and the rule it describes.
+/// It covers the state a snapshot copies by value; `node` is shared through
+/// an `Rc`, and the rule links are snapshots in their own right, so neither
+/// can drift.
+#[cfg(debug_assertions)]
+fn same_rule(snapshot: &crate::RuleSnapshot, rule: &Rule) -> bool {
+    snapshot.i == rule.i
+        && snapshot.d == rule.d
+        && snapshot.name == rule.name
+        && snapshot.state == rule.state
+        && snapshot.need == rule.need
+        && snapshot.bo == rule.bo
+        && snapshot.ao == rule.ao
+        && snapshot.bc == rule.bc
+        && snapshot.ac == rule.ac
+        && snapshot.child_node == rule.child_node
+        && snapshot.next_rule_name == rule.next_rule_name
+        && snapshot.n == rule.n
+        && snapshot.u == rule.u
+        && snapshot.k == rule.k
+        && snapshot.o == rule.o
+        && snapshot.c == rule.c
+        && same_link(&snapshot.parent_rule, &rule.parent_rule)
+        && same_link(&snapshot.child_rule, &rule.child_rule)
+        && same_link(&snapshot.prev_rule, &rule.prev_rule)
+        && same_link(&snapshot.next_rule, &rule.next_rule)
+}
+
+/// The rule links are snapshots themselves, so identity is the question
+/// worth asking: a relinked frame points at a different snapshot, and
+/// comparing the pointers says so without walking the ancestry.
+#[cfg(debug_assertions)]
+fn same_link(
+    snapshot: &Option<std::rc::Rc<crate::RuleSnapshot>>,
+    rule: &Option<std::rc::Rc<crate::RuleSnapshot>>,
+) -> bool {
+    match (snapshot, rule) {
+        (None, None) => true,
+        (Some(left), Some(right)) => std::rc::Rc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
 /// Mutable state for one parse run.
 ///
 /// Consumed tokens are retained in `v` so actions can mark and rewind the
@@ -200,7 +243,46 @@ impl Context {
 
     pub(crate) fn set_active(&mut self, rule: &Rule, stack: &[Rule]) {
         self.set_rule(rule);
-        self.rule_stack = stack.iter().map(Rule::snapshot).collect();
+        self.sync_rule_stack(stack);
+    }
+
+    /// Bring `rule_stack` into step with the parse loop's ancestor stack.
+    ///
+    /// Rebuilding every entry here, which is what this used to do, costs one
+    /// deep snapshot per ancestor per loop iteration. A grammar whose rules
+    /// nest with the input pays that on every step, so a recogniser like the
+    /// even-palindrome one runs in O(n^2) where the TypeScript and Go engines
+    /// run in O(n) — they publish the stack as live rule handles and copy
+    /// nothing. Measured on a 16 KiB palindrome: 155 s before, 0.25 s after.
+    ///
+    /// A frame is only ever mutated while it is the rule the loop is working
+    /// on, and that rule is not in `stack` — it is passed separately and
+    /// re-snapshotted every call. So a frame's snapshot, taken when the frame
+    /// was pushed, still describes it for as long as it stays buried, and the
+    /// stack only needs the frames that left dropped and the frames that
+    /// arrived added.
+    ///
+    /// That is a claim about the whole parse loop, including its recovery
+    /// paths, so it is checked rather than asserted in prose: the debug
+    /// assertion below compares every retained frame against the live rule it
+    /// describes, on every call, and the test suite runs with debug
+    /// assertions on. A frame mutated in place — new `u`, a relinked
+    /// `child_rule` — fails it.
+    fn sync_rule_stack(&mut self, stack: &[Rule]) {
+        self.rule_stack.truncate(stack.len());
+        for rule in &stack[self.rule_stack.len()..] {
+            self.rule_stack.push(rule.snapshot());
+        }
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(
+                self.rule_stack
+                    .iter()
+                    .zip(stack)
+                    .all(|(snapshot, rule)| same_rule(snapshot, rule)),
+                "the incremental rule stack drifted from the live parse stack"
+            );
+        }
     }
 
     pub(crate) fn set_rule(&mut self, rule: &Rule) {

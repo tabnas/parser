@@ -365,3 +365,93 @@ fn typed_parent_context_seeds_meta_and_plugin_state_only() {
     assert_eq!(Some(&Value::Bool(true)), u.get("seeded"));
     assert_eq!(0, errors);
 }
+
+/// `context.rule_stack` has to describe the ancestors as they are now, at
+/// every depth, on the way down and on the way back up. The engine keeps
+/// that stack incrementally rather than re-snapshotting every ancestor on
+/// every parse step, so this walks a grammar that nests once per token and
+/// reads each frame's own `u` — the per-rule state a stale ancestor
+/// snapshot would report from an earlier step.
+#[test]
+fn the_rule_stack_describes_every_ancestor_at_its_current_state() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let record = |seen: Arc<Mutex<Vec<String>>>, phase: &'static str| {
+        move |_rule: &mut Rule, context: &mut tabnas::Context| {
+            let frames = context
+                .rule_stack
+                .iter()
+                .map(|frame| {
+                    let mark = match frame.u.get("mark") {
+                        Some(Value::Number(number)) => number.to_string(),
+                        _ => "-".to_string(),
+                    };
+                    format!("{}:{mark}", frame.name)
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            seen.lock().unwrap().push(format!("{phase} {frames}"));
+        }
+    };
+
+    let mut tabnas = Tabnas::new();
+    tabnas.options.rule.start = "top".into();
+    tabnas.define_rule("top", |rule| {
+        rule.add_open(AltSpec {
+            p: Some("node".into()),
+            ..Default::default()
+        })
+        .add_close(AltSpec {
+            s: vec![vec![tabnas::TIN_ZZ]],
+            ..Default::default()
+        });
+    });
+    tabnas.define_rule("node", {
+        let seen = seen.clone();
+        move |rule| {
+            let mut descend = AltSpec {
+                s: vec![vec![TIN_NR]],
+                p: Some("node".into()),
+                ..Default::default()
+            };
+            // Each frame stamps its own token value, so a frame reported
+            // with another frame's mark is a stale snapshot.
+            descend.add_action(|rule, _context| {
+                let mark = rule.o.first().map_or(Value::Undefined, |o| o.val.clone());
+                rule.u.insert("mark".into(), mark);
+            });
+            descend.add_action(record(seen.clone(), "open"));
+            let mut close = AltSpec::default();
+            close.add_action(record(seen.clone(), "close"));
+            rule.add_open(descend)
+                .add_open(AltSpec::default())
+                .add_close(close);
+        }
+    });
+
+    tabnas.parse("1 2 3").expect("nested parse");
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.iter()
+            .filter(|entry| entry.starts_with("open"))
+            .collect::<Vec<_>>(),
+        [
+            "open top:-",
+            "open top:- node:1",
+            "open top:- node:1 node:2"
+        ],
+    );
+    // Unwinding reports the same frames, still carrying their own marks.
+    assert_eq!(
+        seen.iter()
+            .filter(|entry| entry.starts_with("close"))
+            .collect::<Vec<_>>(),
+        [
+            "close top:- node:1 node:2 node:3",
+            "close top:- node:1 node:2",
+            "close top:- node:1",
+            "close top:-",
+        ],
+    );
+}
