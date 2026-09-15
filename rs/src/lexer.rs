@@ -181,7 +181,7 @@ impl<'a> Lexer<'a> {
             .peek()
             .map_or_else(String::new, |character| character.to_string());
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = crate::TokenText::from(why.into());
+        token.err = crate::TokenCode::from(why.into());
         token.why = token.err.clone();
         token
     }
@@ -207,7 +207,7 @@ impl<'a> Lexer<'a> {
                 .map_or_else(String::new, |character| character.to_string())
         };
         let mut token = Token::new("#BD", TIN_BD, Value::Undefined, source, point);
-        token.err = crate::TokenText::from(why.into());
+        token.err = crate::TokenCode::from(why.into());
         token.why = token.err.clone();
         token
     }

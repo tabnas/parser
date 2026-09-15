@@ -299,6 +299,165 @@ impl From<TokenText> for String {
     }
 }
 
+/// A token's diagnostic code, held behind a pointer.
+///
+/// `err` and `why` are empty on virtually every token of every parse, and a
+/// `Token` is moved and cloned several times per input construct. Carried
+/// inline as `TokenText` the pair took 48 of the token's 248 bytes. Padding
+/// `Token` by those 32 bytes measured 1.2% to 3.8% across the benchmark
+/// rows, which is what carrying them inline was costing; behind a pointer
+/// the pair costs 16 bytes and one allocation on the error path, which is
+/// already the expensive one.
+///
+/// The surface matches `TokenText`, so reading code does not change: it
+/// derefs, compares and prints as `str`, and an absent code reads as the
+/// empty string. Setting one to `""` stores nothing, so `is_empty` answers
+/// the same question either way.
+#[derive(Clone, Default)]
+pub struct TokenCode(Option<Box<TokenText>>);
+
+impl TokenCode {
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            Some(text) => text.as_str(),
+            None => "",
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn build(text: &str) -> Self {
+        TokenCode((!text.is_empty()).then(|| Box::new(TokenText::from(text))))
+    }
+}
+
+impl Eq for TokenCode {}
+
+impl PartialEq for TokenCode {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl std::hash::Hash for TokenCode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state)
+    }
+}
+
+impl PartialOrd for TokenCode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TokenCode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl std::ops::Deref for TokenCode {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for TokenCode {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for TokenCode {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for TokenCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Printed as the bare text, like `TokenText`.
+impl fmt::Debug for TokenCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl PartialEq<str> for TokenCode {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for TokenCode {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for TokenCode {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<TokenCode> for str {
+    fn eq(&self, other: &TokenCode) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<TokenCode> for &str {
+    fn eq(&self, other: &TokenCode) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<TokenCode> for String {
+    fn eq(&self, other: &TokenCode) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl From<&str> for TokenCode {
+    fn from(text: &str) -> Self {
+        TokenCode::build(text)
+    }
+}
+
+impl From<String> for TokenCode {
+    fn from(text: String) -> Self {
+        TokenCode::build(text.as_str())
+    }
+}
+
+impl From<&String> for TokenCode {
+    fn from(text: &String) -> Self {
+        TokenCode::build(text.as_str())
+    }
+}
+
+impl From<TokenText> for TokenCode {
+    fn from(text: TokenText) -> Self {
+        TokenCode((!text.is_empty()).then(|| Box::new(text)))
+    }
+}
+
+impl From<TokenCode> for String {
+    fn from(text: TokenCode) -> Self {
+        text.as_str().to_string()
+    }
+}
+
 /// A single lexical token produced by the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
@@ -312,8 +471,8 @@ pub struct Token {
     pub pos: usize,
     pub ri: usize,
     pub ci: usize,
-    pub err: TokenText,
-    pub why: TokenText,
+    pub err: TokenCode,
+    pub why: TokenCode,
     /// Plugin diagnostic details, boxed and absent until something
     /// writes one. Prefer `use_data()` and `use_data_mut()` to reaching
     /// through the `Option`; the shape is public only so that a `Token`
@@ -342,8 +501,8 @@ impl Default for Token {
             pos: 0,
             ri: 1,
             ci: 1,
-            err: TokenText::default(),
-            why: TokenText::default(),
+            err: TokenCode::default(),
+            why: TokenCode::default(),
             use_data: None,
             ignored: None,
             val_fn: None,
@@ -371,8 +530,8 @@ impl Token {
             pos: pnt.pos,
             ri: pnt.ri,
             ci: pnt.ci,
-            err: TokenText::default(),
-            why: TokenText::default(),
+            err: TokenCode::default(),
+            why: TokenCode::default(),
             use_data: None,
             ignored: None,
             val_fn: None,
@@ -406,8 +565,8 @@ impl Token {
             pos: 0,
             ri: 1,
             ci: 1,
-            err: TokenText::default(),
-            why: TokenText::default(),
+            err: TokenCode::default(),
+            why: TokenCode::default(),
             use_data: None,
             ignored: None,
             val_fn: None,
@@ -419,7 +578,7 @@ impl Token {
     }
 
     pub fn bad(&mut self, err: &str) -> &mut Self {
-        self.err = TokenText::from(err);
+        self.err = TokenCode::from(err);
         self
     }
 
@@ -431,7 +590,7 @@ impl Token {
         err: &str,
         details: impl IntoIterator<Item = (String, Value)>,
     ) -> &mut Self {
-        self.err = TokenText::from(err);
+        self.err = TokenCode::from(err);
         for (key, value) in details {
             let details = self.use_data_mut();
             let previous = details.remove(&key).unwrap_or(Value::Undefined);

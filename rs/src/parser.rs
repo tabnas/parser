@@ -2949,7 +2949,7 @@ fn error_token(error: &TabnasError) -> Token {
             ci: error.col,
         },
     );
-    token.err = crate::TokenText::from(error.code.as_str());
+    token.err = crate::TokenCode::from(error.code.as_str());
     token.why = token.err.clone();
     token
 }
