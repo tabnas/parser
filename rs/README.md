@@ -138,6 +138,31 @@ ignored. See
 gates; the implementation has intentionally advanced beyond that document's
 v0.1 scope.
 
+## Building a release that uses this
+
+The engine is a separate crate from whatever links it, so nothing in it
+can be inlined into your code unless your binary asks for that. Put this
+in the release profile of the crate that builds the final artefact:
+
+```toml
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+```
+
+`lto` is the one that matters and the one that is not on by default.
+Without it, `tabnas/measure` records this port as **1.10x to 1.15x
+slower on every case**: more than all but two of the twenty
+optimisations in the engine's own history are worth individually. Go's
+compiler inlines across packages within a binary by default and V8
+inlines across module boundaries at runtime, so this is the flag that
+puts a Rust consumer on the same footing rather than an unusual
+tuning.
+
+A library cannot set a profile for its consumers, which is why this is
+written down rather than configured.
+
 ## Development
 
 ```sh
