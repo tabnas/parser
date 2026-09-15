@@ -1679,23 +1679,33 @@ impl Parser {
                 }
 
                 if alt_matches {
-                    let mut candidate = current_rule.clone();
-                    let tokens: Vec<Token> = context.t.iter().take(s_len).cloned().collect();
-                    if is_open {
-                        candidate.o = Rc::new(tokens);
-                    } else {
-                        candidate.c = Rc::new(tokens);
-                    }
-                    if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
-                        || !conditions_match(&alt.c, &candidate, &stack)
-                    {
-                        alt_matches = false;
+                    let tokens: Rc<Vec<Token>> =
+                        Rc::new(context.t.iter().take(s_len).cloned().collect());
+                    // The declarative conditions are the only readers of a
+                    // candidate rule; the callback tiers below run against
+                    // `current_rule` itself, after its matched tokens are in
+                    // place. Most alternates declare no declarative
+                    // condition, and cloning a whole rule to answer a
+                    // question nobody asks was the parse loop's largest
+                    // single copy.
+                    if alt.c_ref.is_some() || !alt.c.is_empty() {
+                        let mut candidate = current_rule.clone();
+                        if is_open {
+                            candidate.o = Rc::clone(&tokens);
+                        } else {
+                            candidate.c = Rc::clone(&tokens);
+                        }
+                        if !builtin_condition_matches(alt.c_ref.as_deref(), &candidate)
+                            || !conditions_match(&alt.c, &candidate, &stack)
+                        {
+                            alt_matches = false;
+                        }
                     }
                     if alt_matches {
                         if is_open {
-                            current_rule.o = Rc::clone(&candidate.o);
+                            current_rule.o = Rc::clone(&tokens);
                         } else {
-                            current_rule.c = Rc::clone(&candidate.c);
+                            current_rule.c = Rc::clone(&tokens);
                         }
                         if let Some(condition) = &alt.c_fn {
                             context.set_rule(&current_rule);
@@ -3209,6 +3219,13 @@ fn continuation_tins(
 }
 
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
+    // With neither an include nor an exclude list there is nothing to
+    // test against, so every alternate is enabled whatever groups it
+    // declares. That is the usual case, and it is asked once per
+    // alternate per iteration.
+    if options.rule.include.is_empty() && options.rule.exclude.is_empty() {
+        return true;
+    }
     let groups: Vec<&str> = alt
         .g
         .split(',')
