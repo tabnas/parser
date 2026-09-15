@@ -8,7 +8,7 @@ use crate::token::{
 use crate::value::Value;
 use regex::Regex;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct Lexer<'a> {
     src: &'a str,
@@ -18,7 +18,7 @@ pub struct Lexer<'a> {
     idx: usize,
     ri: usize,
     ci: usize,
-    options: Rc<Options>,
+    options: Arc<Options>,
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
@@ -52,23 +52,15 @@ enum CheckFlow {
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
         // A lexer built directly may be handed options nobody has
-        // ordered yet, so it orders them before taking ownership. The
-        // parser's own lexer comes through `with_shared`, which skips
-        // this because `Parser::new` has already done it.
-        options
-            .match_tokens
-            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
-        options.match_values.sort_keys();
-        options.lex.matchers.sort_by(|name_a, left, name_b, right| {
-            left.order
-                .total_cmp(&right.order)
-                .then_with(|| name_a.cmp(name_b))
-        });
-        Self::with_shared(src, Rc::new(options))
+        // ordered yet. The parser's own lexer comes through
+        // `with_shared`, whose options were ordered when they were
+        // prepared.
+        options.sort_for_lexing();
+        Self::with_shared(src, Arc::new(options))
     }
 
     /// Lex against options the parser already owns and has ordered.
-    pub(crate) fn with_shared(src: &'a str, options: Rc<Options>) -> Self {
+    pub(crate) fn with_shared(src: &'a str, options: Arc<Options>) -> Self {
         let mut chars = Vec::new();
         let mut byte_indices = Vec::new();
         for (b_idx, c) in src.char_indices() {
@@ -172,7 +164,7 @@ impl<'a> Lexer<'a> {
 
     /// Resolve or allocate a token identity in this lexer's configuration.
     pub fn token_tin(&mut self, name: impl Into<String>) -> crate::Tin {
-        Rc::make_mut(&mut self.options).register_token(name)
+        Arc::make_mut(&mut self.options).register_token(name)
     }
 
     /// Resolve a token identity back to its configured name.
@@ -603,7 +595,7 @@ impl<'a> Lexer<'a> {
                     self.options.rewind.history,
                     self.src,
                     Value::Undefined,
-                    Rc::clone(&self.options),
+                    Arc::clone(&self.options),
                     crate::InstanceInfo::default(),
                 ),
             ),

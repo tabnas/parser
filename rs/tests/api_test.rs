@@ -392,3 +392,40 @@ fn token_text_reads_back_whatever_it_was_given() {
     assert_eq!(by_text.get("x"), Some(&1));
     assert_eq!(by_text.get("x".repeat(40).as_str()), Some(&2));
 }
+
+/// The configuration a parse runs against is prepared once and reused,
+/// so the thing that has to be right is noticing when it changes.
+/// `options` is a public field callers write to directly, and a stale
+/// prepared copy would silently parse against the old configuration.
+#[test]
+fn configuration_changed_between_parses_takes_effect() {
+    let mut tn = Tabnas::make_json();
+    assert_eq!(tn.parse("1").unwrap(), Value::Number(1.0));
+
+    // A start rule that does not exist yields undefined rather than a
+    // parse, which is an unmistakable signal that the change was seen.
+    tn.options.rule.start = "no-such-rule".into();
+    assert_eq!(
+        tn.parse("1").unwrap(),
+        Value::Undefined,
+        "a start rule set after the first parse must be honoured"
+    );
+
+    tn.options.rule.start = "val".into();
+    assert_eq!(
+        tn.parse("1").unwrap(),
+        Value::Number(1.0),
+        "and changing it back must be honoured too"
+    );
+
+    // The lexer's configuration comes from the same prepared copy,
+    // so it has to notice too.
+    let mut lexing = Tabnas::make_json();
+    assert!(lexing.parse("[1,2]").is_ok());
+    lexing.options.rule.start = "".into();
+    assert_eq!(
+        lexing.parse("[1,2]").unwrap(),
+        Value::Undefined,
+        "clearing the start rule after a parse must be honoured"
+    );
+}

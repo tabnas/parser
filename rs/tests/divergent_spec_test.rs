@@ -49,7 +49,7 @@ fn lex_probe(input: &str, args: &JsonValue) -> String {
             return "INSTALL_ERROR".into();
         }
     }
-    let mut lexer = Lexer::new(input, tabnas.options);
+    let mut lexer = Lexer::new(input, tabnas.config());
     let at = args.get("at").and_then(JsonValue::as_u64).unwrap_or(0) as usize;
     let find = args.get("find").and_then(JsonValue::as_str);
     let fields = args["show"].as_array().expect("lex probe show array");

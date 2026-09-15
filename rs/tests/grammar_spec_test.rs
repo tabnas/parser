@@ -366,7 +366,7 @@ fn serialized_match_lex_switch_disables_custom_tokens() {
     parser
         .grammar_json(r##"{"options":{"match":{"lex":false,"token":{"#HI":"@/^hi/"}}}}"##)
         .unwrap();
-    let mut lexer = tabnas::lexer::Lexer::new("hi", parser.options);
+    let mut lexer = tabnas::lexer::Lexer::new("hi", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");
 }
 
@@ -376,7 +376,7 @@ fn explicitly_empty_string_chars_are_not_treated_as_unset() {
     parser
         .grammar_json(r#"{"options":{"string":{"chars":""}}}"#)
         .unwrap();
-    let mut lexer = tabnas::lexer::Lexer::new(r#""ab""#, parser.options);
+    let mut lexer = tabnas::lexer::Lexer::new(r#""ab""#, parser.config());
     let token = lexer.next_raw_token().unwrap();
     assert_eq!(token.name, "#TX");
     assert_eq!(token.src, r#""ab""#);
@@ -388,7 +388,7 @@ fn serialized_strict_escape_option_reaches_the_lexer() {
     parser
         .grammar_json(r#"{"options":{"string":{"allowUnknown":false,"escapeStrict":true}}}"#)
         .unwrap();
-    let mut lexer = tabnas::lexer::Lexer::new(r#""\x41""#, parser.options);
+    let mut lexer = tabnas::lexer::Lexer::new(r#""\x41""#, parser.config());
     assert_eq!(lexer.next_raw_token().unwrap_err().code, "unexpected");
 }
 
@@ -401,7 +401,7 @@ fn serialized_fixed_tokens_rebind_remove_and_clear() {
         )
         .unwrap();
 
-    let mut lexer = tabnas::lexer::Lexer::new(";@,", parser.options.clone());
+    let mut lexer = tabnas::lexer::Lexer::new(";@,", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().name, "#CA");
     assert_eq!(lexer.next_raw_token().unwrap().name, "#AT");
     assert_eq!(lexer.next_raw_token().unwrap().name, "#TX");

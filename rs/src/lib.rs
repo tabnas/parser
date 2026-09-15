@@ -15,6 +15,7 @@ pub mod parser;
 pub mod rule;
 mod text;
 pub mod token;
+mod tracked;
 pub mod utility;
 pub mod value;
 
@@ -204,7 +205,14 @@ pub struct Tabnas {
     /// Identifier of the instance this parser was derived from.
     pub parent_id: Option<String>,
     /// Resolved configuration used by the lexer and parser.
-    pub options: Options,
+    ///
+    /// Wrapped so that writing to it is noticed: the shared copy handed
+    /// to each parse is built once and reused until something takes a
+    /// mutable path to this. Reads and writes both work as they did.
+    pub options: crate::tracked::Tracked<Options>,
+    /// The `options` a parse gets, prepared once. Cloning a thirty-field
+    /// `Options` per `parse()` call was 7% of a small parse.
+    prepared_options: PreparedOptions,
     /// Accumulated option input before `config.modify` callbacks run. Keeping
     /// this separate prevents non-idempotent modifiers from compounding on
     /// each grammar overlay or derived instance.
@@ -281,7 +289,8 @@ impl Tabnas {
             id,
             parent_id: None,
             raw_options: options.clone(),
-            options,
+            options: crate::tracked::Tracked::new(options),
+            prepared_options: PreparedOptions::default(),
             rules: IndexMap::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
@@ -441,7 +450,7 @@ impl Tabnas {
         let mut raw_options = if self.options.config_modify.is_empty() {
             // Direct typed option mutation is part of the native Rust API.
             // With no modifier-created delta, the public tree is the source.
-            self.options.clone()
+            self.options.peek().clone()
         } else {
             self.raw_options.clone()
         };
@@ -559,7 +568,7 @@ impl Tabnas {
 
     /// Return an independent snapshot of the resolved configuration.
     pub fn config(&self) -> Options {
-        self.options.clone()
+        self.options.peek().clone()
     }
 
     /// Human-readable, deterministic description of this instance's public
@@ -725,7 +734,7 @@ impl Tabnas {
         modify: impl FnOnce(&mut Options),
     ) -> Result<&mut Self, PluginError> {
         let mut raw_options = if self.options.config_modify.is_empty() {
-            self.options.clone()
+            self.options.peek().clone()
         } else {
             self.raw_options.clone()
         };
@@ -733,7 +742,7 @@ impl Tabnas {
         let mut resolved = raw_options.clone();
         resolved.refresh_configuration().map_err(PluginError)?;
         self.raw_options = raw_options;
-        self.options = resolved;
+        *self.options = resolved;
         self.plugin_options = self.options.plugin.clone();
         self.emit_debug_config();
         Ok(self)
@@ -1426,7 +1435,7 @@ impl Tabnas {
     }
 
     fn parser(&self) -> Parser {
-        let mut p = Parser::new(self.options.clone());
+        let mut p = Parser::from_shared(self.prepared_options.get(&self.options));
         p.set_instance_info(InstanceInfo {
             id: self.id.clone(),
             parent_id: self.parent_id.clone(),
@@ -1694,5 +1703,40 @@ pub(crate) fn merge_plugin_values(base: Value, overlay: Value) -> Value {
             )
         }
         (_, overlay) => overlay,
+    }
+}
+
+/// One shared `Options` per configuration, rebuilt when the
+/// configuration changes and shared by every parse until it does.
+///
+/// A `Mutex` rather than a `RefCell` because `Tabnas` is `Send + Sync`
+/// and should stay that way, and `Arc` rather than `Rc` for the same
+/// reason. Both are per `parse()` call, not per token, which is why
+/// the atomics do not show up.
+#[derive(Default)]
+struct PreparedOptions(std::sync::Mutex<Option<(u64, Arc<Options>)>>);
+
+impl PreparedOptions {
+    fn get(&self, options: &crate::tracked::Tracked<Options>) -> Arc<Options> {
+        let generation = options.generation();
+        let mut slot = self.0.lock().expect("prepared options lock");
+        if let Some((prepared_at, ref prepared)) = *slot {
+            if prepared_at == generation {
+                return Arc::clone(prepared);
+            }
+        }
+        let mut prepared_value = options.peek().clone();
+        prepared_value.sort_for_lexing();
+        let prepared = Arc::new(prepared_value);
+        *slot = Some((generation, Arc::clone(&prepared)));
+        prepared
+    }
+}
+
+/// A cloned instance prepares its own; it does not inherit the
+/// original's, which may already be stale for it.
+impl Clone for PreparedOptions {
+    fn clone(&self) -> Self {
+        PreparedOptions::default()
     }
 }

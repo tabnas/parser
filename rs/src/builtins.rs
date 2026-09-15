@@ -228,12 +228,12 @@ fn list_push(node: &mut Value, value: Value) {
 /// This keeps the original public helper stable for embedders. Parser-owned
 /// execution uses [`run_builtin_action_with_info`] with its configured options.
 pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -> bool {
-    let options = std::rc::Rc::new(crate::Options::default());
+    let options = std::sync::Arc::new(crate::Options::default());
     let mut context = Context::new(
         options.rewind.history,
         "",
         Value::Undefined,
-        std::rc::Rc::clone(&options),
+        std::sync::Arc::clone(&options),
         crate::InstanceInfo::default(),
     );
     run_builtin_action_with_info(name, rule, &mut context, config, &InfoOptions::default())

@@ -270,7 +270,7 @@ impl Tabnas {
             // Native Rust callers can mutate the public typed tree directly.
             // With no modifier-produced delta, it is also the authoritative
             // raw option source for the next overlay.
-            self.raw_options = self.options.clone();
+            self.raw_options = self.options.peek().clone();
         }
         if grammar.clear {
             self.rules.clear();
@@ -283,7 +283,7 @@ impl Tabnas {
             resolved
                 .refresh_configuration()
                 .map_err(|error| GrammarError(format!("Grammar: {error}")))?;
-            self.options = resolved;
+            *self.options = resolved;
             self.plugin_options = self.options.plugin.clone();
         }
         if let Some(rules) = root.get("rule") {

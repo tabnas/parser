@@ -16,7 +16,7 @@ fn serialized_comment_suffix_callback_consumes_only_its_owned_prefix() {
         )
         .unwrap();
 
-    let mut lexer = Lexer::new("# body !ENDtail\n", parser.options);
+    let mut lexer = Lexer::new("# body !ENDtail\n", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().src, "# body !END");
     assert_eq!(lexer.next_raw_token().unwrap().src, "tail");
 }
@@ -33,7 +33,7 @@ fn invalid_callback_spans_are_ignored_without_cursor_mutation() {
         )
         .unwrap();
 
-    let mut lexer = Lexer::new("# body\n", parser.options);
+    let mut lexer = Lexer::new("# body\n", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().src, "# body");
     assert_eq!(lexer.next_raw_token().unwrap().name, "#LN");
 }
@@ -49,7 +49,7 @@ fn unknown_at_prefixed_suffix_remains_a_static_literal() {
         )
         .unwrap();
 
-    let mut lexer = Lexer::new("# body @literaltail\n", parser.options);
+    let mut lexer = Lexer::new("# body @literaltail\n", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().src, "# body @literal");
     assert_eq!(lexer.next_raw_token().unwrap().src, "tail");
 }
@@ -79,7 +79,7 @@ fn live_suffix_probe_sees_each_position_and_its_cursor_is_rolled_back() {
         )
         .unwrap();
 
-    let mut lexer = Lexer::new("#ab!ENDtail\n", parser.options);
+    let mut lexer = Lexer::new("#ab!ENDtail\n", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().src, "#ab!END");
     assert_eq!(lexer.point().pos, 7);
     assert_eq!(lexer.next_raw_token().unwrap().src, "tail");

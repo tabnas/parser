@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionError {
@@ -175,7 +176,7 @@ pub struct Context {
     /// has started. Each parse still gets the options as they stood when
     /// it began, so
     /// callbacks cannot mutate the shared parser configuration.
-    pub options: Rc<Options>,
+    pub options: Arc<Options>,
     /// Owning instance identity, installed plugins, and grammar names.
     pub instance: InstanceInfo,
     /// Snapshot of the current rule and its ancestor stack. The live rule is
@@ -207,7 +208,7 @@ impl Context {
         history_limit: Option<usize>,
         source: impl Into<String>,
         meta: Value,
-        options: Rc<Options>,
+        options: Arc<Options>,
         instance: InstanceInfo,
     ) -> Self {
         Self {

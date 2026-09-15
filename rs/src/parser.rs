@@ -67,7 +67,7 @@ pub struct Parser {
     /// Shared with the lexer, which never writes to them. Cloning a
     /// whole `Options` was 22% of a small parse, and it was happening
     /// twice.
-    pub options: Rc<Options>,
+    pub options: Arc<Options>,
     pub rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token.
@@ -130,22 +130,15 @@ impl ExpectedTins {
 impl Parser {
     pub fn new(options: Options) -> Self {
         let mut options = options;
-        // Sorted once here rather than once per lexer, which is what
-        // lets the lexer share these rather than copy them. TypeScript
-        // evaluates serialized token matchers in tin order; keep that
-        // deterministic even when callers assembled `Options` by
-        // mutating the public maps directly.
-        options
-            .match_tokens
-            .sort_by(|_, left, _, right| left.tin.cmp(&right.tin));
-        options.match_values.sort_keys();
-        options.lex.matchers.sort_by(|name_a, left, name_b, right| {
-            left.order
-                .total_cmp(&right.order)
-                .then_with(|| name_a.cmp(name_b))
-        });
+        options.sort_for_lexing();
+        Self::from_shared(Arc::new(options))
+    }
+
+    /// Parse against a configuration that is already prepared and
+    /// ordered, shared with every other parse of the same grammar.
+    pub fn from_shared(options: Arc<Options>) -> Self {
         Parser {
-            options: Rc::new(options),
+            options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
             names: HashMap::new(),
@@ -1335,7 +1328,7 @@ impl Parser {
             self.options.rewind.history,
             src,
             meta,
-            Rc::clone(&self.options),
+            Arc::clone(&self.options),
             self.instance.clone(),
         );
         if let Some(parent) = parent {
@@ -1370,7 +1363,7 @@ impl Parser {
             };
         }
 
-        let mut lexer = Lexer::with_shared(src, Rc::clone(&self.options));
+        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options));
 
         let start_name = self.options.rule.start.as_str();
         if !self.rules.contains_key(start_name) {
