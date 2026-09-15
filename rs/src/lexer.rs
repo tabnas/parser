@@ -297,7 +297,29 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Give any plugin matcher whose order is below `before` its turn.
+    ///
+    /// Nine sites in the lexer call this per token, once at each stage a
+    /// matcher is allowed to intervene. A grammar with no custom matcher,
+    /// which is most of them, was paying nine index lookups per token to be
+    /// told nine times that there is nothing to run. The guard is inline so
+    /// those sites skip the call itself; the walk stays out of line.
+    #[inline]
     fn run_custom_matchers(
+        &mut self,
+        index: &mut usize,
+        before: f64,
+        point: Point,
+        plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
+    ) -> Option<Token> {
+        if *index >= self.options.lex.matchers.len() {
+            return None;
+        }
+        self.run_remaining_custom_matchers(index, before, point, plugin)
+    }
+
+    #[inline(never)]
+    fn run_remaining_custom_matchers(
         &mut self,
         index: &mut usize,
         before: f64,
