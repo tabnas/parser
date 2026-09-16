@@ -23,7 +23,9 @@ pub struct Lexer<'a> {
     char_sets: crate::text::CharSets,
     err: Option<TabnasError>,
     end_reached: bool,
-    exclude_regex: Option<Regex>,
+    /// `number.exclude`, compiled once per grammar and shared by the
+    /// parser that owns it; see [`compile_number_exclude`].
+    exclude_regex: Option<Arc<Regex>>,
     want: Option<Vec<crate::Tin>>,
     standalone: Option<(crate::Rule, crate::Context)>,
 }
@@ -64,18 +66,39 @@ enum CheckFlow {
 /// caller of this crate sees the box.
 type LexResult<T> = Result<T, Box<TabnasError>>;
 
+/// The compiled form of `number.exclude`, or `None` when there is no
+/// pattern or it does not compile (an invalid pattern excludes nothing,
+/// as it always has).
+///
+/// Compiling a regex costs about 700K instructions, which is more than
+/// a small document costs to parse, so the parser compiles it once per
+/// grammar and hands every lexer the same automaton through the `Arc`.
+/// Cloning a `Regex` would not do: it shares the automaton but builds a
+/// fresh scratch-cache pool, and the first search from each clone fills
+/// it. Go and TypeScript compile the pattern once, at configuration time.
+pub(crate) fn compile_number_exclude(options: &Options) -> Option<Arc<Regex>> {
+    let pattern = options.number.exclude.as_deref()?;
+    Regex::new(pattern).ok().map(Arc::new)
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
         // A lexer built directly may be handed options nobody has
         // ordered yet. The parser's own lexer comes through
         // `with_shared`, whose options were ordered when they were
-        // prepared.
+        // prepared, and whose exclude pattern was compiled then too.
         options.sort_for_lexing();
-        Self::with_shared(src, Arc::new(options))
+        let exclude_regex = compile_number_exclude(&options);
+        Self::with_shared(src, Arc::new(options), exclude_regex)
     }
 
-    /// Lex against options the parser already owns and has ordered.
-    pub(crate) fn with_shared(src: &'a str, options: Arc<Options>) -> Self {
+    /// Lex against options the parser already owns and has ordered, with
+    /// the `number.exclude` pattern it compiled from them.
+    pub(crate) fn with_shared(
+        src: &'a str,
+        options: Arc<Options>,
+        exclude_regex: Option<Arc<Regex>>,
+    ) -> Self {
         let mut chars = Vec::new();
         let mut byte_indices = Vec::new();
         for (b_idx, c) in src.char_indices() {
@@ -83,12 +106,6 @@ impl<'a> Lexer<'a> {
             byte_indices.push(b_idx);
         }
         let char_len = chars.len();
-
-        let exclude_regex = if let Some(ref pat) = options.number.exclude {
-            Regex::new(pat).ok()
-        } else {
-            None
-        };
 
         Lexer {
             src,

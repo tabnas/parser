@@ -3,7 +3,7 @@
 use crate::builtins::run_builtin_action_with_info;
 use crate::context::{Context, ContextSeed, InstanceInfo};
 use crate::error::TabnasError;
-use crate::lexer::{Lexer, RelexCheckpoint};
+use crate::lexer::{compile_number_exclude, Lexer, RelexCheckpoint};
 use crate::options::Options;
 use crate::rule::{
     resolved_action_order, resolved_alt_action_order, ActionBinding, AltActionBinding, AltMatch,
@@ -69,6 +69,10 @@ pub struct Parser {
     /// twice.
     pub options: Arc<Options>,
     ignore_tins: Vec<Tin>,
+    /// `options.number.exclude` compiled once, here, and shared with
+    /// the lexer of every parse instead of compiled by each of them.
+    /// Derived from `options` exactly as `ignore_tins` is.
+    exclude_regex: Option<Arc<regex::Regex>>,
     /// Installed rules by name.
     ///
     /// Private, and read through [`Parser::rules`]. Two derived tables below
@@ -151,6 +155,7 @@ impl Parser {
     pub fn from_shared(options: Arc<Options>) -> Self {
         Parser {
             ignore_tins: options.ignore_tins(),
+            exclude_regex: compile_number_exclude(&options),
             options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
@@ -1405,7 +1410,8 @@ impl Parser {
             };
         }
 
-        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options));
+        let mut lexer =
+            Lexer::with_shared(src, Arc::clone(&self.options), self.exclude_regex.clone());
 
         let start_name = self.options.rule.start.as_str();
         if !self.rules.contains_key(start_name) {
