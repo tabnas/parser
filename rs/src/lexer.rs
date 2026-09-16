@@ -780,7 +780,20 @@ impl<'a> Lexer<'a> {
         }
 
         let remaining = &self.src[self.byte_position()..];
-        let custom = (self.options.match_lex && !match_skipped).then(|| {
+        // With no custom matcher there is nothing for the band to do: both
+        // passes walk an empty table and yield nothing, and `fix_len` is
+        // read only by that walk. Most grammars register none, and every
+        // token fetch of theirs paid the eager pass's scan of the fixed
+        // table (one closure call per fixed literal) to arrive at the
+        // `None` this guard now hands over directly. TS `makeMatchMatcher`
+        // returns null on an empty table (ts/src/lexer.ts) and the band is
+        // never installed; Go reaches the same place by defaulting
+        // `MatchLex` off unless `Options.Match` is set. Rust defaults
+        // `match_lex` true as TS does, so the guard is the parity.
+        let custom = (self.options.match_lex
+            && !match_skipped
+            && !self.options.match_tokens.is_empty())
+        .then(|| {
             // Two passes, position-expected before eager, as go/lexer.go
             // matchMatch and ts/src/lexer.ts makeMatchMatcher both make.
             // One tin-ordered pass in which eagerness merely bypassed the
@@ -808,23 +821,34 @@ impl<'a> Lexer<'a> {
             // literal, and an eager matcher that cuts further still
             // wins. TS and Go do the same, in makeMatchMatcher and
             // matchMatch.
-            let fix_len = if self.want.is_none() && self.options.fixed.lex {
-                expected_match_tins.map_or(0, |expected| {
-                    self.options
-                        .fixed
-                        .tokens
-                        .values()
-                        .filter(|token| {
-                            !token.source.is_empty()
-                                && expected.contains(&token.tin)
-                                && remaining.starts_with(&token.source)
-                        })
-                        .map(|token| token.source.len())
-                        .max()
-                        .unwrap_or(0)
-                })
-            } else {
-                0
+            //
+            // Computed once per fetch and only when a regex matcher in the
+            // eager pass has something to weigh against it, as TS
+            // `expectedFixedLen` does (`fixLen = -1` until asked). The
+            // scan is the whole fixed table against the slot's list; an
+            // expected matcher that wins in pass 0, or a fetch under a
+            // want, never needs it. Nothing the scan reads changes
+            // between the two passes, so lazy equals eager.
+            let mut fix_len: Option<usize> = None;
+            let compute_fix_len = || {
+                if self.want.is_none() && self.options.fixed.lex {
+                    expected_match_tins.map_or(0, |expected| {
+                        self.options
+                            .fixed
+                            .tokens
+                            .values()
+                            .filter(|token| {
+                                !token.source.is_empty()
+                                    && expected.contains(&token.tin)
+                                    && remaining.starts_with(&token.source)
+                            })
+                            .map(|token| token.source.len())
+                            .max()
+                            .unwrap_or(0)
+                    })
+                } else {
+                    0
+                }
             };
             let passes = if self.want.is_some() { 1 } else { 2 };
             (0..passes).find_map(|pass| {
@@ -851,7 +875,12 @@ impl<'a> Lexer<'a> {
                             // literal it cannot out-cut; the fixed
                             // matcher (2e6) runs next and takes it. See
                             // `fix_len` above.
-                            .filter(|found| pass == 0 || fix_len == 0 || found.len() > fix_len)
+                            .filter(|found| {
+                                pass == 0 || {
+                                    let fix_len = *fix_len.get_or_insert_with(compute_fix_len);
+                                    fix_len == 0 || found.len() > fix_len
+                                }
+                            })
                             .map(|found| {
                                 let source = found.as_str().to_string();
                                 (source.clone(), Value::String(source))
