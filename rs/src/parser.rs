@@ -71,8 +71,16 @@ pub struct Parser {
     ignore_tins: Vec<Tin>,
     /// `options.number.exclude` compiled once, here, and shared with
     /// the lexer of every parse instead of compiled by each of them.
-    /// Derived from `options` exactly as `ignore_tins` is.
+    ///
+    /// `options` is public, so this is a cache whose source has a second
+    /// writer: a caller on the low-level API may replace the whole `Arc`
+    /// between parses, and before this was cached each lexer compiled
+    /// whatever pattern was in force. `exclude_pattern` is the pattern
+    /// this regex was built from, and a parse whose options no longer
+    /// carry it compiles the one they do carry instead -- the old cost,
+    /// paid only by the callers who change the pattern under the parser.
     exclude_regex: Option<Arc<regex::Regex>>,
+    exclude_pattern: Option<String>,
     /// Installed rules by name.
     ///
     /// Private, and read through [`Parser::rules`]. Two derived tables below
@@ -156,6 +164,7 @@ impl Parser {
         Parser {
             ignore_tins: options.ignore_tins(),
             exclude_regex: compile_number_exclude(&options),
+            exclude_pattern: options.number.exclude.clone(),
             options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
@@ -1410,8 +1419,14 @@ impl Parser {
             };
         }
 
-        let mut lexer =
-            Lexer::with_shared(src, Arc::clone(&self.options), self.exclude_regex.clone());
+        // The cached regex is the one the parser was built with; use it
+        // only while the options still carry the pattern it came from.
+        let exclude_regex = if self.exclude_pattern == self.options.number.exclude {
+            self.exclude_regex.clone()
+        } else {
+            compile_number_exclude(&self.options)
+        };
+        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex);
 
         let start_name = self.options.rule.start.as_str();
         if !self.rules.contains_key(start_name) {

@@ -8,9 +8,10 @@
 // nothing rather than failing the parse.
 
 use serde_json::json;
+use std::sync::Arc;
 use tabnas::lexer::Lexer;
 use tabnas::options::Options;
-use tabnas::{Tabnas, Value, TIN_NR, TIN_TX};
+use tabnas::{AltSpec, Parser, RuleSpec, Tabnas, Value, TIN_NR, TIN_TX, TIN_ZZ};
 
 /// The JSON preset with its exclude pattern swapped for the one under
 /// test, and text lexing turned back on so that an excluded number can
@@ -120,4 +121,67 @@ fn lexer_built_directly_compiles_its_own_exclude() {
     let mut lexer = Lexer::new("01", Options::default());
     let no_pattern = lexer.next_raw_token().unwrap();
     assert_eq!(no_pattern.tin, TIN_NR, "without a pattern 01 is a number");
+}
+
+/// `Parser.options` is public, so a caller on the low-level API can
+/// replace it between parses. The pattern in force must be the one in
+/// `self.options` at the parse, not the one the parser happened to be
+/// built from: a cache derived from a public mutable field is a cache
+/// with a second writer, and this is the writer.
+#[test]
+fn exclude_follows_options_replaced_directly_on_the_parser() {
+    fn options_with(exclude: &str) -> Arc<Options> {
+        let mut options = Options::default();
+        options.number.exclude = Some(exclude.to_string());
+        options.text.lex = true;
+        options.string.allow_unknown = true;
+        options.rule.start = "val".into();
+        Arc::new(options)
+    }
+
+    fn val_rule() -> RuleSpec {
+        let mut val = RuleSpec::new("val");
+        // A hand-built rule carries no value into its node on its own;
+        // the action is what makes the matched token's value the result,
+        // and so what makes a number-versus-text outcome observable.
+        let take_value = |tin| {
+            let mut alt = AltSpec {
+                s: vec![vec![tin]],
+                ..Default::default()
+            };
+            alt.add_action(|rule, _context| {
+                if let Some(token) = rule.o0() {
+                    *rule.node.borrow_mut() = token.val.clone();
+                }
+            });
+            alt
+        };
+        val.open.push(take_value(TIN_NR));
+        val.open.push(take_value(TIN_TX));
+        val.close.push(AltSpec {
+            s: vec![vec![TIN_ZZ]],
+            ..Default::default()
+        });
+        val
+    }
+
+    let mut parser = Parser::from_shared(options_with(r"^0\d"));
+    parser.add_rule(val_rule());
+    assert_eq!(
+        parser.parse("01").expect("01 parses"),
+        Value::String("01".into()),
+        "the pattern the parser was built with excludes 01"
+    );
+
+    parser.options = options_with(r"^9");
+    assert_eq!(
+        parser.parse("01").expect("01 parses"),
+        Value::Number(1.0),
+        "the replaced options drop the old pattern"
+    );
+    assert_eq!(
+        parser.parse("99").expect("99 parses"),
+        Value::String("99".into()),
+        "and bring the new one"
+    );
 }
