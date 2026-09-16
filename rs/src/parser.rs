@@ -98,7 +98,16 @@ pub struct Parser {
     expected_tins: HashMap<String, ExpectedTins>,
     /// One shared copy of each installed rule's name, so pushing a rule
     /// clones a pointer rather than reallocating the name per push.
-    names: HashMap<String, RuleName>,
+    ///
+    /// Parallel to `rules`, indexed by position rather than keyed by the
+    /// name again: every route already has to find the rule's spec, and
+    /// `IndexMap::get_full` hands back that rule's index with it, so the
+    /// shared name costs an array index instead of a second hash of the
+    /// same bytes. `Parser::rules` is public and hands out the map itself,
+    /// which is why the handle lives beside the map rather than in it.
+    /// `add_rule` keeps the two in step; `IndexMap` gives a replaced key
+    /// back its existing index, so a replacement overwrites in place.
+    names: Vec<RuleName>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub matched_actions: HashMap<String, AltAction>,
@@ -168,7 +177,7 @@ impl Parser {
             options,
             rules: IndexMap::new(),
             expected_tins: HashMap::new(),
-            names: HashMap::new(),
+            names: Vec::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             matched_actions: HashMap::new(),
@@ -192,19 +201,27 @@ impl Parser {
     pub fn add_rule(&mut self, spec: RuleSpec) {
         self.expected_tins
             .insert(spec.name.clone(), ExpectedTins::of(&spec));
-        self.names
-            .insert(spec.name.clone(), RuleName::from(spec.name.as_str()));
-        self.rules.insert(spec.name.clone(), Arc::new(spec));
+        let shared = RuleName::from(spec.name.as_str());
+        let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
+        // A replacement keeps the key's index, so it overwrites its own
+        // name handle; a new rule is appended and takes the next slot.
+        match self.names.get_mut(index) {
+            Some(existing) => *existing = shared,
+            None => self.names.push(shared),
+        }
     }
 
-    /// The shared name for an installed rule. Names that no rule claims
-    /// still parse — the error path wants the name the grammar asked
-    /// for — so an unknown name gets its own allocation.
-    fn interned(&self, name: &str) -> RuleName {
-        match self.names.get(name) {
-            Some(shared) => shared.clone(),
-            None => RuleName::from(name),
-        }
+    /// Resolve a rule name to the shared name handle and the installed
+    /// spec in one lookup.
+    ///
+    /// Every route into a rule needs both, and used to hash the same
+    /// three-byte name three times over to get them: once to ask whether
+    /// the rule existed, once for the shared handle, once for the spec.
+    /// `get_full` answers all three at once -- absence, the index the
+    /// handle sits at, and the spec.
+    fn installed(&self, name: &str) -> Option<(RuleName, &Arc<RuleSpec>)> {
+        let (index, _, spec) = self.rules.get_full(name)?;
+        Some((self.names[index].clone(), spec))
     }
 
     pub fn add_action(&mut self, name: String, action: Action) {
@@ -1428,19 +1445,15 @@ impl Parser {
         };
         let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex);
 
+        // One lookup for the start rule: whether it exists, its shared
+        // name handle and the spec to bind, which used to be three.
         let start_name = self.options.rule.start.as_str();
-        if !self.rules.contains_key(start_name) {
+        let Some((start_shared, start_spec)) = self.installed(start_name) else {
             return Ok(Value::Undefined);
-        }
+        };
 
-        let start_shared = self.interned(start_name);
         let mut current_rule = Rule::new(start_shared.clone(), Value::Undefined);
-        current_rule.bind_spec(
-            self.rules
-                .get(start_name)
-                .expect("start rule existence was checked before construction"),
-            start_shared,
-        );
+        current_rule.bind_spec(start_spec, start_shared);
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
@@ -2425,59 +2438,68 @@ impl Parser {
                 // grammar-install time. Reject an unknown destination at the
                 // canonical point: after the matched action, but before any
                 // lifecycle after-action or transition.
-                let unknown_route = push_name
-                    .as_ref()
-                    .or(replace_name.as_ref())
-                    .filter(|name| !self.rules.contains_key(name.as_str()));
-                if let Some(name) = unknown_route {
-                    let mut token = Self::phase_token(&current_rule)
-                        .cloned()
-                        .or_else(|| context.t.first().cloned())
-                        .unwrap_or_else(Token::no_token);
-                    token.bad("unknown_rule");
-                    token
-                        .use_data_mut()
-                        .insert("rulename".into(), Value::String(name.clone()));
-                    let error = self.raised_token_error(
-                        &token,
-                        &current_rule,
-                        ParseSite {
-                            source: src,
-                            stack: &stack,
-                            alts,
-                        },
-                    );
-                    self.recover_error_pass(
-                        error,
-                        if is_open {
-                            RuleState::Open
-                        } else {
-                            RuleState::Close
-                        },
-                        done_alt,
-                        false,
-                        src,
-                        &mut current_rule,
-                        &mut stack,
-                        &mut context,
-                        &mut lexer,
-                        mode,
-                    )?;
-                    update_partial(mode, &root_node, &current_rule, &stack);
-                    continue 'parse;
-                }
+                //
+                // Resolving it here also settles the transition below: the
+                // arms take the shared name and the spec out of this one
+                // lookup rather than hashing the same name twice more.
+                // `push` wins over `replace` in the arms below, so this
+                // resolves whichever of the two the parse will take.
+                let mut route = match push_name.as_deref().or(replace_name.as_deref()) {
+                    Some(name) => match self.installed(name) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            let mut token = Self::phase_token(&current_rule)
+                                .cloned()
+                                .or_else(|| context.t.first().cloned())
+                                .unwrap_or_else(Token::no_token);
+                            token.bad("unknown_rule");
+                            token
+                                .use_data_mut()
+                                .insert("rulename".into(), Value::String(name.to_string()));
+                            let error = self.raised_token_error(
+                                &token,
+                                &current_rule,
+                                ParseSite {
+                                    source: src,
+                                    stack: &stack,
+                                    alts,
+                                },
+                            );
+                            self.recover_error_pass(
+                                error,
+                                if is_open {
+                                    RuleState::Open
+                                } else {
+                                    RuleState::Close
+                                },
+                                done_alt,
+                                false,
+                                src,
+                                &mut current_rule,
+                                &mut stack,
+                                &mut context,
+                                &mut lexer,
+                                mode,
+                            )?;
+                            update_partial(mode, &root_node, &current_rule, &stack);
+                            continue 'parse;
+                        }
+                    },
+                    None => None,
+                };
 
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
                 // The action still belongs to the rule whose alternate matched.
                 let completed_rule;
                 let mut completed_value = None;
-                if let Some(ref push_name) = push_name {
-                    let push_shared = self.interned(push_name);
+                if push_name.is_some() {
+                    let (push_shared, push_spec) =
+                        route.take().expect("a push route was resolved above");
                     let mut child = Rule::bound(
                         push_shared.clone(),
                         current_rule.node.clone(),
-                        self.rules.get(push_name),
+                        Some(push_spec),
                     );
                     child.i = next_rule_id;
                     next_rule_id += 1;
@@ -2525,12 +2547,13 @@ impl Parser {
                     completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
-                } else if let Some(ref replace_name) = replace_name {
-                    let replace_shared = self.interned(replace_name);
+                } else if replace_name.is_some() {
+                    let (replace_shared, replace_spec) =
+                        route.take().expect("a replace route was resolved above");
                     let mut next = Rule::bound(
                         replace_shared.clone(),
                         current_rule.node.clone(),
-                        self.rules.get(replace_name),
+                        Some(replace_spec),
                     );
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -3641,7 +3664,11 @@ mod tests {
         });
         parser.add_rule(first);
         assert_eq!(parser.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
-        assert_eq!(&*parser.names["val"], "val");
+        let slot = parser
+            .rules()
+            .get_index_of("val")
+            .expect("the rule was just installed");
+        assert_eq!(&*parser.names[slot], "val");
 
         let mut second = RuleSpec::new("val");
         second.open.push(AltSpec {
@@ -3656,6 +3683,13 @@ mod tests {
             [crate::TIN_ST],
             "lookahead would still expect the replaced rule's tokens"
         );
+        // The name table is positional now, so a replacement has to land on
+        // the index the map kept for the key rather than append beside it:
+        // an appended handle would leave `names` describing the wrong rule
+        // at every index past this one.
+        assert_eq!(parser.names.len(), 1, "one rule, one shared name");
+        assert_eq!(parser.rules().get_index_of("val"), Some(slot));
+        assert_eq!(&*parser.names[slot], "val");
     }
 
     /// `expected_match_tins` exists to gate the custom matchers, so with no
