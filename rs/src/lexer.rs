@@ -20,6 +20,7 @@ pub struct Lexer<'a> {
     ci: usize,
     options: Arc<Options>,
     ignore_tins: Vec<crate::Tin>,
+    char_sets: crate::text::CharSets,
     err: Option<TabnasError>,
     end_reached: bool,
     exclude_regex: Option<Regex>,
@@ -98,6 +99,7 @@ impl<'a> Lexer<'a> {
             ri: 1,
             ci: 1,
             ignore_tins: options.ignore_tins(),
+            char_sets: options.char_sets(),
             options,
             err: None,
             end_reached: false,
@@ -236,7 +238,7 @@ impl<'a> Lexer<'a> {
         if self.idx < self.char_len {
             let c = self.chars[self.idx];
             self.idx += 1;
-            if self.options.line.row_chars.contains(c) {
+            if self.char_sets.row.contains(c) {
                 self.ri += 1;
                 self.ci = 1;
             } else {
@@ -407,7 +409,7 @@ impl<'a> Lexer<'a> {
             return true;
         };
         let remaining = &self.src[self.byte_indices[index]..];
-        (self.options.space.lex && self.options.space.chars.contains(ch))
+        (self.options.space.lex && self.char_sets.space.contains(ch))
             || (self.options.fixed.lex
                 && self
                     .options
@@ -416,9 +418,7 @@ impl<'a> Lexer<'a> {
                     .values()
                     .any(|token| !token.source.is_empty() && remaining.starts_with(&token.source)))
             || (self.options.line.lex
-                && (self.options.line.chars.contains(ch)
-                    || self.options.line.fixed.contains(&ch)
-                    || matches!(ch, '\u{2028}' | '\u{2029}')))
+                && (self.char_sets.line_ends.contains(ch) || matches!(ch, '\u{2028}' | '\u{2029}')))
             || (self.options.comment.lex
                 && self.options.comment.definitions.values().any(|definition| {
                     definition.lex
@@ -959,11 +959,11 @@ impl<'a> Lexer<'a> {
         if self.options.space.lex
             && !space_skipped
             && self.wants(TIN_SP)
-            && self.options.space.chars.contains(c)
+            && self.char_sets.space.contains(c)
         {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
-                if self.options.space.chars.contains(ch) {
+                if self.char_sets.space.contains(ch) {
                     src.push(ch);
                     self.advance();
                 } else {
@@ -998,12 +998,12 @@ impl<'a> Lexer<'a> {
         if self.options.line.lex
             && !line_skipped
             && self.wants(TIN_LN)
-            && (self.options.line.chars.contains(c) || self.options.line.fixed.contains(&c))
+            && (self.char_sets.line_ends.contains(c))
         {
             let mut src = String::new();
             let mut seen = std::collections::HashSet::new();
             while let Some(ch) = self.peek() {
-                if !self.options.line.chars.contains(ch) && !self.options.line.fixed.contains(&ch) {
+                if !self.char_sets.line_ends.contains(ch) {
                     break;
                 }
                 if self.options.line.single && !seen.insert(ch) {
@@ -1060,7 +1060,7 @@ impl<'a> Lexer<'a> {
         if self.options.string.lex
             && !string_skipped
             && self.wants(TIN_ST)
-            && self.options.string.chars.contains(c)
+            && self.char_sets.string.contains(c)
         {
             let start = (self.idx, self.ri, self.ci);
             match self.match_string(c, pnt) {
@@ -1349,9 +1349,7 @@ impl<'a> Lexer<'a> {
             let Some(ch) = self.peek() else {
                 break;
             };
-            if definition.line
-                && (self.options.line.chars.contains(ch) || self.options.line.fixed.contains(&ch))
-            {
+            if definition.line && (self.char_sets.line_ends.contains(ch)) {
                 break;
             }
             src.push(self.advance().expect("comment body must advance"));
@@ -1372,7 +1370,7 @@ impl<'a> Lexer<'a> {
 
         if definition.eat_line && !terminated_by_suffix {
             while let Some(ch) = self.peek() {
-                if !self.options.line.chars.contains(ch) && !self.options.line.fixed.contains(&ch) {
+                if !self.char_sets.line_ends.contains(ch) {
                     break;
                 }
                 src.push(self.advance().expect("comment line tail must advance"));
@@ -1687,7 +1685,7 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
-            if self.options.line.chars.contains(c) {
+            if self.char_sets.line.contains(c) {
                 if self.options.string.multi_chars.contains(quote) {
                     raw_src.push(self.advance().expect("peeked character must advance"));
                     out_str.push(c);
