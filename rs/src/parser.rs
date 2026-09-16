@@ -1193,7 +1193,26 @@ impl Parser {
         out.into_iter().collect()
     }
 
+    /// The tins the rule can accept at `slot`, as the lexer's custom-matcher
+    /// gate wants them, or nothing when there is no custom matcher to gate.
+    ///
+    /// Both consumers (the `fix_len` filter and the expected-first pass in
+    /// `Lexer::next_raw_inner`) only read this list to decide WHICH of
+    /// `options.match_tokens` may fire; with no match tokens the answer is
+    /// the same for any list, and the walk over an empty table yields
+    /// nothing either way. The empty slice is therefore exact, and it
+    /// spares every token fetch a SipHash of the rule name against
+    /// `expected_tins` -- the one hashed lookup that sat on the fetch path
+    /// of a grammar with no custom matcher at all. TS `makeMatchMatcher`
+    /// returns null on an empty table and never asks (ts/src/lexer.ts).
+    ///
+    /// `options` is the one `Arc<Options>` the lexer reads too, so this
+    /// guard consults the field its consumers consult and cannot drift
+    /// from it.
     fn expected_match_tins(&self, rule: &Rule, slot: usize) -> &[Tin] {
+        if self.options.match_tokens.is_empty() {
+            return &[];
+        }
         self.expected_tins
             .get(&*rule.name)
             .map(|expected| expected.at(rule.state == RuleState::Open, slot))
@@ -3615,6 +3634,60 @@ mod tests {
             parser.expected_tins["val"].at(true, 0),
             [crate::TIN_ST],
             "lookahead would still expect the replaced rule's tokens"
+        );
+    }
+
+    /// `expected_match_tins` exists to gate the custom matchers, so with no
+    /// custom matcher registered it answers "nothing" without consulting
+    /// the table -- the table is still built and still says what it said,
+    /// and the moment a match token appears the same rule at the same slot
+    /// gets the table's row again. The first assertion is what pins the
+    /// short-circuit: were it dropped, the empty-matcher parser would
+    /// return `[TIN_NR]` and the assertion would fail.
+    #[test]
+    fn expected_match_tins_is_empty_until_a_match_token_exists() {
+        fn val_rule() -> RuleSpec {
+            let mut spec = RuleSpec::new("val");
+            spec.open.push(AltSpec {
+                s: vec![vec![crate::TIN_NR]],
+                ..Default::default()
+            });
+            spec
+        }
+        let rule = Rule::new("val", Value::Undefined);
+
+        let mut without = Parser::new(crate::Options::default());
+        without.add_rule(val_rule());
+        assert!(without.options.match_tokens.is_empty());
+        assert_eq!(without.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
+        assert_eq!(
+            without.expected_match_tins(&rule, 0),
+            &[] as &[Tin],
+            "no custom matcher: nothing to gate, so nothing to look up"
+        );
+
+        let mut options = crate::Options::default();
+        let tin = options.register_token("#QQ");
+        options.match_tokens.insert(
+            "#QQ".into(),
+            crate::options::MatchToken {
+                name: "#QQ".into(),
+                tin,
+                matcher: crate::options::MatchTokenMatcher::Regex(regex::Regex::new("^q").unwrap()),
+                eager: false,
+            },
+        );
+        let mut with = Parser::new(options);
+        with.add_rule(val_rule());
+        assert_eq!(
+            with.expected_match_tins(&rule, 0),
+            [crate::TIN_NR],
+            "a custom matcher is present, so the slot's tins gate it"
+        );
+        assert_eq!(
+            with.expected_match_tins(&rule, 1),
+            &[] as &[Tin],
+            "a slot the rule never fills expects nothing"
         );
     }
 }
