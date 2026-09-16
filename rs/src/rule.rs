@@ -1211,6 +1211,18 @@ pub struct Rule {
     pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
+    /// Where this rule's prepared state sits in the parser's table, or
+    /// `usize::MAX` for a rule the parser did not bind.
+    ///
+    /// A plain `usize` rather than a handle on the prepared record itself:
+    /// the parse loop clones a `Rule` once per close and snapshots it
+    /// several times per step, and an `Arc` here would make every one of
+    /// those a pair of atomics. The table is reached through the parser's
+    /// `&self` instead, and this only says where to look. It is a hint,
+    /// not a fact -- a callback can write `spec` or `name` out from under
+    /// it -- so the loop checks the record it finds against both before
+    /// trusting it.
+    pub(crate) slot: usize,
 }
 
 impl std::ops::Deref for Rule {
@@ -1343,11 +1355,12 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            slot: usize::MAX,
         }
     }
 
     pub fn with_shared_node(name: impl Into<RuleName>, node: Rc<RefCell<Value>>) -> Self {
-        Self::bound(name.into(), node, None)
+        Self::bound(name.into(), node, None, usize::MAX)
     }
 
     /// Build a rule already bound to its installed spec.
@@ -1363,6 +1376,7 @@ impl Rule {
         name: RuleName,
         node: Rc<RefCell<Value>>,
         installed: Option<&Arc<RuleSpec>>,
+        slot: usize,
     ) -> Self {
         let spec = match installed {
             Some(spec) => Arc::clone(spec),
@@ -1396,14 +1410,19 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            slot,
         }
     }
 
     /// `name` arrives already shared: the parser interns one handle per
     /// installed rule, so binding copies a pointer rather than the text.
-    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName) {
+    ///
+    /// `slot` is the rule's position in the parser's prepared table, which
+    /// the same lookup that found the spec already returned.
+    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName, slot: usize) {
         self.name = name;
         self.spec = Arc::clone(spec);
+        self.slot = slot;
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.
         self.bo = true;
