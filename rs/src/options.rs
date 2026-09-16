@@ -1374,6 +1374,25 @@ impl Options {
         self.token_set.get("IGNORE").cloned().unwrap_or_default()
     }
 
+    /// The lexer's character classes, tabulated. Built alongside
+    /// `ignore_tins` and carrying the same caveat: these answer from a
+    /// snapshot of the options, so whatever holds them has to be rebuilt
+    /// when the options change. The lexer is, once per parse.
+    ///
+    /// `line_ends` merges `line.chars` with `line.fixed`, which is how most
+    /// sites ask. `line` is `line.chars` ALONE: string lexing decides what
+    /// is unprintable without consulting `line.fixed`, and folding the two
+    /// together there would change which characters a string rejects.
+    pub(crate) fn char_sets(&self) -> crate::text::CharSets {
+        crate::text::CharSets {
+            space: crate::text::CharSet::new(&self.space.chars),
+            line_ends: crate::text::CharSet::with_extra(&self.line.chars, &self.line.fixed),
+            line: crate::text::CharSet::new(&self.line.chars),
+            row: crate::text::CharSet::new(&self.line.row_chars),
+            string: crate::text::CharSet::new(&self.string.chars),
+        }
+    }
+
     pub fn token(&self, name: &str) -> Option<Tin> {
         crate::token::name_to_tin(name).or_else(|| {
             let name = if name.starts_with('#') {
