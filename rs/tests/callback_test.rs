@@ -456,3 +456,139 @@ fn continuations_do_not_guess_through_dynamic_backtracking() {
     assert_eq!(parser.continuations("a").tokens, ["#ZZ"]);
     assert!(parser.parse("aa").is_err());
 }
+
+/// An alternate rewritten by a two-argument modifier publishes the groups
+/// the MODIFIER produced, not the ones the rule was installed with.
+///
+/// Group tags are otherwise split once, when the rule is installed, so the
+/// prepared list holds the installed spelling. A rewritten alternate has to
+/// fall back to splitting what the modifier returned -- including trimming
+/// the tags, which the prepared list also does.
+#[test]
+fn a_modifier_rewriting_an_alternate_rewrites_the_groups_it_publishes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+
+    parser.alt_modifier("@retag", move |mut alt, _rule, _context| {
+        alt.g = "rewritten, second".into();
+        alt
+    });
+    let log = seen.clone();
+    parser.action_with_match_ref("@check", move |_rule, _context, matched| {
+        log.lock().unwrap().clone_from(&matched.g);
+        Ok(None)
+    });
+
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "fixed":{"token":{"#TA":"a","#TB":"b"}}
+              },
+              "rule":{
+                "top":{"open":[{
+                  "s":"#TA #TB", "h":"@retag", "a":"@check", "g":"installed"
+                }]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("ab").unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["rewritten", "second"]);
+}
+
+/// Every rule pass reaches a `ruleDone` subscriber, including the two the
+/// suite did not previously reach: a rule whose CLOSE alternate matched and
+/// then popped, and an OPEN state that declares no alternatives at all.
+///
+/// The engine copies the finished rule for this subscriber and for nothing
+/// else, so a branch that forgets to copy it silently stops notifying --
+/// which is exactly what these two branches did under test until now.
+#[test]
+fn rule_done_reaches_a_subscriber_on_every_completion_branch() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+
+    let log = seen.clone();
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        log.lock().unwrap().push(format!(
+            "{}:{}",
+            rule.name.as_str(),
+            match done.state {
+                tabnas::RuleState::Open => "open",
+                tabnas::RuleState::Close => "close",
+            }
+        ));
+    });
+
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "fixed":{"token":{"#TA":"a","#TB":"b"}}
+              },
+              "rule":{
+                "top":{
+                  "open":[{"s":"#TA","p":"child"}],
+                  "close":[{"s":"#TB"}]
+                },
+                "child":{"open":[],"close":[]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("ab").unwrap();
+    // top's open pushes child; child declares nothing in either state and
+    // passes through both; top's close matches `#TB` and pops as the root.
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["top:open", "child:open", "child:close", "top:close"]
+    );
+}
+
+/// A `ruleDone` subscriber sees the value the finished rule built.
+///
+/// `Rule` has no `node` of its own -- `rule.node` derefs into the shared
+/// `RuleSnapshot`, so `Rule::clone` and `Rule::snapshot` both clone that
+/// snapshot's `Rc` and go on sharing the ONE node `Rc` inside it. A
+/// reader that reasons about reachability from `Rc::strong_count` on the
+/// node therefore counts the cell, not the rules and snapshots that can
+/// still reach it, and can conclude a live value is unreachable.
+///
+/// The engine took the value out of the cell under exactly that
+/// reasoning, and this is the assertion that catches it: the `val` rules
+/// below handed their subscriber `Undefined` instead of `1`, `2` and the
+/// array. The suite had nothing that looked at a completed rule's node.
+#[test]
+fn a_rule_done_subscriber_sees_the_value_the_finished_rule_built() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::make_json();
+
+    let log = seen.clone();
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        if matches!(done.state, tabnas::RuleState::Close) {
+            log.lock()
+                .unwrap()
+                .push((rule.name.as_str().to_string(), rule.node.borrow().clone()));
+        }
+    });
+
+    parser.parse(r#"{"a":[1,2]}"#).unwrap();
+    let emptied: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, node)| matches!(node, Value::Undefined))
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert!(
+        emptied.is_empty(),
+        "these rules handed the subscriber an emptied node: {emptied:?}"
+    );
+}

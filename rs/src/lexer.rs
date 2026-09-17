@@ -1193,7 +1193,15 @@ impl<'a> Lexer<'a> {
         };
         if (text_lex || value_lex) && !text_skipped && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
-            let remaining = self.src[self.byte_position()..].to_string();
+            // Only a `value` definition declaring `consume` looks at the
+            // rest of the document, and the JSON grammar has none -- but
+            // this ran for every text token, copying the whole tail of the
+            // input each time. `self.src` is borrowed from the caller for
+            // `'a` and is never reassigned, so reading the reference out
+            // before the scan below gives a slice that does not borrow
+            // `self` and survives the `&mut self` the scan needs.
+            let source: &'a str = self.src;
+            let remaining = &source[self.byte_position()..];
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if self.is_text_delimiter_here() {
@@ -1237,7 +1245,7 @@ impl<'a> Lexer<'a> {
                     definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
                     for (_, definition) in definitions {
                         let regex = definition.matcher.as_ref().expect("filtered matcher");
-                        let target = if definition.consume { &remaining } else { &src };
+                        let target: &str = if definition.consume { remaining } else { &src };
                         let Some(captures) = regex.captures(target) else {
                             continue;
                         };

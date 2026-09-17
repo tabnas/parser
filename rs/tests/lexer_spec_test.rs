@@ -439,3 +439,49 @@ fn named_and_regex_values_and_text_enders_are_honored() {
     assert_eq!(lexer.next_raw_token().unwrap().src, "abc");
     assert_eq!(lex("abcEX", ender).unwrap(), "#TX:abcEX");
 }
+
+/// A `consume` value matcher is matched against the rest of the document,
+/// not against the text run the lexer just scanned, so it may claim input
+/// past a text delimiter. `^@[a-z]+,[a-z]+` cannot match `@abc` alone.
+#[test]
+fn a_consuming_value_matcher_matches_past_the_text_run() {
+    let mut options = Options::default();
+    options.value.definitions.insert(
+        "pair".into(),
+        ValueDef {
+            val: None,
+            matcher: Some(regex::Regex::new(r"^@[a-z]+,[a-z]+").unwrap()),
+            transform: None,
+            consume: true,
+        },
+    );
+    let mut lexer = Lexer::new("@abc,tail rest", options);
+    let value = lexer.next_raw_token().unwrap();
+    assert_eq!(
+        (value.name.as_str(), value.src.as_str()),
+        ("#VL", "@abc,tail")
+    );
+    let rest = lexer.next_raw_token().unwrap();
+    assert_eq!(rest.src.as_str(), " ");
+}
+
+/// A non-`consume` value matcher is matched against the text run alone and
+/// has to cover all of it. Matching it against the rest of the document
+/// instead would make the "covers all of it" test ask whether the match
+/// reached the END OF THE INPUT, which is a different question: `^[a-z]+`
+/// covers `yes` but stops well short of `yes,tail`.
+#[test]
+fn a_non_consuming_value_matcher_covers_the_text_run_not_the_document() {
+    let mut options = Options::default();
+    options.value.definitions.insert(
+        "word".into(),
+        ValueDef {
+            val: Some(Value::Bool(true)),
+            matcher: Some(regex::Regex::new(r"^[a-z]+").unwrap()),
+            transform: None,
+            consume: false,
+        },
+    );
+    let value = Lexer::new("yes,tail", options).next_raw_token().unwrap();
+    assert_eq!((value.name.as_str(), value.src.as_str()), ("#VL", "yes"));
+}

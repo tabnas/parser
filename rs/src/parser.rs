@@ -240,6 +240,14 @@ struct PreparedAlt {
     /// record what this was computed against, and the step checks those
     /// two strings ONCE rather than re-deriving the answer per alternate.
     groups: bool,
+    /// `alt.g` split into the tags the step publishes into `matched.g`,
+    /// split when the rule was installed rather than per rule step.
+    ///
+    /// Unlike `groups` this is derived from the alternate alone, so no
+    /// option string can stale it; the only alternate it cannot answer for
+    /// is one a modifier rewrote, which the step detects the same way it
+    /// does for the action order.
+    group_tags: Vec<String>,
 }
 
 enum PreparedRoute {
@@ -470,6 +478,7 @@ impl Parser {
                     observed,
                     named,
                     groups: groups_enabled(alt, options),
+                    group_tags: listed(&alt.g).map(str::to_owned).collect(),
                 }
             })
             .collect()
@@ -896,6 +905,18 @@ impl Parser {
         } else {
             stack
         }
+    }
+
+    /// A copy of the rule that just finished, when something will read it.
+    ///
+    /// [`Parser::notify_rule_done`] is its only reader, and that returns
+    /// without looking when no `ruleDone` subscriber is installed. Cloning
+    /// a `Rule` copies the value tree it has built with it, which is 3.3%
+    /// of a 1 MB parse spent for nobody in a grammar that subscribes to
+    /// nothing. This is the treatment `RuleDoneAlt` already gets at the
+    /// transition arms, for the same reason.
+    fn rule_done_copy(&self, rule: &Rule) -> Option<Rule> {
+        (!self.rule_done_subscribers.is_empty()).then(|| rule.clone())
     }
 
     fn notify_rule_done(
@@ -2342,24 +2363,26 @@ impl Parser {
                 if !alt.k.is_empty() {
                     matched.k = alt.k.clone();
                 }
-                if !alt.g.is_empty() {
-                    matched.g = alt
-                        .g
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|group| !group.is_empty())
-                        .map(str::to_owned)
-                        .collect();
-                }
-                // The alternate's action order, worked out when the rule
-                // was installed. A modifier rewrites the whole `AltSpec`
-                // per step, so a rule that carries one is resolved from
-                // what the modifier produced, not from the record.
+                // The alternate's group tags and action order, both worked
+                // out when the rule was installed. A modifier rewrites the
+                // whole `AltSpec` per step, so a rule that carries one is
+                // resolved from what the modifier produced, not from the
+                // record.
                 let prepared_alt = if alts[idx].h.is_some() {
                     None
                 } else {
                     prepared.and_then(|prepared| prepared.alt(is_open, idx))
                 };
+                match prepared_alt {
+                    // `clone_from` writes into the list the last step left
+                    // behind -- `AltMatch::reset` clears it without giving
+                    // up its capacity -- rather than growing a fresh one.
+                    Some(prepared_alt) => matched.g.clone_from(&prepared_alt.group_tags),
+                    None if !alt.g.is_empty() => {
+                        matched.g = listed(&alt.g).map(str::to_owned).collect();
+                    }
+                    None => {}
+                }
                 // Publishing the order into the record is only observable
                 // when something this step runs receives the record. When
                 // nothing does -- no matched condition, error, route,
@@ -2921,7 +2944,7 @@ impl Parser {
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
                 // The action still belongs to the rule whose alternate matched.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
                 if push_name.is_some() {
                     let (push_slot, push_shared, push_spec) =
@@ -2976,7 +2999,7 @@ impl Parser {
                         current_rule.state = RuleState::Close;
                     }
                     child.parent_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     stack.push(current_rule);
                     current_rule = child;
                 } else if replace_name.is_some() {
@@ -3031,7 +3054,10 @@ impl Parser {
                         current_rule.state = RuleState::Close;
                     }
                     next.prev_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule;
+                    // Moved rather than cloned: this arm hands the
+                    // finished rule over instead of copying it, so the
+                    // gate above has nothing to save here.
+                    completed_rule = Some(current_rule);
                     current_rule = next;
                 } else if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
@@ -3063,7 +3089,7 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                 } else {
                     // Close phase pop
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
@@ -3095,7 +3121,7 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
@@ -3106,18 +3132,20 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    done_alt,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = &completed_rule {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;
@@ -3126,7 +3154,7 @@ impl Parser {
             } else if alts.is_empty() {
                 // A state with no alternatives performs an implicit empty
                 // pass. It still resolves next and runs lifecycle after-actions.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
                 if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
@@ -3158,7 +3186,7 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                 } else {
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
@@ -3189,7 +3217,7 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
@@ -3199,18 +3227,20 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    None,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = &completed_rule {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        None,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;
@@ -3798,6 +3828,17 @@ fn continuation_tins(
     out.into_iter().collect()
 }
 
+/// The group tags a comma-separated group list declares.
+///
+/// One definition, because two places ask: the include/exclude filter in
+/// `groups_enabled`, and the list the engine publishes into `matched.g`.
+/// They have to agree on what a tag is -- trimmed, and never empty.
+fn listed(list: &str) -> impl Iterator<Item = &str> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+}
+
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // With neither an include nor an exclude list there is nothing to
     // test against, so every alternate is enabled whatever groups it
@@ -3814,11 +3855,6 @@ fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // preset sets `rule.include` to "json", so the early return above
     // never fires for it and every alternate of every rule step paid
     // them.
-    fn listed(list: &str) -> impl Iterator<Item = &str> {
-        list.split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-    }
     let declares = |wanted: &str| listed(&alt.g).any(|group| group == wanted);
     let included = listed(include).next().is_none() || listed(include).any(&declares);
     included && !listed(exclude).any(&declares)
