@@ -94,8 +94,11 @@ pub struct Parser {
     /// there was nothing to go stale, so this hazard arrived with the table.
     rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
-    /// worked out once per installed rule rather than once per token.
-    expected_tins: HashMap<String, ExpectedTins>,
+    /// worked out once per installed rule rather than once per token, and
+    /// positional in `rules` the way `names` is: a rule carries the slot
+    /// it was installed at, so reaching its row costs an index rather than
+    /// a hash of its name on every token fetch.
+    expected_tins: Vec<ExpectedTins>,
     /// One shared copy of each installed rule's name, so pushing a rule
     /// clones a pointer rather than reallocating the name per push.
     ///
@@ -315,7 +318,7 @@ impl Parser {
             exclude_pattern: options.number.exclude.clone(),
             options,
             rules: IndexMap::new(),
-            expected_tins: HashMap::new(),
+            expected_tins: Vec::new(),
             names: Vec::new(),
             prepared: Vec::new(),
             actions: HashMap::new(),
@@ -339,15 +342,22 @@ impl Parser {
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
-        self.expected_tins
-            .insert(spec.name.clone(), ExpectedTins::of(&spec));
+        let expected = ExpectedTins::of(&spec);
         let shared = RuleName::from(spec.name.as_str());
         let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
         // A replacement keeps the key's index, so it overwrites its own
-        // name handle; a new rule is appended and takes the next slot.
+        // name handle; a new rule is appended and takes the next slot. The
+        // accepted-token table is positional for the same reason and is
+        // written here, not in `rebuild_prepared`: it is derived from one
+        // rule's spec alone, so rebuilding it for every rule on every
+        // install would be quadratic for no gain.
         match self.names.get_mut(index) {
             Some(existing) => *existing = shared,
             None => self.names.push(shared),
+        }
+        match self.expected_tins.get_mut(index) {
+            Some(existing) => *existing = expected,
+            None => self.expected_tins.push(expected),
         }
         self.rebuild_prepared();
     }
@@ -1502,9 +1512,9 @@ impl Parser {
     /// `options.match_tokens` may fire; with no match tokens the answer is
     /// the same for any list, and the walk over an empty table yields
     /// nothing either way. The empty slice is therefore exact, and it
-    /// spares every token fetch a SipHash of the rule name against
-    /// `expected_tins` -- the one hashed lookup that sat on the fetch path
-    /// of a grammar with no custom matcher at all. TS `makeMatchMatcher`
+    /// spares every token fetch the rule's accepted-token row entirely --
+    /// the last work that sat on the fetch path of a grammar with no
+    /// custom matcher at all. TS `makeMatchMatcher`
     /// returns null on an empty table and never asks (ts/src/lexer.ts).
     ///
     /// `options` is the one `Arc<Options>` the lexer reads too, so this
@@ -1514,10 +1524,21 @@ impl Parser {
         if self.options.match_tokens.is_empty() {
             return &[];
         }
-        self.expected_tins
-            .get(&*rule.name)
-            .map(|expected| expected.at(rule.state == RuleState::Open, slot))
-            .unwrap_or_default()
+        // The table is the rule's, chosen by what the rule is called --
+        // exactly as the name-keyed map this replaced chose it. The slot
+        // is only a hint that skips the hash: `name` is public and a
+        // callback may have written it, so the slot is trusted only while
+        // the name installed there is still the rule's own, and anything
+        // else falls back to the lookup by name. A slot never answers for
+        // a name that is not at it.
+        let index = match self.names.get(rule.slot) {
+            Some(installed) if *installed == rule.name => rule.slot,
+            _ => match self.rules.get_index_of(&*rule.name) {
+                Some(index) => index,
+                None => return &[],
+            },
+        };
+        self.expected_tins[index].at(rule.state == RuleState::Open, slot)
     }
 
     fn ensure_lookahead(
@@ -4023,8 +4044,8 @@ mod tests {
     use super::*;
 
     /// `expected_tins`, `names` and `prepared` are derived from `rules` and
-    /// keyed by the same names, and `add_rule` is the only thing that writes
-    /// any of the four. That is the whole reason `rules` is private: while it was
+    /// positional in it, and `add_rule` is the only thing that writes any
+    /// of the four. That is the whole reason `rules` is private: while it was
     /// public, an embedder inserting or replacing a rule straight into it
     /// left the derived tables describing the rule that used to be there,
     /// and lookahead went on gating the custom matchers on that rule's token
@@ -4043,11 +4064,11 @@ mod tests {
             ..Default::default()
         });
         parser.add_rule(first);
-        assert_eq!(parser.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
         let slot = parser
             .rules()
             .get_index_of("val")
             .expect("the rule was just installed");
+        assert_eq!(parser.expected_tins[slot].at(true, 0), [crate::TIN_NR]);
         assert_eq!(&*parser.names[slot], "val");
         assert_eq!(parser.prepared[slot].before(true).len(), 1);
         assert_eq!(parser.prepared[slot].open[0].actions.len(), 1);
@@ -4061,7 +4082,7 @@ mod tests {
 
         assert_eq!(parser.rules().len(), 1, "a replacement, not an addition");
         assert_eq!(
-            parser.expected_tins["val"].at(true, 0),
+            parser.expected_tins[slot].at(true, 0),
             [crate::TIN_ST],
             "lookahead would still expect the replaced rule's tokens"
         );
@@ -4092,6 +4113,85 @@ mod tests {
         assert!(!parser.prepared[slot].open[0].named);
     }
 
+    /// The accepted-token table is positional now, and the slot a rule
+    /// carries is a hint rather than an authority: `name` is public and a
+    /// callback may have written it between one token fetch and the next.
+    /// What the rule is called is what decides which row answers, exactly
+    /// as the name-keyed map this replaced decided it, and a name that is
+    /// installed nowhere expects nothing rather than whatever happens to
+    /// sit at its slot.
+    #[test]
+    fn expected_match_tins_follows_the_rule_name_when_the_slot_goes_stale() {
+        fn rule_named(name: &str, tin: Tin) -> RuleSpec {
+            let mut spec = RuleSpec::new(name);
+            spec.open.push(AltSpec {
+                s: vec![vec![tin]],
+                ..Default::default()
+            });
+            spec
+        }
+
+        let mut options = crate::Options::default();
+        let tin = options.register_token("#QQ");
+        options.match_tokens.insert(
+            "#QQ".into(),
+            crate::options::MatchToken {
+                name: "#QQ".into(),
+                tin,
+                matcher: crate::options::MatchTokenMatcher::Regex(regex::Regex::new("^q").unwrap()),
+                eager: false,
+            },
+        );
+        let mut parser = Parser::new(options);
+        parser.add_rule(rule_named("val", crate::TIN_NR));
+        parser.add_rule(rule_named("other", crate::TIN_ST));
+
+        let val_slot = parser.rules().get_index_of("val").expect("installed");
+        let other_slot = parser.rules().get_index_of("other").expect("installed");
+        assert_ne!(val_slot, other_slot);
+
+        // Bound the way the parse loop binds it: slot, name and spec all
+        // describe the same installed rule.
+        let mut rule = Rule::new("val", Value::Undefined);
+        rule.bind_spec(
+            &parser.rules()["val"],
+            parser.names[val_slot].clone(),
+            val_slot,
+        );
+        assert_eq!(parser.expected_match_tins(&rule, 0), [crate::TIN_NR]);
+
+        // A callback renames the rule to another installed rule. The slot
+        // still points at `val`, so the slot alone would answer with
+        // `val`'s row; the name is what makes it `other`'s, which is what
+        // the lookup by name always gave.
+        rule.name = parser.names[other_slot].clone();
+        assert_eq!(
+            parser.expected_match_tins(&rule, 0),
+            [crate::TIN_ST],
+            "the rule is called `other` now, so `other`'s row answers"
+        );
+
+        // A callback swaps the spec and leaves the name. Nothing about
+        // which row answers depends on the spec, because the row is
+        // derived from the name the rule was installed under.
+        rule.name = parser.names[val_slot].clone();
+        rule.spec = Arc::clone(&parser.rules()["other"]);
+        assert_eq!(
+            parser.expected_match_tins(&rule, 0),
+            [crate::TIN_NR],
+            "still called `val`, so still gated by `val`'s row"
+        );
+
+        // A name installed nowhere expects nothing. Its slot is
+        // `usize::MAX`, so nothing is in range to answer by accident.
+        let ghost = Rule::new("ghost", Value::Undefined);
+        assert_eq!(
+            parser.expected_match_tins(&ghost, 0),
+            &[] as &[Tin],
+            "an uninstalled name has no row, not another rule's"
+        );
+    }
+
     /// `expected_match_tins` exists to gate the custom matchers, so with no
     /// custom matcher registered it answers "nothing" without consulting
     /// the table -- the table is still built and still says what it said,
@@ -4114,7 +4214,7 @@ mod tests {
         let mut without = Parser::new(crate::Options::default());
         without.add_rule(val_rule());
         assert!(without.options.match_tokens.is_empty());
-        assert_eq!(without.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
+        assert_eq!(without.expected_tins[0].at(true, 0), [crate::TIN_NR]);
         assert_eq!(
             without.expected_match_tins(&rule, 0),
             &[] as &[Tin],
