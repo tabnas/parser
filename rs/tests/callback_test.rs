@@ -456,3 +456,46 @@ fn continuations_do_not_guess_through_dynamic_backtracking() {
     assert_eq!(parser.continuations("a").tokens, ["#ZZ"]);
     assert!(parser.parse("aa").is_err());
 }
+
+/// An alternate rewritten by a two-argument modifier publishes the groups
+/// the MODIFIER produced, not the ones the rule was installed with.
+///
+/// Group tags are otherwise split once, when the rule is installed, so the
+/// prepared list holds the installed spelling. A rewritten alternate has to
+/// fall back to splitting what the modifier returned -- including trimming
+/// the tags, which the prepared list also does.
+#[test]
+fn a_modifier_rewriting_an_alternate_rewrites_the_groups_it_publishes() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+
+    parser.alt_modifier("@retag", move |mut alt, _rule, _context| {
+        alt.g = "rewritten, second".into();
+        alt
+    });
+    let log = seen.clone();
+    parser.action_with_match_ref("@check", move |_rule, _context, matched| {
+        log.lock().unwrap().clone_from(&matched.g);
+        Ok(None)
+    });
+
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "fixed":{"token":{"#TA":"a","#TB":"b"}}
+              },
+              "rule":{
+                "top":{"open":[{
+                  "s":"#TA #TB", "h":"@retag", "a":"@check", "g":"installed"
+                }]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("ab").unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["rewritten", "second"]);
+}

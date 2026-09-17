@@ -240,6 +240,14 @@ struct PreparedAlt {
     /// record what this was computed against, and the step checks those
     /// two strings ONCE rather than re-deriving the answer per alternate.
     groups: bool,
+    /// `alt.g` split into the tags the step publishes into `matched.g`,
+    /// split when the rule was installed rather than per rule step.
+    ///
+    /// Unlike `groups` this is derived from the alternate alone, so no
+    /// option string can stale it; the only alternate it cannot answer for
+    /// is one a modifier rewrote, which the step detects the same way it
+    /// does for the action order.
+    group_tags: Vec<String>,
 }
 
 enum PreparedRoute {
@@ -470,6 +478,7 @@ impl Parser {
                     observed,
                     named,
                     groups: groups_enabled(alt, options),
+                    group_tags: listed(&alt.g).map(str::to_owned).collect(),
                 }
             })
             .collect()
@@ -2342,24 +2351,26 @@ impl Parser {
                 if !alt.k.is_empty() {
                     matched.k = alt.k.clone();
                 }
-                if !alt.g.is_empty() {
-                    matched.g = alt
-                        .g
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|group| !group.is_empty())
-                        .map(str::to_owned)
-                        .collect();
-                }
-                // The alternate's action order, worked out when the rule
-                // was installed. A modifier rewrites the whole `AltSpec`
-                // per step, so a rule that carries one is resolved from
-                // what the modifier produced, not from the record.
+                // The alternate's group tags and action order, both worked
+                // out when the rule was installed. A modifier rewrites the
+                // whole `AltSpec` per step, so a rule that carries one is
+                // resolved from what the modifier produced, not from the
+                // record.
                 let prepared_alt = if alts[idx].h.is_some() {
                     None
                 } else {
                     prepared.and_then(|prepared| prepared.alt(is_open, idx))
                 };
+                match prepared_alt {
+                    // `clone_from` writes into the list the last step left
+                    // behind -- `AltMatch::reset` clears it without giving
+                    // up its capacity -- rather than growing a fresh one.
+                    Some(prepared_alt) => matched.g.clone_from(&prepared_alt.group_tags),
+                    None if !alt.g.is_empty() => {
+                        matched.g = listed(&alt.g).map(str::to_owned).collect();
+                    }
+                    None => {}
+                }
                 // Publishing the order into the record is only observable
                 // when something this step runs receives the record. When
                 // nothing does -- no matched condition, error, route,
@@ -3798,6 +3809,17 @@ fn continuation_tins(
     out.into_iter().collect()
 }
 
+/// The group tags a comma-separated group list declares.
+///
+/// One definition, because two places ask: the include/exclude filter in
+/// `groups_enabled`, and the list the engine publishes into `matched.g`.
+/// They have to agree on what a tag is -- trimmed, and never empty.
+fn listed(list: &str) -> impl Iterator<Item = &str> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+}
+
 fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // With neither an include nor an exclude list there is nothing to
     // test against, so every alternate is enabled whatever groups it
@@ -3814,11 +3836,6 @@ fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // preset sets `rule.include` to "json", so the early return above
     // never fires for it and every alternate of every rule step paid
     // them.
-    fn listed(list: &str) -> impl Iterator<Item = &str> {
-        list.split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-    }
     let declares = |wanted: &str| listed(&alt.g).any(|group| group == wanted);
     let included = listed(include).next().is_none() || listed(include).any(&declares);
     included && !listed(exclude).any(&declares)
