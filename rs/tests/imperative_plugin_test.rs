@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tabnas::{AltSpec, Plugin, Rule, RuleSpec, Tabnas, Value, TIN_NR, TIN_ZZ};
 
 fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
-    Value::Object(
+    Value::object(
         entries
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))

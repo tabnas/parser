@@ -106,7 +106,7 @@ fn parser_start_receives_the_optional_parent_context_seed() {
             .and_then(|seed| seed.u.get("parent"))
             .cloned()
             .unwrap_or(Value::Undefined);
-        Ok(Value::Array(vec![
+        Ok(Value::array(vec![
             Value::String(source.into()),
             Value::String(instance.id.clone()),
             meta.clone(),
@@ -117,7 +117,7 @@ fn parser_start_receives_the_optional_parent_context_seed() {
         .grammar_json(r#"{"options":{"parser":{"start":"@context"}}}"#)
         .unwrap();
 
-    let meta = Value::Object(
+    let meta = Value::object(
         [("request".into(), Value::Number(7.0))]
             .into_iter()
             .collect(),
@@ -133,7 +133,7 @@ fn parser_start_receives_the_optional_parent_context_seed() {
         .unwrap();
     assert_eq!(
         result,
-        Value::Array(vec![
+        Value::array(vec![
             Value::String("input".into()),
             Value::String(parser.id.clone()),
             meta,

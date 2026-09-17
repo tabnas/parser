@@ -976,7 +976,7 @@ fn apply_options(
             let current = options
                 .plugin
                 .shift_remove(&name)
-                .unwrap_or_else(|| Value::Object(IndexMap::new()));
+                .unwrap_or_else(|| Value::object(IndexMap::new()));
             options.plugin.insert(
                 name,
                 crate::merge_plugin_values(current, Value::from_json(value)),

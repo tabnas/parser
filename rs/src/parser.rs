@@ -4094,7 +4094,7 @@ fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
         value.insert("src".into(), Value::String(token.src.to_string()));
         value.insert("val".into(), token.val.clone());
         value.insert("why".into(), Value::String(token.why.to_string()));
-        return Some(Value::Object(value));
+        return Some(Value::object(value));
     }
     let (field, rest) = path.split_first()?;
     let value = match field.as_str() {
