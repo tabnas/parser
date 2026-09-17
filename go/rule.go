@@ -1072,6 +1072,24 @@ func (r *Rule) nodeHolder() *Rule {
 	return r
 }
 
+// heldNode is the node this rule is building, read from wherever the
+// authoritative copy of it lives.
+//
+// A Go slice is a value, so a rule that LIFTED a list (`@bubble$`,
+// `@value$`) and was then replaced keeps the header as it stood at the
+// lift, while every push that follows lands on the list's owner. That
+// rule is still the one its parent's `Child` points at, so the parent
+// reading it directly saw a list that stopped growing at the lift.
+// Asking the owner is how it sees the finished one.
+//
+// The alternative was writing the grown header back along the `Prev`
+// chain on every push, which is O(1) per holder but O(n) per push, and
+// so quadratic in the length of a list -- reachable from untrusted
+// input, as `nodeOwner` warns above.
+func (r *Rule) heldNode() any {
+	return r.nodeHolder().Node
+}
+
 // MakeRule creates a new Rule from a RuleSpec.
 func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
 	// N/U/K stay nil until first written (see the field docs / Ensure

@@ -877,6 +877,78 @@ func TestPushSurvivesReplacementWithListRef(t *testing.T) {
 	}
 }
 
+func specFromJSON(t *testing.T, src string) *GrammarSpec {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(src), &m); err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+	gs := &GrammarSpec{}
+	if om, ok := m["options"].(map[string]any); ok {
+		gs.OptionsMap = om
+	}
+	if rm, ok := m["rule"].(map[string]any); ok {
+		gs.Rule = mapToGrammarRules(rm)
+	}
+	if v, ok := m["v"]; ok {
+		gs.V = cfgInt(v)
+	}
+	return gs
+}
+
+// A rule that LIFTS a list with @bubble$ and then replaces itself.
+//
+// `mid` pushes `arr`, which allocates the list and appends the first
+// element; `mid` lifts that list on close and replaces itself with
+// `tail`, which appends the second. The parent's Child pointer stays on
+// `mid`, and `mid` is neither the list's owner (that is `arr`) nor the
+// rule doing the pushing (that is `tail`) -- so nothing in the push path
+// writes to it, and `__start__`'s @bubble$ reads a header that stopped
+// growing at the lift.
+//
+// No fixture had this shape: push-replace.fixture.json replaces a rule
+// that OWNS its list, so the owner write covers it.
+func TestPushSurvivesReplacementAfterABubbledList(t *testing.T) {
+	const spec = `{
+	  "v": 5,
+	  "options": { "rule": { "start": "__start__" } },
+	  "rule": {
+	    "__start__": {
+	      "open":  [ { "p": "mid" } ],
+	      "close": [ { "s": "#ZZ", "a": "@bubble$" } ]
+	    },
+	    "mid": {
+	      "open":  [ { "p": "arr" } ],
+	      "close": [ { "a": "@bubble$", "r": "tail" } ]
+	    },
+	    "arr": {
+	      "open":  [ { "a": "@array$", "p": "elem" } ],
+	      "close": [ { "a": "@push$", "k": { "push$": { "src": true } } } ]
+	    },
+	    "tail": {
+	      "open":  [ { "s": "#CA", "p": "elem" } ],
+	      "close": [ { "a": "@push$", "k": { "push$": { "src": true } } } ]
+	    },
+	    "elem": {
+	      "open":  [ { "s": "#NR", "a": "@node$",
+	                   "k": { "node$": { "init": true, "nterms": 1 } } } ],
+	      "close": [ { "a": "@capture$" } ]
+	    }
+	  }
+	}`
+	j := Make()
+	if err := j.Grammar(specFromJSON(t, spec)); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []any{"1", "2"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", omPlainify(UnwrapUndefined(got)), want)
+	}
+}
+
 // A list grown ARBITRARILY DEEP below the rule that allocated it reaches
 // that rule.
 //

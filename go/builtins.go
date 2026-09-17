@@ -128,7 +128,7 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if n == nil || r.Child == nil {
 		return
 	}
-	c := r.Child.Node
+	c := r.Child.heldNode()
 	if c == nil || c == Undefined {
 		return
 	}
@@ -158,8 +158,8 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 // @bubble$ — lift the committed child's node straight up (no merge).
 // Mirrors TS `r.child.node !== undefined` (a null child node still lifts).
 func builtinBubble(r *Rule, _ *Context) {
-	if r.Child != nil && r.Child.Node != Undefined {
-		r.Node = r.Child.Node
+	if r.Child != nil && r.Child.heldNode() != Undefined {
+		r.Node = r.Child.heldNode()
 		// The lifted node keeps its OWNER. Claiming ownership here would
 		// strand the rule that actually allocated the container when the
 		// child is still carrying one handed down to it, and a later push
@@ -358,7 +358,7 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 		return
 	}
 	key, _ := r.U[slot].(string)
-	val := r.Child.Node
+	val := r.Child.heldNode()
 	if cfgBool(cfg["src"]) {
 		val = srcVal(val)
 	}
@@ -408,10 +408,10 @@ func listHeader(v any) ([]any, bool) {
 // replacement that allocated a fresh container of its own cannot clobber
 // the one it replaced.
 func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
-	if r.Child == nil || IsUndefined(r.Child.Node) {
+	if r.Child == nil || IsUndefined(r.Child.heldNode()) {
 		return
 	}
-	val := r.Child.Node
+	val := r.Child.heldNode()
 	if cfgBool(cfg["src"]) {
 		val = srcVal(val)
 	}
@@ -446,8 +446,8 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 // is wrapped in a Text carrying its source quote char (the leaf whose
 // output type changes under info — the TS counterpart boxes a String).
 func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
-	if r.Child != nil && !IsUndefined(r.Child.Node) {
-		r.Node = r.Child.Node
+	if r.Child != nil && !IsUndefined(r.Child.heldNode()) {
+		r.Node = r.Child.heldNode()
 		// Same as @bubble$: a lifted container keeps its owner.
 		r.nodeOwner = r.Child.nodeHolder()
 		return
