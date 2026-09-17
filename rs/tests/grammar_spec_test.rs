@@ -827,3 +827,60 @@ fn grammar_settings_append_groups_without_mutating_the_source_spec() {
     assert_eq!(second.rules["top"].open[0].g, "base,arraya,arrayb");
     assert_eq!(second.rules["top"].close[0].g, "arraya,arrayb");
 }
+
+/// `rule.exclude` was dead to the suite: deleting the half of
+/// `groups_enabled` that reads it left all 308 tests passing, while
+/// deleting the `include` half failed one. The two halves are ANDed, so
+/// exclude is not a mirror of include -- it overrides it -- and none of
+/// that was pinned.
+#[test]
+fn an_excluded_group_is_disabled_even_when_it_is_also_included() {
+    use std::sync::{Arc, Mutex};
+
+    fn ran(grammar: &str) -> Vec<&'static str> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut parser = Tabnas::new();
+        for name in ["@plain", "@banned"] {
+            let seen = seen.clone();
+            parser.action(name, move |_| seen.lock().unwrap().push(name));
+        }
+        parser.grammar_json(grammar).unwrap();
+        parser.parse("1").unwrap();
+        let out = seen.lock().unwrap().clone();
+        out
+    }
+
+    // An alternate whose group is excluded does not run, and the one
+    // without any group does. Nothing is included, so the include half
+    // is vacuous here and only exclude decides.
+    assert_eq!(
+        ran(
+            r##"{"clear":true,"options":{"rule":{"start":"top","exclude":"banned"}},"rule":{
+          "top":{"open":[
+            {"s":"#NR","g":"banned","a":"@banned"},
+            {"s":"#NR","a":"@plain"}
+          ]}
+        }}"##
+        ),
+        ["@plain"],
+        "an alternate in the exclude list must not run"
+    );
+
+    // The two lists are ANDed, not ordered: naming a group in BOTH
+    // leaves it disabled. The excluded alternate is FIRST, so without the
+    // exclude half it would match and its action would be the one that
+    // ran. That is what makes this case discriminating rather than
+    // decorative.
+    assert_eq!(
+        ran(
+            r##"{"clear":true,"options":{"rule":{"start":"top","include":"keep,both","exclude":"both"}},"rule":{
+          "top":{"open":[
+            {"s":"#NR","g":"both","a":"@banned"},
+            {"s":"#NR","g":"keep","a":"@plain"}
+          ]}
+        }}"##
+        ),
+        ["@plain"],
+        "exclude overrides include for a group named by both lists"
+    );
+}

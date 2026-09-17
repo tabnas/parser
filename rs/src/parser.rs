@@ -3764,31 +3764,25 @@ fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // test against, so every alternate is enabled whatever groups it
     // declares. That is the usual case, and it is asked once per
     // alternate per iteration.
-    if options.rule.include.is_empty() && options.rule.exclude.is_empty() {
+    let include = options.rule.include.as_str();
+    let exclude = options.rule.exclude.as_str();
+    if include.is_empty() && exclude.is_empty() {
         return true;
     }
-    let groups: Vec<&str> = alt
-        .g
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let includes: Vec<&str> = options
-        .rule
-        .include
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let excludes: Vec<&str> = options
-        .rule
-        .exclude
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    (includes.is_empty() || includes.iter().any(|include| groups.contains(include)))
-        && !excludes.iter().any(|exclude| groups.contains(exclude))
+    // Iterators rather than three collected `Vec<&str>`. The question is
+    // the same one and the answer is the same answer; the three heap
+    // allocations per call were not part of either. The shipped JSON
+    // preset sets `rule.include` to "json", so the early return above
+    // never fires for it and every alternate of every rule step paid
+    // them.
+    fn listed(list: &str) -> impl Iterator<Item = &str> {
+        list.split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+    }
+    let declares = |wanted: &str| listed(&alt.g).any(|group| group == wanted);
+    let included = listed(include).next().is_none() || listed(include).any(&declares);
+    included && !listed(exclude).any(&declares)
 }
 
 fn builtin_condition_matches(reference: Option<&str>, rule: &Rule) -> bool {
