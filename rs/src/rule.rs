@@ -1636,28 +1636,9 @@ impl Rule {
         Rc::clone(&self.shared)
     }
 
-    /// Take the finished child's built value for the parent to fold in.
-    ///
-    /// The child is about to be dropped or overwritten at every call site,
-    /// so when its cell is the only one pointing at the value there is
-    /// nothing to copy FOR: the value can be moved out and an empty cell
-    /// left in its place. Copying it instead is what makes a deeply nested
-    /// document quadratic -- the copy is taken once per rule close and is
-    /// the size of everything built so far.
-    ///
-    /// `strong_count == 1` is the whole test, and it is exact rather than
-    /// conservative. Anything that can still reach this value holds a
-    /// count: the `Rule` copy a `ruleDone` subscriber is given, the
-    /// `RuleSnapshot` chain when its `node` is this same cell, the parent
-    /// itself when the two share one (which `child_node_is_self` records
-    /// just above). Any of them and the value is copied exactly as before.
     pub(crate) fn accept_child_node(&mut self, child: &Rule) {
         self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
-        self.child_node = if Rc::strong_count(&child.node) == 1 {
-            std::mem::replace(&mut *child.node.borrow_mut(), Value::Undefined)
-        } else {
-            child.node.borrow().clone()
-        };
+        self.child_node = child.node.borrow().clone();
     }
 }
 

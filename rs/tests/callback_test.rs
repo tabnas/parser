@@ -551,3 +551,44 @@ fn rule_done_reaches_a_subscriber_on_every_completion_branch() {
         ["top:open", "child:open", "child:close", "top:close"]
     );
 }
+
+/// A `ruleDone` subscriber sees the value the finished rule built.
+///
+/// `Rule` has no `node` of its own -- `rule.node` derefs into the shared
+/// `RuleSnapshot`, so `Rule::clone` and `Rule::snapshot` both clone that
+/// snapshot's `Rc` and go on sharing the ONE node `Rc` inside it. A
+/// reader that reasons about reachability from `Rc::strong_count` on the
+/// node therefore counts the cell, not the rules and snapshots that can
+/// still reach it, and can conclude a live value is unreachable.
+///
+/// The engine took the value out of the cell under exactly that
+/// reasoning, and this is the assertion that catches it: the `val` rules
+/// below handed their subscriber `Undefined` instead of `1`, `2` and the
+/// array. The suite had nothing that looked at a completed rule's node.
+#[test]
+fn a_rule_done_subscriber_sees_the_value_the_finished_rule_built() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::make_json();
+
+    let log = seen.clone();
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        if matches!(done.state, tabnas::RuleState::Close) {
+            log.lock()
+                .unwrap()
+                .push((rule.name.as_str().to_string(), rule.node.borrow().clone()));
+        }
+    });
+
+    parser.parse(r#"{"a":[1,2]}"#).unwrap();
+    let emptied: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, node)| matches!(node, Value::Undefined))
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert!(
+        emptied.is_empty(),
+        "these rules handed the subscriber an emptied node: {emptied:?}"
+    );
+}
