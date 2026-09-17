@@ -1,5 +1,6 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
+use crate::value::unwrap_arc;
 use crate::value::Value;
 use crate::{Context, Rule};
 use std::collections::HashMap;
@@ -661,14 +662,17 @@ impl fmt::Display for Token {
 fn merge_detail(base: Value, overlay: Value) -> Value {
     match (base, overlay) {
         (base, Value::Undefined) => base,
-        (Value::Object(mut base), Value::Object(overlay)) => {
-            for (key, value) in overlay {
+        (Value::Object(base), Value::Object(overlay)) => {
+            let mut base = unwrap_arc(base);
+            for (key, value) in unwrap_arc(overlay) {
                 let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
                 base.insert(key, merge_detail(previous, value));
             }
-            Value::Object(base)
+            Value::object(base)
         }
-        (Value::Array(mut base), Value::Array(overlay)) => {
+        (Value::Array(base), Value::Array(overlay)) => {
+            let mut base = unwrap_arc(base);
+            let overlay = unwrap_arc(overlay);
             if base.len() < overlay.len() {
                 base.resize(overlay.len(), Value::Undefined);
             }
@@ -676,7 +680,7 @@ fn merge_detail(base: Value, overlay: Value) -> Value {
                 let previous = std::mem::replace(&mut base[index], Value::Undefined);
                 base[index] = merge_detail(previous, value);
             }
-            Value::Array(base)
+            Value::array(base)
         }
         (_, overlay) => overlay,
     }
@@ -727,8 +731,8 @@ fn detail_json(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
-        Value::ListRef(list) => detail_json(&Value::Array(list.value.clone())),
-        Value::MapRef(map) => detail_json(&Value::Object(map.value.clone())),
+        Value::ListRef(list) => detail_json(&Value::array(list.value.clone())),
+        Value::MapRef(map) => detail_json(&Value::object(map.value.clone())),
     }
 }
 

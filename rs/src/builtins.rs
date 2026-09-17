@@ -8,6 +8,7 @@ use crate::Context;
 use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub(crate) fn is_builtin_action(name: &str) -> bool {
     matches!(
@@ -37,7 +38,7 @@ pub(crate) fn is_builtin_action(name: &str) -> bool {
 
 fn config_object(config: Option<&Value>) -> Option<&IndexMap<String, Value>> {
     config.and_then(|value| match value {
-        Value::Object(map) => Some(map),
+        Value::Object(map) => Some(map.as_ref()),
         _ => None,
     })
 }
@@ -98,8 +99,8 @@ fn ast_node(rule: String, kind: String) -> Value {
         node.insert("rule".into(), Value::String(rule));
     }
     node.insert("src".into(), Value::String(String::new()));
-    node.insert("kids".into(), Value::Array(Vec::new()));
-    Value::Object(node)
+    node.insert("kids".into(), Value::array(Vec::new()));
+    Value::object(node)
 }
 
 /// The accumulated source text of a tree node -- the `{rule?, src, kids}`
@@ -127,7 +128,7 @@ fn append_src(node: &mut IndexMap<String, Value>, source: &str) {
 }
 
 fn append_kid(node: &mut IndexMap<String, Value>, child: Value) {
-    if let Some(Value::Array(kids)) = node.get_mut("kids") {
+    if let Some(kids) = node.get_mut("kids").and_then(Value::as_array_mut) {
         kids.push(child);
     }
 }
@@ -142,7 +143,7 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
             {
                 append_kid(node, child);
             } else if let Some(Value::Array(children)) = child_map.get("kids") {
-                for nested in children {
+                for nested in children.iter() {
                     append_kid(node, nested.clone());
                 }
             }
@@ -154,26 +155,26 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
 
 fn map_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.map {
-        Value::MapRef(Box::new(MapRef {
+        Value::MapRef(Arc::new(MapRef {
             value: IndexMap::new(),
             implicit,
             meta: IndexMap::new(),
         }))
     } else {
-        Value::Object(IndexMap::new())
+        Value::object(IndexMap::new())
     }
 }
 
 fn list_value(info: &InfoOptions, implicit: bool) -> Value {
     if info.list {
-        Value::ListRef(Box::new(ListRef {
+        Value::ListRef(Arc::new(ListRef {
             value: Vec::new(),
             implicit,
             child: None,
             meta: IndexMap::new(),
         }))
     } else {
-        Value::Array(Vec::new())
+        Value::array(Vec::new())
     }
 }
 
@@ -206,10 +207,10 @@ fn token_value(rule: &mut Rule, context: &mut Context, index: usize, info: &Info
 fn map_insert(node: &mut Value, key: String, value: Value) {
     match node {
         Value::Object(map) => {
-            map.insert(key, value);
+            Arc::make_mut(map).insert(key, value);
         }
         Value::MapRef(map) => {
-            map.value.insert(key, value);
+            Arc::make_mut(map).value.insert(key, value);
         }
         _ => {}
     }
@@ -217,8 +218,8 @@ fn map_insert(node: &mut Value, key: String, value: Value) {
 
 fn list_push(node: &mut Value, value: Value) {
     match node {
-        Value::Array(array) => array.push(value),
-        Value::ListRef(list) => list.value.push(value),
+        Value::Array(array) => Arc::make_mut(array).push(value),
+        Value::ListRef(list) => Arc::make_mut(list).value.push(value),
         _ => {}
     }
 }
@@ -267,7 +268,7 @@ pub(crate) fn run_builtin_action_with_info(
                 )));
             }
             let nterms = config_usize(config, "nterms");
-            if let Value::Object(node) = &mut *rule.node.borrow_mut() {
+            if let Some(node) = rule.node.borrow_mut().as_object_mut() {
                 for token in rule.o.iter().take(nterms) {
                     append_src(node, &token.src);
                 }
@@ -281,7 +282,7 @@ pub(crate) fn run_builtin_action_with_info(
                 )));
             }
             if !rule.child_node.is_undefined() && !rule.child_node_is_self {
-                if let Value::Object(node) = &mut *rule.node.borrow_mut() {
+                if let Some(node) = rule.node.borrow_mut().as_object_mut() {
                     capture_child(node, rule.child_node.clone());
                 }
             }
@@ -295,7 +296,7 @@ pub(crate) fn run_builtin_action_with_info(
             if let Some(parent_node) = &rule.parent_node {
                 let same_node = Rc::ptr_eq(parent_node, &rule.node);
                 let own = rule.node.borrow().clone();
-                if let Value::Object(parent) = &mut *parent_node.borrow_mut() {
+                if let Some(parent) = parent_node.borrow_mut().as_object_mut() {
                     if !same_node {
                         capture_child(parent, own);
                     }

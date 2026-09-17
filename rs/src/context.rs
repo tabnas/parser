@@ -4,6 +4,7 @@ use crate::error::TabnasError;
 use crate::options::Options;
 use crate::rule::{Rule, RuleSnapshot};
 use crate::token::Token;
+use crate::value::unwrap_arc;
 use crate::value::Value;
 use indexmap::IndexMap;
 use std::cell::RefCell;
@@ -444,12 +445,13 @@ impl Context {
 fn merge_seed_value(base: Value, overlay: Value) -> Value {
     match (base, overlay) {
         (base, Value::Undefined) => base,
-        (Value::Object(mut base), Value::Object(overlay)) => {
-            for (key, value) in overlay {
+        (Value::Object(base), Value::Object(overlay)) => {
+            let mut base = unwrap_arc(base);
+            for (key, value) in unwrap_arc(overlay) {
                 let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
                 base.insert(key, merge_seed_value(previous, value));
             }
-            Value::Object(base)
+            Value::object(base)
         }
         (_, overlay) => overlay,
     }

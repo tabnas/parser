@@ -103,7 +103,7 @@ fn core_runtime_values_have_stable_human_readable_forms() {
             ("x".into(), Value::Number(1.0)),
             (
                 "nested".into(),
-                Value::Object([("a".into(), Value::Number(1.0))].into_iter().collect()),
+                Value::object([("a".into(), Value::Number(1.0))].into_iter().collect()),
             ),
         ],
     );
@@ -111,12 +111,12 @@ fn core_runtime_values_have_stable_human_readable_forms() {
         "unexpected",
         [(
             "nested".into(),
-            Value::Object([("b".into(), Value::Number(2.0))].into_iter().collect()),
+            Value::object([("b".into(), Value::Number(2.0))].into_iter().collect()),
         )],
     );
     assert_eq!(
         token.use_data()["nested"],
-        Value::Object(
+        Value::object(
             [
                 ("a".into(), Value::Number(1.0)),
                 ("b".into(), Value::Number(2.0)),
@@ -225,7 +225,7 @@ fn metadata_aware_parser_start_receives_the_owning_instance() {
         .grammar_json(r#"{"options":{"parser":{"start":"@custom"}}}"#)
         .unwrap();
 
-    let meta = Value::Object(
+    let meta = Value::object(
         [("request".into(), Value::Number(7.0))]
             .into_iter()
             .collect(),
@@ -332,19 +332,19 @@ fn typed_parent_context_seeds_meta_and_plugin_state_only() {
     rule.open.push(alt);
     tabnas.rule(rule);
 
-    let meta = Value::Object(
+    let meta = Value::object(
         [(
             "request".into(),
-            Value::Object([("a".into(), Value::Number(1.0))].into_iter().collect()),
+            Value::object([("a".into(), Value::Number(1.0))].into_iter().collect()),
         )]
         .into_iter()
         .collect(),
     );
     let seed = ContextSeed {
-        meta: Some(Value::Object(
+        meta: Some(Value::object(
             [(
                 "request".into(),
-                Value::Object([("b".into(), Value::Number(2.0))].into_iter().collect()),
+                Value::object([("b".into(), Value::Number(2.0))].into_iter().collect()),
             )]
             .into_iter()
             .collect(),

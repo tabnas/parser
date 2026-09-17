@@ -12,7 +12,7 @@ keywords = ["parser", "grammar", "json"]
 categories = ["parsing"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 regex = "1.10"
 indexmap = { version = "2.2", features = ["serde"] }

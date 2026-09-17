@@ -3,6 +3,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text {
@@ -99,15 +100,32 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     String(String),
-    Array(Vec<Value>),
-    Object(IndexMap<String, Value>),
+    /// Shared, not owned. The engine builds a tree by folding each
+    /// finished rule's value into its parent's container, and with an
+    /// owned container that fold copied the whole accumulated subtree --
+    /// once per level, so a document nested `d` deep cost O(d^2). A
+    /// depth-1024 document took 398 ms where TypeScript, whose values are
+    /// references, took 6 ms. Behind an `Arc` the fold is a refcount bump
+    /// and the build is linear again.
+    ///
+    /// `Arc` rather than `Rc` because `Value` is `Send + Sync` and has to
+    /// stay that way: `Options` carries `Value`s and is shared as
+    /// `Arc<Options>`, and a parsed value can be sent between threads
+    /// today. The atomic lands only on containers, never on a `Number` or
+    /// a `String`, and one refcount beats copying a map by any measure.
+    ///
+    /// Mutate through `Arc::make_mut`, which copies only when the
+    /// container is genuinely shared.
+    Array(Arc<Vec<Value>>),
+    Object(Arc<IndexMap<String, Value>>),
     Text(Text),
-    /// Boxed: a `ListRef` is 112 bytes and a `MapRef` 152, and an unboxed
-    /// variant sets the size of every `Value`, hence of every `Token` and
-    /// every `Rule`. Both are niche next to the scalars and containers the
-    /// parse loop moves constantly.
-    ListRef(Box<ListRef>),
-    MapRef(Box<MapRef>),
+    /// Shared for the reason above, and behind a pointer for the reason
+    /// they always were: a `ListRef` is 112 bytes and a `MapRef` 152, and
+    /// an unboxed variant sets the size of every `Value`, hence of every
+    /// `Token` and every `Rule`. Both are niche next to the scalars and
+    /// containers the parse loop moves constantly.
+    ListRef(Arc<ListRef>),
+    MapRef(Arc<MapRef>),
 }
 
 impl<'de> Deserialize<'de> for Value {
@@ -123,7 +141,54 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
+/// Take a container out of its `Arc`, copying it only if it is shared.
+///
+/// `unwrap_undefined` consumes the value it is given, so the usual case
+/// is the last holder letting go and the contents moving out untouched.
+pub(crate) fn unwrap_arc<T: Clone>(shared: Arc<T>) -> T {
+    Arc::try_unwrap(shared).unwrap_or_else(|shared| (*shared).clone())
+}
+
 impl Value {
+    /// Build an array value from an owned vector.
+    ///
+    /// The variant holds an `Arc`, so that a value folded into a parent
+    /// container costs a refcount rather than a copy. Constructing one
+    /// still starts from an owned vector, and this is the shorthand for
+    /// handing it over.
+    pub fn array(values: Vec<Value>) -> Self {
+        Value::Array(Arc::new(values))
+    }
+
+    /// Build an object value from an owned map. See [`Value::array`].
+    pub fn object(entries: IndexMap<String, Value>) -> Self {
+        Value::Object(Arc::new(entries))
+    }
+
+    /// The array behind this value, ready to write to, or `None` when it
+    /// is not an array.
+    ///
+    /// Copies the contents first if anything else still shares them, so a
+    /// write through this handle is never seen by another holder. That
+    /// copy is the whole price of sharing, and it is paid only when a
+    /// value is mutated after being handed on -- which the tree build,
+    /// which only ever folds a finished value upwards, never does.
+    pub fn as_array_mut(&mut self) -> Option<&mut Vec<Value>> {
+        match self {
+            Value::Array(values) => Some(Arc::make_mut(values)),
+            _ => None,
+        }
+    }
+
+    /// The map behind this value, ready to write to, or `None` when it is
+    /// not an object. See [`Value::as_array_mut`].
+    pub fn as_object_mut(&mut self) -> Option<&mut IndexMap<String, Value>> {
+        match self {
+            Value::Object(entries) => Some(Arc::make_mut(entries)),
+            _ => None,
+        }
+    }
+
     pub fn is_undefined(&self) -> bool {
         matches!(self, Value::Undefined)
     }
@@ -135,18 +200,23 @@ impl Value {
     pub fn unwrap_undefined(self) -> Value {
         match self {
             Value::Undefined => Value::Null,
-            Value::Array(arr) => {
-                Value::Array(arr.into_iter().map(|v| v.unwrap_undefined()).collect())
-            }
-            Value::Object(map) => {
-                let mut out = IndexMap::with_capacity(map.len());
-                for (k, v) in map {
-                    out.insert(k, v.unwrap_undefined());
+            Value::Array(values) => Value::array(
+                unwrap_arc(values)
+                    .into_iter()
+                    .map(Value::unwrap_undefined)
+                    .collect(),
+            ),
+            Value::Object(entries) => {
+                let entries = unwrap_arc(entries);
+                let mut out = IndexMap::with_capacity(entries.len());
+                for (key, value) in entries {
+                    out.insert(key, value.unwrap_undefined());
                 }
-                Value::Object(out)
+                Value::object(out)
             }
             Value::Text(text) => Value::Text(text),
-            Value::ListRef(mut list) => {
+            Value::ListRef(list) => {
+                let mut list = unwrap_arc(list);
                 list.value = list
                     .value
                     .into_iter()
@@ -158,9 +228,10 @@ impl Value {
                     .into_iter()
                     .map(|(key, value)| (key, value.unwrap_undefined()))
                     .collect();
-                Value::ListRef(list)
+                Value::ListRef(Arc::new(list))
             }
-            Value::MapRef(mut map) => {
+            Value::MapRef(map) => {
+                let mut map = unwrap_arc(map);
                 map.value = map
                     .value
                     .into_iter()
@@ -171,7 +242,7 @@ impl Value {
                     .into_iter()
                     .map(|(key, value)| (key, value.unwrap_undefined()))
                     .collect();
-                Value::MapRef(map)
+                Value::MapRef(Arc::new(map))
             }
             other => other,
         }
@@ -195,7 +266,7 @@ impl Value {
             }
             Value::Object(obj) => {
                 let mut map = serde_json::Map::new();
-                for (k, v) in obj {
+                for (k, v) in obj.iter() {
                     map.insert(k.clone(), v.to_json());
                 }
                 serde_json::Value::Object(map)
@@ -221,14 +292,14 @@ impl Value {
             serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
             serde_json::Value::String(s) => Value::String(s.clone()),
             serde_json::Value::Array(arr) => {
-                Value::Array(arr.iter().map(Value::from_json).collect())
+                Value::array(arr.iter().map(Value::from_json).collect())
             }
             serde_json::Value::Object(map) => {
                 let mut out = IndexMap::with_capacity(map.len());
                 for (k, val) in map {
                     out.insert(k.clone(), Value::from_json(val));
                 }
-                Value::Object(out)
+                Value::object(out)
             }
         }
     }
@@ -261,7 +332,7 @@ impl Value {
                 if a.len() != b.len() {
                     return false;
                 }
-                for (k, va) in a {
+                for (k, va) in a.iter() {
                     if let Some(vb) = b.get(k) {
                         if !va.deep_equal(vb) {
                             return false;
@@ -315,8 +386,8 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::Text(text) => write!(f, "\"{}\"", text.string),
-            Value::ListRef(list) => write!(f, "{}", Value::Array(list.value.clone())),
-            Value::MapRef(map) => write!(f, "{}", Value::Object(map.value.clone())),
+            Value::ListRef(list) => write!(f, "{}", Value::array(list.value.clone())),
+            Value::MapRef(map) => write!(f, "{}", Value::object(map.value.clone())),
         }
     }
 }

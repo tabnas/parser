@@ -1752,7 +1752,7 @@ fn merge_plugin_value(left: &Value, right: &Value, path: &str) -> Result<Value, 
                 };
                 out.insert(key, value);
             }
-            Ok(Value::Object(out))
+            Ok(Value::object(out))
         }
         _ if left.deep_equal(right) => Ok(left.clone()),
         _ => Err(conflict(path)),
@@ -1804,8 +1804,8 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
     let mut options = merge_options(&left.options, &right.options)?;
     options.tag = format!("{left_tag}~{right_tag}");
     let plugin_options = merge_plugin_value(
-        &Value::Object(left.plugin_options.clone()),
-        &Value::Object(right.plugin_options.clone()),
+        &Value::object(left.plugin_options.clone()),
+        &Value::object(right.plugin_options.clone()),
         "plugin",
     )?;
     let Value::Object(plugin_options) = plugin_options else {
@@ -2020,7 +2020,7 @@ pub(crate) fn merge(left: &Tabnas, right: &Tabnas) -> Result<Tabnas, MergeError>
     };
 
     let mut out = Tabnas::with_options(options);
-    out.plugin_options = plugin_options;
+    out.plugin_options = crate::value::unwrap_arc(plugin_options);
     out.decorations = decorations;
     let install_callback = install.clone();
     out.use_plugin(

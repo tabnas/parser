@@ -167,7 +167,7 @@ impl Plugin {
     ) -> Self {
         Self {
             name: name.into(),
-            defaults: Value::Object(IndexMap::new()),
+            defaults: Value::object(IndexMap::new()),
             callback: Arc::new(callback),
         }
     }
@@ -408,7 +408,7 @@ impl Tabnas {
             .plugin_options
             .get(&name)
             .cloned()
-            .unwrap_or_else(|| Value::Object(IndexMap::new()));
+            .unwrap_or_else(|| Value::object(IndexMap::new()));
         let merged = merge_plugin_values(
             merge_plugin_values(current, plugin.defaults.clone()),
             options.unwrap_or(Value::Undefined),
@@ -440,7 +440,7 @@ impl Tabnas {
             .plugin_options
             .get(&name)
             .cloned()
-            .unwrap_or_else(|| Value::Object(IndexMap::new()));
+            .unwrap_or_else(|| Value::object(IndexMap::new()));
         let merged = merge_plugin_values(current, options);
         self.plugin_options.insert(name.clone(), merged.clone());
         self.options.plugin.insert(name.clone(), merged.clone());
@@ -1703,21 +1703,22 @@ pub(crate) fn merge_plugin_values(base: Value, overlay: Value) -> Value {
     const DANGEROUS: [&str; 3] = ["__proto__", "constructor", "prototype"];
     match (base, overlay) {
         (base, Value::Undefined) => base,
-        (Value::Object(mut base), Value::Object(overlay)) => {
-            for (key, value) in overlay {
+        (Value::Object(base), Value::Object(overlay)) => {
+            let mut base = crate::value::unwrap_arc(base);
+            for (key, value) in crate::value::unwrap_arc(overlay) {
                 if DANGEROUS.contains(&key.as_str()) {
                     continue;
                 }
                 let previous = base.shift_remove(&key).unwrap_or(Value::Undefined);
                 base.insert(key, merge_plugin_values(previous, value));
             }
-            Value::Object(base)
+            Value::object(base)
         }
         (Value::Array(base), Value::Array(overlay)) => {
             let length = base.len().max(overlay.len());
-            let mut base = base.into_iter();
-            let mut overlay = overlay.into_iter();
-            Value::Array(
+            let mut base = crate::value::unwrap_arc(base).into_iter();
+            let mut overlay = crate::value::unwrap_arc(overlay).into_iter();
+            Value::array(
                 (0..length)
                     .map(|_| match (base.next(), overlay.next()) {
                         (Some(base), Some(overlay)) => merge_plugin_values(base, overlay),
