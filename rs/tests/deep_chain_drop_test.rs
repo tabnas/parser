@@ -63,3 +63,60 @@ fn a_rule_chain_as_long_as_the_input_drops_without_the_call_stack() {
         ELEMENTS
     );
 }
+
+/// The same chain, but with a `Weak` observer on EVERY node.
+///
+/// `Rule::snapshot` is public and `Context` hands out `Rc<RuleSnapshot>`,
+/// so an embedder can hold a `Weak` to a snapshot that is in the chain.
+/// `Rc::get_mut` refuses while any weak observer exists, even when the
+/// caller IS the last strong owner and dropping will run the destructor,
+/// so a walk that only uses `get_mut` leaves that snapshot's links in
+/// place and lets its own `drop` deal with them. `Rc::try_unwrap` is the
+/// call that distinguishes the two.
+///
+/// ONE observed node costs one extra frame, because the re-entered `drop`
+/// walks the rest iteratively; it is observers all the way down that turn
+/// the walk back into one frame per link. So that is what this builds,
+/// and it is why a single observer would have been a test that passed
+/// either way.
+///
+/// Nothing in this crate creates a `Weak<RuleSnapshot>`, which is exactly
+/// why the first version of the iterative drop shipped with this hole.
+#[test]
+fn weak_observers_all_the_way_down_do_not_restore_the_recursion() {
+    use std::rc::{Rc, Weak};
+    use tabnas::{Rule, Value};
+
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(|| {
+            let mut head: Rc<tabnas::RuleSnapshot> = Rule::new("link", Value::Undefined).snapshot();
+            let mut observers: Vec<Weak<tabnas::RuleSnapshot>> = Vec::with_capacity(ELEMENTS);
+            observers.push(Rc::downgrade(&head));
+
+            for _ in 0..ELEMENTS {
+                let mut next = Rule::new("link", Value::Undefined).snapshot();
+                Rc::get_mut(&mut next)
+                    .expect("freshly built, so solely owned")
+                    .prev_rule = Some(head);
+                head = next;
+                observers.push(Rc::downgrade(&head));
+            }
+
+            assert!(
+                observers.iter().all(|link| link.upgrade().is_some()),
+                "every node alive before the drop"
+            );
+            drop(head);
+            assert!(
+                observers.iter().all(|link| link.upgrade().is_none()),
+                "every node gone after it, observers included"
+            );
+            ELEMENTS
+        })
+        .expect("thread should spawn");
+    assert_eq!(
+        handle.join().expect("the drop must not overflow the stack"),
+        ELEMENTS
+    );
+}

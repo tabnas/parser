@@ -1265,16 +1265,6 @@ pub struct Rule {
     pub(crate) slot: usize,
 }
 
-thread_local! {
-    /// Scratch for `RuleSnapshot`'s drop, so that walking a chain costs a
-    /// thread-local read rather than a `Vec` allocation per snapshot. The
-    /// buffer is only ever reached by a snapshot that still holds links,
-    /// and it is always left empty, so re-entering `drop` while it is
-    /// borrowed cannot happen: every snapshot this walk drops has had its
-    /// links taken first, and one with no links returns before it looks.
-    static UNLINK_SCRATCH: RefCell<Vec<Rc<RuleSnapshot>>> = const { RefCell::new(Vec::new()) };
-}
-
 impl Drop for RuleSnapshot {
     /// Unlink iteratively, because the derived drop recurses and the links
     /// below form a chain as long as the input.
@@ -1293,6 +1283,14 @@ impl Drop for RuleSnapshot {
     /// survived an input that a build in the configuration rs/README.md
     /// documents for shipping did not. That is the wrong way round, and it
     /// is why this is a `Drop` impl rather than advice about stack size.
+    ///
+    /// The scratch is a local rather than a thread-local. A thread-local
+    /// is faster and was wrong twice over: its key can be destroyed before
+    /// another thread-local holding a snapshot is, and touching a
+    /// destroyed key panics from inside a destructor; and re-entering this
+    /// function while its `RefCell` is borrowed panics too. A local is
+    /// immune to both, and the early return below means most drops never
+    /// reach it.
     fn drop(&mut self) {
         // The overwhelmingly common case, and the one on the parse loop's
         // hot path: nothing is linked, so there is nothing to walk. Four
@@ -1305,6 +1303,12 @@ impl Drop for RuleSnapshot {
             return;
         }
 
+        /// Move a snapshot's links out, preferring the single-slot
+        /// `cursor` so that a pure chain -- one link per snapshot, which
+        /// is what a rule replaced once per input element builds -- is
+        /// walked without allocating anything at all. `pending` is only
+        /// reached for a snapshot holding more than one link, and a `Vec`
+        /// that is never pushed to never allocates.
         fn unlink(
             snapshot: &mut RuleSnapshot,
             cursor: &mut Option<Rc<RuleSnapshot>>,
@@ -1325,26 +1329,31 @@ impl Drop for RuleSnapshot {
             hold(snapshot.next_rule.take());
         }
 
-        // A pure chain -- one link per snapshot, which is what a rule
-        // replaced once per input element builds -- never touches
-        // `pending` and so never allocates at all.
         let mut cursor: Option<Rc<RuleSnapshot>> = None;
-        UNLINK_SCRATCH.with(|scratch| {
-            let mut pending = scratch.borrow_mut();
-            unlink(self, &mut cursor, &mut pending);
-            while let Some(mut link) = cursor.take().or_else(|| pending.pop()) {
-                // `get_mut` rather than `try_unwrap`: both answer "am I the
-                // last handle", but `try_unwrap` answers it by MOVING the
-                // snapshot out of its allocation, and a `RuleSnapshot` is a
+        let mut pending: Vec<Rc<RuleSnapshot>> = Vec::new();
+        unlink(self, &mut cursor, &mut pending);
+        while let Some(mut link) = cursor.take().or_else(|| pending.pop()) {
+            if Rc::weak_count(&link) == 0 {
+                // No weak observers, so `get_mut` answers "am I the last
+                // handle" without moving anything. `RuleSnapshot` is a
                 // twenty-field struct carrying eight reference-counted
-                // handles.
+                // handles, and this is the path the parse loop takes.
                 if let Some(owned) = Rc::get_mut(&mut link) {
                     unlink(owned, &mut cursor, &mut pending);
                 }
-                // `link` drops here with its links already taken, so its
-                // own `drop` returns at the check above and cannot recurse.
+            } else if let Ok(mut owned) = Rc::try_unwrap(link) {
+                // `Rule::snapshot` is public and `Context` hands out
+                // `Rc<RuleSnapshot>`, so an embedder can hold a `Weak` to
+                // one. `get_mut` refuses while any weak observer exists,
+                // even when we ARE the last strong owner and dropping will
+                // run the destructor; `try_unwrap` is the one that
+                // distinguishes those. Getting this wrong left the links
+                // in place and recursed after all.
+                unlink(&mut owned, &mut cursor, &mut pending);
             }
-        });
+            // Anything reached here drops with its links already taken, so
+            // its own `drop` returns at the check above.
+        }
     }
 }
 
