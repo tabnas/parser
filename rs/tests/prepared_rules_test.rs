@@ -105,6 +105,15 @@ fn a_route_into_a_rule_installed_later_resolves() {
 /// used only while it still describes the rule in hand. Here an action
 /// makes `child` into `top` -- same name, same spec -- and the close pass
 /// has to run `top`'s alternate, not the one sitting at `child`'s slot.
+///
+/// Both rules also declare before-close and after-close actions, and they
+/// declare different ones, because the alternates are not the only thing
+/// read out of the record: the lifecycle action orders are prepared there
+/// too. The impersonating rule's close pass is the one step in the suite
+/// that reaches those phases with the record rejected, so it is the only
+/// place the fallback to the spec's own order runs with anything in it --
+/// and the only place a record trusted one step too long would be caught
+/// running `child`'s lifecycle actions for `top`.
 #[test]
 fn a_rule_that_takes_another_rules_name_and_spec_runs_that_rules_alternates() {
     fn run(impersonate: bool) -> Vec<&'static str> {
@@ -139,6 +148,21 @@ fn a_rule_that_takes_another_rules_name_and_spec_runs_that_rules_alternates() {
         parser.action("@top-close", move |_rule| {
             events.lock().unwrap().push("top-close")
         });
+        // `@<rule>-<phase>` is how a JSON grammar declares a lifecycle
+        // action: the loader wires each of these into the phase its name
+        // spells out.
+        for (name, mark) in [
+            ("@top-bc", "top-bc"),
+            ("@top-ac", "top-ac"),
+            ("@child-bc", "child-bc"),
+            ("@child-ac", "child-ac"),
+        ] {
+            let events = log.clone();
+            parser.action_with_context(name, move |_rule, _context| {
+                events.lock().unwrap().push(mark);
+                Ok(())
+            });
+        }
         parser
             .grammar_json(
                 r##"{
@@ -168,8 +192,27 @@ fn a_rule_that_takes_another_rules_name_and_spec_runs_that_rules_alternates() {
 
     assert_eq!(
         run(true),
-        ["impersonate", "top-close", "top-close"],
-        "the impersonating rule closed on its slot's alternate, not on the one it now claims"
+        [
+            "impersonate",
+            "top-bc",
+            "top-close",
+            "top-ac",
+            "top-bc",
+            "top-close",
+            "top-ac",
+        ],
+        "the impersonating rule closed on its slot's alternate or its slot's \
+         lifecycle order, not on the ones it now claims"
     );
-    assert_eq!(run(false), ["child-close", "top-close"]);
+    assert_eq!(
+        run(false),
+        [
+            "child-bc",
+            "child-close",
+            "child-ac",
+            "top-bc",
+            "top-close",
+            "top-ac",
+        ]
+    );
 }
