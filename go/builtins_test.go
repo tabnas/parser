@@ -850,9 +850,19 @@ func TestPushSurvivesReplacementWithListRef(t *testing.T) {
 	}
 
 	// top holds the list; step replaced it and appends the second element.
+	//
+	// `nodeOwner` is what `Rule.Process` seeds on an `r:` (rule.go:
+	// `next.nodeOwner = r.nodeHolder()`), and it is load-bearing here
+	// rather than decoration: it is what makes top the ONE rule holding
+	// the authoritative header, so a push from anywhere in the chain
+	// lands somewhere every holder agrees on. Leaving it out builds a
+	// rule the engine cannot produce, and the growth would have to be
+	// chased back along `Prev` instead -- which is quadratic in the
+	// length of the list, and was.
 	seed := ListRef{Val: []any{"1"}, Meta: map[string]any{}}
 	top := &Rule{Node: seed}
-	step := &Rule{Node: seed, Prev: top, Child: &Rule{Node: "2"}}
+	step := &Rule{Node: seed, Prev: top, Child: &Rule{Node: "2"},
+		nodeOwner: top}
 	grow(step)
 
 	got, ok := listHeader(top.Node)
@@ -864,6 +874,104 @@ func TestPushSurvivesReplacementWithListRef(t *testing.T) {
 	}
 	if _, isRef := top.Node.(ListRef); !isRef {
 		t.Errorf("the ListRef wrapper must be preserved, got %T", top.Node)
+	}
+}
+
+func specFromJSON(t *testing.T, src string) *GrammarSpec {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(src), &m); err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+	gs := &GrammarSpec{}
+	if om, ok := m["options"].(map[string]any); ok {
+		gs.OptionsMap = om
+	}
+	if rm, ok := m["rule"].(map[string]any); ok {
+		gs.Rule = mapToGrammarRules(rm)
+	}
+	if v, ok := m["v"]; ok {
+		gs.V = cfgInt(v)
+	}
+	return gs
+}
+
+// A rule that LIFTS a list with @bubble$ and then replaces itself.
+//
+// `mid` pushes `arr`, which allocates the list and appends the first
+// element; `mid` lifts that list on close and replaces itself with
+// `tail`, which appends the second. The parent's Child pointer stays on
+// `mid`, and `mid` is neither the list's owner (that is `arr`) nor the
+// rule doing the pushing (that is `tail`) -- so nothing in the push path
+// writes to it, and `__start__`'s @bubble$ reads a header that stopped
+// growing at the lift.
+//
+// No fixture had this shape: push-replace.fixture.json replaces a rule
+// that OWNS its list, so the owner write covers it.
+func TestPushSurvivesReplacementAfterABubbledList(t *testing.T) {
+	const spec = `{
+	  "v": 5,
+	  "options": { "rule": { "start": "__start__" } },
+	  "rule": {
+	    "__start__": {
+	      "open":  [ { "p": "mid" } ],
+	      "close": [ { "s": "#ZZ", "a": "@bubble$" } ]
+	    },
+	    "mid": {
+	      "open":  [ { "p": "arr" } ],
+	      "close": [ { "a": "@bubble$", "r": "tail" } ]
+	    },
+	    "arr": {
+	      "open":  [ { "a": "@array$", "p": "elem" } ],
+	      "close": [ { "a": "@push$", "k": { "push$": { "src": true } } } ]
+	    },
+	    "tail": {
+	      "open":  [ { "s": "#CA", "p": "elem" } ],
+	      "close": [ { "a": "@push$", "k": { "push$": { "src": true } } } ]
+	    },
+	    "elem": {
+	      "open":  [ { "s": "#NR", "a": "@node$",
+	                   "k": { "node$": { "init": true, "nterms": 1 } } } ],
+	      "close": [ { "a": "@capture$" } ]
+	    }
+	  }
+	}`
+	j := Make()
+	if err := j.Grammar(specFromJSON(t, spec)); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []any{"1", "2"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("build: got %#v, want %#v", omPlainify(UnwrapUndefined(got)), want)
+	}
+}
+
+// A custom AltAction assigns `r.Node` on a pushed rule, and the rule it
+// was pushed from reads that value.
+//
+// This pins the limit of `nodeOwner`. It is seeded down on push, and an
+// AltAction cannot clear it -- the field is unexported, and an action
+// only ever receives `*Rule`. So a rule can be holding a node that has
+// nothing to do with its owner's container, and anything that resolves a
+// rule's node THROUGH its owner reads the container instead of what the
+// plugin produced. Custom actions are the normal plugin surface, so that
+// is not an exotic case.
+//
+// Recorded because the obvious O(1) replacement for the quadratic `Prev`
+// walk in `@push$` is exactly that resolution, and this is why it does
+// not work. See `go/doc/differences.md` on the replacement chain.
+func TestCustomActionNodeSurvivesOwnerResolution(t *testing.T) {
+	top := &Rule{Node: []any{}, Child: NoRule, Parent: NoRule, Prev: NoRule}
+	leaf := &Rule{Node: top.Node, nodeOwner: top, Child: NoRule, Parent: top, Prev: NoRule}
+	leaf.Node = "leaf" // what a custom AltAction does
+	top.Child = leaf
+
+	builtinValueCfg(top, nil, nil)
+	if top.Node != "leaf" {
+		t.Errorf("@value$ lost the plugin's node: got %#v, want \"leaf\"", top.Node)
 	}
 }
 
