@@ -3,7 +3,7 @@
 use crate::builtins::run_builtin_action_with_info;
 use crate::context::{Context, ContextSeed, InstanceInfo};
 use crate::error::TabnasError;
-use crate::lexer::{Lexer, RelexCheckpoint};
+use crate::lexer::{compile_number_exclude, Lexer, RelexCheckpoint};
 use crate::options::Options;
 use crate::rule::{
     resolved_action_order, resolved_alt_action_order, ActionBinding, AltActionBinding, AltMatch,
@@ -69,6 +69,18 @@ pub struct Parser {
     /// twice.
     pub options: Arc<Options>,
     ignore_tins: Vec<Tin>,
+    /// `options.number.exclude` compiled once, here, and shared with
+    /// the lexer of every parse instead of compiled by each of them.
+    ///
+    /// `options` is public, so this is a cache whose source has a second
+    /// writer: a caller on the low-level API may replace the whole `Arc`
+    /// between parses, and before this was cached each lexer compiled
+    /// whatever pattern was in force. `exclude_pattern` is the pattern
+    /// this regex was built from, and a parse whose options no longer
+    /// carry it compiles the one they do carry instead -- the old cost,
+    /// paid only by the callers who change the pattern under the parser.
+    exclude_regex: Option<Arc<regex::Regex>>,
+    exclude_pattern: Option<String>,
     /// Installed rules by name.
     ///
     /// Private, and read through [`Parser::rules`]. Two derived tables below
@@ -82,11 +94,32 @@ pub struct Parser {
     /// there was nothing to go stale, so this hazard arrived with the table.
     rules: IndexMap<String, Arc<RuleSpec>>,
     /// The token identities each rule can accept at each lookahead slot,
-    /// worked out once per installed rule rather than once per token.
-    expected_tins: HashMap<String, ExpectedTins>,
+    /// worked out once per installed rule rather than once per token, and
+    /// positional in `rules` the way `names` is: a rule carries the slot
+    /// it was installed at, so reaching its row costs an index rather than
+    /// a hash of its name on every token fetch.
+    expected_tins: Vec<ExpectedTins>,
     /// One shared copy of each installed rule's name, so pushing a rule
     /// clones a pointer rather than reallocating the name per push.
-    names: HashMap<String, RuleName>,
+    ///
+    /// Parallel to `rules`, indexed by position rather than keyed by the
+    /// name again: every route already has to find the rule's spec, and
+    /// `IndexMap::get_full` hands back that rule's index with it, so the
+    /// shared name costs an array index instead of a second hash of the
+    /// same bytes. `Parser::rules` is public and hands out the map itself,
+    /// which is why the handle lives beside the map rather than in it.
+    /// `add_rule` keeps the two in step; `IndexMap` gives a replaced key
+    /// back its existing index, so a replacement overwrites in place.
+    names: Vec<RuleName>,
+    /// Per-rule state worked out once, when the grammar is installed.
+    ///
+    /// Parallel to `rules` and `names`, and written only by `add_rule`,
+    /// which rebuilds the whole table -- a route may name a rule that is
+    /// installed later, so an entry is only right once every rule is in.
+    /// The loop reaches an entry by the `slot` the rule carries and checks
+    /// it against the rule's own spec and name before trusting it, so a
+    /// callback that rewrites either just falls back to the lookup.
+    prepared: Vec<PreparedRule>,
     pub actions: HashMap<String, Action>,
     pub context_actions: HashMap<String, ContextAction>,
     pub matched_actions: HashMap<String, AltAction>,
@@ -96,6 +129,136 @@ pub struct Parser {
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
     pub instance: InstanceInfo,
+}
+
+/// One installed rule, with what the parse loop can work out about it
+/// before a parse starts.
+///
+/// Routing, and the order the rule's actions run in. The order is a
+/// question about the spec alone -- which of the named, callback and
+/// state lists a binding came from, and where the three interleave -- and
+/// the spec behind the `Arc` this record is checked against cannot change
+/// while a parse runs, so it is answered once here instead of rebuilt into
+/// a fresh `Vec` on every rule step. What a *named* binding resolves to is
+/// a different question: it is looked up in `Parser::actions`,
+/// `matched_actions` and `state_actions`, all of them public maps an
+/// embedder may write after `add_rule` has run, so that lookup stays where
+/// it was, on the step -- a table derived from a field with a second
+/// writer goes stale in silence, which is the hazard `rules` was made
+/// private to close.
+struct PreparedRule {
+    /// The rule's shared name handle and the spec it was installed with.
+    ///
+    /// `spec` is what the loop borrows in place of the rule's own; `name`
+    /// is only ever compared. Together they are what says the rule in hand
+    /// is still the rule this record describes.
+    name: RuleName,
+    spec: Arc<RuleSpec>,
+    open: Vec<PreparedAlt>,
+    close: Vec<PreparedAlt>,
+    /// The four lifecycle action orders, in the same order the rule runs
+    /// them. Most grammars declare none of them, and an empty list here is
+    /// what lets a step skip the whole phase rather than walk an empty
+    /// one: `bind_spec` sets a rule's `bo`/`ao`/`bc`/`ac` true
+    /// unconditionally, so those flags say the phase is *enabled*, never
+    /// that it has anything to run.
+    bo: Vec<ActionBinding>,
+    ao: Vec<ActionBinding>,
+    bc: Vec<ActionBinding>,
+    ac: Vec<ActionBinding>,
+}
+
+impl PreparedRule {
+    fn alt(&self, is_open: bool, idx: usize) -> Option<&PreparedAlt> {
+        if is_open {
+            self.open.get(idx)
+        } else {
+            self.close.get(idx)
+        }
+    }
+
+    /// The before-open or before-close action order.
+    fn before(&self, is_open: bool) -> &[ActionBinding] {
+        if is_open {
+            &self.bo
+        } else {
+            &self.bc
+        }
+    }
+
+    /// The after-open or after-close action order.
+    fn after(&self, is_open: bool) -> &[ActionBinding] {
+        if is_open {
+            &self.ao
+        } else {
+            &self.ac
+        }
+    }
+}
+
+/// One alternate's two routing channels and its action order, resolved at
+/// install time.
+struct PreparedAlt {
+    p: PreparedRoute,
+    r: PreparedRoute,
+    /// The alternate's action bindings in the order they run.
+    actions: Vec<AltActionBinding>,
+    /// Whether anything a step on this alternate runs can read the
+    /// `AltMatch` record, and so see the action list the engine publishes
+    /// into `matched.actions`.
+    ///
+    /// The list is published for the callbacks that receive the record --
+    /// the `c`/`e`/`p`/`r`/`b` matched hooks, the matched modifier, and a
+    /// matched action itself. When the alternate declares none of them
+    /// nothing in the step can tell whether the field was filled, so the
+    /// step runs these bindings straight from here: no `Vec` built, no
+    /// second copy taken to iterate, no reference counts touched. When it
+    /// declares any of them the step fills the record exactly as before.
+    ///
+    /// A `Named` binding may also resolve to a matched action, and that
+    /// cannot be settled here -- `add_matched_action` may be called after
+    /// `add_rule`, and `matched_actions` is public. `named` records only
+    /// that the question arises; the step asks it of the map it is asking
+    /// anyway.
+    observed: bool,
+    named: bool,
+}
+
+enum PreparedRoute {
+    /// Nothing was resolved: the alternate declares no route on this
+    /// channel, or names a rule that is not installed, or routes through a
+    /// callback. All three take the same path they took before the table --
+    /// one lookup by name, which is also what raises `unknown_rule` for a
+    /// route naming no rule.
+    ByName,
+    Static {
+        slot: usize,
+        name: RuleName,
+        spec: Arc<RuleSpec>,
+    },
+}
+
+impl PreparedRoute {
+    /// The prepared answer, if the route the parse is actually taking is
+    /// still the one that was prepared.
+    ///
+    /// The test is byte-equality of the name, unconditionally, and not a
+    /// pointer comparison of the alternate: `h` rewrites the whole
+    /// `AltSpec` per step, `p_fn`/`r_fn` and `p_match`/`r_match` produce
+    /// the name at run time, and a matched action may write `matched.p` or
+    /// `matched.r` outright -- all supported routing channels. A route that
+    /// arrives at the same name resolves to the same rule whichever of them
+    /// produced it, so the bytes are the whole question.
+    fn resolved(&self, name: &str) -> Option<(usize, RuleName, &Arc<RuleSpec>)> {
+        match self {
+            PreparedRoute::Static {
+                slot,
+                name: prepared,
+                spec,
+            } if prepared.as_str() == name => Some((*slot, prepared.clone(), spec)),
+            _ => None,
+        }
+    }
 }
 
 /// Per-slot accepted token identities for one rule, in each state.
@@ -151,10 +314,13 @@ impl Parser {
     pub fn from_shared(options: Arc<Options>) -> Self {
         Parser {
             ignore_tins: options.ignore_tins(),
+            exclude_regex: compile_number_exclude(&options),
+            exclude_pattern: options.number.exclude.clone(),
             options,
             rules: IndexMap::new(),
-            expected_tins: HashMap::new(),
-            names: HashMap::new(),
+            expected_tins: Vec::new(),
+            names: Vec::new(),
+            prepared: Vec::new(),
             actions: HashMap::new(),
             context_actions: HashMap::new(),
             matched_actions: HashMap::new(),
@@ -176,21 +342,148 @@ impl Parser {
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
-        self.expected_tins
-            .insert(spec.name.clone(), ExpectedTins::of(&spec));
-        self.names
-            .insert(spec.name.clone(), RuleName::from(spec.name.as_str()));
-        self.rules.insert(spec.name.clone(), Arc::new(spec));
+        let expected = ExpectedTins::of(&spec);
+        let shared = RuleName::from(spec.name.as_str());
+        let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
+        // A replacement keeps the key's index, so it overwrites its own
+        // name handle; a new rule is appended and takes the next slot. The
+        // accepted-token table is positional for the same reason and is
+        // written here, not in `rebuild_prepared`: it is derived from one
+        // rule's spec alone, so rebuilding it for every rule on every
+        // install would be quadratic for no gain.
+        match self.names.get_mut(index) {
+            Some(existing) => *existing = shared,
+            None => self.names.push(shared),
+        }
+        match self.expected_tins.get_mut(index) {
+            Some(existing) => *existing = expected,
+            None => self.expected_tins.push(expected),
+        }
+        self.rebuild_prepared();
     }
 
-    /// The shared name for an installed rule. Names that no rule claims
-    /// still parse — the error path wants the name the grammar asked
-    /// for — so an unknown name gets its own allocation.
-    fn interned(&self, name: &str) -> RuleName {
-        match self.names.get(name) {
-            Some(shared) => shared.clone(),
-            None => RuleName::from(name),
+    /// Rebuild the prepared table for every installed rule.
+    ///
+    /// Every rule, not just the one just installed: routes point across the
+    /// grammar, so a rule installed now can be the destination an earlier
+    /// rule named and could not resolve, and a replaced rule is a new
+    /// `Arc<RuleSpec>` that every route into it has to start handing out.
+    /// That makes installing a grammar quadratic in its size, which for the
+    /// grammars this engine runs -- tens of rules, installed once -- is
+    /// nothing next to a single parse, and it is the only shape that stays
+    /// right for a `Parser` that has rules added to it after it has already
+    /// parsed something.
+    fn rebuild_prepared(&mut self) {
+        let mut prepared = Vec::with_capacity(self.rules.len());
+        for (index, spec) in self.rules.values().enumerate() {
+            prepared.push(PreparedRule {
+                name: self.names[index].clone(),
+                spec: Arc::clone(spec),
+                open: Self::prepared_alts(&spec.open, &self.rules, &self.names),
+                close: Self::prepared_alts(&spec.close, &self.rules, &self.names),
+                bo: resolved_action_order(
+                    &spec.bo,
+                    &spec.bo_fns,
+                    &spec.bo_state_fns,
+                    &spec.bo_order,
+                ),
+                ao: resolved_action_order(
+                    &spec.ao,
+                    &spec.ao_fns,
+                    &spec.ao_state_fns,
+                    &spec.ao_order,
+                ),
+                bc: resolved_action_order(
+                    &spec.bc,
+                    &spec.bc_fns,
+                    &spec.bc_state_fns,
+                    &spec.bc_order,
+                ),
+                ac: resolved_action_order(
+                    &spec.ac,
+                    &spec.ac_fns,
+                    &spec.ac_state_fns,
+                    &spec.ac_order,
+                ),
+            });
         }
+        self.prepared = prepared;
+    }
+
+    fn prepared_alts(
+        alts: &[AltSpec],
+        rules: &IndexMap<String, Arc<RuleSpec>>,
+        names: &[RuleName],
+    ) -> Vec<PreparedAlt> {
+        alts.iter()
+            .map(|alt| {
+                // The same normalisation the step used to run: a grammar
+                // that appended to `a` or `action_fns` after the builder
+                // last touched `action_order` gets the fallback chain built
+                // for it here instead of there.
+                let actions = resolved_alt_action_order(
+                    &alt.a,
+                    &alt.action_fns,
+                    &alt.matched_action_fns,
+                    &alt.action_order,
+                );
+                let observed = alt.c_match.is_some()
+                    || alt.c_lex_match.is_some()
+                    || alt.e_match.is_some()
+                    || alt.p_match.is_some()
+                    || alt.r_match.is_some()
+                    || alt.b_match.is_some()
+                    || alt.h_match.is_some()
+                    || actions
+                        .iter()
+                        .any(|binding| matches!(binding, AltActionBinding::Matched(_)));
+                let named = actions
+                    .iter()
+                    .any(|binding| matches!(binding, AltActionBinding::Named(_)));
+                PreparedAlt {
+                    p: Self::prepared_route(alt.p.as_deref(), rules, names),
+                    r: Self::prepared_route(alt.r.as_deref(), rules, names),
+                    actions,
+                    observed,
+                    named,
+                }
+            })
+            .collect()
+    }
+
+    fn prepared_route(
+        route: Option<&str>,
+        rules: &IndexMap<String, Arc<RuleSpec>>,
+        names: &[RuleName],
+    ) -> PreparedRoute {
+        // An empty route name is "no route" at the transition, so it is not
+        // one here either.
+        let Some(route) = route.filter(|route| !route.is_empty()) else {
+            return PreparedRoute::ByName;
+        };
+        match rules.get_full(route) {
+            Some((slot, _, spec)) => PreparedRoute::Static {
+                slot,
+                name: names[slot].clone(),
+                spec: Arc::clone(spec),
+            },
+            None => PreparedRoute::ByName,
+        }
+    }
+
+    /// Resolve a rule name to the shared name handle and the installed
+    /// spec in one lookup.
+    ///
+    /// Every route into a rule needs both, and used to hash the same
+    /// three-byte name three times over to get them: once to ask whether
+    /// the rule existed, once for the shared handle, once for the spec.
+    /// `get_full` answers all three at once -- absence, the index the
+    /// handle sits at, and the spec. The index is also the rule's slot in
+    /// the prepared table, which the rule carries so that the next step can
+    /// find its state without asking again.
+    fn installed(&self, name: &str) -> Option<(usize, RuleName, &Arc<RuleSpec>)> {
+        let (index, _, spec) = self.rules.get_full(name)?;
+        Some((index, self.names[index].clone(), spec))
     }
 
     pub fn add_action(&mut self, name: String, action: Action) {
@@ -241,6 +534,7 @@ impl Parser {
     fn run_after_actions(
         &self,
         spec: &RuleSpec,
+        prepared: Option<&PreparedRule>,
         is_open: bool,
         rule: &mut Rule,
         context: &mut Context,
@@ -249,17 +543,34 @@ impl Parser {
         if (is_open && !rule.ao) || (!is_open && !rule.ac) {
             return Ok(());
         }
-        let (actions, callbacks, states, order) = if is_open {
-            (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
-        } else {
-            (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
+        // `ao`/`ac` above are run control, not presence: a rule carries
+        // them set whether or not it declares an after action. The order
+        // itself says whether there is anything to run, and when there is
+        // not the phase costs nothing -- not the list, and not the
+        // reference count on the next rule the state callbacks would have
+        // been handed.
+        let by_spec;
+        let bindings: &[ActionBinding] = match prepared {
+            Some(prepared) => prepared.after(is_open),
+            None => {
+                let (actions, callbacks, states, order) = if is_open {
+                    (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
+                } else {
+                    (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
+                };
+                by_spec = resolved_action_order(actions, callbacks, states, order);
+                &by_spec
+            }
         };
+        if bindings.is_empty() {
+            return Ok(());
+        }
         let next = rule.next_rule.clone();
         let mut output = None;
-        for binding in resolved_action_order(actions, callbacks, states, order) {
+        for binding in bindings {
             output = match binding {
                 ActionBinding::Named(action) => {
-                    if let Some(callback) = self.state_actions.get(&action) {
+                    if let Some(callback) = self.state_actions.get(action) {
                         self.run_state_callback(
                             "named lifecycle after action",
                             callback,
@@ -278,7 +589,7 @@ impl Parser {
                             )
                         })?
                     } else {
-                        self.run_action(&action, rule, context).map_err(|error| {
+                        self.run_action(action, rule, context).map_err(|error| {
                             self.attach_action_error(
                                 error,
                                 site.source,
@@ -291,7 +602,7 @@ impl Parser {
                     }
                 }
                 ActionBinding::Callback(callback) => {
-                    self.run_context_callback("lifecycle after action", &callback, rule, context)
+                    self.run_context_callback("lifecycle after action", callback, rule, context)
                         .map_err(|error| {
                             self.attach_action_error(
                                 error,
@@ -306,7 +617,7 @@ impl Parser {
                 ActionBinding::State(callback) => self
                     .run_state_callback(
                         "lifecycle after action",
-                        &callback,
+                        callback,
                         rule,
                         context,
                         next.as_deref(),
@@ -1193,11 +1504,41 @@ impl Parser {
         out.into_iter().collect()
     }
 
+    /// The tins the rule can accept at `slot`, as the lexer's custom-matcher
+    /// gate wants them, or nothing when there is no custom matcher to gate.
+    ///
+    /// Both consumers (the `fix_len` filter and the expected-first pass in
+    /// `Lexer::next_raw_inner`) only read this list to decide WHICH of
+    /// `options.match_tokens` may fire; with no match tokens the answer is
+    /// the same for any list, and the walk over an empty table yields
+    /// nothing either way. The empty slice is therefore exact, and it
+    /// spares every token fetch the rule's accepted-token row entirely --
+    /// the last work that sat on the fetch path of a grammar with no
+    /// custom matcher at all. TS `makeMatchMatcher`
+    /// returns null on an empty table and never asks (ts/src/lexer.ts).
+    ///
+    /// `options` is the one `Arc<Options>` the lexer reads too, so this
+    /// guard consults the field its consumers consult and cannot drift
+    /// from it.
     fn expected_match_tins(&self, rule: &Rule, slot: usize) -> &[Tin] {
-        self.expected_tins
-            .get(&*rule.name)
-            .map(|expected| expected.at(rule.state == RuleState::Open, slot))
-            .unwrap_or_default()
+        if self.options.match_tokens.is_empty() {
+            return &[];
+        }
+        // The table is the rule's, chosen by what the rule is called --
+        // exactly as the name-keyed map this replaced chose it. The slot
+        // is only a hint that skips the hash: `name` is public and a
+        // callback may have written it, so the slot is trusted only while
+        // the name installed there is still the rule's own, and anything
+        // else falls back to the lookup by name. A slot never answers for
+        // a name that is not at it.
+        let index = match self.names.get(rule.slot) {
+            Some(installed) if *installed == rule.name => rule.slot,
+            _ => match self.rules.get_index_of(&*rule.name) {
+                Some(index) => index,
+                None => return &[],
+            },
+        };
+        self.expected_tins[index].at(rule.state == RuleState::Open, slot)
     }
 
     fn ensure_lookahead(
@@ -1386,21 +1727,24 @@ impl Parser {
             };
         }
 
-        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options));
+        // The cached regex is the one the parser was built with; use it
+        // only while the options still carry the pattern it came from.
+        let exclude_regex = if self.exclude_pattern == self.options.number.exclude {
+            self.exclude_regex.clone()
+        } else {
+            compile_number_exclude(&self.options)
+        };
+        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex);
 
+        // One lookup for the start rule: whether it exists, its shared
+        // name handle and the spec to bind, which used to be three.
         let start_name = self.options.rule.start.as_str();
-        if !self.rules.contains_key(start_name) {
+        let Some((start_slot, start_shared, start_spec)) = self.installed(start_name) else {
             return Ok(Value::Undefined);
-        }
+        };
 
-        let start_shared = self.interned(start_name);
         let mut current_rule = Rule::new(start_shared.clone(), Value::Undefined);
-        current_rule.bind_spec(
-            self.rules
-                .get(start_name)
-                .expect("start rule existence was checked before construction"),
-            start_shared,
-        );
+        current_rule.bind_spec(start_spec, start_shared, start_slot);
         current_rule.i = 0;
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
@@ -1423,6 +1767,15 @@ impl Parser {
             .saturating_mul(maxmul)
             .max(100);
         let budget = &self.options.parse.budget;
+
+        // One match record for the whole parse, reset at the head of each
+        // rule step. It used to be born twice per step -- a seed and a
+        // per-alternate candidate -- and then moved twice more, at 320
+        // bytes a move, to end up holding what one record could have held
+        // all along. TypeScript keeps exactly one per context
+        // (`ctx._palt`); a nested parse runs `parse_inner` again and so
+        // gets its own, which is why this is a local and not a field.
+        let mut matched = AltMatch::default();
 
         'parse: loop {
             context.set_active(&current_rule, &stack);
@@ -1463,31 +1816,51 @@ impl Parser {
                 }
             }
 
-            // The rule already holds the spec it was bound to, and every
-            // route into a rule is checked against `self.rules` before the
-            // rule is built — so looking it up again here only re-hashed the
-            // name, once per iteration. The lookup stays as the guard for a
+            // The rule was bound to its prepared state when it was routed
+            // to, and carries the slot that state sits at. Taking the spec
+            // from there rather than from the rule costs an array index in
+            // place of comparing the two names byte by byte, and hands out a
+            // borrow of the parser instead of a reference count on the spec
+            // -- the clone existed only to release the borrow on the rule
+            // that the callbacks below need mutably, and the parser is not
+            // mutable here at all.
+            //
+            // The record is a hint. `spec` and `name` are both public on a
+            // rule and reachable from any callback, so the slot is trusted
+            // only while the record still describes the rule in hand: same
+            // spec by pointer, same name. Anything else falls back to the
+            // rule's own spec, and to the lookup by name as the guard for a
             // rule that was never bound.
-            let spec = if current_rule.spec.name == *current_rule.name {
-                Arc::clone(&current_rule.spec)
-            } else {
-                match self.rules.get(&*current_rule.name) {
-                    Some(s) => s.clone(),
-                    None => {
-                        let pnt = context
-                            .t
-                            .first()
-                            .map(|t| (t.pos, t.ri, t.ci))
-                            .unwrap_or((0, 1, 1));
-                        return Err(TabnasError::new(
-                            "unknown_rule",
-                            &*current_rule.name,
-                            src,
-                            pnt.0,
-                            pnt.1,
-                            pnt.2,
-                        ));
-                    }
+            let by_name;
+            let (prepared, spec) = match self.prepared.get(current_rule.slot).filter(|prepared| {
+                Arc::ptr_eq(&prepared.spec, &current_rule.spec)
+                    && prepared.name == current_rule.name
+            }) {
+                Some(prepared) => (Some(prepared), &prepared.spec),
+                None => {
+                    by_name = if current_rule.spec.name == *current_rule.name {
+                        Arc::clone(&current_rule.spec)
+                    } else {
+                        match self.rules.get(&*current_rule.name) {
+                            Some(s) => s.clone(),
+                            None => {
+                                let pnt = context
+                                    .t
+                                    .first()
+                                    .map(|t| (t.pos, t.ri, t.ci))
+                                    .unwrap_or((0, 1, 1));
+                                return Err(TabnasError::new(
+                                    "unknown_rule",
+                                    &*current_rule.name,
+                                    src,
+                                    pnt.0,
+                                    pnt.1,
+                                    pnt.2,
+                                ));
+                            }
+                        }
+                    };
+                    (None, &by_name)
                 }
             };
 
@@ -1519,23 +1892,32 @@ impl Parser {
             } else {
                 current_rule.bc
             };
-            if !skip_befores && before_enabled {
-                let (actions, callbacks, states, order, label) = if is_open {
-                    (
-                        &spec.bo,
-                        &spec.bo_fns,
-                        &spec.bo_state_fns,
-                        &spec.bo_order,
-                        "before-open action",
-                    )
+            // `bo`/`bc` are run control, not presence -- see
+            // `run_after_actions`. An empty order is the phase having
+            // nothing to run, and skipping it here also skips the
+            // snapshot the state callbacks would have been handed.
+            let by_spec;
+            let before_bindings: &[ActionBinding] = if skip_befores || !before_enabled {
+                &[]
+            } else {
+                match prepared {
+                    Some(prepared) => prepared.before(is_open),
+                    None => {
+                        let (actions, callbacks, states, order) = if is_open {
+                            (&spec.bo, &spec.bo_fns, &spec.bo_state_fns, &spec.bo_order)
+                        } else {
+                            (&spec.bc, &spec.bc_fns, &spec.bc_state_fns, &spec.bc_order)
+                        };
+                        by_spec = resolved_action_order(actions, callbacks, states, order);
+                        &by_spec
+                    }
+                }
+            };
+            if !before_bindings.is_empty() {
+                let label = if is_open {
+                    "before-open action"
                 } else {
-                    (
-                        &spec.bc,
-                        &spec.bc_fns,
-                        &spec.bc_state_fns,
-                        &spec.bc_order,
-                        "before-close action",
-                    )
+                    "before-close action"
                 };
                 let next = is_open.then(|| current_rule.snapshot());
                 let site = ParseSite {
@@ -1545,10 +1927,10 @@ impl Parser {
                 };
                 let mut output = None;
                 let mut lifecycle_error = None;
-                for binding in resolved_action_order(actions, callbacks, states, order) {
+                for binding in before_bindings {
                     output = match binding {
                         ActionBinding::Named(action) => {
-                            if let Some(callback) = self.state_actions.get(&action) {
+                            if let Some(callback) = self.state_actions.get(action) {
                                 self.run_state_callback(
                                     label,
                                     callback,
@@ -1567,7 +1949,7 @@ impl Parser {
                                     )
                                 })?
                             } else {
-                                self.run_action(&action, &mut current_rule, &mut context)
+                                self.run_action(action, &mut current_rule, &mut context)
                                     .map_err(|error| {
                                         self.attach_action_error(
                                             error,
@@ -1583,7 +1965,7 @@ impl Parser {
                         ActionBinding::Callback(callback) => {
                             self.run_context_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -1595,7 +1977,7 @@ impl Parser {
                         ActionBinding::State(callback) => self
                             .run_state_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                                 next.as_deref(),
@@ -1639,7 +2021,15 @@ impl Parser {
             // 2. Select alternates
             let mut matched_alt_idx: Option<usize> = None;
             let mut matched_count = 0;
-            let mut matched_seed = AltMatch::default();
+            // Nothing has read the record since the last step ended, so
+            // this is the only point it has to be clean by.
+            matched.reset();
+            // Set once either of the two condition callbacks that receive
+            // the record has written into it, so a rejected alternate's
+            // writes are wiped before the next alternate is tried. Rust
+            // keeps the alternates isolated from each other here; only the
+            // candidates that were actually offered a record pay for it.
+            let mut record_written = false;
             // The winning alternate's matched tokens, when they are known to
             // still describe `context.t`. See the assignment below.
             let mut matched_tokens: Option<Rc<Vec<Token>>> = None;
@@ -1650,7 +2040,10 @@ impl Parser {
                 }
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
-                let mut candidate_match = AltMatch::default();
+                if record_written {
+                    matched.reset();
+                    record_written = false;
+                }
                 let mut relex_undo: Option<RelexUndo> = None;
                 for (pos, pos_tins) in alt.s.iter().enumerate() {
                     if let Err(error) = self.ensure_lookahead(
@@ -1762,13 +2155,10 @@ impl Parser {
                         if alt_matches {
                             if let Some(condition) = &alt.c_match {
                                 context.set_rule(&current_rule);
+                                record_written = true;
                                 let result =
                                     self.catch_callback("matched alternate condition", src, || {
-                                        condition(
-                                            &mut current_rule,
-                                            &mut context,
-                                            &mut candidate_match,
-                                        )
+                                        condition(&mut current_rule, &mut context, &mut matched)
                                     });
                                 alt_matches = result.map_err(|error| {
                                     self.attach_error(
@@ -1784,6 +2174,7 @@ impl Parser {
                         if alt_matches {
                             if let Some(condition) = &alt.c_lex_match {
                                 context.set_rule(&current_rule);
+                                record_written = true;
                                 let result = self.catch_callback(
                                     "matched alternate lexer condition",
                                     src,
@@ -1791,7 +2182,7 @@ impl Parser {
                                         condition(
                                             &mut current_rule,
                                             &mut context,
-                                            &mut candidate_match,
+                                            &mut matched,
                                             &mut lexer,
                                         )
                                     },
@@ -1829,7 +2220,6 @@ impl Parser {
                     if alt_matches {
                         matched_alt_idx = Some(idx);
                         matched_count = s_len;
-                        matched_seed = candidate_match;
                         // `tokens` is `context.t[..s_len]`, which is what the
                         // matched-token copy after this loop rebuilds from
                         // the same buffer. Between building it and here, the
@@ -1903,7 +2293,6 @@ impl Parser {
                     &alts[idx]
                 };
 
-                let mut matched = matched_seed;
                 matched.h = alt.h_match.clone();
                 if !alt.n.is_empty() {
                     matched.n = alt.n.clone();
@@ -1923,14 +2312,38 @@ impl Parser {
                         .map(str::to_owned)
                         .collect();
                 }
-                let actions = resolved_alt_action_order(
-                    &alt.a,
-                    &alt.action_fns,
-                    &alt.matched_action_fns,
-                    &alt.action_order,
-                );
-                if !actions.is_empty() {
-                    matched.actions = actions;
+                // The alternate's action order, worked out when the rule
+                // was installed. A modifier rewrites the whole `AltSpec`
+                // per step, so a rule that carries one is resolved from
+                // what the modifier produced, not from the record.
+                let prepared_alt = if alts[idx].h.is_some() {
+                    None
+                } else {
+                    prepared.and_then(|prepared| prepared.alt(is_open, idx))
+                };
+                // Publishing the order into the record is only observable
+                // when something this step runs receives the record. When
+                // nothing does -- no matched condition, error, route,
+                // backtrack, modifier or action, and no named binding that
+                // could resolve to a matched action -- the step runs the
+                // prepared order in place and the record keeps the empty
+                // list it was born with. `matched_actions` is public and
+                // may be written after `add_rule`, so whether a name can
+                // reach it is asked here, per step, never cached.
+                let prepared_alt = prepared_alt.filter(|prepared_alt| {
+                    !prepared_alt.observed
+                        && (!prepared_alt.named || self.matched_actions.is_empty())
+                });
+                if prepared_alt.is_none() {
+                    let actions = resolved_alt_action_order(
+                        &alt.a,
+                        &alt.action_fns,
+                        &alt.matched_action_fns,
+                        &alt.action_order,
+                    );
+                    if !actions.is_empty() {
+                        matched.actions = actions;
+                    }
                 }
                 if !alt.action_configs.is_empty() {
                     matched.action_configs = alt.action_configs.clone();
@@ -2089,7 +2502,12 @@ impl Parser {
                     let next = is_open.then(|| current_rule.snapshot());
                     matched = self
                         .catch_callback("matched alternate modifier", src, || {
-                            modifier(matched, &mut current_rule, &mut context, next.as_deref())
+                            modifier(
+                                std::mem::take(&mut matched),
+                                &mut current_rule,
+                                &mut context,
+                                next.as_deref(),
+                            )
                         })
                         .map_err(|error| {
                             self.attach_error(
@@ -2169,12 +2587,25 @@ impl Parser {
                 // lifecycle actions; later actions must not run.
                 let mut matched_action_error = None;
                 let mut matched_action_token = None;
-                for binding in matched.actions.clone() {
+                // The published list has to be copied to be walked -- an
+                // action may write the record it is being read out of, and
+                // appending to `matched.actions` from inside this loop has
+                // never reached it. The prepared list is not the record, so
+                // it is walked where it lies.
+                let published;
+                let bindings: &[AltActionBinding] = match prepared_alt {
+                    Some(prepared_alt) => &prepared_alt.actions,
+                    None => {
+                        published = matched.actions.clone();
+                        &published
+                    }
+                };
+                for binding in bindings {
                     let act_name = match binding {
                         AltActionBinding::Context(callback) => {
                             self.run_context_callback(
                                 "alternate action",
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -2224,7 +2655,7 @@ impl Parser {
                         }
                         AltActionBinding::Named(name) => name,
                     };
-                    if let Some(callback) = self.matched_actions.get(&act_name) {
+                    if let Some(callback) = self.matched_actions.get(act_name) {
                         context.set_rule(&current_rule);
                         let result = self
                             .catch_callback("named matched alternate action", src, || {
@@ -2321,10 +2752,10 @@ impl Parser {
                         }
                         _ => self
                             .run_action_with_config(
-                                &act_name,
+                                act_name,
                                 &mut current_rule,
                                 &mut context,
-                                matched.action_configs.get(&act_name),
+                                matched.action_configs.get(act_name),
                             )
                             .map_err(|error| {
                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
@@ -2385,59 +2816,82 @@ impl Parser {
                 // grammar-install time. Reject an unknown destination at the
                 // canonical point: after the matched action, but before any
                 // lifecycle after-action or transition.
-                let unknown_route = push_name
-                    .as_ref()
-                    .or(replace_name.as_ref())
-                    .filter(|name| !self.rules.contains_key(name.as_str()));
-                if let Some(name) = unknown_route {
-                    let mut token = Self::phase_token(&current_rule)
-                        .cloned()
-                        .or_else(|| context.t.first().cloned())
-                        .unwrap_or_else(Token::no_token);
-                    token.bad("unknown_rule");
-                    token
-                        .use_data_mut()
-                        .insert("rulename".into(), Value::String(name.clone()));
-                    let error = self.raised_token_error(
-                        &token,
-                        &current_rule,
-                        ParseSite {
-                            source: src,
-                            stack: &stack,
-                            alts,
-                        },
-                    );
-                    self.recover_error_pass(
-                        error,
-                        if is_open {
-                            RuleState::Open
-                        } else {
-                            RuleState::Close
-                        },
-                        done_alt,
-                        false,
-                        src,
-                        &mut current_rule,
-                        &mut stack,
-                        &mut context,
-                        &mut lexer,
-                        mode,
-                    )?;
-                    update_partial(mode, &root_node, &current_rule, &stack);
-                    continue 'parse;
-                }
+                //
+                // Resolving it here also settles the transition below: the
+                // arms take the shared name and the spec out of this one
+                // lookup rather than hashing the same name twice more.
+                // `push` wins over `replace` in the arms below, so this
+                // resolves whichever of the two the parse will take.
+                //
+                // A route the grammar declared on this alternate was already
+                // resolved when the rule was installed; all that is left of
+                // it here is checking that the name the step is actually
+                // routing to is still that name, which is a byte compare
+                // against a handle rather than a hash of the same three
+                // bytes for the tens of thousands of steps that route where
+                // the grammar said they would.
+                let mut route = match push_name.as_deref().or(replace_name.as_deref()) {
+                    Some(name) => match prepared
+                        .and_then(|prepared| prepared.alt(is_open, idx))
+                        .map(|alt| if push_name.is_some() { &alt.p } else { &alt.r })
+                        .and_then(|route| route.resolved(name))
+                        .or_else(|| self.installed(name))
+                    {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            let mut token = Self::phase_token(&current_rule)
+                                .cloned()
+                                .or_else(|| context.t.first().cloned())
+                                .unwrap_or_else(Token::no_token);
+                            token.bad("unknown_rule");
+                            token
+                                .use_data_mut()
+                                .insert("rulename".into(), Value::String(name.to_string()));
+                            let error = self.raised_token_error(
+                                &token,
+                                &current_rule,
+                                ParseSite {
+                                    source: src,
+                                    stack: &stack,
+                                    alts,
+                                },
+                            );
+                            self.recover_error_pass(
+                                error,
+                                if is_open {
+                                    RuleState::Open
+                                } else {
+                                    RuleState::Close
+                                },
+                                done_alt,
+                                false,
+                                src,
+                                &mut current_rule,
+                                &mut stack,
+                                &mut context,
+                                &mut lexer,
+                                mode,
+                            )?;
+                            update_partial(mode, &root_node, &current_rule, &stack);
+                            continue 'parse;
+                        }
+                    },
+                    None => None,
+                };
 
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
                 // The action still belongs to the rule whose alternate matched.
                 let completed_rule;
                 let mut completed_value = None;
-                if let Some(ref push_name) = push_name {
-                    let push_shared = self.interned(push_name);
+                if push_name.is_some() {
+                    let (push_slot, push_shared, push_spec) =
+                        route.take().expect("a push route was resolved above");
                     let mut child = Rule::bound(
                         push_shared.clone(),
                         current_rule.node.clone(),
-                        self.rules.get(push_name),
+                        Some(push_spec),
+                        push_slot,
                     );
                     child.i = next_rule_id;
                     next_rule_id += 1;
@@ -2450,7 +2904,8 @@ impl Parser {
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2485,12 +2940,14 @@ impl Parser {
                     completed_rule = current_rule.clone();
                     stack.push(current_rule);
                     current_rule = child;
-                } else if let Some(ref replace_name) = replace_name {
-                    let replace_shared = self.interned(replace_name);
+                } else if replace_name.is_some() {
+                    let (replace_slot, replace_shared, replace_spec) =
+                        route.take().expect("a replace route was resolved above");
                     let mut next = Rule::bound(
                         replace_shared.clone(),
                         current_rule.node.clone(),
-                        self.rules.get(replace_name),
+                        Some(replace_spec),
+                        replace_slot,
                     );
                     next.i = next_rule_id;
                     next_rule_id += 1;
@@ -2502,7 +2959,8 @@ impl Parser {
                     current_rule.next_rule_name = Some(replace_shared);
                     current_rule.next_rule = Some(next.snapshot());
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2540,7 +2998,8 @@ impl Parser {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2571,7 +3030,8 @@ impl Parser {
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -2633,7 +3093,8 @@ impl Parser {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
                     current_rule.next_rule = Some(current_rule.snapshot());
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2663,7 +3124,8 @@ impl Parser {
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
                     let after = self.run_after_actions(
-                        &spec,
+                        spec,
+                        prepared,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -3581,9 +4043,9 @@ fn token_path(token: Option<&Token>, path: &[String]) -> Option<Value> {
 mod tests {
     use super::*;
 
-    /// `expected_tins` and `names` are derived from `rules` and keyed by the
-    /// same names, and `add_rule` is the only thing that writes any of the
-    /// three. That is the whole reason `rules` is private: while it was
+    /// `expected_tins`, `names` and `prepared` are derived from `rules` and
+    /// positional in it, and `add_rule` is the only thing that writes any
+    /// of the four. That is the whole reason `rules` is private: while it was
     /// public, an embedder inserting or replacing a rule straight into it
     /// left the derived tables describing the rule that used to be there,
     /// and lookahead went on gating the custom matchers on that rule's token
@@ -3595,13 +4057,21 @@ mod tests {
         let mut parser = Parser::new(crate::Options::default());
 
         let mut first = RuleSpec::new("val");
+        first.bo.push("@enter".into());
         first.open.push(AltSpec {
             s: vec![vec![crate::TIN_NR]],
+            a: vec!["@act".into()],
             ..Default::default()
         });
         parser.add_rule(first);
-        assert_eq!(parser.expected_tins["val"].at(true, 0), [crate::TIN_NR]);
-        assert_eq!(&*parser.names["val"], "val");
+        let slot = parser
+            .rules()
+            .get_index_of("val")
+            .expect("the rule was just installed");
+        assert_eq!(parser.expected_tins[slot].at(true, 0), [crate::TIN_NR]);
+        assert_eq!(&*parser.names[slot], "val");
+        assert_eq!(parser.prepared[slot].before(true).len(), 1);
+        assert_eq!(parser.prepared[slot].open[0].actions.len(), 1);
 
         let mut second = RuleSpec::new("val");
         second.open.push(AltSpec {
@@ -3612,9 +4082,167 @@ mod tests {
 
         assert_eq!(parser.rules().len(), 1, "a replacement, not an addition");
         assert_eq!(
-            parser.expected_tins["val"].at(true, 0),
+            parser.expected_tins[slot].at(true, 0),
             [crate::TIN_ST],
             "lookahead would still expect the replaced rule's tokens"
+        );
+        // The name table is positional now, so a replacement has to land on
+        // the index the map kept for the key rather than append beside it:
+        // an appended handle would leave `names` describing the wrong rule
+        // at every index past this one.
+        assert_eq!(parser.names.len(), 1, "one rule, one shared name");
+        assert_eq!(parser.rules().get_index_of("val"), Some(slot));
+        assert_eq!(&*parser.names[slot], "val");
+        // The prepared table is positional for the same reason, and its
+        // record has to describe the rule that is installed now: the parse
+        // loop trusts a record only while its spec is the one the rule in
+        // hand holds, so a record left pointing at the replaced spec is a
+        // record the loop would stop using at all.
+        assert_eq!(parser.prepared.len(), 1);
+        assert_eq!(&*parser.prepared[slot].name, "val");
+        assert!(Arc::ptr_eq(
+            &parser.prepared[slot].spec,
+            &parser.rules()["val"]
+        ));
+        // The action orders are derived from the same spec and go stale the
+        // same way. The replacement declares neither the lifecycle action
+        // nor the alternate action the first rule did, and an order left
+        // over from that rule is one the loop would run for it.
+        assert!(parser.prepared[slot].before(true).is_empty());
+        assert!(parser.prepared[slot].open[0].actions.is_empty());
+        assert!(!parser.prepared[slot].open[0].named);
+    }
+
+    /// The accepted-token table is positional now, and the slot a rule
+    /// carries is a hint rather than an authority: `name` is public and a
+    /// callback may have written it between one token fetch and the next.
+    /// What the rule is called is what decides which row answers, exactly
+    /// as the name-keyed map this replaced decided it, and a name that is
+    /// installed nowhere expects nothing rather than whatever happens to
+    /// sit at its slot.
+    #[test]
+    fn expected_match_tins_follows_the_rule_name_when_the_slot_goes_stale() {
+        fn rule_named(name: &str, tin: Tin) -> RuleSpec {
+            let mut spec = RuleSpec::new(name);
+            spec.open.push(AltSpec {
+                s: vec![vec![tin]],
+                ..Default::default()
+            });
+            spec
+        }
+
+        let mut options = crate::Options::default();
+        let tin = options.register_token("#QQ");
+        options.match_tokens.insert(
+            "#QQ".into(),
+            crate::options::MatchToken {
+                name: "#QQ".into(),
+                tin,
+                matcher: crate::options::MatchTokenMatcher::Regex(regex::Regex::new("^q").unwrap()),
+                eager: false,
+            },
+        );
+        let mut parser = Parser::new(options);
+        parser.add_rule(rule_named("val", crate::TIN_NR));
+        parser.add_rule(rule_named("other", crate::TIN_ST));
+
+        let val_slot = parser.rules().get_index_of("val").expect("installed");
+        let other_slot = parser.rules().get_index_of("other").expect("installed");
+        assert_ne!(val_slot, other_slot);
+
+        // Bound the way the parse loop binds it: slot, name and spec all
+        // describe the same installed rule.
+        let mut rule = Rule::new("val", Value::Undefined);
+        rule.bind_spec(
+            &parser.rules()["val"],
+            parser.names[val_slot].clone(),
+            val_slot,
+        );
+        assert_eq!(parser.expected_match_tins(&rule, 0), [crate::TIN_NR]);
+
+        // A callback renames the rule to another installed rule. The slot
+        // still points at `val`, so the slot alone would answer with
+        // `val`'s row; the name is what makes it `other`'s, which is what
+        // the lookup by name always gave.
+        rule.name = parser.names[other_slot].clone();
+        assert_eq!(
+            parser.expected_match_tins(&rule, 0),
+            [crate::TIN_ST],
+            "the rule is called `other` now, so `other`'s row answers"
+        );
+
+        // A callback swaps the spec and leaves the name. Nothing about
+        // which row answers depends on the spec, because the row is
+        // derived from the name the rule was installed under.
+        rule.name = parser.names[val_slot].clone();
+        rule.spec = Arc::clone(&parser.rules()["other"]);
+        assert_eq!(
+            parser.expected_match_tins(&rule, 0),
+            [crate::TIN_NR],
+            "still called `val`, so still gated by `val`'s row"
+        );
+
+        // A name installed nowhere expects nothing. Its slot is
+        // `usize::MAX`, so nothing is in range to answer by accident.
+        let ghost = Rule::new("ghost", Value::Undefined);
+        assert_eq!(
+            parser.expected_match_tins(&ghost, 0),
+            &[] as &[Tin],
+            "an uninstalled name has no row, not another rule's"
+        );
+    }
+
+    /// `expected_match_tins` exists to gate the custom matchers, so with no
+    /// custom matcher registered it answers "nothing" without consulting
+    /// the table -- the table is still built and still says what it said,
+    /// and the moment a match token appears the same rule at the same slot
+    /// gets the table's row again. The first assertion is what pins the
+    /// short-circuit: were it dropped, the empty-matcher parser would
+    /// return `[TIN_NR]` and the assertion would fail.
+    #[test]
+    fn expected_match_tins_is_empty_until_a_match_token_exists() {
+        fn val_rule() -> RuleSpec {
+            let mut spec = RuleSpec::new("val");
+            spec.open.push(AltSpec {
+                s: vec![vec![crate::TIN_NR]],
+                ..Default::default()
+            });
+            spec
+        }
+        let rule = Rule::new("val", Value::Undefined);
+
+        let mut without = Parser::new(crate::Options::default());
+        without.add_rule(val_rule());
+        assert!(without.options.match_tokens.is_empty());
+        assert_eq!(without.expected_tins[0].at(true, 0), [crate::TIN_NR]);
+        assert_eq!(
+            without.expected_match_tins(&rule, 0),
+            &[] as &[Tin],
+            "no custom matcher: nothing to gate, so nothing to look up"
+        );
+
+        let mut options = crate::Options::default();
+        let tin = options.register_token("#QQ");
+        options.match_tokens.insert(
+            "#QQ".into(),
+            crate::options::MatchToken {
+                name: "#QQ".into(),
+                tin,
+                matcher: crate::options::MatchTokenMatcher::Regex(regex::Regex::new("^q").unwrap()),
+                eager: false,
+            },
+        );
+        let mut with = Parser::new(options);
+        with.add_rule(val_rule());
+        assert_eq!(
+            with.expected_match_tins(&rule, 0),
+            [crate::TIN_NR],
+            "a custom matcher is present, so the slot's tins gate it"
+        );
+        assert_eq!(
+            with.expected_match_tins(&rule, 1),
+            &[] as &[Tin],
+            "a slot the rule never fills expects nothing"
         );
     }
 }

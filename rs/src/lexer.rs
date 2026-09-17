@@ -23,7 +23,9 @@ pub struct Lexer<'a> {
     char_sets: crate::text::CharSets,
     err: Option<TabnasError>,
     end_reached: bool,
-    exclude_regex: Option<Regex>,
+    /// `number.exclude`, compiled once per grammar and shared by the
+    /// parser that owns it; see [`compile_number_exclude`].
+    exclude_regex: Option<Arc<Regex>>,
     want: Option<Vec<crate::Tin>>,
     standalone: Option<(crate::Rule, crate::Context)>,
 }
@@ -64,18 +66,39 @@ enum CheckFlow {
 /// caller of this crate sees the box.
 type LexResult<T> = Result<T, Box<TabnasError>>;
 
+/// The compiled form of `number.exclude`, or `None` when there is no
+/// pattern or it does not compile (an invalid pattern excludes nothing,
+/// as it always has).
+///
+/// Compiling a regex costs about 700K instructions, which is more than
+/// a small document costs to parse, so the parser compiles it once per
+/// grammar and hands every lexer the same automaton through the `Arc`.
+/// Cloning a `Regex` would not do: it shares the automaton but builds a
+/// fresh scratch-cache pool, and the first search from each clone fills
+/// it. Go and TypeScript compile the pattern once, at configuration time.
+pub(crate) fn compile_number_exclude(options: &Options) -> Option<Arc<Regex>> {
+    let pattern = options.number.exclude.as_deref()?;
+    Regex::new(pattern).ok().map(Arc::new)
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
         // A lexer built directly may be handed options nobody has
         // ordered yet. The parser's own lexer comes through
         // `with_shared`, whose options were ordered when they were
-        // prepared.
+        // prepared, and whose exclude pattern was compiled then too.
         options.sort_for_lexing();
-        Self::with_shared(src, Arc::new(options))
+        let exclude_regex = compile_number_exclude(&options);
+        Self::with_shared(src, Arc::new(options), exclude_regex)
     }
 
-    /// Lex against options the parser already owns and has ordered.
-    pub(crate) fn with_shared(src: &'a str, options: Arc<Options>) -> Self {
+    /// Lex against options the parser already owns and has ordered, with
+    /// the `number.exclude` pattern it compiled from them.
+    pub(crate) fn with_shared(
+        src: &'a str,
+        options: Arc<Options>,
+        exclude_regex: Option<Arc<Regex>>,
+    ) -> Self {
         let mut chars = Vec::new();
         let mut byte_indices = Vec::new();
         for (b_idx, c) in src.char_indices() {
@@ -83,12 +106,6 @@ impl<'a> Lexer<'a> {
             byte_indices.push(b_idx);
         }
         let char_len = chars.len();
-
-        let exclude_regex = if let Some(ref pat) = options.number.exclude {
-            Regex::new(pat).ok()
-        } else {
-            None
-        };
 
         Lexer {
             src,
@@ -780,7 +797,20 @@ impl<'a> Lexer<'a> {
         }
 
         let remaining = &self.src[self.byte_position()..];
-        let custom = (self.options.match_lex && !match_skipped).then(|| {
+        // With no custom matcher there is nothing for the band to do: both
+        // passes walk an empty table and yield nothing, and `fix_len` is
+        // read only by that walk. Most grammars register none, and every
+        // token fetch of theirs paid the eager pass's scan of the fixed
+        // table (one closure call per fixed literal) to arrive at the
+        // `None` this guard now hands over directly. TS `makeMatchMatcher`
+        // returns null on an empty table (ts/src/lexer.ts) and the band is
+        // never installed; Go reaches the same place by defaulting
+        // `MatchLex` off unless `Options.Match` is set. Rust defaults
+        // `match_lex` true as TS does, so the guard is the parity.
+        let custom = (self.options.match_lex
+            && !match_skipped
+            && !self.options.match_tokens.is_empty())
+        .then(|| {
             // Two passes, position-expected before eager, as go/lexer.go
             // matchMatch and ts/src/lexer.ts makeMatchMatcher both make.
             // One tin-ordered pass in which eagerness merely bypassed the
@@ -808,23 +838,34 @@ impl<'a> Lexer<'a> {
             // literal, and an eager matcher that cuts further still
             // wins. TS and Go do the same, in makeMatchMatcher and
             // matchMatch.
-            let fix_len = if self.want.is_none() && self.options.fixed.lex {
-                expected_match_tins.map_or(0, |expected| {
-                    self.options
-                        .fixed
-                        .tokens
-                        .values()
-                        .filter(|token| {
-                            !token.source.is_empty()
-                                && expected.contains(&token.tin)
-                                && remaining.starts_with(&token.source)
-                        })
-                        .map(|token| token.source.len())
-                        .max()
-                        .unwrap_or(0)
-                })
-            } else {
-                0
+            //
+            // Computed once per fetch and only when a regex matcher in the
+            // eager pass has something to weigh against it, as TS
+            // `expectedFixedLen` does (`fixLen = -1` until asked). The
+            // scan is the whole fixed table against the slot's list; an
+            // expected matcher that wins in pass 0, or a fetch under a
+            // want, never needs it. Nothing the scan reads changes
+            // between the two passes, so lazy equals eager.
+            let mut fix_len: Option<usize> = None;
+            let compute_fix_len = || {
+                if self.want.is_none() && self.options.fixed.lex {
+                    expected_match_tins.map_or(0, |expected| {
+                        self.options
+                            .fixed
+                            .tokens
+                            .values()
+                            .filter(|token| {
+                                !token.source.is_empty()
+                                    && expected.contains(&token.tin)
+                                    && remaining.starts_with(&token.source)
+                            })
+                            .map(|token| token.source.len())
+                            .max()
+                            .unwrap_or(0)
+                    })
+                } else {
+                    0
+                }
             };
             let passes = if self.want.is_some() { 1 } else { 2 };
             (0..passes).find_map(|pass| {
@@ -851,7 +892,12 @@ impl<'a> Lexer<'a> {
                             // literal it cannot out-cut; the fixed
                             // matcher (2e6) runs next and takes it. See
                             // `fix_len` above.
-                            .filter(|found| pass == 0 || fix_len == 0 || found.len() > fix_len)
+                            .filter(|found| {
+                                pass == 0 || {
+                                    let fix_len = *fix_len.get_or_insert_with(compute_fix_len);
+                                    fix_len == 0 || found.len() > fix_len
+                                }
+                            })
                             .map(|found| {
                                 let source = found.as_str().to_string();
                                 (source.clone(), Value::String(source))

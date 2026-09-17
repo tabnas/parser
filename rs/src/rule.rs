@@ -125,6 +125,46 @@ pub struct AltMatch {
     pub action_configs: HashMap<String, Value>,
 }
 
+impl AltMatch {
+    /// Return the record to the state `AltMatch::default()` would give it,
+    /// without giving up the buffers it has already allocated.
+    ///
+    /// The parse loop keeps one record for the whole parse and resets it at
+    /// the head of each rule step, the shape TypeScript's `ctx._palt` has
+    /// (ts/src/rules.ts): building a fresh 320-byte record twice per step
+    /// and moving it twice more cost more than the nine fields are worth.
+    /// Every field an earlier step or a rejected alternate can leave behind
+    /// has to be cleared here -- a step can leave by the error path with
+    /// `e`, `p`, `r`, `b` and `g` still set -- and the maps and vectors are
+    /// cleared rather than replaced so the next step writes into the
+    /// capacity the last one left.
+    pub(crate) fn reset(&mut self) {
+        self.p = None;
+        self.r = None;
+        self.b = 0;
+        self.e = None;
+        self.h = None;
+        if !self.n.is_empty() {
+            self.n.clear();
+        }
+        if !self.u.is_empty() {
+            self.u.clear();
+        }
+        if !self.k.is_empty() {
+            self.k.clear();
+        }
+        if !self.g.is_empty() {
+            self.g.clear();
+        }
+        if !self.actions.is_empty() {
+            self.actions.clear();
+        }
+        if !self.action_configs.is_empty() {
+            self.action_configs.clear();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleState {
     Open,
@@ -1211,6 +1251,18 @@ pub struct Rule {
     pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
+    /// Where this rule's prepared state sits in the parser's table, or
+    /// `usize::MAX` for a rule the parser did not bind.
+    ///
+    /// A plain `usize` rather than a handle on the prepared record itself:
+    /// the parse loop clones a `Rule` once per close and snapshots it
+    /// several times per step, and an `Arc` here would make every one of
+    /// those a pair of atomics. The table is reached through the parser's
+    /// `&self` instead, and this only says where to look. It is a hint,
+    /// not a fact -- a callback can write `spec` or `name` out from under
+    /// it -- so the loop checks the record it finds against both before
+    /// trusting it.
+    pub(crate) slot: usize,
 }
 
 impl std::ops::Deref for Rule {
@@ -1343,11 +1395,12 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            slot: usize::MAX,
         }
     }
 
     pub fn with_shared_node(name: impl Into<RuleName>, node: Rc<RefCell<Value>>) -> Self {
-        Self::bound(name.into(), node, None)
+        Self::bound(name.into(), node, None, usize::MAX)
     }
 
     /// Build a rule already bound to its installed spec.
@@ -1363,6 +1416,7 @@ impl Rule {
         name: RuleName,
         node: Rc<RefCell<Value>>,
         installed: Option<&Arc<RuleSpec>>,
+        slot: usize,
     ) -> Self {
         let spec = match installed {
             Some(spec) => Arc::clone(spec),
@@ -1396,14 +1450,19 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            slot,
         }
     }
 
     /// `name` arrives already shared: the parser interns one handle per
     /// installed rule, so binding copies a pointer rather than the text.
-    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName) {
+    ///
+    /// `slot` is the rule's position in the parser's prepared table, which
+    /// the same lookup that found the spec already returned.
+    pub(crate) fn bind_spec(&mut self, spec: &Arc<RuleSpec>, name: RuleName, slot: usize) {
         self.name = name;
         self.spec = Arc::clone(spec);
+        self.slot = slot;
         // Rust RuleSpec lifecycle lists are always present (possibly empty),
         // matching the canonical normalized definition's non-null defaults.
         self.bo = true;

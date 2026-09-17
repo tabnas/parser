@@ -123,3 +123,51 @@ fn eager_matchers_still_fire_at_a_slot_the_column_does_not_cover() {
     assert!(parser.parse("a!").is_ok());
     assert!(parser.parse("ab").is_ok());
 }
+
+fn keyword_parser(sequence: &str) -> Tabnas {
+    // `#IF` is a literal the grammar names; `#I` and `#ID` are eager
+    // classes that contain it. `#I` cuts SHORTER than the literal, `#ID`
+    // cuts the same or further, so in the eager pass the two matchers
+    // weigh the same expected literal in turn.
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(&format!(
+            r##"{{
+              "clear":true,
+              "options":{{
+                "rule":{{"start":"top"}},
+                "fixed":{{"token":{{"#IF":"if"}}}},
+                "match":{{"token":{{"#I":"@~/^i/","#ID":"@~/^[a-z]+/"}}}}
+              }},
+              "rule":{{"top":{{"open":[{{"s":"{sequence}","a":"@value$"}}]}}}}
+            }}"##
+        ))
+        .unwrap();
+    parser
+}
+
+#[test]
+fn eager_pass_yields_to_an_expected_literal_only_where_it_cannot_out_cut_it() {
+    // The slot names `#IF` and neither class, so both classes reach the
+    // eager pass and are held to the literal's length there: `if` is a
+    // tie and goes to the literal, `iffy` is cut further by `#ID` and
+    // stays a word -- the keyword cannot truncate it. `#I` is held back
+    // both times, so the length the fixed table answers is consulted
+    // twice in one fetch and must answer the same.
+    let parser = keyword_parser("#IF");
+    assert!(parser.parse("if").is_ok());
+    let error = parser.parse("iffy").unwrap_err();
+    assert_eq!(error.code, "unexpected");
+    assert_eq!(error.token.name, "#ID");
+}
+
+#[test]
+fn a_literal_the_slot_does_not_name_holds_nothing_back_in_the_eager_pass() {
+    // Same characters, but `#IF` is not what this slot expects, so no
+    // literal outranks the classes and the first eager one in tin order
+    // takes the `i`.
+    let parser = keyword_parser("#TX");
+    let error = parser.parse("if").unwrap_err();
+    assert_eq!(error.code, "unexpected");
+    assert_eq!(error.token.name, "#I");
+}
