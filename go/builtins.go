@@ -382,29 +382,6 @@ func listHeader(v any) ([]any, bool) {
 	return nil, false
 }
 
-// sameGrownList reports whether `held` is the very list that `before`
-// was: same length, and the same backing array.
-//
-// EMPTY lists are deliberately NOT matched. Go gives two distinct
-// zero-length slices the same (or no) data pointer, so an empty list
-// cannot be told apart from another empty one — and guessing the wrong
-// way is worse than not propagating. A replacement that allocated its
-// OWN empty list before its first push must not overwrite the list of
-// the rule it replaced, because TypeScript would not: there the fresh
-// allocation is a different object and the replaced rule keeps its own.
-// Declining to propagate keeps that guarantee, at the cost of the
-// mirror-image case — a rule that allocated a list, was replaced before
-// anything went into it, and is then read by a parent — which is
-// recorded in go/doc/differences.md rather than silently traded away.
-func sameGrownList(held, before any) bool {
-	hs, hok := listHeader(held)
-	bs, bok := listHeader(before)
-	if !hok || !bok || len(hs) != len(bs) || 0 == len(bs) {
-		return false
-	}
-	return &hs[0] == &bs[0]
-}
-
 // @push$ — append the child node to the array (skips the no-value child).
 // Works on a plain []any or a ListRef wrapper (info mode) via
 // NodeListAppend.
@@ -447,7 +424,6 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	owner := r.nodeHolder()
 	switch owner.Node.(type) {
 	case []any, ListRef:
-		before := owner.Node
 		owner.Node = NodeListAppend(owner.Node, val)
 		r.Node = owner.Node
 		// Only a parent BUILDING INTO THE SAME CONTAINER gets the grown
@@ -461,25 +437,6 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 		if r.Parent != nil && r.Parent != NoRule &&
 			r.Parent.nodeHolder() == owner {
 			r.Parent.Node = owner.Node
-		}
-		// ...and back along the replacement chain. A rule replaced via
-		// `r:` carries the chain on under a new Rule, and the parent's
-		// Child still refers to the rule that was REPLACED — so a parent
-		// reading the result (`@bubble$`, `@capture$`) reads that rule's
-		// node. In TypeScript the replacement is handed the same array
-		// OBJECT and pushing mutates it, so either pointer sees every
-		// element; here a slice is a value and the replaced rule would
-		// keep a shorter one.
-		//
-		// Only rules still holding the list this push grew are updated,
-		// so a replacement that allocated a container of its own cannot
-		// clobber the one it replaced — which is what TypeScript does,
-		// and what child-pusher.fixture.json pins.
-		for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
-			if !sameGrownList(p.Node, before) {
-				break
-			}
-			p.Node = owner.Node
 		}
 	}
 }

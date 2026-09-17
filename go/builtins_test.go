@@ -850,9 +850,19 @@ func TestPushSurvivesReplacementWithListRef(t *testing.T) {
 	}
 
 	// top holds the list; step replaced it and appends the second element.
+	//
+	// `nodeOwner` is what `Rule.Process` seeds on an `r:` (rule.go:
+	// `next.nodeOwner = r.nodeHolder()`), and it is load-bearing here
+	// rather than decoration: it is what makes top the ONE rule holding
+	// the authoritative header, so a push from anywhere in the chain
+	// lands somewhere every holder agrees on. Leaving it out builds a
+	// rule the engine cannot produce, and the growth would have to be
+	// chased back along `Prev` instead -- which is quadratic in the
+	// length of the list, and was.
 	seed := ListRef{Val: []any{"1"}, Meta: map[string]any{}}
 	top := &Rule{Node: seed}
-	step := &Rule{Node: seed, Prev: top, Child: &Rule{Node: "2"}}
+	step := &Rule{Node: seed, Prev: top, Child: &Rule{Node: "2"},
+		nodeOwner: top}
 	grow(step)
 
 	got, ok := listHeader(top.Node)
