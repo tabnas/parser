@@ -29,6 +29,15 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+    # Node and Go are pinned above, and the Rust arm needs the same
+    # treatment for the same reason: without it the build takes whatever
+    # rustc the ubuntu-latest image happens to carry, so a runner image
+    # update lands in the recorded artifact looking like a parser change.
+    # `@stable` is what ci/workflows/rust.yml uses; the version is echoed
+    # into the results below so that when it does move, the artifact says
+    # so instead of leaving the step change invisible.
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
     - name: Clone downstream repos
       shell: bash
       run: |
@@ -51,7 +60,10 @@ jobs:
     - name: Run benchmarks
       shell: bash
       run: |
-        parser/ci/bench/run-bench.sh | tee bench-results.txt
+        {
+          echo "toolchains: node $(node --version), go $(go version | awk '{print $3}'), $(rustc --version)"
+          parser/ci/bench/run-bench.sh
+        } | tee bench-results.txt
     - name: Upload results
       uses: actions/upload-artifact@v4
       with:

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# run-bench.sh — the dual-runtime benchmark harness.
+# run-bench.sh — the three-runtime benchmark harness.
 #
 # Generates the deterministic fixture matrix (pinned seed — TS and Go
-# read identical bytes), then runs the TS benchmarks (each parser in its
-# own process) and the Go benchmarks (-benchmem). Numbers are advisory:
+# read identical bytes), then runs the TS and Rust benchmarks (each in
+# its own process) and the Go benchmarks (-benchmem). Numbers are advisory:
 # compare against a baseline run on the SAME machine, back-to-back;
 # never hard-gate CI on absolute thresholds.
 #
@@ -20,7 +20,11 @@ ROOT="${TABNAS_ROOT:-$(cd "$PARSER_ROOT/.." && pwd)}"
 FIX="$DIR/fixtures"
 
 MODE="${1:-full}"
-if [ "$MODE" = quick ]; then ITERS=10 WARMUP=5 BENCHTIME=5x; else ITERS=30 WARMUP=15 BENCHTIME=2s; fi
+if [ "$MODE" = quick ]; then
+  ITERS=10 WARMUP=5 RUST_ITERS=3 RUST_WARMUP=1 BENCHTIME=5x
+else
+  ITERS=30 WARMUP=15 RUST_ITERS=10 RUST_WARMUP=5 BENCHTIME=2s
+fi
 
 # --- TS wiring: measure the WORKING TREE, not whatever npm installed ---
 # Without this the harness benchmarks the PUBLISHED @tabnas/parser that
@@ -53,6 +57,38 @@ for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb
 done
 node "$DIR/bench.js" jsonic "$FIX/records-1mb.json" "$ITERS" "$WARMUP"
 node "$DIR/bench.js" jsonic "$FIX/text-1mb.jsonic" "$ITERS" "$WARMUP"
+
+echo
+echo "=== Rust benchmarks ==="
+# Built in the configuration rs/README.md documents (lto = "fat",
+# codegen-units = 1, mimalloc), which is also the configuration #179's
+# instruction counts were taken in. A default release build is a
+# different binary and is not what these rows should report.
+cargo build --release --manifest-path "$DIR/rustbench/Cargo.toml"
+RUST_BENCH="$DIR/rustbench/target/release/tabnas-rustbench"
+# numbers-1mb.json overflows the default 8 MiB main-thread stack on the
+# Rust port. The fixture is a FLAT array -- nesting depth 1 -- so this is
+# not deep input, and TS and Go parse the same bytes without complaint.
+# 16 MiB is enough. The limit is raised here rather than inside the
+# benchmark so that running the binary directly still shows the real
+# behaviour; this is a defect to fix in rs/, not a harness convenience.
+# `ulimit -s` is in KiB, so this asks for the 16 MiB measured to be
+# enough, not 64. If the host's hard limit forbids it, say so and keep
+# going: the other four fixtures are still worth having, and silently
+# dropping to 8 MiB would abort the Rust arm mid-run and take the Go
+# benchmarks below down with it under `set -e`.
+(
+  if ! ulimit -s 16384 2>/dev/null; then
+    echo "WARNING: could not raise the stack limit to 16 MiB (hard limit" \
+         "$(ulimit -Hs) KiB); skipping numbers-1mb.json, which needs it." >&2
+    RUST_FIXTURES="records-1mb.json records-escaped-1mb.json records-16kb.json records-cjk-1mb.json"
+  else
+    RUST_FIXTURES="records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json"
+  fi
+  for f in $RUST_FIXTURES; do
+    "$RUST_BENCH" "$FIX/$f" "$RUST_ITERS" "$RUST_WARMUP"
+  done
+)
 
 echo
 echo "=== Go benchmarks ==="
