@@ -1,0 +1,20 @@
+[package]
+name = "tabnas-rustbench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tabnas = { path = "../../../rs" }
+mimalloc = "0.1"
+
+# The configuration rs/README.md documents as the one to measure in, and
+# the one the instruction-count work on #179 was measured in. Without it
+# this harness reports a build nobody ships: `lto` is the setting that
+# matters and is off by default, and the allocator alone is worth 1.09x
+# to 1.56x on this workload.
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+debug = 1

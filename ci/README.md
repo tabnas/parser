@@ -187,7 +187,7 @@ built for, with the richest corpus) is not even cloned.
   script was pointing at a path that no longer existed and exiting 1 on
   every run.
 
-## bench/ — dual-runtime benchmark harness
+## bench/ — three-runtime benchmark harness
 
 - `genfixture.js` — deterministic fixture matrix (pinned seed, NOT
   checked in): key-repetitive records (16KB/1MB), escape-dense strings,
@@ -201,6 +201,14 @@ built for, with the richest corpus) is not even cloned.
   (JSON.parse baseline).
 - `gobench/` — `go test -bench` module (tabnas json + jsonic vs
   encoding/json, with -benchmem).
+- `rustbench/` — one fixture per process, median/min/max and MiB/s, in
+  the same JSON line shape `bench.js` emits so rows compare directly.
+  Built with `lto = "fat"`, `codegen-units = 1` and mimalloc, which is
+  what rs/README.md documents as the configuration to measure in: `lto`
+  is off by default and is the setting that matters, and the allocator
+  alone is worth 1.09x to 1.56x here, so a default release build reports
+  a binary nobody ships. The parser is built once and reused across
+  iterations, as the TS and Go arms do.
 - `run-bench.sh [quick]` — wires the downstream checkouts at this
   working tree (`ci/lib/wire.sh`), generates fixtures, runs everything.
 - `abba.js` / `ab-compare.sh` — the DECISION instrument for an engine
