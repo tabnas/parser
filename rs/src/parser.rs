@@ -907,6 +907,18 @@ impl Parser {
         }
     }
 
+    /// A copy of the rule that just finished, when something will read it.
+    ///
+    /// [`Parser::notify_rule_done`] is its only reader, and that returns
+    /// without looking when no `ruleDone` subscriber is installed. Cloning
+    /// a `Rule` copies the value tree it has built with it, which is 3.3%
+    /// of a 1 MB parse spent for nobody in a grammar that subscribes to
+    /// nothing. This is the treatment `RuleDoneAlt` already gets at the
+    /// transition arms, for the same reason.
+    fn rule_done_copy(&self, rule: &Rule) -> Option<Rule> {
+        (!self.rule_done_subscribers.is_empty()).then(|| rule.clone())
+    }
+
     fn notify_rule_done(
         &self,
         rule: &Rule,
@@ -2932,7 +2944,7 @@ impl Parser {
                 // Resolve the transition before running lifecycle after-actions,
                 // so they can inspect rule.next just like the canonical engine.
                 // The action still belongs to the rule whose alternate matched.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
                 if push_name.is_some() {
                     let (push_slot, push_shared, push_spec) =
@@ -2987,7 +2999,7 @@ impl Parser {
                         current_rule.state = RuleState::Close;
                     }
                     child.parent_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     stack.push(current_rule);
                     current_rule = child;
                 } else if replace_name.is_some() {
@@ -3042,7 +3054,10 @@ impl Parser {
                         current_rule.state = RuleState::Close;
                     }
                     next.prev_rule = Some(current_rule.snapshot());
-                    completed_rule = current_rule;
+                    // Moved rather than cloned: this arm hands the
+                    // finished rule over instead of copying it, so the
+                    // gate above has nothing to save here.
+                    completed_rule = Some(current_rule);
                     current_rule = next;
                 } else if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
@@ -3074,7 +3089,7 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                 } else {
                     // Close phase pop
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
@@ -3106,7 +3121,7 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
@@ -3117,18 +3132,20 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    done_alt,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = &completed_rule {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        done_alt,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;
@@ -3137,7 +3154,7 @@ impl Parser {
             } else if alts.is_empty() {
                 // A state with no alternatives performs an implicit empty
                 // pass. It still resolves next and runs lifecycle after-actions.
-                let completed_rule;
+                let completed_rule: Option<Rule>;
                 let mut completed_value = None;
                 if is_open {
                     current_rule.next_rule_name = Some(current_rule.name.clone());
@@ -3169,7 +3186,7 @@ impl Parser {
                         continue 'parse;
                     }
                     current_rule.state = RuleState::Close;
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                 } else {
                     current_rule.next_rule_name = stack.last().map(|rule| rule.name.clone());
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
@@ -3200,7 +3217,7 @@ impl Parser {
                         continue 'parse;
                     }
                     let parent = stack.pop();
-                    completed_rule = current_rule.clone();
+                    completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child_node(&current_rule);
                         parent.child_rule = Some(current_rule.snapshot());
@@ -3210,18 +3227,20 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
-                self.notify_rule_done(
-                    &completed_rule,
-                    &context,
-                    if is_open {
-                        RuleState::Open
-                    } else {
-                        RuleState::Close
-                    },
-                    None,
-                    src,
-                    &stack,
-                )?;
+                if let Some(completed_rule) = &completed_rule {
+                    self.notify_rule_done(
+                        completed_rule,
+                        &context,
+                        if is_open {
+                            RuleState::Open
+                        } else {
+                            RuleState::Close
+                        },
+                        None,
+                        src,
+                        &stack,
+                    )?;
+                }
                 if let Some(value) = completed_value {
                     final_value = Some(value);
                     break;

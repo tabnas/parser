@@ -499,3 +499,55 @@ fn a_modifier_rewriting_an_alternate_rewrites_the_groups_it_publishes() {
     parser.parse("ab").unwrap();
     assert_eq!(*seen.lock().unwrap(), ["rewritten", "second"]);
 }
+
+/// Every rule pass reaches a `ruleDone` subscriber, including the two the
+/// suite did not previously reach: a rule whose CLOSE alternate matched and
+/// then popped, and an OPEN state that declares no alternatives at all.
+///
+/// The engine copies the finished rule for this subscriber and for nothing
+/// else, so a branch that forgets to copy it silently stops notifying --
+/// which is exactly what these two branches did under test until now.
+#[test]
+fn rule_done_reaches_a_subscriber_on_every_completion_branch() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut parser = Tabnas::new();
+
+    let log = seen.clone();
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        log.lock().unwrap().push(format!(
+            "{}:{}",
+            rule.name.as_str(),
+            match done.state {
+                tabnas::RuleState::Open => "open",
+                tabnas::RuleState::Close => "close",
+            }
+        ));
+    });
+
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "fixed":{"token":{"#TA":"a","#TB":"b"}}
+              },
+              "rule":{
+                "top":{
+                  "open":[{"s":"#TA","p":"child"}],
+                  "close":[{"s":"#TB"}]
+                },
+                "child":{"open":[],"close":[]}
+              }
+            }"##,
+        )
+        .unwrap();
+
+    parser.parse("ab").unwrap();
+    // top's open pushes child; child declares nothing in either state and
+    // passes through both; top's close matches `#TB` and pops as the root.
+    assert_eq!(
+        *seen.lock().unwrap(),
+        ["top:open", "child:open", "child:close", "top:close"]
+    );
+}
