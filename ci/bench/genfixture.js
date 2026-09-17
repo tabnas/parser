@@ -151,8 +151,17 @@ function genLongString(chars) {
 }
 
 // Numbers built to be awkward rather than large: long digit runs, long
-// fraction tails, and exponents far outside f64, which a parser has to
-// scan in full before it can reject or saturate them.
+// fraction tails, and exponents genuinely outside f64, which a parser has
+// to scan in full before it can saturate them.
+//
+// UNDERFLOW rather than overflow, deliberately, and the asymmetry is not
+// this file's. `1e400` saturates to Infinity in the TypeScript and Rust
+// arms and is REJECTED in the Go one: tabnas/json holds each runtime to
+// its own platform oracle, and `encoding/json` fails on an overflowing
+// literal where `JSON.parse` saturates, so the Go plugin excludes it by
+// design. One fixture feeds all three arms, so nothing the Go arm rejects
+// can be in it. Underflow all three accept, and it reaches the same
+// saturating conversion.
 function genNumericEdge(sizeBytes) {
   const parts = []
   let n = 0, i = 0
@@ -160,8 +169,13 @@ function genNumericEdge(sizeBytes) {
     const v = [
       '9'.repeat(40 + (i % 60)),
       '0.' + '1'.repeat(30 + (i % 40)),
-      '1e' + (300 + (i % 9)),
-      '-1e-' + (300 + (i % 9)),
+      // Far below the smallest subnormal (~4.9e-324), so the conversion
+      // has to consume the whole literal to arrive at zero.
+      '1e-' + (400 + (i % 9) * 400),
+      // Straddling the subnormal boundary: -1e-318 is representable,
+      // -1e-324 and below are not, so consecutive elements take the two
+      // different paths out of the same conversion.
+      '-1e-' + (318 + (i % 9)),
       '1' + '0'.repeat(25 + (i % 30)),
     ][i % 5]
     parts.push(v)
