@@ -102,8 +102,24 @@ fn a_parsed_value_and_its_clone_are_independent() {
 ///
 /// The tree is walked rather than compared against `serde_json`, whose
 /// own recursion limit gives up at 128 levels.
+///
+/// On its own thread with a named stack, because the parse recurses once
+/// per level and an UNOPTIMISED build's frames are several times an
+/// optimised one's. This passed in `--release` and overflowed the
+/// default 8 MiB stack under `cargo test`, which is the build the Rust
+/// gate runs. `deep_chain_drop_test.rs` says the same thing for the same
+/// reason.
 #[test]
 fn a_thousand_levels_of_nesting_parse_to_the_right_value() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(nesting_body)
+        .expect("spawn the deep-nesting thread")
+        .join()
+        .expect("the deep-nesting thread should not panic");
+}
+
+fn nesting_body() {
     const DEPTH: usize = 1024;
     let mut source = String::from("1");
     for level in 0..DEPTH {

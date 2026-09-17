@@ -103,6 +103,30 @@ impl Default for InlineText {
 /// What it does on the clock is below what the harness can resolve: a NULL
 /// change to this crate -- one `#[inline(never)]` function that displaces
 /// code and changes nothing else -- moves the same suite by -2.5% to +2.9%.
+///
+/// That O(1) held for the ASCII arm ONLY. Characters at or above U+0080
+/// fall out of the bit table into `other`, and that was still a linear
+/// scan -- so a grammar whose class is mostly non-ASCII kept paying
+/// O(length of the class) per input character, which is the case the
+/// paragraph above says the table was for. `other` is now sorted at build
+/// time and bisected, making that arm O(log class). Measured by
+/// instruction count over a 190 KB CJK document, per parse, at several
+/// class sizes:
+///
+/// | non-ASCII class | scan | bisect |
+/// | --- | --- | --- |
+/// | 0 (shipped JSON grammar) | 48.45M | 47.74M |
+/// | 2 | 50.00M | 49.14M |
+/// | 17 (Unicode's own whitespace set) | 50.78M | 51.18M |
+/// | 64 | 53.93M | 51.51M |
+/// | 256 | 67.14M | 52.48M |
+/// | 1024 | 121.15M | 53.71M |
+///
+/// The scan grows linearly with the class -- 2.4x from 2 to 1024 -- and
+/// the bisect is flat to within 9%. Below about 64 the two are the same
+/// to within the null-change floor above, the shipped grammar included:
+/// this buys nothing for the grammars in the harness and everything for a
+/// grammar that enumerates a script.
 #[derive(Clone, Default)]
 pub(crate) struct CharSet {
     /// Two 64-bit words rather than one `u128`. A `u128` shifted by a
@@ -130,10 +154,15 @@ impl CharSet {
             let u = c as u32;
             if u < 128 {
                 ascii[(u >> 6) as usize] |= 1u64 << (u & 63);
-            } else if !other.contains(&c) {
+            } else {
                 other.push(c);
             }
         }
+        // Sorted so `contains` can bisect, and deduplicated by the sort
+        // rather than by a scan per character, which made BUILDING a
+        // class quadratic in its own length.
+        other.sort_unstable();
+        other.dedup();
         CharSet { ascii, other }
     }
 
@@ -143,7 +172,14 @@ impl CharSet {
         if u < 128 {
             (self.ascii[(u >> 6) as usize] >> (u & 63)) & 1 != 0
         } else {
-            !self.other.is_empty() && self.other.contains(&c)
+            // Bisected, not scanned. This arm answers one question per
+            // NON-ASCII input character, so a linear scan made the cost
+            // of asking it proportional to the length of the configured
+            // class -- O(input x class) over a document, on a path that
+            // runs per character. The ASCII arm above is a bit test and
+            // was never the problem; this is the same treatment for the
+            // characters that fall out of it.
+            !self.other.is_empty() && self.other.binary_search(&c).is_ok()
         }
     }
 }
@@ -233,6 +269,45 @@ mod char_set_tests {
         assert!(sets.line_ends.contains('\u{b}'));
         assert!(!sets.line.contains('\u{b}'));
         assert!(sets.line.contains('\n') && sets.line_ends.contains('\n'));
+    }
+
+    /// A class big enough that the non-ASCII arm actually bisects, fed in
+    /// deliberately unsorted order. The two-and-three-character classes
+    /// above pass whether or not `build` sorts; this one does not, and a
+    /// search over an unsorted vector answers wrongly rather than slowly.
+    #[test]
+    fn a_large_non_ascii_class_answers_for_every_member() {
+        // Scattered so neighbours in the class are not neighbours in code
+        // point order, interleaved so the input order is not sorted order.
+        let mut members: Vec<char> = Vec::new();
+        for i in 0..150u32 {
+            members.push(char::from_u32(0x2000 + i * 3).unwrap());
+            members.push(char::from_u32(0x30A0 - i * 5).unwrap());
+        }
+        let class: String = members.iter().collect();
+        let set = CharSet::new(&class);
+
+        for &c in &members {
+            assert!(
+                set.contains(c),
+                "{c:?} (U+{:04X}) is in the class",
+                c as u32
+            );
+        }
+        // Every gap the scattering leaves, including on either side of the
+        // lowest and highest members, where a bisect goes out of bounds.
+        for &c in &members {
+            for delta in [-1i32, 1] {
+                let probe = char::from_u32((c as i32 + delta) as u32).unwrap();
+                if !members.contains(&probe) {
+                    assert!(
+                        !set.contains(probe),
+                        "{probe:?} (U+{:04X}) is not in the class",
+                        probe as u32
+                    );
+                }
+            }
+        }
     }
 
     #[test]
