@@ -93,6 +93,15 @@ pub struct Parser {
     /// identities were derived once per rule instead of once per lookahead
     /// there was nothing to go stale, so this hazard arrived with the table.
     rules: IndexMap<String, Arc<RuleSpec>>,
+    /// The `rule.include` and `rule.exclude` every `PreparedAlt::groups`
+    /// was worked out against. Both are public and a callback may write
+    /// either between one step and the next, so the step compares these
+    /// two strings before trusting the prepared answer -- the same shape
+    /// of guard the compiled `number.exclude` pattern carries, and for
+    /// the same reason: a cache derived from a public mutable field is a
+    /// cache with a second writer.
+    prepared_include: String,
+    prepared_exclude: String,
     /// The token identities each rule can accept at each lookahead slot,
     /// worked out once per installed rule rather than once per token, and
     /// positional in `rules` the way `names` is: a rule carries the slot
@@ -222,6 +231,15 @@ struct PreparedAlt {
     /// anyway.
     observed: bool,
     named: bool,
+    /// Whether `rule.include` and `rule.exclude` leave this alternate
+    /// active, worked out when the rule was installed.
+    ///
+    /// The question is about `alt.g` against two option strings, and the
+    /// answer cannot change during a parse unless a callback rewrites the
+    /// options -- so `prepared_include`/`prepared_exclude` on the parser
+    /// record what this was computed against, and the step checks those
+    /// two strings ONCE rather than re-deriving the answer per alternate.
+    groups: bool,
 }
 
 enum PreparedRoute {
@@ -318,6 +336,8 @@ impl Parser {
             exclude_pattern: options.number.exclude.clone(),
             options,
             rules: IndexMap::new(),
+            prepared_include: String::new(),
+            prepared_exclude: String::new(),
             expected_tins: Vec::new(),
             names: Vec::new(),
             prepared: Vec::new(),
@@ -379,8 +399,8 @@ impl Parser {
             prepared.push(PreparedRule {
                 name: self.names[index].clone(),
                 spec: Arc::clone(spec),
-                open: Self::prepared_alts(&spec.open, &self.rules, &self.names),
-                close: Self::prepared_alts(&spec.close, &self.rules, &self.names),
+                open: Self::prepared_alts(&spec.open, &self.rules, &self.names, &self.options),
+                close: Self::prepared_alts(&spec.close, &self.rules, &self.names, &self.options),
                 bo: resolved_action_order(
                     &spec.bo,
                     &spec.bo_fns,
@@ -408,12 +428,15 @@ impl Parser {
             });
         }
         self.prepared = prepared;
+        self.prepared_include.clone_from(&self.options.rule.include);
+        self.prepared_exclude.clone_from(&self.options.rule.exclude);
     }
 
     fn prepared_alts(
         alts: &[AltSpec],
         rules: &IndexMap<String, Arc<RuleSpec>>,
         names: &[RuleName],
+        options: &Options,
     ) -> Vec<PreparedAlt> {
         alts.iter()
             .map(|alt| {
@@ -446,6 +469,7 @@ impl Parser {
                     actions,
                     observed,
                     named,
+                    groups: groups_enabled(alt, options),
                 }
             })
             .collect()
@@ -2034,8 +2058,23 @@ impl Parser {
             // still describe `context.t`. See the assignment below.
             let mut matched_tokens: Option<Rc<Vec<Token>>> = None;
 
+            // Asked once per step rather than once per alternate. When
+            // the options still carry what the prepared answers were
+            // worked out against, every alternate below reads a `bool`;
+            // when a callback has rewritten either list, every alternate
+            // falls back to deriving it, exactly as before.
+            let groups_prepared = self.options.rule.include == self.prepared_include
+                && self.options.rule.exclude == self.prepared_exclude;
+
             for (idx, alt) in alts.iter().enumerate() {
-                if !groups_enabled(alt, &self.options) {
+                let enabled = match prepared
+                    .filter(|_| groups_prepared)
+                    .and_then(|prepared| prepared.alt(is_open, idx))
+                {
+                    Some(prepared_alt) => prepared_alt.groups,
+                    None => groups_enabled(alt, &self.options),
+                };
+                if !enabled {
                     continue;
                 }
                 let s_len = alt.s.len();
@@ -3764,31 +3803,25 @@ fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // test against, so every alternate is enabled whatever groups it
     // declares. That is the usual case, and it is asked once per
     // alternate per iteration.
-    if options.rule.include.is_empty() && options.rule.exclude.is_empty() {
+    let include = options.rule.include.as_str();
+    let exclude = options.rule.exclude.as_str();
+    if include.is_empty() && exclude.is_empty() {
         return true;
     }
-    let groups: Vec<&str> = alt
-        .g
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let includes: Vec<&str> = options
-        .rule
-        .include
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    let excludes: Vec<&str> = options
-        .rule
-        .exclude
-        .split(',')
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    (includes.is_empty() || includes.iter().any(|include| groups.contains(include)))
-        && !excludes.iter().any(|exclude| groups.contains(exclude))
+    // Iterators rather than three collected `Vec<&str>`. The question is
+    // the same one and the answer is the same answer; the three heap
+    // allocations per call were not part of either. The shipped JSON
+    // preset sets `rule.include` to "json", so the early return above
+    // never fires for it and every alternate of every rule step paid
+    // them.
+    fn listed(list: &str) -> impl Iterator<Item = &str> {
+        list.split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+    }
+    let declares = |wanted: &str| listed(&alt.g).any(|group| group == wanted);
+    let included = listed(include).next().is_none() || listed(include).any(&declares);
+    included && !listed(exclude).any(&declares)
 }
 
 fn builtin_condition_matches(reference: Option<&str>, rule: &Rule) -> bool {
