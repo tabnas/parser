@@ -875,7 +875,7 @@ impl<'a> Lexer<'a> {
                     }
                     if self.want.is_none() {
                         let expected = expected_match_tins
-                            .map_or(true, |expected| expected.contains(&matcher.tin));
+                            .is_none_or(|expected| expected.contains(&matcher.tin));
                         if pass == 0 {
                             if !expected {
                                 return None;

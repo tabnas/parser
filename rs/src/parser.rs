@@ -1605,7 +1605,7 @@ impl Parser {
                     Some(token) => Ok(token),
                     None => {
                         let result = self.catch_callback("lexer callback", site.source, || {
-                            lexer.next_rule_token(&expected_match_tins, rule, context)
+                            lexer.next_rule_token(expected_match_tins, rule, context)
                         });
                         result.map_err(|error| {
                             self.attach_active_error(

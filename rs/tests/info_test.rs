@@ -1,4 +1,4 @@
-use tabnas::{ListRef, MapRef, Tabnas, Text, Value};
+use tabnas::{ListRef, Tabnas, Text, Value};
 
 #[test]
 fn json_map_info_wraps_nested_maps_and_serializes_plainly() {
