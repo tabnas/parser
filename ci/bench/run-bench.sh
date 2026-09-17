@@ -55,8 +55,19 @@ for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb
   node "$DIR/bench.js" json "$FIX/$f" "$ITERS" "$WARMUP"
   node "$DIR/bench.js" native "$FIX/$f" "$ITERS" "$WARMUP"
 done
+# Pathologies: one axis each, everything else small. An ordinary document
+# is wide AND shallow AND small-tokened at once, so no single axis gets far
+# enough on it to separate O(n) from O(n^2) -- which is where both of this
+# engine's quadratics hid. No `native` arm: these are about THIS parser's
+# shape, and encoding/json has nothing to say about the jsonic one.
+for f in wide-40k.json longstring-1mb.json numeric-edge-1mb.json separators-1mb.json tiny.json; do
+  node "$DIR/bench.js" json "$FIX/$f" "$ITERS" "$WARMUP"
+done
 node "$DIR/bench.js" jsonic "$FIX/records-1mb.json" "$ITERS" "$WARMUP"
 node "$DIR/bench.js" jsonic "$FIX/text-1mb.jsonic" "$ITERS" "$WARMUP"
+# Ambiguity is the classic parser pathology and strict JSON cannot express
+# it, so it only reaches the relaxed grammar.
+node "$DIR/bench.js" jsonic "$FIX/ambiguous-1mb.jsonic" "$ITERS" "$WARMUP"
 
 echo
 echo "=== Rust benchmarks ==="
@@ -85,6 +96,10 @@ RUST_BENCH="$DIR/rustbench/target/release/tabnas-rustbench"
   else
     RUST_FIXTURES="records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json"
   fi
+  # Pathologies, on whichever branch above applied. No jsonic row: the
+  # relaxed grammar is not ported to Rust yet.
+  RUST_FIXTURES="$RUST_FIXTURES wide-40k.json longstring-1mb.json"
+  RUST_FIXTURES="$RUST_FIXTURES numeric-edge-1mb.json separators-1mb.json tiny.json"
   for f in $RUST_FIXTURES; do
     "$RUST_BENCH" "$FIX/$f" "$RUST_ITERS" "$RUST_WARMUP"
   done

@@ -122,6 +122,91 @@ function genJsonicText(sizeBytes) {
   return parts.join('\n')
 }
 
+// ---------------------------------------------------------------------
+// Pathology fixtures.
+//
+// The matrix above is all "ordinary document, made large". These are the
+// shapes that historically break parsers, and the two quadratics found in
+// this engine were both of this kind: a copy per element (Go `@push$`) and
+// a copy per nesting level (Rust value containers). Neither showed up on an
+// ordinary document, because ordinary documents are wide AND shallow AND
+// have small tokens all at once, so no single axis gets far enough to
+// separate O(n) from O(n^2).
+//
+// Each fixture below takes ONE axis a long way and leaves the rest small.
+
+// One object with very many keys. `records-*` nests many SMALL maps, so a
+// cost per key paid against the whole map -- a copy-on-write container
+// that turns out to be shared, say -- averages out to nothing there.
+function genWideObject(keys) {
+  const parts = []
+  for (let i = 0; i < keys; i++) parts.push(`"k${i}":${i}`)
+  return '{' + parts.join(',') + '}'
+}
+
+// One enormous token. Exercises the lexer's per-character accumulation on
+// its own: no structure to build, one value to return.
+function genLongString(chars) {
+  return '["' + 'a'.repeat(chars) + '"]'
+}
+
+// Numbers built to be awkward rather than large: long digit runs, long
+// fraction tails, and exponents far outside f64, which a parser has to
+// scan in full before it can reject or saturate them.
+function genNumericEdge(sizeBytes) {
+  const parts = []
+  let n = 0, i = 0
+  while (n < sizeBytes) {
+    const v = [
+      '9'.repeat(40 + (i % 60)),
+      '0.' + '1'.repeat(30 + (i % 40)),
+      '1e' + (300 + (i % 9)),
+      '-1e-' + (300 + (i % 9)),
+      '1' + '0'.repeat(25 + (i % 30)),
+    ][i % 5]
+    parts.push(v)
+    n += v.length + 1
+    i++
+  }
+  return '[' + parts.join(',') + ']'
+}
+
+// A tiny document buried in separators. `padded-tiny` pads the END, which
+// the lexer reaches once; this puts the run BETWEEN two tokens, where the
+// skip loop runs with a rule half-matched and the stack live.
+function genSeparators(sizeBytes) {
+  const run = ' \n\t'.repeat(Math.ceil(sizeBytes / 3))
+  return '{"a":' + run + '1}'
+}
+
+// The smallest useful document. `padded-tiny` is 10 KB of padding, so it
+// measures the skip loop; this measures per-parse FIXED cost and nothing
+// else -- grammar install is amortised by the harness, so what is left is
+// what every call pays however small the input.
+const TINY = '{"a":1}'
+
+// Relaxed-jsonic input that keeps the alternate selector guessing: every
+// line opens looking like an implicit map and only resolves at its end.
+// Ambiguity is the classic parser pathology and nothing else in this
+// matrix has any -- strict JSON is unambiguous by construction, so the
+// alternate retry and relex paths are unmeasured without this.
+function genAmbiguous(sizeBytes) {
+  const parts = []
+  let n = 0, i = 0
+  while (n < sizeBytes) {
+    // `a b c: 1` reads as an implicit map only once the colon arrives;
+    // `a b c d` is an implicit list. Alternating the two keeps any
+    // first-match cache cold.
+    const line = 0 === i % 2
+      ? `k${i} v${i} w${i}: ${i}`
+      : `k${i} v${i} w${i} x${i}`
+    parts.push(line)
+    n += line.length + 1
+    i++
+  }
+  return parts.join('\n')
+}
+
 const KB = 1024, MB = 1024 * KB
 const fixtures = {
   'records-16kb.json': genRecords(16 * KB, false, 1),
@@ -134,6 +219,14 @@ const fixtures = {
   // the per-character scan fallback never ran under any measurement.
   'records-cjk-1mb.json': genRecords(1 * MB, false, 5, true),
   'text-1mb.jsonic': genJsonicText(1 * MB),
+
+  // Pathologies: one axis each, everything else small. See above.
+  'wide-40k.json': genWideObject(40000),
+  'longstring-1mb.json': genLongString(1 * MB),
+  'numeric-edge-1mb.json': genNumericEdge(1 * MB),
+  'separators-1mb.json': genSeparators(1 * MB),
+  'tiny.json': TINY,
+  'ambiguous-1mb.jsonic': genAmbiguous(1 * MB),
 }
 
 for (const [name, content] of Object.entries(fixtures)) {

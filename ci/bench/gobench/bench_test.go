@@ -78,6 +78,34 @@ func BenchmarkJsonPadded(b *testing.B) {
 	benchJsonic(b, `{"a":1}`+strings.Repeat(" ", 10000))
 }
 
+// Pathology fixtures: one axis each, everything else small. The matrix
+// above is all "ordinary document, made large", and an ordinary document
+// is wide AND shallow AND small-tokened at once, so no single axis gets
+// far enough to separate O(n) from O(n^2). Both quadratics found in this
+// engine hid there.
+func BenchmarkJsonWide40K(b *testing.B) { benchTabnasJson(b, fixture(b, "wide-40k.json")) }
+func BenchmarkJsonLongString1MB(b *testing.B) {
+	benchTabnasJson(b, fixture(b, "longstring-1mb.json"))
+}
+func BenchmarkJsonNumericEdge1MB(b *testing.B) {
+	benchTabnasJson(b, fixture(b, "numeric-edge-1mb.json"))
+}
+func BenchmarkJsonSeparators1MB(b *testing.B) {
+	benchTabnasJson(b, fixture(b, "separators-1mb.json"))
+}
+
+// Per-parse FIXED cost and nothing else: grammar install is amortised by
+// the harness, so what is left is what every call pays however small the
+// input. BenchmarkJsonPadded measures the skip loop instead.
+func BenchmarkJsonSmallest(b *testing.B) { benchTabnasJson(b, fixture(b, "tiny.json")) }
+
+// Ambiguity, the classic parser pathology, which strict JSON cannot
+// express: every line here opens looking like an implicit map and only
+// resolves at its end, so the alternate selector cannot settle early.
+func BenchmarkJsonicAmbiguous1MB(b *testing.B) {
+	benchJsonic(b, fixture(b, "ambiguous-1mb.jsonic"))
+}
+
 func BenchmarkJsonicRecords1MB(b *testing.B) { benchJsonic(b, fixture(b, "records-1mb.json")) }
 func BenchmarkJsonicText1MB(b *testing.B)    { benchJsonic(b, fixture(b, "text-1mb.jsonic")) }
 
