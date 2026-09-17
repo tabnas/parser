@@ -131,12 +131,18 @@ pub struct Parser {
 /// One installed rule, with what the parse loop can work out about it
 /// before a parse starts.
 ///
-/// Routing only, so far. A rule's action lists look preparable too, but a
-/// named action is resolved against `Parser::actions`, `matched_actions`
-/// and `state_actions`, all of them public maps an embedder may write after
-/// `add_rule` has run -- a table derived from a field with a second writer
-/// goes stale in silence, which is the hazard `rules` was made private to
-/// close. What can be prepared of them is its own change.
+/// Routing, and the order the rule's actions run in. The order is a
+/// question about the spec alone -- which of the named, callback and
+/// state lists a binding came from, and where the three interleave -- and
+/// the spec behind the `Arc` this record is checked against cannot change
+/// while a parse runs, so it is answered once here instead of rebuilt into
+/// a fresh `Vec` on every rule step. What a *named* binding resolves to is
+/// a different question: it is looked up in `Parser::actions`,
+/// `matched_actions` and `state_actions`, all of them public maps an
+/// embedder may write after `add_rule` has run, so that lookup stays where
+/// it was, on the step -- a table derived from a field with a second
+/// writer goes stale in silence, which is the hazard `rules` was made
+/// private to close.
 struct PreparedRule {
     /// The rule's shared name handle and the spec it was installed with.
     ///
@@ -147,6 +153,16 @@ struct PreparedRule {
     spec: Arc<RuleSpec>,
     open: Vec<PreparedAlt>,
     close: Vec<PreparedAlt>,
+    /// The four lifecycle action orders, in the same order the rule runs
+    /// them. Most grammars declare none of them, and an empty list here is
+    /// what lets a step skip the whole phase rather than walk an empty
+    /// one: `bind_spec` sets a rule's `bo`/`ao`/`bc`/`ac` true
+    /// unconditionally, so those flags say the phase is *enabled*, never
+    /// that it has anything to run.
+    bo: Vec<ActionBinding>,
+    ao: Vec<ActionBinding>,
+    bc: Vec<ActionBinding>,
+    ac: Vec<ActionBinding>,
 }
 
 impl PreparedRule {
@@ -157,12 +173,52 @@ impl PreparedRule {
             self.close.get(idx)
         }
     }
+
+    /// The before-open or before-close action order.
+    fn before(&self, is_open: bool) -> &[ActionBinding] {
+        if is_open {
+            &self.bo
+        } else {
+            &self.bc
+        }
+    }
+
+    /// The after-open or after-close action order.
+    fn after(&self, is_open: bool) -> &[ActionBinding] {
+        if is_open {
+            &self.ao
+        } else {
+            &self.ac
+        }
+    }
 }
 
-/// One alternate's two routing channels, resolved at install time.
+/// One alternate's two routing channels and its action order, resolved at
+/// install time.
 struct PreparedAlt {
     p: PreparedRoute,
     r: PreparedRoute,
+    /// The alternate's action bindings in the order they run.
+    actions: Vec<AltActionBinding>,
+    /// Whether anything a step on this alternate runs can read the
+    /// `AltMatch` record, and so see the action list the engine publishes
+    /// into `matched.actions`.
+    ///
+    /// The list is published for the callbacks that receive the record --
+    /// the `c`/`e`/`p`/`r`/`b` matched hooks, the matched modifier, and a
+    /// matched action itself. When the alternate declares none of them
+    /// nothing in the step can tell whether the field was filled, so the
+    /// step runs these bindings straight from here: no `Vec` built, no
+    /// second copy taken to iterate, no reference counts touched. When it
+    /// declares any of them the step fills the record exactly as before.
+    ///
+    /// A `Named` binding may also resolve to a matched action, and that
+    /// cannot be settled here -- `add_matched_action` may be called after
+    /// `add_rule`, and `matched_actions` is public. `named` records only
+    /// that the question arises; the step asks it of the map it is asking
+    /// anyway.
+    observed: bool,
+    named: bool,
 }
 
 enum PreparedRoute {
@@ -315,6 +371,30 @@ impl Parser {
                 spec: Arc::clone(spec),
                 open: Self::prepared_alts(&spec.open, &self.rules, &self.names),
                 close: Self::prepared_alts(&spec.close, &self.rules, &self.names),
+                bo: resolved_action_order(
+                    &spec.bo,
+                    &spec.bo_fns,
+                    &spec.bo_state_fns,
+                    &spec.bo_order,
+                ),
+                ao: resolved_action_order(
+                    &spec.ao,
+                    &spec.ao_fns,
+                    &spec.ao_state_fns,
+                    &spec.ao_order,
+                ),
+                bc: resolved_action_order(
+                    &spec.bc,
+                    &spec.bc_fns,
+                    &spec.bc_state_fns,
+                    &spec.bc_order,
+                ),
+                ac: resolved_action_order(
+                    &spec.ac,
+                    &spec.ac_fns,
+                    &spec.ac_state_fns,
+                    &spec.ac_order,
+                ),
             });
         }
         self.prepared = prepared;
@@ -326,9 +406,37 @@ impl Parser {
         names: &[RuleName],
     ) -> Vec<PreparedAlt> {
         alts.iter()
-            .map(|alt| PreparedAlt {
-                p: Self::prepared_route(alt.p.as_deref(), rules, names),
-                r: Self::prepared_route(alt.r.as_deref(), rules, names),
+            .map(|alt| {
+                // The same normalisation the step used to run: a grammar
+                // that appended to `a` or `action_fns` after the builder
+                // last touched `action_order` gets the fallback chain built
+                // for it here instead of there.
+                let actions = resolved_alt_action_order(
+                    &alt.a,
+                    &alt.action_fns,
+                    &alt.matched_action_fns,
+                    &alt.action_order,
+                );
+                let observed = alt.c_match.is_some()
+                    || alt.c_lex_match.is_some()
+                    || alt.e_match.is_some()
+                    || alt.p_match.is_some()
+                    || alt.r_match.is_some()
+                    || alt.b_match.is_some()
+                    || alt.h_match.is_some()
+                    || actions
+                        .iter()
+                        .any(|binding| matches!(binding, AltActionBinding::Matched(_)));
+                let named = actions
+                    .iter()
+                    .any(|binding| matches!(binding, AltActionBinding::Named(_)));
+                PreparedAlt {
+                    p: Self::prepared_route(alt.p.as_deref(), rules, names),
+                    r: Self::prepared_route(alt.r.as_deref(), rules, names),
+                    actions,
+                    observed,
+                    named,
+                }
             })
             .collect()
     }
@@ -416,6 +524,7 @@ impl Parser {
     fn run_after_actions(
         &self,
         spec: &RuleSpec,
+        prepared: Option<&PreparedRule>,
         is_open: bool,
         rule: &mut Rule,
         context: &mut Context,
@@ -424,17 +533,34 @@ impl Parser {
         if (is_open && !rule.ao) || (!is_open && !rule.ac) {
             return Ok(());
         }
-        let (actions, callbacks, states, order) = if is_open {
-            (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
-        } else {
-            (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
+        // `ao`/`ac` above are run control, not presence: a rule carries
+        // them set whether or not it declares an after action. The order
+        // itself says whether there is anything to run, and when there is
+        // not the phase costs nothing -- not the list, and not the
+        // reference count on the next rule the state callbacks would have
+        // been handed.
+        let by_spec;
+        let bindings: &[ActionBinding] = match prepared {
+            Some(prepared) => prepared.after(is_open),
+            None => {
+                let (actions, callbacks, states, order) = if is_open {
+                    (&spec.ao, &spec.ao_fns, &spec.ao_state_fns, &spec.ao_order)
+                } else {
+                    (&spec.ac, &spec.ac_fns, &spec.ac_state_fns, &spec.ac_order)
+                };
+                by_spec = resolved_action_order(actions, callbacks, states, order);
+                &by_spec
+            }
         };
+        if bindings.is_empty() {
+            return Ok(());
+        }
         let next = rule.next_rule.clone();
         let mut output = None;
-        for binding in resolved_action_order(actions, callbacks, states, order) {
+        for binding in bindings {
             output = match binding {
                 ActionBinding::Named(action) => {
-                    if let Some(callback) = self.state_actions.get(&action) {
+                    if let Some(callback) = self.state_actions.get(action) {
                         self.run_state_callback(
                             "named lifecycle after action",
                             callback,
@@ -453,7 +579,7 @@ impl Parser {
                             )
                         })?
                     } else {
-                        self.run_action(&action, rule, context).map_err(|error| {
+                        self.run_action(action, rule, context).map_err(|error| {
                             self.attach_action_error(
                                 error,
                                 site.source,
@@ -466,7 +592,7 @@ impl Parser {
                     }
                 }
                 ActionBinding::Callback(callback) => {
-                    self.run_context_callback("lifecycle after action", &callback, rule, context)
+                    self.run_context_callback("lifecycle after action", callback, rule, context)
                         .map_err(|error| {
                             self.attach_action_error(
                                 error,
@@ -481,7 +607,7 @@ impl Parser {
                 ActionBinding::State(callback) => self
                     .run_state_callback(
                         "lifecycle after action",
-                        &callback,
+                        callback,
                         rule,
                         context,
                         next.as_deref(),
@@ -1736,23 +1862,32 @@ impl Parser {
             } else {
                 current_rule.bc
             };
-            if !skip_befores && before_enabled {
-                let (actions, callbacks, states, order, label) = if is_open {
-                    (
-                        &spec.bo,
-                        &spec.bo_fns,
-                        &spec.bo_state_fns,
-                        &spec.bo_order,
-                        "before-open action",
-                    )
+            // `bo`/`bc` are run control, not presence -- see
+            // `run_after_actions`. An empty order is the phase having
+            // nothing to run, and skipping it here also skips the
+            // snapshot the state callbacks would have been handed.
+            let by_spec;
+            let before_bindings: &[ActionBinding] = if skip_befores || !before_enabled {
+                &[]
+            } else {
+                match prepared {
+                    Some(prepared) => prepared.before(is_open),
+                    None => {
+                        let (actions, callbacks, states, order) = if is_open {
+                            (&spec.bo, &spec.bo_fns, &spec.bo_state_fns, &spec.bo_order)
+                        } else {
+                            (&spec.bc, &spec.bc_fns, &spec.bc_state_fns, &spec.bc_order)
+                        };
+                        by_spec = resolved_action_order(actions, callbacks, states, order);
+                        &by_spec
+                    }
+                }
+            };
+            if !before_bindings.is_empty() {
+                let label = if is_open {
+                    "before-open action"
                 } else {
-                    (
-                        &spec.bc,
-                        &spec.bc_fns,
-                        &spec.bc_state_fns,
-                        &spec.bc_order,
-                        "before-close action",
-                    )
+                    "before-close action"
                 };
                 let next = is_open.then(|| current_rule.snapshot());
                 let site = ParseSite {
@@ -1762,10 +1897,10 @@ impl Parser {
                 };
                 let mut output = None;
                 let mut lifecycle_error = None;
-                for binding in resolved_action_order(actions, callbacks, states, order) {
+                for binding in before_bindings {
                     output = match binding {
                         ActionBinding::Named(action) => {
-                            if let Some(callback) = self.state_actions.get(&action) {
+                            if let Some(callback) = self.state_actions.get(action) {
                                 self.run_state_callback(
                                     label,
                                     callback,
@@ -1784,7 +1919,7 @@ impl Parser {
                                     )
                                 })?
                             } else {
-                                self.run_action(&action, &mut current_rule, &mut context)
+                                self.run_action(action, &mut current_rule, &mut context)
                                     .map_err(|error| {
                                         self.attach_action_error(
                                             error,
@@ -1800,7 +1935,7 @@ impl Parser {
                         ActionBinding::Callback(callback) => {
                             self.run_context_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -1812,7 +1947,7 @@ impl Parser {
                         ActionBinding::State(callback) => self
                             .run_state_callback(
                                 label,
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                                 next.as_deref(),
@@ -2140,14 +2275,38 @@ impl Parser {
                         .map(str::to_owned)
                         .collect();
                 }
-                let actions = resolved_alt_action_order(
-                    &alt.a,
-                    &alt.action_fns,
-                    &alt.matched_action_fns,
-                    &alt.action_order,
-                );
-                if !actions.is_empty() {
-                    matched.actions = actions;
+                // The alternate's action order, worked out when the rule
+                // was installed. A modifier rewrites the whole `AltSpec`
+                // per step, so a rule that carries one is resolved from
+                // what the modifier produced, not from the record.
+                let prepared_alt = if alts[idx].h.is_some() {
+                    None
+                } else {
+                    prepared.and_then(|prepared| prepared.alt(is_open, idx))
+                };
+                // Publishing the order into the record is only observable
+                // when something this step runs receives the record. When
+                // nothing does -- no matched condition, error, route,
+                // backtrack, modifier or action, and no named binding that
+                // could resolve to a matched action -- the step runs the
+                // prepared order in place and the record keeps the empty
+                // list it was born with. `matched_actions` is public and
+                // may be written after `add_rule`, so whether a name can
+                // reach it is asked here, per step, never cached.
+                let prepared_alt = prepared_alt.filter(|prepared_alt| {
+                    !prepared_alt.observed
+                        && (!prepared_alt.named || self.matched_actions.is_empty())
+                });
+                if prepared_alt.is_none() {
+                    let actions = resolved_alt_action_order(
+                        &alt.a,
+                        &alt.action_fns,
+                        &alt.matched_action_fns,
+                        &alt.action_order,
+                    );
+                    if !actions.is_empty() {
+                        matched.actions = actions;
+                    }
                 }
                 if !alt.action_configs.is_empty() {
                     matched.action_configs = alt.action_configs.clone();
@@ -2386,12 +2545,25 @@ impl Parser {
                 // lifecycle actions; later actions must not run.
                 let mut matched_action_error = None;
                 let mut matched_action_token = None;
-                for binding in matched.actions.clone() {
+                // The published list has to be copied to be walked -- an
+                // action may write the record it is being read out of, and
+                // appending to `matched.actions` from inside this loop has
+                // never reached it. The prepared list is not the record, so
+                // it is walked where it lies.
+                let published;
+                let bindings: &[AltActionBinding] = match prepared_alt {
+                    Some(prepared_alt) => &prepared_alt.actions,
+                    None => {
+                        published = matched.actions.clone();
+                        &published
+                    }
+                };
+                for binding in bindings {
                     let act_name = match binding {
                         AltActionBinding::Context(callback) => {
                             self.run_context_callback(
                                 "alternate action",
-                                &callback,
+                                callback,
                                 &mut current_rule,
                                 &mut context,
                             )
@@ -2441,7 +2613,7 @@ impl Parser {
                         }
                         AltActionBinding::Named(name) => name,
                     };
-                    if let Some(callback) = self.matched_actions.get(&act_name) {
+                    if let Some(callback) = self.matched_actions.get(act_name) {
                         context.set_rule(&current_rule);
                         let result = self
                             .catch_callback("named matched alternate action", src, || {
@@ -2538,10 +2710,10 @@ impl Parser {
                         }
                         _ => self
                             .run_action_with_config(
-                                &act_name,
+                                act_name,
                                 &mut current_rule,
                                 &mut context,
-                                matched.action_configs.get(&act_name),
+                                matched.action_configs.get(act_name),
                             )
                             .map_err(|error| {
                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
@@ -2691,6 +2863,7 @@ impl Parser {
                     current_rule.next_rule = current_rule.child_rule.clone();
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2745,6 +2918,7 @@ impl Parser {
                     current_rule.next_rule = Some(next.snapshot());
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         is_open,
                         &mut current_rule,
                         &mut context,
@@ -2783,6 +2957,7 @@ impl Parser {
                     current_rule.next_rule = Some(current_rule.snapshot());
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2814,6 +2989,7 @@ impl Parser {
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -2876,6 +3052,7 @@ impl Parser {
                     current_rule.next_rule = Some(current_rule.snapshot());
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         true,
                         &mut current_rule,
                         &mut context,
@@ -2906,6 +3083,7 @@ impl Parser {
                     current_rule.next_rule = stack.last().map(Rule::snapshot);
                     let after = self.run_after_actions(
                         spec,
+                        prepared,
                         false,
                         &mut current_rule,
                         &mut context,
@@ -3837,8 +4015,10 @@ mod tests {
         let mut parser = Parser::new(crate::Options::default());
 
         let mut first = RuleSpec::new("val");
+        first.bo.push("@enter".into());
         first.open.push(AltSpec {
             s: vec![vec![crate::TIN_NR]],
+            a: vec!["@act".into()],
             ..Default::default()
         });
         parser.add_rule(first);
@@ -3848,6 +4028,8 @@ mod tests {
             .get_index_of("val")
             .expect("the rule was just installed");
         assert_eq!(&*parser.names[slot], "val");
+        assert_eq!(parser.prepared[slot].before(true).len(), 1);
+        assert_eq!(parser.prepared[slot].open[0].actions.len(), 1);
 
         let mut second = RuleSpec::new("val");
         second.open.push(AltSpec {
@@ -3880,6 +4062,13 @@ mod tests {
             &parser.prepared[slot].spec,
             &parser.rules()["val"]
         ));
+        // The action orders are derived from the same spec and go stale the
+        // same way. The replacement declares neither the lifecycle action
+        // nor the alternate action the first rule did, and an order left
+        // over from that rule is one the loop would run for it.
+        assert!(parser.prepared[slot].before(true).is_empty());
+        assert!(parser.prepared[slot].open[0].actions.is_empty());
+        assert!(!parser.prepared[slot].open[0].named);
     }
 
     /// `expected_match_tins` exists to gate the custom matchers, so with no
