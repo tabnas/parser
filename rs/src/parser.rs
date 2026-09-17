@@ -1747,6 +1747,15 @@ impl Parser {
             .max(100);
         let budget = &self.options.parse.budget;
 
+        // One match record for the whole parse, reset at the head of each
+        // rule step. It used to be born twice per step -- a seed and a
+        // per-alternate candidate -- and then moved twice more, at 320
+        // bytes a move, to end up holding what one record could have held
+        // all along. TypeScript keeps exactly one per context
+        // (`ctx._palt`); a nested parse runs `parse_inner` again and so
+        // gets its own, which is why this is a local and not a field.
+        let mut matched = AltMatch::default();
+
         'parse: loop {
             context.set_active(&current_rule, &stack);
             update_partial(mode, &root_node, &current_rule, &stack);
@@ -1991,7 +2000,15 @@ impl Parser {
             // 2. Select alternates
             let mut matched_alt_idx: Option<usize> = None;
             let mut matched_count = 0;
-            let mut matched_seed = AltMatch::default();
+            // Nothing has read the record since the last step ended, so
+            // this is the only point it has to be clean by.
+            matched.reset();
+            // Set once either of the two condition callbacks that receive
+            // the record has written into it, so a rejected alternate's
+            // writes are wiped before the next alternate is tried. Rust
+            // keeps the alternates isolated from each other here; only the
+            // candidates that were actually offered a record pay for it.
+            let mut record_written = false;
             // The winning alternate's matched tokens, when they are known to
             // still describe `context.t`. See the assignment below.
             let mut matched_tokens: Option<Rc<Vec<Token>>> = None;
@@ -2002,7 +2019,10 @@ impl Parser {
                 }
                 let s_len = alt.s.len();
                 let mut alt_matches = true;
-                let mut candidate_match = AltMatch::default();
+                if record_written {
+                    matched.reset();
+                    record_written = false;
+                }
                 let mut relex_undo: Option<RelexUndo> = None;
                 for (pos, pos_tins) in alt.s.iter().enumerate() {
                     if let Err(error) = self.ensure_lookahead(
@@ -2114,13 +2134,10 @@ impl Parser {
                         if alt_matches {
                             if let Some(condition) = &alt.c_match {
                                 context.set_rule(&current_rule);
+                                record_written = true;
                                 let result =
                                     self.catch_callback("matched alternate condition", src, || {
-                                        condition(
-                                            &mut current_rule,
-                                            &mut context,
-                                            &mut candidate_match,
-                                        )
+                                        condition(&mut current_rule, &mut context, &mut matched)
                                     });
                                 alt_matches = result.map_err(|error| {
                                     self.attach_error(
@@ -2136,6 +2153,7 @@ impl Parser {
                         if alt_matches {
                             if let Some(condition) = &alt.c_lex_match {
                                 context.set_rule(&current_rule);
+                                record_written = true;
                                 let result = self.catch_callback(
                                     "matched alternate lexer condition",
                                     src,
@@ -2143,7 +2161,7 @@ impl Parser {
                                         condition(
                                             &mut current_rule,
                                             &mut context,
-                                            &mut candidate_match,
+                                            &mut matched,
                                             &mut lexer,
                                         )
                                     },
@@ -2181,7 +2199,6 @@ impl Parser {
                     if alt_matches {
                         matched_alt_idx = Some(idx);
                         matched_count = s_len;
-                        matched_seed = candidate_match;
                         // `tokens` is `context.t[..s_len]`, which is what the
                         // matched-token copy after this loop rebuilds from
                         // the same buffer. Between building it and here, the
@@ -2255,7 +2272,6 @@ impl Parser {
                     &alts[idx]
                 };
 
-                let mut matched = matched_seed;
                 matched.h = alt.h_match.clone();
                 if !alt.n.is_empty() {
                     matched.n = alt.n.clone();
@@ -2465,7 +2481,12 @@ impl Parser {
                     let next = is_open.then(|| current_rule.snapshot());
                     matched = self
                         .catch_callback("matched alternate modifier", src, || {
-                            modifier(matched, &mut current_rule, &mut context, next.as_deref())
+                            modifier(
+                                std::mem::take(&mut matched),
+                                &mut current_rule,
+                                &mut context,
+                                next.as_deref(),
+                            )
                         })
                         .map_err(|error| {
                             self.attach_error(

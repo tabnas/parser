@@ -125,6 +125,46 @@ pub struct AltMatch {
     pub action_configs: HashMap<String, Value>,
 }
 
+impl AltMatch {
+    /// Return the record to the state `AltMatch::default()` would give it,
+    /// without giving up the buffers it has already allocated.
+    ///
+    /// The parse loop keeps one record for the whole parse and resets it at
+    /// the head of each rule step, the shape TypeScript's `ctx._palt` has
+    /// (ts/src/rules.ts): building a fresh 320-byte record twice per step
+    /// and moving it twice more cost more than the nine fields are worth.
+    /// Every field an earlier step or a rejected alternate can leave behind
+    /// has to be cleared here -- a step can leave by the error path with
+    /// `e`, `p`, `r`, `b` and `g` still set -- and the maps and vectors are
+    /// cleared rather than replaced so the next step writes into the
+    /// capacity the last one left.
+    pub(crate) fn reset(&mut self) {
+        self.p = None;
+        self.r = None;
+        self.b = 0;
+        self.e = None;
+        self.h = None;
+        if !self.n.is_empty() {
+            self.n.clear();
+        }
+        if !self.u.is_empty() {
+            self.u.clear();
+        }
+        if !self.k.is_empty() {
+            self.k.clear();
+        }
+        if !self.g.is_empty() {
+            self.g.clear();
+        }
+        if !self.actions.is_empty() {
+            self.actions.clear();
+        }
+        if !self.action_configs.is_empty() {
+            self.action_configs.clear();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleState {
     Open,
