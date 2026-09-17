@@ -1265,6 +1265,89 @@ pub struct Rule {
     pub(crate) slot: usize,
 }
 
+thread_local! {
+    /// Scratch for `RuleSnapshot`'s drop, so that walking a chain costs a
+    /// thread-local read rather than a `Vec` allocation per snapshot. The
+    /// buffer is only ever reached by a snapshot that still holds links,
+    /// and it is always left empty, so re-entering `drop` while it is
+    /// borrowed cannot happen: every snapshot this walk drops has had its
+    /// links taken first, and one with no links returns before it looks.
+    static UNLINK_SCRATCH: RefCell<Vec<Rc<RuleSnapshot>>> = const { RefCell::new(Vec::new()) };
+}
+
+impl Drop for RuleSnapshot {
+    /// Unlink iteratively, because the derived drop recurses and the links
+    /// below form a chain as long as the input.
+    ///
+    /// `parent_rule`, `child_rule`, `prev_rule` and `next_rule` each own an
+    /// `Rc<RuleSnapshot>`, so the generated glue walks a chain with the call
+    /// stack: `drop_in_place<RuleSnapshot>` calls `Rc::drop_slow` calls
+    /// `drop_in_place<RuleSnapshot>` again, one frame per link. A grammar
+    /// that pushes or replaces a rule per input element builds one link per
+    /// element, so a flat JSON array of 150,000 numbers -- nesting depth
+    /// ONE, nothing recursive about the document -- overflowed the default
+    /// 8 MiB main-thread stack and aborted the process.
+    ///
+    /// Fat LTO makes it worse rather than better: inlining the cycle into
+    /// itself multiplies the per-link frame, so a default release build
+    /// survived an input that a build in the configuration rs/README.md
+    /// documents for shipping did not. That is the wrong way round, and it
+    /// is why this is a `Drop` impl rather than advice about stack size.
+    fn drop(&mut self) {
+        // The overwhelmingly common case, and the one on the parse loop's
+        // hot path: nothing is linked, so there is nothing to walk. Four
+        // loads and a branch, no scratch, no allocation.
+        if self.parent_rule.is_none()
+            && self.child_rule.is_none()
+            && self.prev_rule.is_none()
+            && self.next_rule.is_none()
+        {
+            return;
+        }
+
+        fn unlink(
+            snapshot: &mut RuleSnapshot,
+            cursor: &mut Option<Rc<RuleSnapshot>>,
+            pending: &mut Vec<Rc<RuleSnapshot>>,
+        ) {
+            let mut hold = |held: Option<Rc<RuleSnapshot>>| {
+                if let Some(held) = held {
+                    if cursor.is_none() {
+                        *cursor = Some(held);
+                    } else {
+                        pending.push(held);
+                    }
+                }
+            };
+            hold(snapshot.parent_rule.take());
+            hold(snapshot.child_rule.take());
+            hold(snapshot.prev_rule.take());
+            hold(snapshot.next_rule.take());
+        }
+
+        // A pure chain -- one link per snapshot, which is what a rule
+        // replaced once per input element builds -- never touches
+        // `pending` and so never allocates at all.
+        let mut cursor: Option<Rc<RuleSnapshot>> = None;
+        UNLINK_SCRATCH.with(|scratch| {
+            let mut pending = scratch.borrow_mut();
+            unlink(self, &mut cursor, &mut pending);
+            while let Some(mut link) = cursor.take().or_else(|| pending.pop()) {
+                // `get_mut` rather than `try_unwrap`: both answer "am I the
+                // last handle", but `try_unwrap` answers it by MOVING the
+                // snapshot out of its allocation, and a `RuleSnapshot` is a
+                // twenty-field struct carrying eight reference-counted
+                // handles.
+                if let Some(owned) = Rc::get_mut(&mut link) {
+                    unlink(owned, &mut cursor, &mut pending);
+                }
+                // `link` drops here with its links already taken, so its
+                // own `drop` returns at the check above and cannot recurse.
+            }
+        });
+    }
+}
+
 impl std::ops::Deref for Rule {
     type Target = RuleSnapshot;
 
