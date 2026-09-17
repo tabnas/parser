@@ -163,3 +163,10 @@ ci/fleet/.work/
 
 # Written by ts/scripts/vale-counts.cjs while measuring, removed after.
 .vale-counts.ini
+
+# The benchmark crate is tooling, not a shipped artifact. A committed
+# lock here would be a second place the engine version is recorded, and
+# AGENTS.md documents rs/Cargo.lock as the one that already gets missed.
+# gobench/ commits go.mod and no go.sum for the same reason.
+ci/bench/rustbench/Cargo.lock
+ci/bench/rustbench/target/

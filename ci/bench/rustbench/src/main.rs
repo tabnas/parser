@@ -52,11 +52,13 @@ fn main() {
         samples.push(start.elapsed().as_secs_f64() * 1_000.0);
     }
     samples.sort_by(f64::total_cmp);
-    let median_ms = if iterations % 2 == 0 {
-        (samples[iterations / 2 - 1] + samples[iterations / 2]) / 2.0
-    } else {
-        samples[iterations / 2]
-    };
+    // The SAME quantile `bench.js` takes, deliberately, including for an
+    // even sample count: `times[Math.min(len - 1, Math.floor(p * len))]`
+    // is the upper-middle sample, not the average of the middle two. The
+    // rows here are meant to be read against the TypeScript rows, so a
+    // difference between them has to come from the parser and not from
+    // two defensible definitions of "median".
+    let median_ms = samples[(iterations / 2).min(iterations - 1)];
     // The spread is reported alongside the median because a single median
     // on a shared machine says nothing about whether it is stable.
     let min_ms = samples[0];

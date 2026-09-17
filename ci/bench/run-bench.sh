@@ -72,10 +72,23 @@ RUST_BENCH="$DIR/rustbench/target/release/tabnas-rustbench"
 # 16 MiB is enough. The limit is raised here rather than inside the
 # benchmark so that running the binary directly still shows the real
 # behaviour; this is a defect to fix in rs/, not a harness convenience.
-( ulimit -s 65536 2>/dev/null || true
-  for f in records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json; do
+# `ulimit -s` is in KiB, so this asks for the 16 MiB measured to be
+# enough, not 64. If the host's hard limit forbids it, say so and keep
+# going: the other four fixtures are still worth having, and silently
+# dropping to 8 MiB would abort the Rust arm mid-run and take the Go
+# benchmarks below down with it under `set -e`.
+(
+  if ! ulimit -s 16384 2>/dev/null; then
+    echo "WARNING: could not raise the stack limit to 16 MiB (hard limit" \
+         "$(ulimit -Hs) KiB); skipping numbers-1mb.json, which needs it." >&2
+    RUST_FIXTURES="records-1mb.json records-escaped-1mb.json records-16kb.json records-cjk-1mb.json"
+  else
+    RUST_FIXTURES="records-1mb.json records-escaped-1mb.json numbers-1mb.json records-16kb.json records-cjk-1mb.json"
+  fi
+  for f in $RUST_FIXTURES; do
     "$RUST_BENCH" "$FIX/$f" "$RUST_ITERS" "$RUST_WARMUP"
-  done )
+  done
+)
 
 echo
 echo "=== Go benchmarks ==="
