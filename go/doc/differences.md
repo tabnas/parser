@@ -288,29 +288,17 @@ the parent read it. `["1"]` here, `["1","2"]` there, from the same
 serialized grammar.
 
 Go already re-published the grown header to the PARENT for exactly this
-reason; the replacement direction was simply never covered. It was first
-covered by walking the `Prev` chain on every push and updating the rules
-that still held the list -- which is O(1) per holder but O(n) per push,
-and so quadratic in the length of a list. That is reachable from
-untrusted input: a flat 1 MB array of numbers took 741 SECONDS, which is
-why the benchmark harness never produced a row for it.
+reason; the replacement direction was simply never covered. It now walks
+the `Prev` chain too, updating only rules that actually held the list this
+push grew (`sameGrownList`: same length AND same backing array), so a
+replacement that allocated a fresh container of its own cannot clobber the
+one it replaced, which is what `child-pusher.fixture.json` pins, and what
+TypeScript does.
 
-It is answered by ownership instead, and on the READ side. `nodeOwner`
-names the one rule holding the authoritative header, and every push
-writes there. A rule that lifted a list (`@bubble$`, `@value$`) and was
-then replaced keeps the header as it stood at the lift, and it is still
-the rule its parent's `Child` points at -- so the readers ask
-`heldNode()`, which resolves through the owner, rather than reading
-`Child.Node` directly. One indirection per read replaces a walk per push.
-
-A replacement that allocated a fresh container of its own has its own
-owner, so it cannot clobber the one it replaced, which is what
-`child-pusher.fixture.json` pins and what TypeScript does. Info mode
-wraps a list in a `ListRef`; ownership does not care which, so no
-unwrapping comparison is needed. That surface is Go-only, so no shared
-fixture can reach it; `TestPushSurvivesReplacementWithListRef` covers it
-directly, and `TestPushSurvivesReplacementAfterABubbledList` covers the
-lift-then-replace shape that ownership alone had to be made to handle.
+Info mode wraps a list in a `ListRef`, so the comparison unwraps
+(`listHeader`) rather than asserting `[]any`. That surface is Go-only, so
+no shared fixture can reach it; `TestPushSurvivesReplacementWithListRef`
+covers it directly.
 
 **One case is deliberately not propagated.** Go gives two distinct
 zero-length slices the same (or no) data pointer, so an EMPTY list cannot
@@ -323,10 +311,6 @@ is then read by a parent) keeps the empty list here where TypeScript
 would show the elements. Recorded rather than silently traded away; no
 grammar the compilers emit produces it, because a rule that allocates a
 list also pushes into it before replacing itself.
-
-Slice identity stopped being asked at all once ownership answered the
-question on the read side, so neither the empty-list ambiguity nor its
-mirror image arises any more.
 
 **The empty-list case is no longer traded away.** It could not be settled
 by comparing slices, so it is settled by asking a different question. See the next entry, which subsumes it.
@@ -418,10 +402,9 @@ object and nothing aliases it. The header still genuinely has to be
 re-published in Go, but only to a parent building into the SAME
 container, and ownership already answers which: an inherited container
 gives parent and pusher the same holder, while a freshly allocated one
-resets the pusher's owner to itself. The `Prev` walk that used to sit
-beside it was guarded by comparing backing arrays; the parent write-back
-was not guarded at all. Ownership now answers both, and the walk is
-gone.
+resets the pusher's owner to itself. The `Prev` walk beside it was
+already guarded (`sameGrownList`); the parent write-back was not guarded
+at all.
 
 Not specific to the value annotations that turned it up, and not specific
 to any compiler's output: any grammar nesting one value container inside

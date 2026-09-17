@@ -128,7 +128,7 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	if n == nil || r.Child == nil {
 		return
 	}
-	c := r.Child.heldNode()
+	c := r.Child.Node
 	if c == nil || c == Undefined {
 		return
 	}
@@ -158,8 +158,8 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 // @bubble$ — lift the committed child's node straight up (no merge).
 // Mirrors TS `r.child.node !== undefined` (a null child node still lifts).
 func builtinBubble(r *Rule, _ *Context) {
-	if r.Child != nil && r.Child.heldNode() != Undefined {
-		r.Node = r.Child.heldNode()
+	if r.Child != nil && r.Child.Node != Undefined {
+		r.Node = r.Child.Node
 		// The lifted node keeps its OWNER. Claiming ownership here would
 		// strand the rule that actually allocated the container when the
 		// child is still carrying one handed down to it, and a later push
@@ -358,7 +358,7 @@ func builtinSetvalCfg(r *Rule, _ *Context, cfg map[string]any) {
 		return
 	}
 	key, _ := r.U[slot].(string)
-	val := r.Child.heldNode()
+	val := r.Child.Node
 	if cfgBool(cfg["src"]) {
 		val = srcVal(val)
 	}
@@ -380,6 +380,29 @@ func listHeader(v any) ([]any, bool) {
 		return l.Val, true
 	}
 	return nil, false
+}
+
+// sameGrownList reports whether `held` is the very list that `before`
+// was: same length, and the same backing array.
+//
+// EMPTY lists are deliberately NOT matched. Go gives two distinct
+// zero-length slices the same (or no) data pointer, so an empty list
+// cannot be told apart from another empty one — and guessing the wrong
+// way is worse than not propagating. A replacement that allocated its
+// OWN empty list before its first push must not overwrite the list of
+// the rule it replaced, because TypeScript would not: there the fresh
+// allocation is a different object and the replaced rule keeps its own.
+// Declining to propagate keeps that guarantee, at the cost of the
+// mirror-image case — a rule that allocated a list, was replaced before
+// anything went into it, and is then read by a parent — which is
+// recorded in go/doc/differences.md rather than silently traded away.
+func sameGrownList(held, before any) bool {
+	hs, hok := listHeader(held)
+	bs, bok := listHeader(before)
+	if !hok || !bok || len(hs) != len(bs) || 0 == len(bs) {
+		return false
+	}
+	return &hs[0] == &bs[0]
 }
 
 // @push$ — append the child node to the array (skips the no-value child).
@@ -408,10 +431,10 @@ func listHeader(v any) ([]any, bool) {
 // replacement that allocated a fresh container of its own cannot clobber
 // the one it replaced.
 func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
-	if r.Child == nil || IsUndefined(r.Child.heldNode()) {
+	if r.Child == nil || IsUndefined(r.Child.Node) {
 		return
 	}
-	val := r.Child.heldNode()
+	val := r.Child.Node
 	if cfgBool(cfg["src"]) {
 		val = srcVal(val)
 	}
@@ -424,6 +447,7 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 	owner := r.nodeHolder()
 	switch owner.Node.(type) {
 	case []any, ListRef:
+		before := owner.Node
 		owner.Node = NodeListAppend(owner.Node, val)
 		r.Node = owner.Node
 		// Only a parent BUILDING INTO THE SAME CONTAINER gets the grown
@@ -438,6 +462,25 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 			r.Parent.nodeHolder() == owner {
 			r.Parent.Node = owner.Node
 		}
+		// ...and back along the replacement chain. A rule replaced via
+		// `r:` carries the chain on under a new Rule, and the parent's
+		// Child still refers to the rule that was REPLACED — so a parent
+		// reading the result (`@bubble$`, `@capture$`) reads that rule's
+		// node. In TypeScript the replacement is handed the same array
+		// OBJECT and pushing mutates it, so either pointer sees every
+		// element; here a slice is a value and the replaced rule would
+		// keep a shorter one.
+		//
+		// Only rules still holding the list this push grew are updated,
+		// so a replacement that allocated a container of its own cannot
+		// clobber the one it replaced — which is what TypeScript does,
+		// and what child-pusher.fixture.json pins.
+		for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
+			if !sameGrownList(p.Node, before) {
+				break
+			}
+			p.Node = owner.Node
+		}
 	}
 }
 
@@ -446,8 +489,8 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 // is wrapped in a Text carrying its source quote char (the leaf whose
 // output type changes under info — the TS counterpart boxes a String).
 func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
-	if r.Child != nil && !IsUndefined(r.Child.heldNode()) {
-		r.Node = r.Child.heldNode()
+	if r.Child != nil && !IsUndefined(r.Child.Node) {
+		r.Node = r.Child.Node
 		// Same as @bubble$: a lifted container keeps its owner.
 		r.nodeOwner = r.Child.nodeHolder()
 		return

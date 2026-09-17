@@ -949,6 +949,32 @@ func TestPushSurvivesReplacementAfterABubbledList(t *testing.T) {
 	}
 }
 
+// A custom AltAction assigns `r.Node` on a pushed rule, and the rule it
+// was pushed from reads that value.
+//
+// This pins the limit of `nodeOwner`. It is seeded down on push, and an
+// AltAction cannot clear it -- the field is unexported, and an action
+// only ever receives `*Rule`. So a rule can be holding a node that has
+// nothing to do with its owner's container, and anything that resolves a
+// rule's node THROUGH its owner reads the container instead of what the
+// plugin produced. Custom actions are the normal plugin surface, so that
+// is not an exotic case.
+//
+// Recorded because the obvious O(1) replacement for the quadratic `Prev`
+// walk in `@push$` is exactly that resolution, and this is why it does
+// not work. See `go/doc/differences.md` on the replacement chain.
+func TestCustomActionNodeSurvivesOwnerResolution(t *testing.T) {
+	top := &Rule{Node: []any{}, Child: NoRule, Parent: NoRule, Prev: NoRule}
+	leaf := &Rule{Node: top.Node, nodeOwner: top, Child: NoRule, Parent: top, Prev: NoRule}
+	leaf.Node = "leaf" // what a custom AltAction does
+	top.Child = leaf
+
+	builtinValueCfg(top, nil, nil)
+	if top.Node != "leaf" {
+		t.Errorf("@value$ lost the plugin's node: got %#v, want \"leaf\"", top.Node)
+	}
+}
+
 // A list grown ARBITRARILY DEEP below the rule that allocated it reaches
 // that rule.
 //
