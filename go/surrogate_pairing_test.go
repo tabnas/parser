@@ -26,7 +26,8 @@ package tabnas
 //
 // LONE surrogates are NOT covered here beyond pinning the current Go
 // behaviour. They fold to U+FFFD by deliberate design, documented in
-// doc/differences.md line 327 ("U+FFFD (matches encoding/json)") — where TS
+// doc/differences.md, the string-escape table ("U+FFFD (matches
+// encoding/json)") — where TS
 // preserves them. That divergence is a language-design question tracked in
 // aontu#24, not a bug this file may quietly change.
 
@@ -82,7 +83,8 @@ func TestSurrogatePairingInContext(t *testing.T) {
 }
 
 func TestSurrogateLoneFoldsToReplacement(t *testing.T) {
-	// Pins the DELIBERATE Go behaviour (doc/differences.md line 327). TS
+	// Pins the DELIBERATE Go behaviour (doc/differences.md, the
+	// string-escape table). TS
 	// preserves these instead; see the mirrored TS test, which asserts the
 	// opposite on purpose. Changing this is a language decision, not a fix.
 	//
