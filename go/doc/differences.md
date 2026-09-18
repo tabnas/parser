@@ -427,7 +427,7 @@ the same thing.
 
 ### `@push$`'s replacement-chain walk is quadratic: Open
 
-Not a divergence — every port builds the same value — but a Go-only cost,
+Not a divergence (every port builds the same value) but a Go-only cost,
 recorded here because the three obvious repairs are each blocked for a
 different reason and two of them have already been written and reverted.
 
@@ -451,7 +451,7 @@ the walk's steps:
 
 Steps per push double when the record count doubles, so the total is
 O(n²). Of the 15.1 M writes at 5,500 records, 10,999 land on the rule the
-parent's `Child` still points at and 15,116,751 — 99.93% — land on
+parent's `Child` still points at and 15,116,751, or 99.93%, land on
 replaced rules between it and the pusher.
 
 **It is not confined to pathological input.** Per-record cost over that
