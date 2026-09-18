@@ -170,3 +170,5 @@ ci/fleet/.work/
 # gobench/ commits go.mod and no go.sum for the same reason.
 ci/bench/rustbench/Cargo.lock
 ci/bench/rustbench/target/
+ci/bench/profl/target/
+ci/bench/alloc/target/

@@ -1,6 +1,6 @@
-# Phase 2 spec: round-4 refutation, open items
+# Callback-contract spec: round-4 refutation, open items
 
-The spec is `rust-callback-phase2-spec.md` (revision 5). Round 4 is the last automated
+The spec is `rust-callback-contract-spec.md` (revision 5). Round 4 is the last automated
 cycle that was run. BOTH refuters opened with 'the design survives': soundness
 could not construct a callback that fails to compile, panics or sees stale
 state, and parity could not find a behaviour the migration table cannot
