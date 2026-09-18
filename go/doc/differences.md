@@ -425,6 +425,76 @@ annotated rule's array directly. Not specific to it: any grammar that
 accumulates a list more than one rule below where it was allocated hits
 the same thing.
 
+### `@push$`'s replacement-chain walk is quadratic: Open
+
+Not a divergence (every port builds the same value) but a Go-only cost,
+recorded here because the three obvious repairs are each blocked for a
+different reason and two of them have already been written and reverted.
+
+The three entries above each made `@push$` publish a grown list header
+somewhere a holder could see it. The last of those directions, the walk
+back along the replacement chain, is unbounded: a grammar whose element
+rule replaces itself per separator (`{ s: '#CA', r: 'elem', a: '@push$' }`,
+which is what @tabnas/json declares) builds a `Prev` chain one rule longer
+per element, and every push walks all of it.
+
+Measured over @tabnas/json parsing a top-level array of records, counting
+the walk's steps:
+
+| records | pushes | walk steps | steps/push |
+| ---: | ---: | ---: | ---: |
+| 344 | 1,032 | 59,340 | 57.5 |
+| 688 | 2,064 | 237,016 | 114.8 |
+| 1,375 | 4,125 | 946,000 | 229.3 |
+| 2,750 | 8,250 | 3,782,625 | 458.5 |
+| 5,500 | 16,500 | 15,127,750 | 916.8 |
+
+Steps per push double when the record count doubles, so the total is
+O(n²). Of the 15.1 M writes at 5,500 records, 10,999 land on the rule the
+parent's `Child` still points at and 15,116,751, or 99.93%, land on
+replaced rules between it and the pusher.
+
+**It is not confined to pathological input.** Per-record cost over that
+same series runs 34.2, 29.2, 33.0, 48.8, 99.5 µs; @tabnas/jsonic parsing
+the identical bytes stays flat at 38.2, 31.4, 30.8, 34.8, 31.1 µs. Roughly
+two thirds of this port's time on a 1 MB array of records is the walk,
+which read for a long while as the port simply being slow on that shape.
+
+jsonic is flat because it does not call `@push$`. It keeps the same
+`r: 'elem'` chain and supplies its own close action, which appends and
+writes the result to the pusher and its parent and stops there
+(`jsonic/go/grammar.go`, `@elem-bc-json`). That is the behaviour the walk
+would have after dropping every non-head write.
+
+Three repairs, each blocked:
+
+- **Publish to the chain head only.** `prev` is a public condition path
+  (`plugins.md`, the rule graph), so `$prev.prev.node` reads a replaced
+  rule and a grammar can observe the skipped writes. Gating the fast path
+  on the installed grammar not using a declarative `prev` path would cover
+  the declarative surface, but a custom `AltCond` or `AltAction` closure
+  reading `r.Prev.Node` is not detectable from the spec.
+- **Hold the container by reference while building.** This is what
+  TypeScript and Rust do, and it deletes `nodeOwner`, `sameGrownList` and
+  the walk together. `Rule.Node` is a public field documented as `[]any`,
+  so it changes the public contract.
+- **Change the grammar so no chain forms.** Having `list` push a fresh
+  `elem` per separator instead of `elem` replacing itself does not fit the
+  rule lifecycle: once a rule has pushed a child it moves to its close
+  state and its open alternates never run again. Giving @tabnas/json a
+  jsonic-style close action instead is expressible in its TypeScript and
+  Go halves but not its Rust one, whose grammar is a declarative spec with
+  no grammar-local closures by design.
+
+A fourth route, not yet tried: an opt-in config on the builtin
+(`k: { push$: { chain: false } }`, alongside the `src` flag it already
+takes) leaves the default untouched and lets a grammar that does not read
+replaced rules say so, declaratively, in all three ports.
+
+`TestPushSurvivesReplacementAfterABubbledList` and
+`TestCustomActionNodeSurvivesOwnerResolution` pin the two shapes that the
+reverted attempts broke; any repair has to keep both passing.
+
 ### `MapToOptions` carries only some options
 
 Not a divergence: an API gap here, recorded so it is not mistaken for
