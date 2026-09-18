@@ -425,7 +425,7 @@ annotated rule's array directly. Not specific to it: any grammar that
 accumulates a list more than one rule below where it was allocated hits
 the same thing.
 
-### `@push$`'s replacement-chain walk is quadratic: Open
+### `@push$`'s replacement-chain walk is quadratic: Opt-out shipped, default unchanged
 
 Not a divergence (every port builds the same value) but a Go-only cost,
 recorded here because the three obvious repairs are each blocked for a
@@ -486,10 +486,41 @@ Three repairs, each blocked:
   Go halves but not its Rust one, whose grammar is a declarative spec with
   no grammar-local closures by design.
 
-A fourth route, not yet tried: an opt-in config on the builtin
-(`k: { push$: { chain: false } }`, alongside the `src` flag it already
-takes) leaves the default untouched and lets a grammar that does not read
-replaced rules say so, declaratively, in all three ports.
+The fourth route is the one that shipped: an opt-in config on the builtin,
+`k: { push$: { chain: false } }`, alongside the `src` flag it already
+takes. **The default is unchanged** -- absent, the walk runs exactly as
+before, which is why the two pinned tests above still pass untouched and
+why nothing existing moved. A grammar that declares the key is asserting
+that it never reads a replaced rule, and gives up `$prev.node` and
+anything else resolving through `Rule.Prev` in this port.
+
+The Rust engine takes the key in its config-field table and ignores it:
+it hands out one `Arc`ed container, so there is nothing to re-publish,
+but its loader rejects unknown builtin config fields and would otherwise
+refuse a grammar the other two ports accept. TypeScript needs no change
+because it does not validate config keys -- an asymmetry between those
+two loaders that predates this and is untouched by it. No builtin-schema
+bump: the version gate refuses a spec an old engine would MIS-handle, and
+an old Go or TypeScript engine ignores this key and keeps walking, which
+is slower and still correct.
+
+`@tabnas/json` declares it on both `elem` close alternates. Go, same
+host, `benchtime=3x`: `records-1mb` 577 ms to 145 ms, `records-cjk-1mb`
+179 ms to 79 ms, `numeric-edge-1mb` 11901 ms to 230 ms, and `wide-40k`
+flat at ~128 ms, which is the control -- one object, no long array, no
+chain to skip. Allocation counts are identical on every row, so what
+went is work rather than memory.
+
+The promise is not checkable by the loader, so a grammar CAN declare the
+key and then read a replaced rule. That is a reachable different result
+for the same serialized grammar and input, and it is registered in
+`DIVERGENCE.md` and `test/spec/divergent.tsv` as `push-chain-off`, with
+`push-chain-on` as its control, rather than left in a Go-only unit test.
+
+The three blocked repairs above stay blocked. This does not solve the
+general problem -- a grammar that DOES read replaced rules still pays the
+quadratic, and there is still no way to make the walk cheap without one
+of those three trades.
 
 `TestPushSurvivesReplacementAfterABubbledList` and
 `TestCustomActionNodeSurvivesOwnerResolution` pin the two shapes that the
