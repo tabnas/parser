@@ -48,9 +48,9 @@ pub use rule::{
     RuleState, StateAction,
 };
 pub use token::{
-    name_to_tin, tin_name, Point, Tin, Token, TokenCode, TokenText, TokenValFunc, TIN_AA, TIN_BD,
-    TIN_CA, TIN_CB, TIN_CL, TIN_CM, TIN_CS, TIN_LN, TIN_MAX, TIN_NR, TIN_OB, TIN_OS, TIN_SP,
-    TIN_ST, TIN_TX, TIN_UK, TIN_VL, TIN_ZZ,
+    name_to_tin, tin_name, Point, Site, Tin, Token, TokenCode, TokenText, TokenValFunc, TIN_AA,
+    TIN_BD, TIN_CA, TIN_CB, TIN_CL, TIN_CM, TIN_CS, TIN_LN, TIN_MAX, TIN_NR, TIN_OB, TIN_OS,
+    TIN_SP, TIN_ST, TIN_TX, TIN_UK, TIN_VL, TIN_ZZ,
 };
 pub use value::{ListRef, MapRef, Text, Value};
 
@@ -685,8 +685,8 @@ impl Tabnas {
                 token.tin,
                 token.src,
                 context.options.debug.format_source(&token.val),
-                token.ri,
-                token.ci
+                token.site.ri,
+                token.site.ci
             ));
         });
         self.subscribe_rules(move |rule, context| {
@@ -709,8 +709,8 @@ impl Tabnas {
                 token.tin,
                 token.src,
                 context.options.debug.format_source(&token.val),
-                token.ri,
-                token.ci
+                token.site.ri,
+                token.site.ci
             ));
         });
         self.subscribe_rules(|rule, context| {

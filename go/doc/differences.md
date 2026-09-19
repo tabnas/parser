@@ -744,6 +744,52 @@ result, _ := j.Parse(`{"a":1}`)
 // result: tabnas.MapRef{Val: map[string]any{"a": 1.0}, Implicit: false}
 ```
 
+## Source Position: the `Site` Type
+
+Same data, one name for it. TypeScript spells a source location as three
+loose fields, and spells them three times: on `Point`, on `Token`, and in
+the `ScanOut` record its scan driver writes back (`ts/src/lexer.ts`). Go
+and Rust name that triple `Site` and reuse it in all three places.
+
+| Runtime | Shape |
+|---|---|
+| TypeScript | `sI` / `rI` / `cI` fields, repeated on `Point`, `Token` and `ScanOut` |
+| Go | `type Site struct { SI, RI, CI int }`, embedded in `Point` and `Token`; `ScanOut` is `Site` |
+| Rust | `pub struct Site { si, pos, ri, ci }`, a `site` field on `Point` and `Token` |
+
+This is an API shape, not a parity claim. The values a parse reports are
+unchanged in every runtime, which is what the token-stream parity runner
+(`ci/parity/run-parity.sh`) asserts.
+
+What the two ports do differently, and why:
+
+- **Go embeds, Rust does not.** Go's embedding is anonymous, so `pnt.RI`
+  and `tkn.CI` resolve as before and an encoded `Token` keeps its flat
+  shape. Only a composite literal changes: write
+  `Point{Len: n, Site: Site{SI: 0, RI: 1, CI: 1}}`. Rust has no
+  embedding, so the field is named and reads are `token.site.ri`.
+- **Rust's `Site` carries a fourth field, `pos`, and it is not extra
+  data.** TypeScript indexes source by UTF-16 code unit and reports that
+  same number in a diagnostic. Rust slices by UTF-8 byte, so `si` is what
+  it slices with and `pos` is what it reports, and the two together say
+  what TypeScript's single `sI` says. See the Unicode section below and
+  DIVERGENCE.md "Column positions for astral characters" for what that
+  costs at the edges.
+- **No length.** `Point.Len` is the length of the whole source and a
+  token measures its own matched text, so the two mean different things
+  and only the position is shared.
+
+Both ports keep their lexer cursor as private scalars rather than a
+`Site`, since neither cursor holds a byte offset directly: Go derives one
+from its scan, Rust counts characters and converts. `lex.Cursor()` (Go)
+and `Lexer::point()` (Rust) are where that private state becomes a
+`Point`, and a `Site` with it.
+
+`Scan` keeps taking `startSI, startRI, startCI` as loose numbers, because
+a caller such as the comment matcher tracks them as locals against a
+sliced string and has no `Site` to hand. The result is a `Site`, so the
+common case assigns in one statement.
+
 ## Internal Structure: Scan-Spec Lexer (Aligned)
 
 Both lexers use the declarative scan-spec design: a packed-action state

@@ -86,10 +86,12 @@ fn debug_options_load_from_serialized_grammar() {
 fn core_runtime_values_have_stable_human_readable_forms() {
     let point = Point {
         len: 3,
-        si: 1,
-        pos: 1,
-        ri: 2,
-        ci: 4,
+        site: tabnas::Site {
+            si: 1,
+            pos: 1,
+            ri: 2,
+            ci: 4,
+        },
     };
     assert_eq!(point.to_string(), "Point[1/3,2,4]");
     let no_token = Token::no_token();

@@ -297,9 +297,11 @@ fn imperative_lexer_matchers_receive_live_lexer_rule_and_context() {
     let value_tin = parser.options.token("#VL").unwrap();
     let seen = calls.clone();
     parser.imperative_lex_match_ref("@dollar", move |lexer, rule, context| {
-        seen.lock()
-            .unwrap()
-            .push((rule.name.clone(), context.source.clone(), lexer.point().pos));
+        seen.lock().unwrap().push((
+            rule.name.clone(),
+            context.source.clone(),
+            lexer.point().site.pos,
+        ));
         if !lexer.remaining().starts_with("$$") {
             return None;
         }

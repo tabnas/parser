@@ -129,10 +129,7 @@ fn same_tokens(left: &[Token], right: &[Token]) -> bool {
                 && left.tin == right.tin
                 && left.src == right.src
                 && left.len == right.len
-                && left.si == right.si
-                && left.pos == right.pos
-                && left.ri == right.ri
-                && left.ci == right.ci
+                && left.site == right.site
                 && left.err == right.err
                 && left.why == right.why
                 && left.val.deep_equal(&right.val)

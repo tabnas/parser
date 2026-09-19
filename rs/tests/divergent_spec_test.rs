@@ -31,9 +31,9 @@ fn render_token(token: &Token, fields: &[JsonValue]) -> String {
         .map(|field| match field.as_str().unwrap_or_default() {
             "name" => token.name.to_string(),
             "src" => token.src.to_string(),
-            "si" => token.si.to_string(),
-            "ri" => token.ri.to_string(),
-            "ci" => token.ci.to_string(),
+            "si" => token.site.si.to_string(),
+            "ri" => token.site.ri.to_string(),
+            "ci" => token.site.ci.to_string(),
             "valhex" => valhex(&token.val),
             field => panic!("unknown token render field: {field}"),
         })

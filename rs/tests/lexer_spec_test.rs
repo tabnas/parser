@@ -155,11 +155,11 @@ fn token_offsets_are_bytes_and_diagnostic_positions_are_scalars() {
     let first = lexer.next_token().expect("first text token");
     let second = lexer.next_token().expect("second text token");
     let third = lexer.next_token().expect("value token");
-    assert_eq!((first.si, first.pos, first.ci), (0, 0, 1));
+    assert_eq!((first.site.si, first.site.pos, first.site.ci), (0, 0, 1));
     assert_eq!(first.len, 2);
-    assert_eq!((second.si, second.pos, second.ci), (3, 2, 3));
+    assert_eq!((second.site.si, second.site.pos, second.site.ci), (3, 2, 3));
     assert_eq!(second.len, 1);
-    assert_eq!((third.si, third.pos, third.ci), (5, 4, 5));
+    assert_eq!((third.site.si, third.site.pos, third.site.ci), (5, 4, 5));
     assert_eq!(third.len, 4);
     assert_eq!(lexer.point().len, "é a true".len());
 }
@@ -243,7 +243,10 @@ fn configured_line_characters_rows_and_single_mode_are_honored() {
     let line = lexer.next_raw_token().unwrap();
     let text = lexer.next_raw_token().unwrap();
     assert_eq!((line.name.as_str(), line.src.as_str()), ("#LN", ";;"));
-    assert_eq!((text.name.as_str(), text.ri, text.ci), ("#TX", 3, 1));
+    assert_eq!(
+        (text.name.as_str(), text.site.ri, text.site.ci),
+        ("#TX", 3, 1)
+    );
 
     let mut single = Options::default();
     single.line.single = true;

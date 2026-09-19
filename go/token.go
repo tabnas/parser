@@ -34,12 +34,34 @@ var (
 	TinSetKEY    = []Tin{TinTX, TinNR, TinST, TinVL}                   // Tins allowed as a key (same set as VAL).
 )
 
+// Site is one location in the source text: the index reached, and the row
+// and column that index sits at. It is the same triple TypeScript carries
+// as the loose `sI`/`rI`/`cI` fields on both `Point` and `Token`
+// (ts/src/lexer.ts), and as the `ScanOut` record its scan driver writes
+// back — naming it once is what keeps the three in step.
+//
+// Deliberately NOT carrying a length: `Point.Len` is the length of the
+// whole source and `Token` measures its own matched text, so the two mean
+// different things and only the position triple is shared.
+//
+// Embedded rather than named, so `pnt.RI` and `tkn.CI` still resolve and
+// an encoded Token keeps its flat shape; `pnt.Site` addresses the triple
+// as a unit, which is how the lexer now copies a scan result back.
+type Site struct {
+	SI int // Source (string) index, 0-based.
+	RI int // Row index, 1-based.
+	CI int // Column index, 1-based.
+}
+
 // Cursor position within the source text.
+//
+// Len stays declared first so the encoded field order is what it was
+// before Site was extracted: an embedded struct's fields splice in at the
+// embedded field's position, and Token's SI/RI/CI sit where they always
+// did for the same reason.
 type Point struct {
-	Len int // Total length of the source text.
-	SI  int // Source (string) index, 0-based.
-	RI  int // Row index, 1-based.
-	CI  int // Column index, 1-based.
+	Len  int // Total length of the source text.
+	Site     // Where the cursor currently sits.
 }
 
 // A single lexical token produced by the lexer.
@@ -48,9 +70,7 @@ type Token struct {
 	Tin  Tin            // Token identification number.
 	Val  any            // Resolved value, or a lazy TokenValFunc.
 	Src  string         // Matched source text.
-	SI   int            // Source index where the token starts.
-	RI   int            // Row index of the token.
-	CI   int            // Column index of the token.
+	Site                // Where the token starts.
 	Err  string         // Error code, empty when valid.
 	Why  string         // Reason/trace marker for debugging.
 	Use  map[string]any // Custom plugin metadata (TS: token.use).
@@ -113,14 +133,12 @@ func MakeToken(name string, tin Tin, val any, src string, pnt Point) *Token {
 		Tin:  tin,
 		Val:  val,
 		Src:  src,
-		SI:   pnt.SI,
-		RI:   pnt.RI,
-		CI:   pnt.CI,
+		Site: pnt.Site,
 	}
 }
 
 // NoToken is a sentinel token indicating "no token".
-var NoToken = &Token{Name: "", Tin: -1, SI: -1, RI: -1, CI: -1}
+var NoToken = &Token{Name: "", Tin: -1, Site: Site{SI: -1, RI: -1, CI: -1}}
 
 // Fixed token source map: character -> Tin
 var FixedTokens = map[string]Tin{

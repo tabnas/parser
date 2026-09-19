@@ -188,9 +188,9 @@ impl TabnasError {
         expected.dedup();
         self.expected = expected;
         if let Some(token) = token {
-            self.pos = token.pos;
-            self.row = token.ri;
-            self.col = token.ci;
+            self.pos = token.site.pos;
+            self.row = token.site.ri;
+            self.col = token.site.ci;
             self.len = token.src.chars().count();
             self.token = ErrorToken {
                 name: token.name.to_string(),

@@ -116,7 +116,7 @@ func MakeLex(src string, cfg *LexConfig) *Lex {
 // trailing values are sI, rI, cI in that order; omitted values take the
 // TS constructor defaults (sI=0, rI=1, cI=1).
 func MakePoint(srclen int, pos ...int) Point {
-	pnt := Point{Len: srclen, SI: 0, RI: 1, CI: 1}
+	pnt := Point{Len: srclen, Site: Site{SI: 0, RI: 1, CI: 1}}
 	if len(pos) > 0 {
 		pnt.SI = pos[0]
 	}

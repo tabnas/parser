@@ -63,7 +63,7 @@ fn live_suffix_probe_sees_each_position_and_its_cursor_is_rolled_back() {
         callback_seen
             .lock()
             .unwrap()
-            .push((lexer.remaining().to_string(), lexer.point().pos));
+            .push((lexer.remaining().to_string(), lexer.point().site.pos));
         if !lexer.remaining().starts_with("!END") {
             return None;
         }
@@ -81,7 +81,7 @@ fn live_suffix_probe_sees_each_position_and_its_cursor_is_rolled_back() {
 
     let mut lexer = Lexer::new("#ab!ENDtail\n", parser.config());
     assert_eq!(lexer.next_raw_token().unwrap().src, "#ab!END");
-    assert_eq!(lexer.point().pos, 7);
+    assert_eq!(lexer.point().site.pos, 7);
     assert_eq!(lexer.next_raw_token().unwrap().src, "tail");
     let seen = seen.lock().unwrap();
     assert!(seen

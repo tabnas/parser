@@ -683,9 +683,9 @@ impl Parser {
                     action_error.code,
                     token.map_or("", |value| value.src.as_str()),
                     "",
-                    token.map_or(0, |value| value.pos),
-                    token.map_or(1, |value| value.ri),
-                    token.map_or(1, |value| value.ci),
+                    token.map_or(0, |value| value.site.pos),
+                    token.map_or(1, |value| value.site.ri),
+                    token.map_or(1, |value| value.site.ci),
                 );
                 error.detail = action_error.detail;
                 error
@@ -714,9 +714,9 @@ impl Parser {
                     action_error.code,
                     token.map_or("", |value| value.src.as_str()),
                     "",
-                    token.map_or(0, |value| value.pos),
-                    token.map_or(1, |value| value.ri),
-                    token.map_or(1, |value| value.ci),
+                    token.map_or(0, |value| value.site.pos),
+                    token.map_or(1, |value| value.site.ri),
+                    token.map_or(1, |value| value.site.ci),
                 );
                 error.detail = action_error.detail;
                 error
@@ -742,9 +742,9 @@ impl Parser {
             raised_error_code(token),
             token.src.clone(),
             site.source,
-            token.pos,
-            token.ri,
-            token.ci,
+            token.site.pos,
+            token.site.ri,
+            token.site.ci,
         );
         self.attach_error(error, rule, site.stack, site.alts, Some(token))
     }
@@ -797,9 +797,9 @@ impl Parser {
             "unknown",
             name,
             "",
-            token.map_or(0, |value| value.pos),
-            token.map_or(1, |value| value.ri),
-            token.map_or(1, |value| value.ci),
+            token.map_or(0, |value| value.site.pos),
+            token.map_or(1, |value| value.site.ri),
+            token.map_or(1, |value| value.site.ci),
         );
         error.detail = format!("unknown action: {name}");
         Err(error)
@@ -819,9 +819,9 @@ impl Parser {
             payload,
             &format!("action {name}"),
             "",
-            token.map_or(0, |value| value.pos),
-            token.map_or(1, |value| value.ri),
-            token.map_or(1, |value| value.ci),
+            token.map_or(0, |value| value.site.pos),
+            token.map_or(1, |value| value.site.ri),
+            token.map_or(1, |value| value.site.ci),
             &self.options,
         )
     }
@@ -1091,7 +1091,7 @@ impl Parser {
             };
             if token.tin == TIN_ZZ
                 || (sync.contains(&token.tin)
-                    && !(no_progress && last_si.is_some_and(|si| token.pos <= si)))
+                    && !(no_progress && last_si.is_some_and(|si| token.site.pos <= si)))
             {
                 break token;
             }
@@ -1101,10 +1101,13 @@ impl Parser {
             skipped += 1;
         };
 
-        if candidate.tin == TIN_ZZ && no_progress && last_si.is_some_and(|si| candidate.pos <= si) {
+        if candidate.tin == TIN_ZZ
+            && no_progress
+            && last_si.is_some_and(|si| candidate.site.pos <= si)
+        {
             return Ok(false);
         }
-        context.recover_si = Some(candidate.pos);
+        context.recover_si = Some(candidate.site.pos);
         error.recovered = Some(crate::RecoveredAt {
             skipped,
             sync: Some(candidate.tin),
@@ -1183,10 +1186,12 @@ impl Parser {
                     error.token.src.clone(),
                     crate::Point {
                         len: error.len,
-                        si: error.pos,
-                        pos: error.pos,
-                        ri: error.row,
-                        ci: error.col,
+                        site: crate::Site {
+                            si: error.pos,
+                            pos: error.pos,
+                            ri: error.row,
+                            ci: error.col,
+                        },
                     },
                 );
                 token.bad(&error.code);
@@ -1830,7 +1835,7 @@ impl Parser {
                 let pnt = context
                     .t
                     .first()
-                    .map(|t| (t.pos, t.ri, t.ci))
+                    .map(|t| (t.site.pos, t.site.ri, t.site.ci))
                     .unwrap_or((0, 1, 1));
                 return Err(TabnasError::new("unexpected", "", src, pnt.0, pnt.1, pnt.2));
             }
@@ -1853,7 +1858,14 @@ impl Parser {
                     if !keep_going {
                         let token = context.t.first();
                         let pnt = token
-                            .map(|token| (token.src.as_str(), token.pos, token.ri, token.ci))
+                            .map(|token| {
+                                (
+                                    token.src.as_str(),
+                                    token.site.pos,
+                                    token.site.ri,
+                                    token.site.ci,
+                                )
+                            })
                             .unwrap_or(("", 0, 1, 1));
                         let error = TabnasError::new("cancel", pnt.0, src, pnt.1, pnt.2, pnt.3);
                         return Err(self.attach_active_error(error, &current_rule, &stack, token));
@@ -1892,7 +1904,7 @@ impl Parser {
                                 let pnt = context
                                     .t
                                     .first()
-                                    .map(|t| (t.pos, t.ri, t.ci))
+                                    .map(|t| (t.site.pos, t.site.ri, t.site.ci))
                                     .unwrap_or((0, 1, 1));
                                 return Err(TabnasError::new(
                                     "unknown_rule",
@@ -2590,9 +2602,9 @@ impl Parser {
                         code,
                         token.src.clone(),
                         src,
-                        token.pos,
-                        token.ri,
-                        token.ci,
+                        token.site.pos,
+                        token.site.ri,
+                        token.site.ci,
                     );
                     let done_alt = (!self.rule_done_subscribers.is_empty()).then(|| RuleDoneAlt {
                         b: matched.b,
@@ -3277,7 +3289,7 @@ impl Parser {
                     }
                     let t0 = context.t.first().cloned();
                     let (src_token, si, ri, ci) = if let Some(t) = t0.as_ref() {
-                        (t.src.to_string(), t.pos, t.ri, t.ci)
+                        (t.src.to_string(), t.site.pos, t.site.ri, t.site.ci)
                     } else {
                         (String::new(), src.len(), 1, 1)
                     };
@@ -3335,7 +3347,14 @@ impl Parser {
                     let token = context.t.first().cloned();
                     let (source, pos, row, col) = token.as_ref().map_or_else(
                         || (String::new(), src.chars().count(), 1, 1),
-                        |value| (value.src.to_string(), value.pos, value.ri, value.ci),
+                        |value| {
+                            (
+                                value.src.to_string(),
+                                value.site.pos,
+                                value.site.ri,
+                                value.site.ci,
+                            )
+                        },
                     );
                     let code = token.as_ref().map_or("unexpected", deferred_error_code);
                     let error = TabnasError::new(code, source, src, pos, row, col);
@@ -3401,7 +3420,8 @@ impl Parser {
                 } else {
                     "unexpected"
                 };
-                let error = TabnasError::new(code, &*t0.src, src, t0.pos, t0.ri, t0.ci);
+                let error =
+                    TabnasError::new(code, &*t0.src, src, t0.site.pos, t0.site.ri, t0.site.ci);
                 let error = self.attach_error(
                     error,
                     &current_rule,
@@ -3437,9 +3457,9 @@ impl Parser {
                         "unexpected",
                         &*token.src,
                         src,
-                        token.pos,
-                        token.ri,
-                        token.ci,
+                        token.site.pos,
+                        token.site.ri,
+                        token.site.ci,
                     )
                 },
             );
@@ -3504,10 +3524,12 @@ fn error_token(error: &TabnasError) -> Token {
         error.src.clone(),
         crate::Point {
             len: error.len,
-            si: byte_position,
-            pos: error.pos,
-            ri: error.row,
-            ci: error.col,
+            site: crate::Site {
+                si: byte_position,
+                pos: error.pos,
+                ri: error.row,
+                ci: error.col,
+            },
         },
     );
     token.err = crate::TokenCode::from(error.code.as_str());

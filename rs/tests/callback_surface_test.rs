@@ -142,7 +142,7 @@ fn live_lexer_checks_can_advance_and_return_native_tokens() {
     parser.imperative_lex_check_ref("@claim", move |lexer| {
         seen.lock()
             .unwrap()
-            .push((lexer.remaining().to_string(), lexer.point().pos));
+            .push((lexer.remaining().to_string(), lexer.point().site.pos));
         if !lexer.remaining().starts_with('$') {
             return LexCheckResult::Continue;
         }
@@ -294,10 +294,12 @@ fn live_lexer_helpers_support_inspection_bad_tokens_and_relex_rollback() {
             " ",
             tabnas::Point {
                 len: 1,
-                si: 0,
-                pos: 0,
-                ri: 1,
-                ci: 1,
+                site: tabnas::Site {
+                    si: 0,
+                    pos: 0,
+                    ri: 1,
+                    ci: 1,
+                },
             },
         )));
         let (recut, checkpoint) = lexer
@@ -310,7 +312,7 @@ fn live_lexer_helpers_support_inspection_bad_tokens_and_relex_rollback() {
             Some(" ")
         );
         lexer.unrelex(checkpoint, context);
-        assert_eq!(lexer.point().pos, 1);
+        assert_eq!(lexer.point().site.pos, 1);
         true
     });
     parser

@@ -487,7 +487,7 @@ func NewLex(src string, cfg *LexConfig) *Lex {
 	}
 	return &Lex{
 		Src:         src,
-		pnt:         Point{Len: len(src), SI: 0, RI: 1, CI: 1},
+		pnt:         Point{Len: len(src), Site: Site{SI: 0, RI: 1, CI: 1}},
 		Config:      cfg,
 		ignoreDense: ignoreDense,
 		tables:      tables,
@@ -763,9 +763,7 @@ func (l *Lex) Relex(from *Token, want []Tin, rule *Rule) *Token {
 
 	saved := relexPoint{pnt: l.pnt, tokens: l.tokens, end: l.end}
 
-	l.pnt.SI = from.SI
-	l.pnt.RI = from.RI
-	l.pnt.CI = from.CI
+	l.pnt.Site = from.Site
 	l.tokens = nil
 	l.end = nil
 
@@ -877,7 +875,7 @@ func (l *Lex) nextUnfiltered2(r *Rule) (*Token, bool) {
 		}
 		tkn = &Token{
 			Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
-			SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI,
+			Site: l.pnt.Site,
 		}
 	}
 
@@ -914,7 +912,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 	for {
 		// If an error has already occurred, return end-of-source to stop parsing
 		if l.Err != nil {
-			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
+			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: l.pnt.Site}
 		}
 
 		tkn, claimed := l.nextUnfiltered2(r)
@@ -960,7 +958,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			l.attachErrContext(je, r, "#BD", "")
 			l.Ctx.recordErr(je)
 			l.Err = je
-			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: l.pnt.SI, RI: l.pnt.RI, CI: l.pnt.CI}
+			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: l.pnt.Site}
 		}
 		// Bad token → store error and return end-of-source
 		if tkn.Tin == TinBD {
@@ -971,7 +969,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			l.attachErrContext(je, r, tkn.Name, tkn.Why)
 			l.Ctx.recordErr(je)
 			l.Err = je
-			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, SI: tkn.SI, RI: tkn.RI, CI: tkn.CI}
+			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: tkn.Site}
 		}
 		// Skip IGNORE tokens (per-instance set, matching TS
 		// cfg.tokenSetTins.IGNORE; dense snapshot built in NewLex)
