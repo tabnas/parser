@@ -2,7 +2,7 @@
 
 #![allow(clippy::result_large_err)]
 
-pub const VERSION: &str = "0.9.7";
+pub const VERSION: &str = "0.10.0";
 
 pub mod builtins;
 pub mod context;
