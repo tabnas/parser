@@ -1406,9 +1406,9 @@ func markUnknownRule(ctx *Context, name string) {
 	}
 	ctx.ParseErr = &Token{
 		Name: at.Name, Tin: at.Tin, Val: at.Val, Src: at.Src,
-		SI: at.SI, RI: at.RI, CI: at.CI,
-		Err: "unknown_rule",
-		Use: map[string]any{"rulename": name},
+		Site: at.Site,
+		Err:  "unknown_rule",
+		Use:  map[string]any{"rulename": name},
 	}
 	ctx.parseErrDiag = captureDiag(ctx)
 }

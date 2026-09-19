@@ -77,20 +77,34 @@ pub fn name_to_tin(name: &str) -> Option<Tin> {
     }
 }
 
-/// Cursor position within the source text.
+/// One location in the source text: the index reached, and the row and
+/// column that index sits at. It is the same data TypeScript carries as
+/// the loose `sI`/`rI`/`cI` fields on both `Point` and `Token`
+/// (ts/src/lexer.ts), and as the `ScanOut` record its scan driver writes
+/// back — naming it once is what keeps those uses in step.
+///
+/// The extra field is `pos`, and it is not extra data: TypeScript indexes
+/// source by UTF-16 code unit and reports that same number in a
+/// diagnostic, while Rust slices by UTF-8 byte. So `si` is the offset
+/// this port slices with and `pos` is the offset it REPORTS, and the two
+/// together say what TypeScript's single `sI` says. See
+/// `go/doc/differences.md` and DIVERGENCE.md "Column positions for astral
+/// characters" for what that costs at the edges.
+///
+/// Deliberately NOT carrying a length: `Point::len` is the length of the
+/// whole source and `Token::len` is the length of that token's matched
+/// text, so the two mean different things and only the position is shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Point {
-    pub len: usize, // Total UTF-8 byte length of the source.
+pub struct Site {
     pub si: usize,  // 0-based UTF-8 byte position used for source slicing
     pub pos: usize, // 0-based Unicode-scalar position used by diagnostics
     pub ri: usize,  // 1-based row
     pub ci: usize,  // 1-based column
 }
 
-impl Default for Point {
+impl Default for Site {
     fn default() -> Self {
-        Point {
-            len: 0,
+        Site {
             si: 0,
             pos: 0,
             ri: 1,
@@ -99,12 +113,25 @@ impl Default for Point {
     }
 }
 
+impl fmt::Display for Site {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{},{},{}", self.si, self.ri, self.ci)
+    }
+}
+
+/// Cursor position within the source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Point {
+    pub len: usize, // Total UTF-8 byte length of the source.
+    pub site: Site, // Where the cursor currently sits.
+}
+
 impl fmt::Display for Point {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
             "Point[{}/{},{},{}]",
-            self.si, self.len, self.ri, self.ci
+            self.site.si, self.len, self.site.ri, self.site.ci
         )
     }
 }
@@ -466,12 +493,10 @@ pub struct Token {
     pub tin: Tin,
     pub val: Value,
     pub src: TokenText,
-    /// UTF-8 byte length of `src`, paired with the byte offset `si`.
+    /// UTF-8 byte length of `src`, paired with the byte offset `site.si`.
     pub len: usize,
-    pub si: usize,
-    pub pos: usize,
-    pub ri: usize,
-    pub ci: usize,
+    /// Where in the source this token starts.
+    pub site: Site,
     pub err: TokenCode,
     pub why: TokenCode,
     /// Plugin diagnostic details, boxed and absent until something
@@ -498,10 +523,7 @@ impl Default for Token {
             val: Value::Undefined,
             src: TokenText::default(),
             len: 0,
-            si: 0,
-            pos: 0,
-            ri: 1,
-            ci: 1,
+            site: Site::default(),
             err: TokenCode::default(),
             why: TokenCode::default(),
             use_data: None,
@@ -527,10 +549,7 @@ impl Token {
             val,
             src,
             len,
-            si: pnt.si,
-            pos: pnt.pos,
-            ri: pnt.ri,
-            ci: pnt.ci,
+            site: pnt.site,
             err: TokenCode::default(),
             why: TokenCode::default(),
             use_data: None,
@@ -562,10 +581,7 @@ impl Token {
             val: Value::Undefined,
             src: TokenText::default(),
             len: 0,
-            si: 0,
-            pos: 0,
-            ri: 1,
-            ci: 1,
+            site: Site::default(),
             err: TokenCode::default(),
             why: TokenCode::default(),
             use_data: None,
@@ -634,7 +650,7 @@ impl fmt::Display for Token {
         if !self.val.is_undefined() && !matches!(self.name.as_str(), "#ST" | "#TX") {
             write!(formatter, "={}", snip(&value_text(&self.val), 5))?;
         }
-        write!(formatter, " {},{},{}", self.si, self.ri, self.ci)?;
+        write!(formatter, " {}", self.site)?;
         if !self.use_data().is_empty() {
             let mut entries = self.use_data().iter().collect::<Vec<_>>();
             entries.sort_by_key(|(key, _)| *key);

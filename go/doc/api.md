@@ -249,6 +249,31 @@ comment), `TinNR` (#NR number), `TinST` (#ST string), `TinTX` (#TX
 text), `TinVL` (#VL value), `TinOB` `{`, `TinCB` `}`, `TinOS` `[`,
 `TinCS` `]`, `TinCL` `:`, `TinCA` `,`.
 
+### `Site`: where something is in the source
+
+`Site` is the source-location triple, and `Point` and `Token` both
+embed it:
+
+```go
+type Site struct {
+	SI int // Source (string) index, 0-based.
+	RI int // Row index, 1-based.
+	CI int // Column index, 1-based.
+}
+
+type Point struct {
+	Site     // Where the cursor currently sits.
+	Len  int // Total length of the source text.
+}
+```
+
+Because the embedding is anonymous, `pnt.RI` and `tkn.CI` read as they
+always did and an encoded `Token` keeps its flat shape. What the name
+adds is the triple as one value: `tkn.Site`, `pnt.Site = tkn.Site`, and
+`ScanOut`, which is the same type. It carries no length, because
+`Point.Len` measures the whole source and a token measures its own
+matched text.
+
 ## Plugins
 
 ### `Plugin` type
@@ -338,6 +363,9 @@ func BuildStringBodySpec(cfg *LexConfig, q rune) *ScanSpec
 
 `ScanSpec` declares the byte-class table and a `Fallback` classifier
 for non-ASCII runes; `ScanOut` receives the reached `SI`/`RI`/`CI`.
+`ScanOut` is `Site`, so a scan result assigns onto a cursor in one
+statement: `lex.Cursor().Site = out` sets the position and leaves `Len`
+alone.
 The packed action flags (`ScanConsume`, `ScanIsRow`, `ScanCIReset`,
 `ScanStop`, `ScanStateMask`) are exported for hand-built specs. See
 [concepts](concepts.md#the-scan-spec-lexer).

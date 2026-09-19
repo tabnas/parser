@@ -426,3 +426,27 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
 - `rust.yml` — formatting, build, tests, strict Clippy, and the two
   TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
+- `release.yml` — **a replacement for a workflow that is already live**,
+  not a new one, so promoting it overwrites `.github/workflows/release.yml`.
+  Diff the two before promoting. It adds crates.io publishing over OIDC
+  trusted publishing, alongside the npm publish that is already there.
+
+  **Promote it only after `tabnas` exists on crates.io.** RFC 3691 lets a
+  trusted publisher be configured only after an initial manual publish, so
+  the first release goes out over a scoped token from a maintainer's
+  machine; until then the auth step has nothing to authenticate against
+  and fails the whole release. Setup order:
+
+  1. From the release commit on `main`: `cd rs && cargo publish --locked`,
+     with a crates.io token scoped to publish-new.
+  2. On `crates.io/crates/tabnas/settings`, add a GitHub Actions trusted
+     publisher: owner `tabnas`, repository `parser`, workflow file
+     `release.yml`, environment blank (or a `release` environment, if one
+     is added here to gate the job behind a reviewer).
+  3. Promote this file.
+  4. Revoke the token from step 1.
+
+  As with npm, the config names a single workflow FILENAME, which is why
+  the crates steps live in `release.yml` rather than a workflow of their
+  own: renaming the file breaks publishing on both registries until the
+  registry-side entries are updated to match.

@@ -129,10 +129,12 @@ impl<'a> Lexer<'a> {
     fn current_point(&self) -> Point {
         Point {
             len: self.src.len(),
-            si: self.byte_position(),
-            pos: self.idx,
-            ri: self.ri,
-            ci: self.ci,
+            site: crate::Site {
+                si: self.byte_position(),
+                pos: self.idx,
+                ri: self.ri,
+                ci: self.ci,
+            },
         }
     }
 
@@ -540,9 +542,9 @@ impl<'a> Lexer<'a> {
             payload,
             api,
             self.src,
-            point.pos,
-            point.ri,
-            point.ci,
+            point.site.pos,
+            point.site.ri,
+            point.site.ci,
             &self.options,
         );
         self.err = Some(error.clone());
@@ -590,7 +592,7 @@ impl<'a> Lexer<'a> {
         rule: &mut crate::Rule,
         context: &mut crate::Context,
     ) -> Option<(Token, RelexCheckpoint)> {
-        if from.src.is_empty() || from.pos > self.char_len || wanted.is_empty() {
+        if from.src.is_empty() || from.site.pos > self.char_len || wanted.is_empty() {
             return None;
         }
         let saved = self.state();
@@ -598,9 +600,9 @@ impl<'a> Lexer<'a> {
         // with an empty queue for a negotiated cut. Rust keeps that queue on
         // Context, so hide it explicitly and preserve it in the checkpoint.
         let replay = context.take_replay();
-        self.idx = from.pos;
-        self.ri = from.ri;
-        self.ci = from.ci;
+        self.idx = from.site.pos;
+        self.ri = from.site.ri;
+        self.ci = from.site.ci;
         self.err = None;
         self.end_reached = false;
         self.want = Some(wanted.to_vec());
@@ -1077,9 +1079,9 @@ impl<'a> Lexer<'a> {
                 "unexpected",
                 bad_char.to_string(),
                 self.src,
-                pnt.pos,
-                pnt.ri,
-                pnt.ci,
+                pnt.site.pos,
+                pnt.site.ri,
+                pnt.site.ci,
             );
             self.err = Some(err.clone());
             return Err(Box::new(err));
@@ -1317,9 +1319,9 @@ impl<'a> Lexer<'a> {
             "unexpected",
             bad_char.to_string(),
             self.src,
-            pnt.pos,
-            pnt.ri,
-            pnt.ci,
+            pnt.site.pos,
+            pnt.site.ri,
+            pnt.site.ci,
         );
         self.err = Some(err.clone());
         Err(Box::new(err))
@@ -1414,9 +1416,9 @@ impl<'a> Lexer<'a> {
                 "unterminated_comment",
                 src,
                 self.src,
-                pnt.pos,
-                pnt.ri,
-                pnt.ci,
+                pnt.site.pos,
+                pnt.site.ri,
+                pnt.site.ci,
             );
             self.err = Some(err.clone());
             return Err(Box::new(err));
@@ -1665,8 +1667,8 @@ impl<'a> Lexer<'a> {
 
     fn reset_number(&mut self, start_idx: usize, pnt: Point) {
         self.idx = start_idx;
-        self.ri = pnt.ri;
-        self.ci = pnt.ci;
+        self.ri = pnt.site.ri;
+        self.ci = pnt.site.ci;
     }
 
     /// Consume a decimal digit/separator run. Separators are legal only
@@ -1749,9 +1751,9 @@ impl<'a> Lexer<'a> {
                     "unprintable",
                     c.to_string(),
                     self.src,
-                    pnt.pos,
-                    pnt.ri,
-                    pnt.ci,
+                    pnt.site.pos,
+                    pnt.site.ri,
+                    pnt.site.ci,
                 );
                 self.err = Some(err.clone());
                 return Err(Box::new(err));
@@ -1763,9 +1765,9 @@ impl<'a> Lexer<'a> {
                     "unprintable",
                     c.to_string(),
                     self.src,
-                    self.current_point().pos,
-                    self.current_point().ri,
-                    self.current_point().ci,
+                    self.current_point().site.pos,
+                    self.current_point().site.ri,
+                    self.current_point().site.ci,
                 );
                 self.err = Some(err.clone());
                 return Err(Box::new(err));
@@ -1807,9 +1809,9 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{{{}}}", hex),
                                         self.src,
-                                        esc_point.pos - 1,
-                                        esc_point.ri,
-                                        esc_point.ci - 1,
+                                        esc_point.site.pos - 1,
+                                        esc_point.site.ri,
+                                        esc_point.site.ci - 1,
                                     );
                                     self.err = Some(err.clone());
                                     return Err(Box::new(err));
@@ -1822,9 +1824,9 @@ impl<'a> Lexer<'a> {
                                             "invalid_unicode",
                                             format!("\\u{{{}}}", hex),
                                             self.src,
-                                            esc_point.pos - 1,
-                                            esc_point.ri,
-                                            esc_point.ci - 1,
+                                            esc_point.site.pos - 1,
+                                            esc_point.site.ri,
+                                            esc_point.site.ci - 1,
                                         );
                                         self.err = Some(err.clone());
                                         return Err(Box::new(err));
@@ -1857,9 +1859,9 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{}", hex),
                                         self.src,
-                                        esc_point.pos - 1,
-                                        esc_point.ri,
-                                        esc_point.ci - 1,
+                                        esc_point.site.pos - 1,
+                                        esc_point.site.ri,
+                                        esc_point.site.ci - 1,
                                     );
                                     self.err = Some(err.clone());
                                     return Err(Box::new(err));
@@ -1870,9 +1872,9 @@ impl<'a> Lexer<'a> {
                                         "invalid_unicode",
                                         format!("\\u{}", hex),
                                         self.src,
-                                        esc_point.pos - 1,
-                                        esc_point.ri,
-                                        esc_point.ci - 1,
+                                        esc_point.site.pos - 1,
+                                        esc_point.site.ri,
+                                        esc_point.site.ci - 1,
                                     );
                                     self.err = Some(err.clone());
                                     err
@@ -1902,9 +1904,9 @@ impl<'a> Lexer<'a> {
                                     "invalid_ascii",
                                     format!("\\x{hex}"),
                                     self.src,
-                                    esc_point.pos - 1,
-                                    esc_point.ri,
-                                    esc_point.ci - 1,
+                                    esc_point.site.pos - 1,
+                                    esc_point.site.ri,
+                                    esc_point.site.ci - 1,
                                 );
                                 self.err = Some(err.clone());
                                 return Err(Box::new(err));
@@ -1919,9 +1921,9 @@ impl<'a> Lexer<'a> {
                                     "unexpected",
                                     format!("\\{}", other),
                                     self.src,
-                                    esc_point.pos - 1,
-                                    esc_point.ri,
-                                    esc_point.ci - 1,
+                                    esc_point.site.pos - 1,
+                                    esc_point.site.ri,
+                                    esc_point.site.ci - 1,
                                 );
                                 self.err = Some(err.clone());
                                 return Err(Box::new(err));
@@ -1935,9 +1937,9 @@ impl<'a> Lexer<'a> {
                         "unterminated_string",
                         raw_src,
                         self.src,
-                        pnt.pos,
-                        pnt.ri,
-                        pnt.ci,
+                        pnt.site.pos,
+                        pnt.site.ri,
+                        pnt.site.ci,
                     );
                     self.err = Some(err.clone());
                     return Err(Box::new(err));
@@ -1953,9 +1955,9 @@ impl<'a> Lexer<'a> {
             "unterminated_string",
             raw_src,
             self.src,
-            pnt.pos,
-            pnt.ri,
-            pnt.ci,
+            pnt.site.pos,
+            pnt.site.ri,
+            pnt.site.ci,
         );
         self.err = Some(err.clone());
         Err(Box::new(err))

@@ -50,8 +50,8 @@ fn dump(source: &str) -> String {
         state.0.push(format!(
             "{}\t{}\t{}\t{}\t{}",
             token.name,
-            utf16_offset(&owned_source, token.si),
-            token.ri,
+            utf16_offset(&owned_source, token.site.si),
+            token.site.ri,
             json_string(&token.src),
             value_repr(&token.name, &token.val),
         ));

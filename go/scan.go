@@ -54,20 +54,21 @@ type ScanSpec struct {
 	Fallback func(r rune) uint8
 }
 
-// ScanOut is caller-owned scratch holding the position a Scan ended at (TS: ScanOut).
-type ScanOut struct {
-	SI int // Source byte index reached.
-	RI int // Row index reached.
-	CI int // Column index reached.
-}
+// ScanOut is caller-owned scratch holding the position a Scan ended at
+// (TS: ScanOut). It is a Site: the triple a scan reports back is the same
+// triple a Point carries and a Token records, so the alias keeps them one
+// type rather than three that have to be kept in step by hand.
+type ScanOut = Site
 
 // Scan walks src from (startSI, startRI, startCI) according to spec,
 // writing the reached positions into out. Reports whether any byte was
 // consumed (TS: scan).
 //
-// Takes raw position numbers rather than a Point because some callers
+// Takes raw position numbers rather than a Site because some callers
 // (notably the comment matcher) track positions as locals against a
-// sliced fwd string rather than on the lex's pnt.
+// sliced fwd string rather than on the lex's pnt. The RESULT is a Site:
+// a scan always reports a whole position, so `out` is one value a caller
+// can assign straight onto a Point.
 func Scan(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOut) bool {
 	sI := startSI
 	rI := startRI
@@ -106,9 +107,7 @@ func Scan(src string, startSI, startRI, startCI int, spec *ScanSpec, out *ScanOu
 		}
 	}
 
-	out.SI = sI
-	out.RI = rI
-	out.CI = cI
+	*out = Site{SI: sI, RI: rI, CI: cI}
 	return startSI < sI
 }
 
