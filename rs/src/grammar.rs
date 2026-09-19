@@ -761,7 +761,14 @@ fn validate_builtin_config(action: &str, config: &Value, label: &str) -> Result<
         "@object$" | "@array$" => &[("implicit", "boolean")],
         "@key$" => &[("slot", "string"), ("from", "integer"), ("lit", "string")],
         "@setval$" => &[("slot", "string"), ("src", "boolean")],
-        "@push$" => &[("src", "boolean")],
+        // `chain` is accepted and ignored here. It tells the GO engine
+        // not to re-publish a grown list back along a replacement chain,
+        // which is O(elements^2) there because a Go slice is a value.
+        // This port hands out one `Arc`ed container, so there is nothing
+        // to re-publish and nothing to skip -- but the key has to be
+        // known, or a grammar that declares it is refused at load and
+        // the three ports stop sharing one grammar.
+        "@push$" => &[("src", "boolean"), ("chain", "boolean")],
         "@value$" => &[("from", "integer")],
         _ => return Ok(()),
     };

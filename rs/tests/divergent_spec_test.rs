@@ -86,9 +86,60 @@ fn spec_probe(input: &str, args: &JsonValue, specs: &IndexMap<String, String>) -
         return "INSTALL_ERROR".into();
     }
     match parser.parse(input) {
-        Ok(_) => "OK".into(),
+        // Without `show`, the probe renders the VALUE (tsv header, "spec"):
+        // this lane returned a bare "OK" for every success, which happened
+        // to match every row that existed because all of them passed
+        // `show: ["code"]`. The first row to compare parsed values would
+        // have gone red against a lane that never rendered one.
+        Ok(value) => match args.get("show") {
+            Some(_) => "OK".into(),
+            None => format!("OK:{}", canon(&value)),
+        },
         Err(error) => format!("ERROR:{}", error.code),
     }
+}
+
+/// The canonical value rendering the Go and TypeScript lanes already
+/// share (`divergentCanon`, `canon`). Map keys sort by UTF-16 code unit
+/// because key order is out of contract and UTF-8 order disagrees.
+fn canon(value: &Value) -> String {
+    match value {
+        Value::Undefined | Value::Null => "null".into(),
+        Value::Bool(true) => "true".into(),
+        Value::Bool(false) => "false".into(),
+        Value::String(text) => format!("\"{text}\""),
+        Value::Text(text) => format!("\"{}\"", text.string),
+        // ECMAScript Number::toString is what the Go lane reimplements as
+        // `jsNumberString`; JavaScript gets it from `String()`. It is NOT
+        // ported here, so a row whose value carries a number fails with
+        // this marker rather than silently rendering a third spelling and
+        // recording a divergence that is only a formatting difference.
+        Value::Number(_) => "UNRENDERABLE_NUMBER".into(),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(canon).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::ListRef(list) => {
+            let parts: Vec<String> = list.value.iter().map(canon).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Object(map) => canon_entries(map.iter()),
+        Value::MapRef(map) => canon_entries(map.value.iter()),
+    }
+}
+
+fn canon_entries<'a>(entries: impl Iterator<Item = (&'a String, &'a Value)>) -> String {
+    let mut pairs: Vec<(&String, &Value)> = entries.collect();
+    pairs.sort_by(|a, b| utf16_units(a.0).cmp(&utf16_units(b.0)));
+    let parts: Vec<String> = pairs
+        .iter()
+        .map(|(key, value)| format!("\"{key}\":{}", canon(value)))
+        .collect();
+    format!("{{{}}}", parts.join(","))
+}
+
+fn utf16_units(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
 }
 
 #[test]

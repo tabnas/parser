@@ -908,6 +908,66 @@ func specFromJSON(t *testing.T, src string) *GrammarSpec {
 //
 // No fixture had this shape: push-replace.fixture.json replaces a rule
 // that OWNS its list, so the owner write covers it.
+// The same grammar as TestPushSurvivesReplacementAfterABubbledList, with
+// `chain: false` on both pushes. That test exists because the replacement
+// chain walk is what makes it produce two elements; this one pins what
+// turning the walk off costs, so the flag is never mistaken for free.
+//
+// `mid` is the rule `__start__`'s Child still points at, and it is
+// neither the list's owner (`arr`) nor the rule doing the pushing
+// (`tail`). Only the chain walk reaches it. Without it `mid` keeps the
+// header it held when it was replaced -- one element -- and `__start__`'s
+// @bubble$ reads that, so the parse returns ["1"] where TypeScript and
+// Rust return ["1", "2"].
+//
+// That is the whole contract of the flag: a grammar declaring it promises
+// nothing reads a replaced rule. This grammar does, which is why it is
+// the one that shows the cost.
+func TestPushChainFalseDropsTheReplacedRulesView(t *testing.T) {
+	const spec = `{
+	  "v": 5,
+	  "options": { "rule": { "start": "__start__" } },
+	  "rule": {
+	    "__start__": {
+	      "open":  [ { "p": "mid" } ],
+	      "close": [ { "s": "#ZZ", "a": "@bubble$" } ]
+	    },
+	    "mid": {
+	      "open":  [ { "p": "arr" } ],
+	      "close": [ { "a": "@bubble$", "r": "tail" } ]
+	    },
+	    "arr": {
+	      "open":  [ { "a": "@array$", "p": "elem" } ],
+	      "close": [ { "a": "@push$",
+	                   "k": { "push$": { "src": true, "chain": false } } } ]
+	    },
+	    "tail": {
+	      "open":  [ { "s": "#CA", "p": "elem" } ],
+	      "close": [ { "a": "@push$",
+	                   "k": { "push$": { "src": true, "chain": false } } } ]
+	    },
+	    "elem": {
+	      "open":  [ { "s": "#NR", "a": "@node$",
+	                   "k": { "node$": { "init": true, "nterms": 1 } } } ],
+	      "close": [ { "a": "@capture$" } ]
+	    }
+	  }
+	}`
+	j := Make()
+	if err := j.Grammar(specFromJSON(t, spec)); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := j.Parse("1,2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// One element, not two: the second push never reached `mid`.
+	if want := []any{"1"}; !reflect.DeepEqual(omPlainify(UnwrapUndefined(got)), want) {
+		t.Errorf("chain=false: got %#v, want %#v",
+			omPlainify(UnwrapUndefined(got)), want)
+	}
+}
+
 func TestPushSurvivesReplacementAfterABubbledList(t *testing.T) {
 	const spec = `{
 	  "v": 5,

@@ -97,6 +97,22 @@ func cfgInt(v any) int {
 func cfgStr(v any) string { s, _ := v.(string); return s }
 func cfgBool(v any) bool  { b, _ := v.(bool); return b }
 
+// cfgFlag reads a config key that defaults to something other than the
+// zero value. `cfgBool` cannot express that: an absent key and an
+// explicit `false` both read as false, which is right for a flag that
+// switches something ON and wrong for one that switches something OFF.
+func cfgFlag(cfg map[string]any, key string, def bool) bool {
+	v, ok := cfg[key]
+	if !ok {
+		return def
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return def
+	}
+	return b
+}
+
 // @node$ — allocate (when init) and/or accumulate matched terminals' src.
 // Config in r.K["node$"] = {init?, rule?, kind?, nterms?}.
 func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
@@ -475,11 +491,31 @@ func builtinPushCfg(r *Rule, _ *Context, cfg map[string]any) {
 		// so a replacement that allocated a container of its own cannot
 		// clobber the one it replaced — which is what TypeScript does,
 		// and what child-pusher.fixture.json pins.
-		for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
-			if !sameGrownList(p.Node, before) {
-				break
+		//
+		// `chain: false` says the grammar never reads a replaced rule,
+		// and skips the walk. It is opt-in because the walk is correct
+		// and this is not: a grammar declaring it gives up `$prev.node`
+		// and anything else that resolves through `Rule.Prev`, which
+		// `plugins.md` documents as part of the rule graph. What it buys
+		// is the difference between O(n^2) and O(n) on a list built by a
+		// rule that replaces itself per separator -- the shape
+		// @tabnas/json's `elem` uses, and the one measured in
+		// `doc/differences.md` at 15.1 M walk steps for 5,500 elements.
+		//
+		// TypeScript and Rust ignore the key, and that is the right
+		// behaviour rather than a gap: they hand out the same list
+		// object, so there is no republication to skip and nothing an
+		// unread flag could change. An engine older than this one
+		// ignores it too and keeps walking, which is slower and still
+		// correct -- so this needs no builtin-schema bump, whose job is
+		// to refuse a spec an old engine would MIS-handle.
+		if cfgFlag(cfg, "chain", true) {
+			for p := r.Prev; p != nil && p != NoRule && p != r; p = p.Prev {
+				if !sameGrownList(p.Node, before) {
+					break
+				}
+				p.Node = owner.Node
 			}
-			p.Node = owner.Node
 		}
 	}
 }

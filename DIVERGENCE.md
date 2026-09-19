@@ -354,6 +354,39 @@ results on purpose. Both drive a real `GrammarSpec` through
 the regex-engine layer, so "a shared grammar that depends on either will
 differ" was a prediction until this was wired.
 
+### `@push$` with `chain: false` and a grammar that breaks its promise
+
+`@push$` takes an opt-in `chain: false` (schema v5 config, alongside
+`src`). It tells the engine that the grammar never reads a rule that has
+been replaced, so the grown list need not be re-published back along the
+replacement chain. TypeScript and Rust hand out one array object, so
+every holder sees every element and the key is a no-op in both. A Go
+slice is a value, so in that port the key is the difference between
+O(elements) and O(elements^2) on a grammar whose element rule replaces
+itself per separator, which is the shape `@tabnas/json` uses.
+
+| grammar | input | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `chain: false`, parent reads the replaced rule | `1,2` | `["1","2"]` | **`["1"]`** | `["1","2"]` |
+| same grammar, key absent | `1,2` | `["1","2"]` | `["1","2"]` | `["1","2"]` |
+
+The divergent row is a grammar declaring the key and then doing the one
+thing the key promises not to do: a rule lifts the list with `@bubble$`
+and replaces itself, and the parent reads the rule it replaced. **The
+loader cannot check that promise** -- it is a claim about which paths the
+grammar will resolve, not about the spec's shape -- so the different
+result is reachable for the same serialized grammar and input, and is
+registered rather than argued away.
+
+Repairing it means one of two things, and both are worse than recording
+it. Removing the opt-out puts `@push$` back to quadratic on the shape the
+shipped JSON grammar uses: 15,127,750 walk steps for 5,500 elements,
+11.9 seconds on `numeric-edge-1mb` against 230 ms with the key. Making
+the walk unconditional but cheap is the open problem
+`go/doc/differences.md` records three blocked attempts at.
+
+Registered as `push-chain-off`, with `push-chain-on` as its control.
+
 ### An explicitly empty option cannot be expressed in Go
 
 **Deferred, not deliberate** — this is a defect awaiting a breaking
