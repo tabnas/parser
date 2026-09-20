@@ -25,10 +25,18 @@
 use std::sync::Arc;
 use tabnas::{ListRef, MapRef, Tabnas, Value};
 
-/// Each level of the old recursive walk needed more than 500 bytes even
-/// in a release build, so this depth needs megabytes against the 512 KiB
-/// below.
-const DEPTH: usize = 20_000;
+/// Each level of the old recursive walk needed roughly 500 bytes to 1 KiB
+/// in a release build and more than 2.5 KiB in a debug build, so a parse
+/// this deep needed well over half a megabyte against the 512 KiB below
+/// (the same floor as `deep_chain_drop_test`: the parse loop's own frames
+/// do not fit in 256 KiB in a debug build). The depth is modest because a
+/// debug build checks the whole rule stack on every step
+/// (`Context::sync_rule_stack`), which makes a nested parse quadratic
+/// there; the direct unwrap below goes much deeper.
+const PARSE_DEPTH: usize = 1_200;
+/// The direct walk is linear, so this pins it at a depth whose old
+/// recursive form needed tens of megabytes.
+const UNWRAP_DEPTH: usize = 20_000;
 const STACK_BYTES: usize = 512 * 1024;
 
 fn on_small_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
@@ -65,14 +73,14 @@ fn array_depth(value: &Value) -> (usize, &Value) {
 
 #[test]
 fn deeply_nested_document_parses_on_a_small_stack() {
-    let source = format!("{}{}", "[".repeat(DEPTH), "]".repeat(DEPTH));
+    let source = format!("{}{}", "[".repeat(PARSE_DEPTH), "]".repeat(PARSE_DEPTH));
     let value = on_small_stack(move || {
         Tabnas::make_json()
             .parse(&source)
             .expect("deeply nested arrays parse")
     });
     let (depth, leaf) = array_depth(&value);
-    assert_eq!(depth, DEPTH);
+    assert_eq!(depth, PARSE_DEPTH);
     assert_eq!(*leaf, Value::array(Vec::new()));
     drop_on_large_stack(value);
 }
@@ -81,13 +89,13 @@ fn deeply_nested_document_parses_on_a_small_stack() {
 fn deeply_nested_undefined_is_unwrapped_on_a_small_stack() {
     let value = on_small_stack(|| {
         let mut value = Value::array(vec![Value::Undefined]);
-        for _ in 1..DEPTH {
+        for _ in 1..UNWRAP_DEPTH {
             value = Value::array(vec![value]);
         }
         value.unwrap_undefined()
     });
     let (depth, leaf) = array_depth(&value);
-    assert_eq!(depth, DEPTH);
+    assert_eq!(depth, UNWRAP_DEPTH);
     assert_eq!(*leaf, Value::Null);
     drop_on_large_stack(value);
 }

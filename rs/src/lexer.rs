@@ -1747,13 +1747,20 @@ impl<'a> Lexer<'a> {
                     out_str.push(c);
                     continue;
                 }
+                // Sited ON the line character, as TypeScript does
+                // (`pnt.sI = sI; pnt.cI = cI` before its `bad()` call,
+                // ts/src/lexer.ts) and as the control-character branch
+                // below already does. `pnt` is the opening quote, and
+                // reporting that put every embedded newline at the start
+                // of its string.
+                let site = self.current_point().site;
                 let err = TabnasError::new(
                     "unprintable",
                     c.to_string(),
                     self.src,
-                    pnt.site.pos,
-                    pnt.site.ri,
-                    pnt.site.ci,
+                    site.pos,
+                    site.ri,
+                    site.ci,
                 );
                 self.err = Some(err.clone());
                 return Err(Box::new(err));
