@@ -1,5 +1,6 @@
 // Copyright (c) 2013-2026 Richard Rodger, MIT License
 
+#![doc = include_str!("../README.md")]
 #![allow(clippy::result_large_err)]
 
 pub const VERSION: &str = "0.10.0";

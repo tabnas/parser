@@ -22,7 +22,7 @@ parser.alt_condition("@positive", |rule, _ctx| {
     rule.o0().is_some_and(|token| token.src != "0")
 });
 parser.grammar_json(
-    r#"{"rule":{"top":{"open":[{"s":"#NR","c":"@positive"}]}}}"#,
+    r##"{"rule":{"top":{"open":[{"s":"#NR","c":"@positive"}]}}}"##,
 )?;
 # Ok::<(), tabnas::GrammarError>(())
 ```
@@ -174,7 +174,7 @@ larger end on the deeply nesting grammars.
 mimalloc = "0.1"
 ```
 
-```rust
+```rust,ignore
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 ```
