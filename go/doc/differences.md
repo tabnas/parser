@@ -1235,7 +1235,13 @@ Shared semantics:
 - **Prefixes that parse still answer**, with `#ZZ` included to mean
   "stopping here is legal". It is a sentinel, not something a user
   types: a completion provider should drop it and read it as "this
-  document is already valid".
+  document is already valid". A prefix that parsed completely and was
+  never asked for more answers exactly `#ZZ`, not the start rule's
+  openers: `a` against a grammar that accepts one `a` must not offer a
+  second. Go answered `#A` there until its capture stopped discarding
+  the parser's trailing end-of-source fetch, which arrives with no rule
+  in hand; pinned in all three runtimes by the "only the end is legal"
+  test.
 - **Recovery never changes the answer.** The query forces its own parse
   fail-fast whatever the instance is configured for, since it must stop
   AT the query point rather than skip past it.

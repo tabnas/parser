@@ -243,8 +243,17 @@ func (j *Tabnas) Continuations(src string) ([]Tin, []string) {
 	// unwound. Every such fetch contributes: the first can belong to an
 	// alternate that is later rejected, so pinning it would drop the
 	// continuations of the branch that actually made the prefix parse.
+	//
+	// Only the TOKEN is tested, as in TS. The parser's trailing-content
+	// probe fetches the end token with no rule in hand, and that fetch
+	// counts: a prefix that parsed completely and was never asked for
+	// more contributes an EMPTY set, which is the answer "only the end
+	// is legal". Returning early on the missing rule left haveEnd false
+	// and fell through to the start rule's openers, so `a` against a
+	// grammar that accepts exactly one `a` answered #A, an offer the
+	// grammar rejects, where TS answers #ZZ (#155).
 	capture := func(tkn *Token, rule *Rule, ctx *Context) {
-		if tkn == nil || TinZZ != tkn.Tin || rule == nil || rule == NoRule {
+		if tkn == nil || TinZZ != tkn.Tin {
 			return
 		}
 		// The lookahead position being fetched: the count of slots
