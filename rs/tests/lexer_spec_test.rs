@@ -182,6 +182,138 @@ fn configured_number_forms_are_honored() {
     }
 }
 
+/// The IEEE-754 bits of the number a source lexes to.
+fn number_bits(source: &str) -> u64 {
+    let mut lexer = Lexer::new(source, Options::default());
+    let token = lexer
+        .next_raw_token()
+        .unwrap_or_else(|error| panic!("source {source}: {}", error.code));
+    assert_eq!(token.name, "#NR", "source {source}");
+    match token.val {
+        Value::Number(number) => number.to_bits(),
+        other => panic!("source {source}: expected a number, got {other:?}"),
+    }
+}
+
+/// A literal is folded as it is read, so its length costs no memory
+/// beyond the source the lexer already holds. The fold keeps a bounded
+/// head, a digit count and a sticky bit, and nothing else: buffering the
+/// digits instead cost four bytes each, which let one token in an
+/// untrusted document multiply peak memory.
+///
+/// Two million digits is past any plausible document and still converts
+/// in well under a second. The values are what node gives: every bit of
+/// a hexadecimal or binary run of that length is above the double range,
+/// and a one followed by two million zeros is exactly one.
+#[test]
+fn a_very_long_literal_is_folded_as_it_is_read() {
+    const DIGITS: usize = 2_000_000;
+    let start = std::time::Instant::now();
+    assert_eq!(
+        number_bits(&format!("0x{} ", "f".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "a hexadecimal run of {DIGITS} digits is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0b{} ", "1".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "a binary run of {DIGITS} digits is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0x1{} ", "0".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "one followed by {DIGITS} hexadecimal zeros is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0x{}1 ", "0".repeat(DIGITS))),
+        1.0f64.to_bits(),
+        "leading zeros carry no value, however many there are"
+    );
+    // Generous, so a slow machine does not fail it: the point is that the
+    // work is linear rather than that it hits a particular time.
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "four literals of {DIGITS} digits took {elapsed:?}"
+    );
+}
+
+#[test]
+fn base_prefixed_literals_round_once_from_the_exact_integer() {
+    // A base-prefixed literal is read as an exact integer and rounded to a
+    // double ONCE, half to even, as `+src` does in canonical TypeScript and
+    // `big.Float.Float64()` does in the Go port. Folding the digits into an
+    // `f64` one at a time instead rounds at every digit, and past the 53-bit
+    // exact integer range the roundings accumulate.
+    //
+    // These pin the IEEE-754 bits because a decimal expectation cannot show
+    // a one-unit-in-the-last-place error: `0Xa6f2f78f4f9bf44` prints the
+    // same either way. Every expectation is the value node gives for the
+    // same literal.
+    let cases: Vec<(String, u64)> = vec![
+        // The literal the digit-by-digit fold answered one unit low.
+        ("0Xa6f2f78f4f9bf44".to_string(), 0x43a4_de5e_f1e9_f37f),
+        ("0xa6f2f78f4f9bf44".to_string(), 0x43a4_de5e_f1e9_f37f),
+        // 2^53 + 1 and 2^53 + 3: exact ties, which round to the EVEN
+        // neighbour and so go in opposite directions.
+        ("0x20000000000001".to_string(), 0x4340_0000_0000_0000),
+        ("0x20000000000002".to_string(), 0x4340_0000_0000_0001),
+        ("0x20000000000003".to_string(), 0x4340_0000_0000_0002),
+        ("0o400000000000000001".to_string(), 0x4340_0000_0000_0000),
+        ("0o400000000000000003".to_string(), 0x4340_0000_0000_0002),
+        (format!("0b1{}1", "0".repeat(52)), 0x4340_0000_0000_0000),
+        (format!("0b1{}11", "0".repeat(51)), 0x4340_0000_0000_0002),
+        // The same tie behind leading zeros, behind a digit separator, and
+        // carrying each sign the number path accepts.
+        (
+            format!("0x{}20000000000003", "0".repeat(40)),
+            0x4340_0000_0000_0002,
+        ),
+        ("0x2_0000000000003".to_string(), 0x4340_0000_0000_0002),
+        ("+0x20000000000003".to_string(), 0x4340_0000_0000_0002),
+        ("-0x20000000000003".to_string(), 0xc340_0000_0000_0002),
+        // Wider than 53 bits, then wider than the u128 head the rounding
+        // packs the leading digits into, so the sticky bit decides.
+        (
+            "0x100000000000004000000000000000000000000000000000001".to_string(),
+            0x4c70_0000_0000_0000,
+        ),
+        (format!("0x1{}1", "0".repeat(149)), 0x6570_0000_0000_0000),
+        (format!("0b1{}1", "0".repeat(599)), 0x6570_0000_0000_0000),
+        // The top of the double range: the largest finite double, the
+        // largest value below the overflow tie, and the tie itself, which
+        // rounds to infinity rather than wrapping.
+        (
+            format!("0xfffffffffffff8{}", "0".repeat(242)),
+            0x7fef_ffff_ffff_ffff,
+        ),
+        (
+            format!("0xfffffffffffffb{}", "f".repeat(242)),
+            0x7fef_ffff_ffff_ffff,
+        ),
+        (
+            format!("0xfffffffffffffc{}", "0".repeat(242)),
+            0x7ff0_0000_0000_0000,
+        ),
+        (format!("0x1{}", "0".repeat(256)), 0x7ff0_0000_0000_0000),
+        (format!("-0x1{}", "0".repeat(256)), 0xfff0_0000_0000_0000),
+        // Zero keeps its sign, and a small literal is unchanged.
+        ("0x0".to_string(), 0x0000_0000_0000_0000),
+        ("0b0000".to_string(), 0x0000_0000_0000_0000),
+        ("0o0".to_string(), 0x0000_0000_0000_0000),
+        ("-0x0".to_string(), 0x8000_0000_0000_0000),
+        ("0xFF".to_string(), 0x406f_e000_0000_0000),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(
+            number_bits(&source),
+            expected,
+            "source {source}: got {:016x}, want {expected:016x}",
+            number_bits(&source)
+        );
+    }
+}
+
 #[test]
 fn decimal_separator_edges_fall_through_to_text() {
     for source in ["+_1", "1_", "1.5_", "1e_2", "1e2_"] {
