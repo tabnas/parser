@@ -1640,6 +1640,47 @@ impl Rule {
         self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
         self.child_node = child.node.borrow().clone();
     }
+
+    /// Let go of `child_node` while this rule sits on the parse stack, in
+    /// the one case where holding it is not free.
+    ///
+    /// A pushed child starts out on its PARENT's node cell, and a child
+    /// that never installs a cell of its own still has it when it closes
+    /// -- `child_node_is_self`. [`Rule::accept_child_node`] then leaves
+    /// `child_node` holding a second `Value` handle on the very container
+    /// the next child will write into. Containers are copy-on-write
+    /// (`value.rs`), so that second handle turns the next `push` or
+    /// `insert` into a copy of the whole container, and a rule with one
+    /// such child per element copies its accumulated node once per
+    /// element: quadratic in the number of elements inside ONE rule,
+    /// where TypeScript and Go, whose nodes are plain references, stay
+    /// linear.
+    ///
+    /// Parking is invisible because every pop that resumes a parked rule
+    /// OVERWRITES the field before anything reads that rule. There are
+    /// four pops in `parser.rs`: the two close-phase pops and the
+    /// forced-close loop hand the popped rule to `accept_child_node`,
+    /// which writes both `child_node` and `child_node_is_self` outright,
+    /// and nothing touches the rule in between. The fourth, the
+    /// fixed-depth recovery pop in `attempt_recover`, does not, and that
+    /// pop is taken only when `recover.pop_until_valid` is off -- which
+    /// is why `parser.rs` parks only when that option is on.
+    /// `pop_until_valid` is read through `&self` and cannot change
+    /// during a parse, so a rule parks exactly when the pop that will
+    /// resume it is one of the three that overwrite.
+    ///
+    /// The field itself is only ever read on the CURRENT rule in any
+    /// case: by the built-ins, by grammar actions and by the plugin
+    /// repos, all of which are handed the rule the loop is working on.
+    /// Snapshots do not carry it (see its declaration) and
+    /// `Context::rule_stack` is snapshots, so no callback can reach a
+    /// stacked rule's copy either. That is the second line of defence,
+    /// not the argument: the argument is the overwrite.
+    pub(crate) fn park_child_node(&mut self) {
+        if self.child_node_is_self {
+            self.child_node = Value::Undefined;
+        }
+    }
 }
 
 impl fmt::Display for Rule {

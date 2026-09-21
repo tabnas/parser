@@ -1124,6 +1124,11 @@ impl Parser {
         context.bad_error = None;
 
         if !recover.pop_until_valid {
+            // The only pop that resumes a parent WITHOUT accepting a
+            // child node over the top of it, so the only one that would
+            // see a parked `child_node`. `Rule::park_child_node` is
+            // skipped for the whole parse when this option is off, so
+            // nothing is parked to see.
             if let Some(parent) = stack.pop() {
                 *current_rule = parent;
                 return Ok(true);
@@ -1799,6 +1804,11 @@ impl Parser {
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
         let mut stack: Vec<Rule> = Vec::new();
+        // Whether a pushed rule may let go of `child_node` while it is
+        // buried. Read once: `self.options` is reached through `&self`,
+        // so this cannot change under the parse, and the rule that parks
+        // is the rule `attempt_recover` will resume.
+        let park_child_nodes = self.options.parse.recover.pop_until_valid;
         let mut next_rule_id = 1;
         #[allow(unused_assignments)]
         let mut final_value = None;
@@ -3012,6 +3022,17 @@ impl Parser {
                     }
                     child.parent_rule = Some(current_rule.snapshot());
                     completed_rule = self.rule_done_copy(&current_rule);
+                    // The child about to run shares this rule's node cell,
+                    // and `child_node` may be a second handle on the very
+                    // container it will write into. Let go of it for the
+                    // duration -- see `Rule::park_child_node`. Taken after
+                    // `rule_done_copy`, so a ruleDone subscriber still sees
+                    // the rule exactly as it stood, and only when every pop
+                    // that can resume this rule overwrites the field first
+                    // (see `park_child_node` and `attempt_recover`).
+                    if park_child_nodes {
+                        current_rule.park_child_node();
+                    }
                     stack.push(current_rule);
                     current_rule = child;
                 } else if replace_name.is_some() {
