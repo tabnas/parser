@@ -39,14 +39,18 @@ func deepMerge(base, over any) any {
 		return base
 	}
 
-	// Extract maps from MapRef if present.
-	baseMap, baseIsMap := base.(map[string]any)
+	// Extract maps from MapRef if present. A declared map type (`type
+	// Field map[string]any`) is read the same way as a plain one: TS
+	// deep() sees only a plain object, so a merge here that recognised
+	// three concrete types and let every other map kind REPLACE the
+	// base dropped defaults the canonical keeps (#198).
+	baseMap, baseIsMap := stringKeyedMap(base)
 	baseMR, baseIsMR := base.(MapRef)
 	if baseIsMR {
 		baseMap = baseMR.Val
 		baseIsMap = true
 	}
-	overMap, overIsMap := over.(map[string]any)
+	overMap, overIsMap := stringKeyedMap(over)
 	overMR, overIsMR := over.(MapRef)
 	if overIsMR {
 		overMap = overMR.Val
@@ -341,12 +345,6 @@ func mapish(v any) (keys []string, vals map[string]any, ok bool) {
 	switch m := v.(type) {
 	case *OrderedMap:
 		return m.Keys, m.Vals, true
-	case map[string]any:
-		ks := make([]string, 0, len(m))
-		for k := range m {
-			ks = append(ks, k)
-		}
-		return ks, m, true
 	case MapRef:
 		ks := make([]string, 0, len(m.Val))
 		for k := range m.Val {
@@ -354,17 +352,72 @@ func mapish(v any) (keys []string, vals map[string]any, ok bool) {
 		}
 		return ks, m.Val, true
 	}
+	if m, ok := stringKeyedMap(v); ok {
+		ks := make([]string, 0, len(m))
+		for k := range m {
+			ks = append(ks, k)
+		}
+		return ks, m, true
+	}
 	return nil, nil, false
 }
 
-// deepClone returns a recursive copy of a value (maps, slices, ListRef, MapRef); other types are returned as-is.
+// stringKeyedMap reads any map KIND whose key type is string as a
+// map[string]any: a plain map[string]any as itself, and a declared map
+// type (`type Field map[string]any`, `map[string]int`) through a copy
+// made by reflection. Go's type switch matches concrete types, so the
+// declared form fell through every map branch of the merge and the
+// clone, where the canonical runtime sees nothing but a plain object.
+// A nil map is a map here too; MapRef and *OrderedMap are structs, not
+// maps, and are handled by their own branches.
+func stringKeyedMap(v any) (map[string]any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+	out := make(map[string]any, rv.Len())
+	iter := rv.MapRange()
+	for iter.Next() {
+		out[iter.Key().String()] = iter.Value().Interface()
+	}
+	return out, true
+}
+
+// deepClone returns a recursive copy of a value (maps, slices, ListRef,
+// MapRef, and any declared map or slice kind); other types are returned
+// as-is.
+//
+// A cyclic value is cloned as a cyclic value, never walked forever: a
+// container is cloned once and every later reference to it inside the
+// same value resolves to that one clone. Without that memo a
+// self-referencing option value took the PROCESS down with a fatal
+// stack overflow inside the option merge, before any plugin ran, where
+// the canonical runtime throws a RangeError a caller can catch (#197).
+// The clone is what TS deep() hands out for an acyclic value; for a
+// cyclic one the caller now at least gets to decide what to do with it.
+//
+// Declared kinds keep their type: `type Ring []any` clones to a Ring.
 // deepClone([]any{1, 2}) // => [1 2] (new slice)
 func deepClone(val any) any {
+	return cloneWithMemo(val, map[uintptr]any{})
+}
+
+// cloneWithMemo is deepClone's recursion, carrying the seen-set. Maps
+// and slices are keyed by the address of their backing store, which is
+// what makes two references to one container resolve to one clone.
+func cloneWithMemo(val any, memo map[uintptr]any) any {
 	if val == nil {
 		return nil
 	}
 	switch v := val.(type) {
 	case *OrderedMap:
+		key := reflect.ValueOf(v).Pointer()
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
 		// Prototype-pollution guard: cloning is TS deep()'s copy path too,
 		// where the same key filter runs, so a dangerous key nested under a
 		// freshly-added key is dropped here rather than copied through. See
@@ -374,36 +427,21 @@ func deepClone(val any) any {
 			Vals:   make(map[string]any, len(v.Vals)),
 			Sorted: v.Sorted,
 		}
+		memo[key] = result
 		for _, k := range v.Keys {
 			if isDangerousMergeKey(k) {
 				continue
 			}
 			result.Keys = append(result.Keys, k)
-			result.Vals[k] = deepClone(v.Vals[k])
-		}
-		return result
-	case map[string]any:
-		result := make(map[string]any)
-		for k, val := range v {
-			// Prototype-pollution guard (see isDangerousMergeKey).
-			if isDangerousMergeKey(k) {
-				continue
-			}
-			result[k] = deepClone(val)
-		}
-		return result
-	case []any:
-		result := make([]any, len(v))
-		for i, val := range v {
-			result[i] = deepClone(val)
+			result.Vals[k] = cloneWithMemo(v.Vals[k], memo)
 		}
 		return result
 	case ListRef:
 		result := make([]any, len(v.Val))
 		for i, val := range v.Val {
-			result[i] = deepClone(val)
+			result[i] = cloneWithMemo(val, memo)
 		}
-		return ListRef{Val: result, Implicit: v.Implicit, Child: deepClone(v.Child), Meta: cloneMeta(v.Meta)}
+		return ListRef{Val: result, Implicit: v.Implicit, Child: cloneWithMemo(v.Child, memo), Meta: cloneMeta(v.Meta)}
 	case MapRef:
 		result := make(map[string]any)
 		for k, val := range v.Val {
@@ -411,12 +449,76 @@ func deepClone(val any) any {
 			if isDangerousMergeKey(k) {
 				continue
 			}
-			result[k] = deepClone(val)
+			result[k] = cloneWithMemo(val, memo)
 		}
 		return MapRef{Val: result, Implicit: v.Implicit, Meta: cloneMeta(v.Meta)}
-	default:
-		return v
 	}
+
+	// Every other map or slice kind, plain or declared, by reflection.
+	// The result keeps the value's own type, so a caller that declared
+	// `type Ring []any` gets a Ring back.
+	rv := reflect.ValueOf(val)
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return val
+		}
+		key := rv.Pointer()
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
+		stringKeys := rv.Type().Key().Kind() == reflect.String
+		result := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		memo[key] = result.Interface()
+		iter := rv.MapRange()
+		for iter.Next() {
+			// Prototype-pollution guard (see isDangerousMergeKey).
+			if stringKeys && isDangerousMergeKey(iter.Key().String()) {
+				continue
+			}
+			result.SetMapIndex(iter.Key(), cloneElem(iter.Value(), memo))
+		}
+		return result.Interface()
+	case reflect.Slice:
+		if rv.IsNil() {
+			return val
+		}
+		// A slice's identity for the memo is its backing array plus its
+		// length: two slices over one array are distinct values, but the
+		// self-reference that matters (a[0] = a) shares both.
+		key := rv.Pointer() ^ uintptr(rv.Len())<<48
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
+		result := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		memo[key] = result.Interface()
+		for i := 0; i < rv.Len(); i++ {
+			result.Index(i).Set(cloneElem(rv.Index(i), memo))
+		}
+		return result.Interface()
+	}
+	return val
+}
+
+// cloneElem clones one map entry or slice element, keeping the static
+// element type of the container it came from: an `any` element is
+// cloned through the type switch above, a concrete one (a string in a
+// []string, a *CommentDef in its map) is copied as it is.
+func cloneElem(ev reflect.Value, memo map[uintptr]any) reflect.Value {
+	if ev.Kind() != reflect.Interface {
+		if ev.Kind() == reflect.Map || ev.Kind() == reflect.Slice {
+			return reflect.ValueOf(cloneWithMemo(ev.Interface(), memo))
+		}
+		return ev
+	}
+	if ev.IsNil() {
+		return ev
+	}
+	cloned := cloneWithMemo(ev.Interface(), memo)
+	if cloned == nil {
+		return reflect.Zero(ev.Type())
+	}
+	return reflect.ValueOf(cloned)
 }
 
 // Snip truncates s to maxlen bytes and replaces \r, \n, \t with '.' (for debug/display output).
