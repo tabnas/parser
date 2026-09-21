@@ -197,55 +197,81 @@ impl Value {
         matches!(self, Value::Null)
     }
 
+    /// Replace every `Undefined` in the tree with `Null`.
+    ///
+    /// Iterative on purpose. The recursive form walked the document with
+    /// the call stack, one frame per nesting level, and a strict-JSON
+    /// parse of `[[[...]]]` overflowed the default 8 MiB main-thread stack
+    /// -- an uncatchable abort -- somewhere between 8,000 and 16,000
+    /// levels in a release build and between 2,000 and 4,000 in a debug
+    /// build. TypeScript's parse loop is iterative (`ts/src/parser.ts`,
+    /// `while (norule !== rule ...)`), so this walk was the only part of a
+    /// parse whose stack use grew with the document's depth.
+    /// `tests/deep_nesting_test.rs` pins it.
+    ///
+    /// The walk is also skipped when the tree holds no `Undefined`, the
+    /// common case: rebuilding every container would otherwise copy each
+    /// level, since the parse's root node still shares them.
     pub fn unwrap_undefined(self) -> Value {
-        match self {
-            Value::Undefined => Value::Null,
-            Value::Array(values) => Value::array(
-                unwrap_arc(values)
-                    .into_iter()
-                    .map(Value::unwrap_undefined)
-                    .collect(),
-            ),
-            Value::Object(entries) => {
-                let entries = unwrap_arc(entries);
-                let mut out = IndexMap::with_capacity(entries.len());
-                for (key, value) in entries {
-                    out.insert(key, value.unwrap_undefined());
-                }
-                Value::object(out)
-            }
-            Value::Text(text) => Value::Text(text),
-            Value::ListRef(list) => {
-                let mut list = unwrap_arc(list);
-                list.value = list
-                    .value
-                    .into_iter()
-                    .map(Value::unwrap_undefined)
-                    .collect();
-                list.child = list.child.map(|value| Box::new(value.unwrap_undefined()));
-                list.meta = list
-                    .meta
-                    .into_iter()
-                    .map(|(key, value)| (key, value.unwrap_undefined()))
-                    .collect();
-                Value::ListRef(Arc::new(list))
-            }
-            Value::MapRef(map) => {
-                let mut map = unwrap_arc(map);
-                map.value = map
-                    .value
-                    .into_iter()
-                    .map(|(key, value)| (key, value.unwrap_undefined()))
-                    .collect();
-                map.meta = map
-                    .meta
-                    .into_iter()
-                    .map(|(key, value)| (key, value.unwrap_undefined()))
-                    .collect();
-                Value::MapRef(Arc::new(map))
-            }
-            other => other,
+        if !self.contains_undefined() {
+            return self;
         }
+
+        let mut stack: Vec<UnwrapFrame> = Vec::new();
+        let mut result = match UnwrapFrame::open(self) {
+            Ok(frame) => {
+                stack.push(frame);
+                None
+            }
+            Err(leaf) => Some(leaf),
+        };
+        loop {
+            if let Some(value) = result.take() {
+                match stack.last_mut() {
+                    None => return value,
+                    Some(frame) => frame.done.push(value),
+                }
+            }
+            let frame = stack.last_mut().expect("an open container frame");
+            match frame.pending.next() {
+                Some(child) => match UnwrapFrame::open(child) {
+                    Ok(frame) => stack.push(frame),
+                    Err(leaf) => result = Some(leaf),
+                },
+                None => {
+                    let frame = stack.pop().expect("an open container frame");
+                    result = Some(frame.close());
+                }
+            }
+        }
+    }
+
+    /// Whether any `Undefined` sits anywhere in the tree. Iterative for
+    /// the same reason as [`Value::unwrap_undefined`].
+    fn contains_undefined(&self) -> bool {
+        let mut pending: Vec<&Value> = vec![self];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Undefined => return true,
+                Value::Array(values) => pending.extend(values.iter()),
+                Value::Object(entries) => pending.extend(entries.values()),
+                Value::ListRef(list) => {
+                    pending.extend(list.value.iter());
+                    pending.extend(list.child.iter().map(|child| &**child));
+                    pending.extend(list.meta.values());
+                }
+                Value::MapRef(map) => {
+                    pending.extend(map.value.values());
+                    pending.extend(map.meta.values());
+                }
+                Value::Null
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::String(_)
+                | Value::Text(_) => {}
+            }
+        }
+        false
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -347,6 +373,116 @@ impl Value {
             (Value::ListRef(a), Value::ListRef(b)) => a == b,
             (Value::MapRef(a), Value::MapRef(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+/// One container on the explicit stack of [`Value::unwrap_undefined`]: the
+/// children still to visit, the children already rewritten, and whatever
+/// is needed to put the container back together.
+struct UnwrapFrame {
+    pending: std::vec::IntoIter<Value>,
+    done: Vec<Value>,
+    shape: UnwrapShape,
+}
+
+enum UnwrapShape {
+    Array,
+    Object(Vec<String>),
+    /// Children are the `value` items, then the `child` when present, then
+    /// the `meta` values, in that order.
+    List {
+        list: ListRef,
+        values: usize,
+        child: bool,
+        meta: Vec<String>,
+    },
+    /// Children are the `value` entries, then the `meta` entries.
+    Map {
+        map: MapRef,
+        values: Vec<String>,
+        meta: Vec<String>,
+    },
+}
+
+impl UnwrapFrame {
+    /// Open a container, or return the rewritten scalar.
+    fn open(value: Value) -> Result<Self, Value> {
+        let (children, shape) = match value {
+            Value::Undefined => return Err(Value::Null),
+            Value::Array(values) => (unwrap_arc(values), UnwrapShape::Array),
+            Value::Object(entries) => {
+                let (keys, values): (Vec<_>, Vec<_>) = unwrap_arc(entries).into_iter().unzip();
+                (values, UnwrapShape::Object(keys))
+            }
+            Value::ListRef(list) => {
+                let mut list = unwrap_arc(list);
+                let mut children = std::mem::take(&mut list.value);
+                let values = children.len();
+                let child = list.child.take();
+                let has_child = child.is_some();
+                children.extend(child.map(|child| *child));
+                let (meta, meta_values): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut list.meta).into_iter().unzip();
+                children.extend(meta_values);
+                (
+                    children,
+                    UnwrapShape::List {
+                        list,
+                        values,
+                        child: has_child,
+                        meta,
+                    },
+                )
+            }
+            Value::MapRef(map) => {
+                let mut map = unwrap_arc(map);
+                let (values, mut children): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut map.value).into_iter().unzip();
+                let (meta, meta_values): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut map.meta).into_iter().unzip();
+                children.extend(meta_values);
+                (children, UnwrapShape::Map { map, values, meta })
+            }
+            other => return Err(other),
+        };
+        Ok(Self {
+            done: Vec::with_capacity(children.len()),
+            pending: children.into_iter(),
+            shape,
+        })
+    }
+
+    /// Reassemble the container from its rewritten children.
+    fn close(self) -> Value {
+        let mut done = self.done.into_iter();
+        match self.shape {
+            UnwrapShape::Array => Value::array(done.collect()),
+            UnwrapShape::Object(keys) => Value::object(keys.into_iter().zip(done).collect()),
+            UnwrapShape::List {
+                mut list,
+                values,
+                child,
+                meta,
+            } => {
+                list.value = done.by_ref().take(values).collect();
+                list.child = if child {
+                    done.next().map(Box::new)
+                } else {
+                    None
+                };
+                list.meta = meta.into_iter().zip(done).collect();
+                Value::ListRef(Arc::new(list))
+            }
+            UnwrapShape::Map {
+                mut map,
+                values,
+                meta,
+            } => {
+                map.value = values.into_iter().zip(done.by_ref()).collect();
+                map.meta = meta.into_iter().zip(done).collect();
+                Value::MapRef(Arc::new(map))
+            }
         }
     }
 }
