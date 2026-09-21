@@ -1516,7 +1516,9 @@ impl<'a> Lexer<'a> {
                                 )));
                             }
                         }
-                        let digits = src
+                        // The digits of the literal, prefix, sign and any
+                        // separators removed, as their numeric values.
+                        let digits: Vec<u32> = src
                             .chars()
                             .skip_while(|ch| matches!(ch, '-' | '+'))
                             .skip(2)
@@ -1527,11 +1529,10 @@ impl<'a> Lexer<'a> {
                                     .sep
                                     .as_ref()
                                     .is_some_and(|separator| separator.contains(*ch))
-                            });
-                        let mut value = digits.fold(0.0, |value, digit| {
-                            value * f64::from(radix)
-                                + f64::from(digit.to_digit(radix).expect("validated base digit"))
-                        });
+                            })
+                            .map(|ch| ch.to_digit(radix).expect("validated base digit"))
+                            .collect();
+                        let mut value = digits_to_f64(&digits, radix.trailing_zeros());
                         if src.starts_with('-') {
                             value = -value;
                         }
@@ -2024,4 +2025,88 @@ impl<'a> Lexer<'a> {
             out.push(char::from_u32(cp).expect("validated escape is a Unicode scalar"));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Base-prefixed integer literals.
+//
+// A `0x`, `0o` or `0b` literal is read as an EXACT integer and rounded to
+// a double ONCE. The obvious fold -- `value = value * radix + digit` in
+// `f64` -- rounds at every digit, and past the 53-bit exact integer range
+// those roundings accumulate: `0Xa6f2f78f4f9bf44` came out as
+// `43a4de5ef1e9f37e` where canonical TypeScript and the Go port both
+// answer `43a4de5ef1e9f37f`, one unit in the last place low. That is
+// silently altered data, not a formatting difference.
+//
+// TypeScript coerces the literal with unary `+`, whose StringNumericValue
+// is the exact mathematical value of the digits rounded once, half to
+// even; Go reads it through `big.Int` and `big.Float.Float64()`, which is
+// the same rule. These reproduce it. Only the VALUE is affected: which
+// literals are accepted, and the token they become, are settled by
+// `match_number` before any of this runs.
+//
+// The decimal path needs none of it -- `str::parse::<f64>` is correctly
+// rounded for a digit string of any length.
+// ---------------------------------------------------------------------------
+
+/// `2^k` for a non-negative `k`, exactly, saturating to infinity above the
+/// double range. A repeated multiply would round on the way up.
+fn pow2(k: i64) -> f64 {
+    debug_assert!(k >= 0, "only non-negative exponents arise here");
+    if k > 1023 {
+        f64::INFINITY
+    } else {
+        f64::from_bits(((k + 1023) as u64) << 52)
+    }
+}
+
+/// The exact integer the digit values denote, as the NEAREST double,
+/// rounding half to even. `bits` is the width of one digit, so the base is
+/// a power of two: 1 for binary, 3 for octal, 4 for hexadecimal. Those are
+/// the only bases `match_number` reads, which is what lets a `u128` head
+/// plus a sticky bit stand in for arbitrary-precision arithmetic.
+fn digits_to_f64(digits: &[u32], bits: u32) -> f64 {
+    debug_assert!(
+        (1..=4).contains(&bits),
+        "only the power-of-two bases the lexer reads"
+    );
+
+    // Leading zeros carry no value, and dropping them is what makes the
+    // head below wider than the 54 significant bits the rounding needs.
+    let Some(start) = digits.iter().position(|digit| *digit != 0) else {
+        return 0.0;
+    };
+    let digits = &digits[start..];
+
+    // A u128 holds exactly this many digits of the base.
+    let head_len = (128 / bits) as usize;
+    let pack = |run: &[u32]| {
+        run.iter()
+            .fold(0u128, |value, digit| (value << bits) | u128::from(*digit))
+    };
+    if digits.len() <= head_len {
+        // A `u128` to `f64` cast rounds to nearest, ties to even, which is
+        // the rule the canonical runtime follows.
+        return pack(digits) as f64;
+    }
+
+    // Longer than a u128: keep the top `head_len` digits, and remember
+    // whether anything below them was set. Those two are all the rounding
+    // can depend on. The leading digit is non-zero, so the head is at least
+    // 121 bits wide in every base here and `shift` is comfortably positive.
+    let head = pack(&digits[..head_len]);
+    let tail = &digits[head_len..];
+    let dropped = i64::from(bits) * tail.len() as i64;
+    let shift = 128 - head.leading_zeros() - 53;
+
+    let mut mantissa = (head >> shift) as u64;
+    let half = (head >> (shift - 1)) & 1 == 1;
+    let sticky = head & ((1u128 << (shift - 1)) - 1) != 0 || tail.iter().any(|digit| *digit != 0);
+    if half && (sticky || mantissa & 1 == 1) {
+        // At most 2^53, which is still an exact double.
+        mantissa += 1;
+    }
+    // The mantissa carries at most 53 significant bits, so the scaling is
+    // exact inside the double range and overflows to infinity outside it.
+    mantissa as f64 * pow2(dropped + i64::from(shift))
 }
