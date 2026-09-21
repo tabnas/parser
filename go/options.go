@@ -85,6 +85,10 @@ type InfoOptions struct {
 	Marker string // Key under which info metadata is stored on wrapped values. Default: "__info__".
 }
 
+// DefaultRewindHistory is the retained rewind window when
+// RewindOptions.History is unset, and what a serialized `null` means.
+const DefaultRewindHistory = 64
+
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
 	// History caps the consumed tokens retained for ctx.Rewind. Nil is
@@ -1094,7 +1098,7 @@ func buildConfig(o *Options) *LexConfig {
 	// Rewind history cap (consumed-token retention for ctx.Rewind).
 	// Default 64, matching TS defaults.ts; a negative value is
 	// unbounded and 0 retains nothing (see RewindOptions).
-	cfg.RewindHistory = 64
+	cfg.RewindHistory = DefaultRewindHistory
 	if o.Rewind != nil && o.Rewind.History != nil {
 		cfg.RewindHistory = *o.Rewind.History
 	}

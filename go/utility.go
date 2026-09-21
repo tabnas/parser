@@ -868,7 +868,35 @@ func mapInt(v any) (int, bool) {
 }
 
 func MapToOptions(m map[string]any) Options {
+	opts, _ := OptionsFromMap(m)
+	return opts
+}
+
+// OptionsFromMap builds an Options struct from a map[string]any whose
+// FuncRefs have already been resolved, and reports the entries it cannot
+// carry rather than dropping or panicking on them.
+//
+// This is the checked form of MapToOptions. It exists because
+// MapToOptions signalled a serialized regex that RE2 could not compile
+// by PANICKING out to its caller, which Grammar() then recovered and
+// mislabelled as an internal error (#119). A caller's unsupported
+// regex is a user error and is reported as one here; MapToOptions keeps
+// its signature and skips the entry, so prefer this function wherever
+// there is an error to return.
+//
+// Coverage is the other half of the contract (#130): every pure-data
+// leaf of Options is read here, and TestOptionsFromMapCoversEveryLeaf
+// walks the struct by reflection to keep it that way, so a field added
+// to Options cannot fall silently out of the serialized surface again.
+// Function-valued leaves are read when the map carries a function of the
+// right type (a resolved ref); a spec carrying only JSON cannot reach
+// them, which is what makes them unportable rather than unread.
+func OptionsFromMap(m map[string]any) (Options, error) {
 	var opts Options
+	var errs []string
+	fail := func(format string, args ...any) {
+		errs = append(errs, fmt.Sprintf(format, args...))
+	}
 
 	if v, ok := m["tag"].(string); ok {
 		opts.Tag = v
@@ -885,6 +913,9 @@ func MapToOptions(m map[string]any) Options {
 	// fixed
 	if fm, ok := m["fixed"].(map[string]any); ok {
 		opts.Fixed = &FixedOptions{}
+		if fn, ok := lexCheckOf(fm["check"]); ok {
+			opts.Fixed.Check = fn
+		}
 		if lex, ok := fm["lex"].(bool); ok {
 			opts.Fixed.Lex = &lex
 		}
@@ -907,6 +938,9 @@ func MapToOptions(m map[string]any) Options {
 	// space
 	if sp, ok := m["space"].(map[string]any); ok {
 		opts.Space = &SpaceOptions{}
+		if fn, ok := lexCheckOf(sp["check"]); ok {
+			opts.Space.Check = fn
+		}
 		if lex, ok := sp["lex"].(bool); ok {
 			opts.Space.Lex = &lex
 		}
@@ -918,6 +952,9 @@ func MapToOptions(m map[string]any) Options {
 	// line
 	if ln, ok := m["line"].(map[string]any); ok {
 		opts.Line = &LineOptions{}
+		if fn, ok := lexCheckOf(ln["check"]); ok {
+			opts.Line.Check = fn
+		}
 		if lex, ok := ln["lex"].(bool); ok {
 			opts.Line.Lex = &lex
 		}
@@ -935,6 +972,19 @@ func MapToOptions(m map[string]any) Options {
 	// text
 	if tm, ok := m["text"].(map[string]any); ok {
 		opts.Text = &TextOptions{}
+		if mods, ok := tm["modify"].([]any); ok {
+			for _, v := range mods {
+				switch fn := v.(type) {
+				case ValModifier:
+					opts.Text.Modify = append(opts.Text.Modify, fn)
+				case func(val any) any:
+					opts.Text.Modify = append(opts.Text.Modify, fn)
+				}
+			}
+		}
+		if fn, ok := lexCheckOf(tm["check"]); ok {
+			opts.Text.Check = fn
+		}
 		if lex, ok := tm["lex"].(bool); ok {
 			opts.Text.Lex = &lex
 		}
@@ -943,6 +993,9 @@ func MapToOptions(m map[string]any) Options {
 	// number
 	if nm, ok := m["number"].(map[string]any); ok {
 		opts.Number = &NumberOptions{}
+		if fn, ok := lexCheckOf(nm["check"]); ok {
+			opts.Number.Check = fn
+		}
 		if lex, ok := nm["lex"].(bool); ok {
 			opts.Number.Lex = &lex
 		}
@@ -970,6 +1023,9 @@ func MapToOptions(m map[string]any) Options {
 	// comment
 	if cm, ok := m["comment"].(map[string]any); ok {
 		opts.Comment = &CommentOptions{}
+		if fn, ok := lexCheckOf(cm["check"]); ok {
+			opts.Comment.Check = fn
+		}
 		if lex, ok := cm["lex"].(bool); ok {
 			opts.Comment.Lex = &lex
 		}
@@ -1022,6 +1078,9 @@ func MapToOptions(m map[string]any) Options {
 	// string
 	if sm, ok := m["string"].(map[string]any); ok {
 		opts.String = &StringOptions{}
+		if fn, ok := lexCheckOf(sm["check"]); ok {
+			opts.String.Check = fn
+		}
 		if lex, ok := sm["lex"].(bool); ok {
 			opts.String.Lex = &lex
 		}
@@ -1085,7 +1144,10 @@ func MapToOptions(m map[string]any) Options {
 		if plain, ok := mm["plain"].(bool); ok {
 			opts.Map.Plain = &plain
 		}
-		if fn, ok := mm["merge"].(func(any, any, *Rule, *Context) any); ok {
+		switch fn := mm["merge"].(type) {
+		case MapMergeFunc:
+			opts.Map.Merge = fn
+		case func(any, any, *Rule, *Context) any:
 			opts.Map.Merge = fn
 		}
 	}
@@ -1188,6 +1250,31 @@ func MapToOptions(m map[string]any) Options {
 		if relex, ok := lx["relex"].(bool); ok {
 			opts.Lex.Relex = &relex
 		}
+		if specs, ok := lx["match"].(map[string]any); ok {
+			for name, v := range specs {
+				sm, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				spec := &MatchSpec{}
+				if n, ok := mapInt(sm["order"]); ok {
+					spec.Order = n
+				}
+				switch mk := sm["make"].(type) {
+				case MakeLexMatcher:
+					spec.Make = mk
+				case func(cfg *LexConfig, opts *Options) LexMatcher:
+					spec.Make = mk
+				}
+				if spec.Make == nil {
+					continue
+				}
+				if opts.Lex.Match == nil {
+					opts.Lex.Match = make(map[string]*MatchSpec)
+				}
+				opts.Lex.Match[name] = spec
+			}
+		}
 	}
 
 	// error
@@ -1250,23 +1337,33 @@ func MapToOptions(m map[string]any) Options {
 					opts.Match.Token[name] = re
 				case string:
 					// A leftover @/…/ or @~/…/ string means its regex did
-					// not compile (an unsupported RE2 construct) — fail loud
+					// not compile (an unsupported RE2 construct). Report it
 					// rather than silently drop the token, which would make
-					// the lexer mis-recognize input (recovered by Grammar()
-					// into an install error). Any other non-regex string is
+					// the lexer mis-recognize input; Grammar() returns it as
+					// an install error. Any other non-regex string is
 					// ignored, as before.
 					if strings.HasPrefix(re, "@/") || strings.HasPrefix(re, "@~/") {
-						panic(fmt.Sprintf(
-							"tabnas: match token %q regex did not compile (got %q) — "+
-								"unsupported regex construct for Go RE2", name, re))
+						fail("match token %q regex did not compile (got %q): "+
+							"unsupported regex construct for Go RE2", name, re)
 					}
+				case LexMatcher:
+					if opts.Match.TokenFn == nil {
+						opts.Match.TokenFn = make(map[string]LexMatcher)
+					}
+					opts.Match.TokenFn[name] = re
+				case func(lex *Lex, rule *Rule) *Token:
+					if opts.Match.TokenFn == nil {
+						opts.Match.TokenFn = make(map[string]LexMatcher)
+					}
+					opts.Match.TokenFn[name] = re
 				}
 			}
 		}
 		if val, ok := mm["value"].(map[string]any); ok {
 			opts.Match.Value = make(map[string]*MatchValueSpec, len(val))
 			for name, v := range val {
-				if spec, ok := v.(map[string]any); ok {
+				switch spec := v.(type) {
+				case map[string]any:
 					mvs := &MatchValueSpec{}
 					if re, ok := spec["match"].(*regexp.Regexp); ok {
 						mvs.Match = re
@@ -1274,9 +1371,24 @@ func MapToOptions(m map[string]any) Options {
 					if fn, ok := spec["val"].(func([]string) any); ok {
 						mvs.Val = fn
 					}
+					if fn, ok := spec["fn"].(LexMatcher); ok {
+						mvs.Fn = fn
+					} else if fn, ok := spec["fn"].(func(lex *Lex, rule *Rule) *Token); ok {
+						mvs.Fn = fn
+					}
 					opts.Match.Value[name] = mvs
+				case LexMatcher:
+					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
+				case func(lex *Lex, rule *Rule) *Token:
+					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
 				}
 			}
+		}
+		if fn, ok := lexCheckOf(mm["check"]); ok {
+			opts.Match.Check = fn
+		}
+		if order, ok := stringList(mm["tokenOrder"]); ok {
+			opts.Match.TokenOrder = order
 		}
 	}
 
@@ -1336,7 +1448,154 @@ func MapToOptions(m map[string]any) Options {
 		}
 	}
 
-	return opts
+	// rewind. The spellings are the cross-runtime contract (#144, #142):
+	// absent leaves the merge alone, null is the documented default, false
+	// is unbounded (a negative History here), a negative cap is 0.
+	if rw, ok := m["rewind"].(map[string]any); ok {
+		opts.Rewind = &RewindOptions{}
+		if raw, present := rw["history"]; present {
+			switch h := raw.(type) {
+			case nil:
+				d := DefaultRewindHistory
+				opts.Rewind.History = &d
+			case bool:
+				if h {
+					fail("rewind.history: true is not a cap; use false for unbounded")
+				} else {
+					unbounded := -1
+					opts.Rewind.History = &unbounded
+				}
+			default:
+				if n, ok := mapInt(raw); ok {
+					if n < 0 {
+						n = 0
+					}
+					opts.Rewind.History = &n
+				} else {
+					fail("rewind.history: expected an integer, null or false, got %T", raw)
+				}
+			}
+		}
+	}
+
+	// result
+	if rm, ok := m["result"].(map[string]any); ok {
+		opts.Result = &ResultOptions{}
+		if fail, ok := rm["fail"].([]any); ok {
+			opts.Result.Fail = append([]any{}, fail...)
+		}
+	}
+
+	// parse: the container of budget and recover, which is why dropping
+	// it left opt-in recovery unreachable from any serialized spec.
+	if pm, ok := m["parse"].(map[string]any); ok {
+		opts.Parse = &ParseOptions{}
+		if prep, ok := pm["prepare"].(map[string]any); ok {
+			for name, v := range prep {
+				if fn, ok := v.(func(ctx *Context)); ok {
+					if opts.Parse.Prepare == nil {
+						opts.Parse.Prepare = make(map[string]func(ctx *Context))
+					}
+					opts.Parse.Prepare[name] = fn
+				}
+			}
+		}
+		if bm, ok := pm["budget"].(map[string]any); ok {
+			opts.Parse.Budget = &BudgetOptions{}
+			if n, ok := mapInt(bm["checkEveryN"]); ok {
+				opts.Parse.Budget.CheckEveryN = n
+			}
+			if fn, ok := bm["onCheck"].(func(ctx *Context) bool); ok {
+				opts.Parse.Budget.OnCheck = fn
+			}
+		}
+		if rm, ok := pm["recover"].(map[string]any); ok {
+			opts.Parse.Recover = &RecoverOptions{}
+			if enabled, ok := rm["enabled"].(bool); ok {
+				opts.Parse.Recover.Enabled = enabled
+			}
+			if groups, ok := stringList(rm["syncGroups"]); ok {
+				opts.Parse.Recover.SyncGroups = groups
+			}
+			if toks, ok := stringList(rm["syncTokens"]); ok {
+				opts.Parse.Recover.SyncTokens = toks
+			}
+			if b, ok := rm["popUntilValid"].(bool); ok {
+				opts.Parse.Recover.PopUntilValid = &b
+			}
+			if n, ok := mapInt(rm["maxSkip"]); ok {
+				opts.Parse.Recover.MaxSkip = &n
+			}
+			if n, ok := mapInt(rm["maxRecoveries"]); ok {
+				opts.Parse.Recover.MaxRecoveries = &n
+			}
+			if n, ok := mapInt(rm["suppress"]); ok {
+				opts.Parse.Recover.Suppress = &n
+			}
+		}
+	}
+
+	// parser: function-valued only, so it reaches here solely through a
+	// resolved ref.
+	if pm, ok := m["parser"].(map[string]any); ok {
+		if fn, ok := pm["start"].(func(src string, j *Tabnas, meta map[string]any) (any, error)); ok {
+			opts.Parser = &ParserOptions{Start: fn}
+		}
+	}
+
+	// property: Go-only, function-valued.
+	if pm, ok := m["property"].(map[string]any); ok {
+		if mods, ok := pm["configModify"].(map[string]any); ok {
+			for name, v := range mods {
+				if fn, ok := v.(func(cfg *LexConfig, opts *Options)); ok {
+					if opts.Property == nil {
+						opts.Property = &PropertyOptions{ConfigModify: map[string]ConfigModifier{}}
+					}
+					opts.Property.ConfigModify[name] = fn
+				} else if fn, ok := v.(ConfigModifier); ok {
+					if opts.Property == nil {
+						opts.Property = &PropertyOptions{ConfigModify: map[string]ConfigModifier{}}
+					}
+					opts.Property.ConfigModify[name] = fn
+				}
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return opts, fmt.Errorf("tabnas: options: %s", strings.Join(errs, "; "))
+	}
+	return opts, nil
+}
+
+// lexCheckOf reads a LexCheck hook out of a resolved map value, in either
+// the named or the bare function spelling.
+func lexCheckOf(v any) (LexCheck, bool) {
+	switch fn := v.(type) {
+	case LexCheck:
+		return fn, fn != nil
+	case func(lex *Lex) *LexCheckResult:
+		return fn, fn != nil
+	}
+	return nil, false
+}
+
+// stringList reads a []string out of a resolved map value: a JSON array
+// (whose non-string entries are skipped) or a Go []string.
+func stringList(v any) ([]string, bool) {
+	switch arr := v.(type) {
+	case []any:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	case []string:
+		return append([]string{}, arr...), true
+	}
+	return nil, false
 }
 
 // ResolveFuncRefs recursively rewrites FuncRef strings within nested maps/slices:

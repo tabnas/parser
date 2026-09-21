@@ -268,10 +268,11 @@ That Go column was not true when first written: `MapToOptions` handled
 `rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
 entirely, so a shared options blob set the multiplier in TypeScript and
 left Go on its default with nothing to notice. Plumbed, and pinned by
-`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. `maxmul` is
-the only numeric option that path carries; the others (`rewind.history`,
-the `error.recover` caps, `parse.budget.checkEveryN`) are still dropped,
-which is an API gap rather than a divergence and is noted in
+`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. The other
+numeric options that path once dropped (`rewind.history`, the
+`parse.recover` caps, `parse.budget.checkEveryN`) are carried now, and
+a reflection gate keeps every data leaf on the surface; see "The
+serialized options surface" in
 [`go/doc/differences.md`](go/doc/differences.md).
 
 Everything else about this guard is aligned, and was not. Three separate

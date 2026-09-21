@@ -526,22 +526,35 @@ of those three trades.
 `TestCustomActionNodeSurvivesOwnerResolution` pin the two shapes that the
 reverted attempts broke; any repair has to keep both passing.
 
-### `MapToOptions` carries only some options
+### The serialized options surface: every data leaf
 
-Not a divergence: an API gap here, recorded so it is not mistaken for
-one. `MapToOptions` (the path `SetOptionsText` and a shared options blob
-take) builds `Options` field by field, and a field it does not name is
-dropped in silence rather than refused. `rule.maxmul` was dropped that
-way until it was plumbed for the repair above, so a shared blob
-configured the runaway guard in TypeScript and left this port on its
-default.
+Not a divergence: an API gap, now closed, recorded so the shape of the
+gap is not forgotten. `OptionsFromMap` (the path `Grammar`,
+`SetOptionsText` and a shared options blob take) builds `Options` from a
+map, and it used to be a hand-written extractor that named 18 of the 24
+option groups: a field it did not name was dropped in silence. Six
+groups fell out that way, among them `rewind.history`, `result.fail` and
+all of `parse.recover`, so a caller who lowered the rewind bound in a
+serialized spec to harden a service got the default instead.
 
-The remaining numeric options take the same path and are still dropped:
-`rewind.history`, `error.recover`'s `maxSkip` / `maxRecoveries` /
-`suppress`, and `parse.budget.checkEveryN`. Set those on the `Options`
-struct directly. Unmarshalling JSON straight into `Options` is not a
-workaround for the fractional case: it rejects a fractional number
-rather than truncating it.
+The surface is now defined by type rather than by list: **every
+pure-data leaf of `Options` is read, and a gate asserts it.**
+`TestOptionsFromMapCoversEveryLeaf` walks `Options` by reflection,
+builds a map that sets every leaf, and fails on any that does not
+arrive, so a field added to `Options` cannot fall out of the serialized
+surface again. Function-valued leaves (`parser.start`, `map.merge`,
+the `check` hooks, `parse.prepare`, `budget.onCheck`) are read when the
+map carries a function of the right type, which is what a resolved
+FuncRef is; a spec carrying only JSON cannot reach them, and that is
+what makes them unportable rather than unread.
+
+`MapToOptions` keeps its signature and delegates to `OptionsFromMap`,
+which also returns an error for an entry it cannot carry: a serialized
+regex that RE2 cannot compile is the one such entry today. Prefer
+`OptionsFromMap` wherever there is an error to return. Unmarshalling
+JSON straight into `Options` is still not a substitute: it rejects a
+fractional `rule.maxmul` rather than truncating it (see "Rule-Iteration
+Budget" above).
 
 ### Token Consumption
 
@@ -859,8 +872,8 @@ RE2 accepts `(?U)`, and it means *swap greedy*. A letter passed through
 because it was unrecognised could therefore change the language a grammar
 matches, silently. Refusing is the safe default, and it is not silent
 either: an unbuildable serialized regex leaves the original `@/…/` string
-in place, which `MapToOptions` turns into an install error naming the
-token.
+in place, which `OptionsFromMap` reports as an error naming the token,
+and `Grammar` returns as an install error.
 
 ### Two related non-equivalences this does NOT fix
 
@@ -926,7 +939,15 @@ guarantees it **never panics**:
   recovery result, while Go returns it as fatal. That is true of every
   panic in this port, not only a preserved one, and predates the
   exception above.
-- `Grammar` has the same guard for malformed specs.
+- `Grammar` has the same guard for malformed specs. The guard is for
+  panics the engine did not expect; the engine's own validators do not
+  use it. A caller's mistake that the engine detects (a matcher-owned
+  token bound to a fixed literal, a serialized regex RE2 cannot
+  compile) comes back from `Grammar`, `SetOptionsText`, `ApplyOptions`
+  and `OptionsFromMap` as a plain error naming the mistake, never as an
+  `"internal"` error. The chaining doors that have no error channel,
+  `Make` and `SetOptions`, panic on the same input, as the TypeScript
+  guard throws; `ApplyOptions` is `SetOptions` with the error returned.
 - APIs that previously panicked now return errors: `Derive` returns
   `(*Tabnas, error)` (a failing plugin during child derivation mirrors
   TS `make()` throwing), and `MakeRuleCond` returns

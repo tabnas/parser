@@ -355,17 +355,26 @@ func (j *Tabnas) Grammar(gs *GrammarSpec, setting ...*GrammarSetting) (err error
 		}
 	}
 
-	// Apply typed Options directly.
+	// Apply typed Options directly. A caller error in them (a
+	// matcher-owned token bound to a literal) is the caller's, and is
+	// returned as such rather than recovered into an internal error.
 	if gs.Options != nil {
-		j.SetOptions(*gs.Options)
+		if err := j.ApplyOptions(*gs.Options); err != nil {
+			return fmt.Errorf("Grammar: %w", err)
+		}
 	}
 
 	// Apply OptionsMap with FuncRef resolution.
 	if gs.OptionsMap != nil {
 		resolved := ResolveFuncRefs(gs.OptionsMap, ref)
 		if resolvedMap, ok := resolved.(map[string]any); ok {
-			opts := MapToOptions(resolvedMap)
-			j.SetOptions(opts)
+			opts, err := OptionsFromMap(resolvedMap)
+			if err != nil {
+				return fmt.Errorf("Grammar: %w", err)
+			}
+			if err := j.ApplyOptions(opts); err != nil {
+				return fmt.Errorf("Grammar: %w", err)
+			}
 		}
 	}
 
