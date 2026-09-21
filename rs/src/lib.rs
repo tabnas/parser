@@ -1504,7 +1504,14 @@ impl Tabnas {
         p
     }
 
-    /// Strict JSON parser setup, mirroring `ts/test/json-plugin.ts` and `go/jsonplugin_test.go`.
+    /// Strict JSON parser setup: the rule set of `ts/test/json-plugin.ts`
+    /// and `go/jsonplugin_test.go`, over stricter options. Those fixtures
+    /// leave `escapeStrict` off, keep the `'` and `` ` `` escapes and
+    /// exclude only `00`-prefixed numbers, so they accept `\x41`,
+    /// `\u{41}`, `01`, `+1`, `.5` and `1.`; this preset rejects all of
+    /// them, as `JSON.parse` does. The shared fixtures pin neither way,
+    /// and `ci/rust/json-fuzz.js` compares the two over generated input
+    /// that stays inside strict JSON.
     pub fn make_json() -> Self {
         let mut opts = Options::default();
         opts.text.lex = false;

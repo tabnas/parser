@@ -138,6 +138,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// The source from char index `start` up to `end`, clipped to the end
+    /// of the source: the span of a bad token, cut as TypeScript's
+    /// `lex.bad(why, pstart, pend)` cuts it (`ts/src/lexer.ts`).
+    fn source_span(&self, start: usize, end: usize) -> String {
+        self.chars[start..end.min(self.char_len)].iter().collect()
+    }
+
     fn state(&self) -> LexerState {
         LexerState {
             idx: self.idx,
@@ -1792,7 +1799,15 @@ impl<'a> Lexer<'a> {
                     }
                     match esc {
                         'u' => {
-                            // Unicode escape: \uXXXX or \u{X...}
+                            // Unicode escape: \uXXXX or \u{X...}. An
+                            // invalid one is reported on the backslash
+                            // with the span TypeScript cuts: six source
+                            // characters for the fixed-width form, four
+                            // for `\x`, and through the closing brace
+                            // (or to the end of the source) for the
+                            // braced form -- clipped, never padded, so a
+                            // truncated escape at end of input reports
+                            // exactly the characters that are there.
                             if self.peek() == Some('{') && !self.options.string.escape_strict {
                                 raw_src.push(self.advance().unwrap()); // '{'
                                 let mut hex = String::new();
@@ -1814,7 +1829,7 @@ impl<'a> Lexer<'a> {
                                 {
                                     let err = TabnasError::new(
                                         "invalid_unicode",
-                                        format!("\\u{{{}}}", hex),
+                                        self.source_span(esc_point.site.pos - 1, self.idx),
                                         self.src,
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
@@ -1829,7 +1844,7 @@ impl<'a> Lexer<'a> {
                                     _ => {
                                         let err = TabnasError::new(
                                             "invalid_unicode",
-                                            format!("\\u{{{}}}", hex),
+                                            self.source_span(esc_point.site.pos - 1, self.idx),
                                             self.src,
                                             esc_point.site.pos - 1,
                                             esc_point.site.ri,
@@ -1864,7 +1879,10 @@ impl<'a> Lexer<'a> {
                                 if hex.len() != 4 {
                                     let err = TabnasError::new(
                                         "invalid_unicode",
-                                        format!("\\u{}", hex),
+                                        self.source_span(
+                                            esc_point.site.pos - 1,
+                                            esc_point.site.pos + 5,
+                                        ),
                                         self.src,
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
@@ -1877,7 +1895,10 @@ impl<'a> Lexer<'a> {
                                 let cp = u16::from_str_radix(&hex, 16).map_err(|_| {
                                     let err = TabnasError::new(
                                         "invalid_unicode",
-                                        format!("\\u{}", hex),
+                                        self.source_span(
+                                            esc_point.site.pos - 1,
+                                            esc_point.site.pos + 5,
+                                        ),
                                         self.src,
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
@@ -1909,7 +1930,10 @@ impl<'a> Lexer<'a> {
                             if hex.len() != 2 {
                                 let err = TabnasError::new(
                                     "invalid_ascii",
-                                    format!("\\x{hex}"),
+                                    self.source_span(
+                                        esc_point.site.pos - 1,
+                                        esc_point.site.pos + 3,
+                                    ),
                                     self.src,
                                     esc_point.site.pos - 1,
                                     esc_point.site.ri,
@@ -1924,13 +1948,19 @@ impl<'a> Lexer<'a> {
                         }
                         other => {
                             if !self.options.string.allow_unknown {
+                                // Sited on the escape CHARACTER with a
+                                // one-character span, as TypeScript
+                                // (`pnt.sI = sI; pnt.cI = cI; lex.bad(
+                                // S.unexpected, sI, sI + 1)`) and Go do;
+                                // the other escape errors sit on the
+                                // backslash and span the construct.
                                 let err = TabnasError::new(
                                     "unexpected",
-                                    format!("\\{}", other),
+                                    other.to_string(),
                                     self.src,
-                                    esc_point.site.pos - 1,
+                                    esc_point.site.pos,
                                     esc_point.site.ri,
-                                    esc_point.site.ci - 1,
+                                    esc_point.site.ci,
                                 );
                                 self.err = Some(err.clone());
                                 return Err(Box::new(err));
