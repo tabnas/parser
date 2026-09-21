@@ -1517,22 +1517,26 @@ impl<'a> Lexer<'a> {
                             }
                         }
                         // The digits of the literal, prefix, sign and any
-                        // separators removed, as their numeric values.
-                        let digits: Vec<u32> = src
-                            .chars()
-                            .skip_while(|ch| matches!(ch, '-' | '+'))
-                            .skip(2)
-                            .filter(|ch| {
-                                !self
-                                    .options
-                                    .number
-                                    .sep
-                                    .as_ref()
-                                    .is_some_and(|separator| separator.contains(*ch))
-                            })
-                            .map(|ch| ch.to_digit(radix).expect("validated base digit"))
-                            .collect();
-                        let mut value = digits_to_f64(&digits, radix.trailing_zeros());
+                        // separators removed, folded as they are read. The
+                        // fold keeps a bounded head, a digit count and a
+                        // sticky bit, so a literal of any length costs the
+                        // same handful of bytes: buffering the digits
+                        // instead would let one long token multiply the
+                        // memory the source already holds.
+                        let mut fold = DigitFold::new(radix.trailing_zeros());
+                        for ch in src.chars().skip_while(|ch| matches!(ch, '-' | '+')).skip(2) {
+                            if self
+                                .options
+                                .number
+                                .sep
+                                .as_ref()
+                                .is_some_and(|separator| separator.contains(ch))
+                            {
+                                continue;
+                            }
+                            fold.push(ch.to_digit(radix).expect("validated base digit"));
+                        }
+                        let mut value = fold.finish();
                         if src.starts_with('-') {
                             value = -value;
                         }
@@ -2060,53 +2064,97 @@ fn pow2(k: i64) -> f64 {
     }
 }
 
-/// The exact integer the digit values denote, as the NEAREST double,
-/// rounding half to even. `bits` is the width of one digit, so the base is
-/// a power of two: 1 for binary, 3 for octal, 4 for hexadecimal. Those are
-/// the only bases `match_number` reads, which is what lets a `u128` head
-/// plus a sticky bit stand in for arbitrary-precision arithmetic.
-fn digits_to_f64(digits: &[u32], bits: u32) -> f64 {
-    debug_assert!(
-        (1..=4).contains(&bits),
-        "only the power-of-two bases the lexer reads"
-    );
+/// Folds the digits of a base-prefixed literal into the NEAREST double,
+/// rounding half to even, without holding the digits.
+///
+/// `bits` is the width of one digit, so the base is a power of two: 1 for
+/// binary, 3 for octal, 4 for hexadecimal. Those are the only bases
+/// `match_number` reads, which is what lets a `u128` head plus a sticky
+/// bit stand in for arbitrary-precision arithmetic.
+///
+/// Only three things about a literal can change the answer: the top
+/// `128 / bits` significant digits, how many digits follow them, and
+/// whether any of those is non-zero. This keeps exactly those, so the
+/// space it costs does not grow with the literal, however long an
+/// untrusted document makes one.
+struct DigitFold {
+    bits: u32,
+    /// The significant digits packed so far, at most `head_len` of them.
+    head: u128,
+    /// How many significant digits have been pushed, head and tail alike.
+    len: usize,
+    /// Whether any digit past the head was non-zero.
+    sticky: bool,
+    /// Whether a non-zero digit has been seen. Leading zeros carry no
+    /// value, and dropping them is what makes the head wider than the 54
+    /// significant bits the rounding needs.
+    started: bool,
+}
 
-    // Leading zeros carry no value, and dropping them is what makes the
-    // head below wider than the 54 significant bits the rounding needs.
-    let Some(start) = digits.iter().position(|digit| *digit != 0) else {
-        return 0.0;
-    };
-    let digits = &digits[start..];
-
-    // A u128 holds exactly this many digits of the base.
-    let head_len = (128 / bits) as usize;
-    let pack = |run: &[u32]| {
-        run.iter()
-            .fold(0u128, |value, digit| (value << bits) | u128::from(*digit))
-    };
-    if digits.len() <= head_len {
-        // A `u128` to `f64` cast rounds to nearest, ties to even, which is
-        // the rule the canonical runtime follows.
-        return pack(digits) as f64;
+impl DigitFold {
+    fn new(bits: u32) -> Self {
+        debug_assert!(
+            (1..=4).contains(&bits),
+            "only the power-of-two bases the lexer reads"
+        );
+        DigitFold {
+            bits,
+            head: 0,
+            len: 0,
+            sticky: false,
+            started: false,
+        }
     }
 
-    // Longer than a u128: keep the top `head_len` digits, and remember
-    // whether anything below them was set. Those two are all the rounding
-    // can depend on. The leading digit is non-zero, so the head is at least
-    // 121 bits wide in every base here and `shift` is comfortably positive.
-    let head = pack(&digits[..head_len]);
-    let tail = &digits[head_len..];
-    let dropped = i64::from(bits) * tail.len() as i64;
-    let shift = 128 - head.leading_zeros() - 53;
-
-    let mut mantissa = (head >> shift) as u64;
-    let half = (head >> (shift - 1)) & 1 == 1;
-    let sticky = head & ((1u128 << (shift - 1)) - 1) != 0 || tail.iter().any(|digit| *digit != 0);
-    if half && (sticky || mantissa & 1 == 1) {
-        // At most 2^53, which is still an exact double.
-        mantissa += 1;
+    /// A `u128` holds exactly this many digits of the base.
+    fn head_len(&self) -> usize {
+        (128 / self.bits) as usize
     }
-    // The mantissa carries at most 53 significant bits, so the scaling is
-    // exact inside the double range and overflows to infinity outside it.
-    mantissa as f64 * pow2(dropped + i64::from(shift))
+
+    fn push(&mut self, digit: u32) {
+        if !self.started {
+            if 0 == digit {
+                return;
+            }
+            self.started = true;
+        }
+        if self.len < self.head_len() {
+            self.head = (self.head << self.bits) | u128::from(digit);
+        } else if 0 != digit {
+            self.sticky = true;
+        }
+        self.len += 1;
+    }
+
+    fn finish(&self) -> f64 {
+        if !self.started {
+            return 0.0;
+        }
+        let head_len = self.head_len();
+        if self.len <= head_len {
+            // A `u128` to `f64` cast rounds to nearest, ties to even, which
+            // is the rule the canonical runtime follows.
+            return self.head as f64;
+        }
+
+        // Longer than a u128: the head holds the top `head_len` digits and
+        // `sticky` remembers whether anything below them was set. Those two
+        // are all the rounding can depend on. The leading digit is
+        // non-zero, so the head is at least 121 bits wide in every base
+        // here and `shift` is comfortably positive.
+        let dropped = i64::from(self.bits) * (self.len - head_len) as i64;
+        let shift = 128 - self.head.leading_zeros() - 53;
+
+        let mut mantissa = (self.head >> shift) as u64;
+        let half = (self.head >> (shift - 1)) & 1 == 1;
+        let sticky = self.head & ((1u128 << (shift - 1)) - 1) != 0 || self.sticky;
+        if half && (sticky || mantissa & 1 == 1) {
+            // At most 2^53, which is still an exact double.
+            mantissa += 1;
+        }
+        // The mantissa carries at most 53 significant bits, so the scaling
+        // is exact inside the double range and overflows to infinity
+        // outside it.
+        mantissa as f64 * pow2(dropped + i64::from(shift))
+    }
 }

@@ -195,6 +195,49 @@ fn number_bits(source: &str) -> u64 {
     }
 }
 
+/// A literal is folded as it is read, so its length costs no memory
+/// beyond the source the lexer already holds. The fold keeps a bounded
+/// head, a digit count and a sticky bit, and nothing else: buffering the
+/// digits instead cost four bytes each, which let one token in an
+/// untrusted document multiply peak memory.
+///
+/// Two million digits is past any plausible document and still converts
+/// in well under a second. The values are what node gives: every bit of
+/// a hexadecimal or binary run of that length is above the double range,
+/// and a one followed by two million zeros is exactly one.
+#[test]
+fn a_very_long_literal_is_folded_as_it_is_read() {
+    const DIGITS: usize = 2_000_000;
+    let start = std::time::Instant::now();
+    assert_eq!(
+        number_bits(&format!("0x{} ", "f".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "a hexadecimal run of {DIGITS} digits is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0b{} ", "1".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "a binary run of {DIGITS} digits is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0x1{} ", "0".repeat(DIGITS))),
+        f64::INFINITY.to_bits(),
+        "one followed by {DIGITS} hexadecimal zeros is above the double range"
+    );
+    assert_eq!(
+        number_bits(&format!("0x{}1 ", "0".repeat(DIGITS))),
+        1.0f64.to_bits(),
+        "leading zeros carry no value, however many there are"
+    );
+    // Generous, so a slow machine does not fail it: the point is that the
+    // work is linear rather than that it hits a particular time.
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "four literals of {DIGITS} digits took {elapsed:?}"
+    );
+}
+
 #[test]
 fn base_prefixed_literals_round_once_from_the_exact_integer() {
     // A base-prefixed literal is read as an exact integer and rounded to a
