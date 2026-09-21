@@ -228,10 +228,11 @@ func (ctx *Context) recordConsumed(consumed int) {
 	}
 	ctx.VAbs += consumed
 	// Amortised-O(1) ring buffer: let V grow to twice the cap, then trim
-	// its front back down to the cap. A non-positive cap means unbounded
-	// (TS Infinity).
+	// its front back down to the cap. A negative cap means unbounded
+	// (the serialized `false`, TS Infinity); 0 retains nothing, as it
+	// does in TypeScript, where this port used to read it as unbounded.
 	cap := ctx.Cfg.RewindHistory
-	if cap > 0 && len(ctx.V) > 2*cap {
+	if cap >= 0 && len(ctx.V) > 2*cap {
 		ctx.V = append([]*Token(nil), ctx.V[len(ctx.V)-cap:]...)
 	}
 }

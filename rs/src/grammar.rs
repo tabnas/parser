@@ -1507,10 +1507,14 @@ fn apply_options(
     if let Some(rewind) = map.get("rewind") {
         let rewind = object(rewind, "options.rewind")?;
         if let Some(history) = rewind.get("history") {
+            // The cross-runtime spellings: `null` is the documented
+            // default, `false` retains everything, a negative cap
+            // retains nothing, exactly as 0 does.
             options.rewind.history = match history {
-                JsonValue::Null => None,
+                JsonValue::Null => crate::RewindOptions::default().history,
+                JsonValue::Bool(false) => None,
                 JsonValue::Number(number) => match number.as_i64() {
-                    Some(value) if value <= 0 => None,
+                    Some(value) if value < 0 => Some(0),
                     Some(value) => Some(usize::try_from(value).map_err(|_| {
                         GrammarError(
                             "Grammar: options.rewind.history is outside the supported range".into(),
@@ -1518,13 +1522,14 @@ fn apply_options(
                     })?),
                     None => {
                         return Err(GrammarError(
-                            "Grammar: options.rewind.history must be an integer or null".into(),
+                            "Grammar: options.rewind.history must be an integer, null or false"
+                                .into(),
                         ))
                     }
                 },
                 _ => {
                     return Err(GrammarError(
-                        "Grammar: options.rewind.history must be an integer or null".into(),
+                        "Grammar: options.rewind.history must be an integer, null or false".into(),
                     ))
                 }
             };

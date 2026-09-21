@@ -87,9 +87,15 @@ type InfoOptions struct {
 
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
-	// History caps consumed tokens retained for ctx.Rewind; non-positive means
-	// unbounded (TS Infinity). Default: 64. ctx.Rewind errors if its target mark
-	// has been evicted from the retained window.
+	// History caps the consumed tokens retained for ctx.Rewind. Nil is
+	// the default of 64; 0 retains nothing; a negative value retains
+	// everything, which is this port's spelling of the serialized
+	// `false` (TypeScript also accepts Infinity). ctx.Rewind errors if
+	// its target mark has been evicted from the retained window.
+	//
+	// A cap of 0 used to mean unbounded here, the opposite of the
+	// canonical runtime on exactly the bound AGENTS.md names against
+	// hostile input; the sign now carries that meaning instead (#142).
 	History *int
 }
 
@@ -1086,8 +1092,8 @@ func buildConfig(o *Options) *LexConfig {
 	copy(cfg.KeySet, TinSetKEY)
 
 	// Rewind history cap (consumed-token retention for ctx.Rewind).
-	// Default 64, matching TS defaults.ts; a non-positive value is
-	// unbounded.
+	// Default 64, matching TS defaults.ts; a negative value is
+	// unbounded and 0 retains nothing (see RewindOptions).
 	cfg.RewindHistory = 64
 	if o.Rewind != nil && o.Rewind.History != nil {
 		cfg.RewindHistory = *o.Rewind.History

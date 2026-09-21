@@ -138,8 +138,11 @@ fn bounded_history_rejects_an_evicted_mark() {
     assert!(error.detail.contains("outside the retained history"));
 }
 
+// The serialized spellings are the cross-runtime contract (#144, #142):
+// null is the documented default, false is unbounded, 0 and any
+// negative cap retain nothing.
 #[test]
-fn serialized_rewind_history_supports_limits_and_unbounded_null() {
+fn serialized_rewind_history_spellings() {
     let mut parser = Tabnas::new();
     parser
         .grammar_json(r#"{"options":{"rewind":{"history":4}}}"#)
@@ -148,5 +151,42 @@ fn serialized_rewind_history_supports_limits_and_unbounded_null() {
     parser
         .grammar_json(r#"{"options":{"rewind":{"history":null}}}"#)
         .unwrap();
+    assert_eq!(parser.options.rewind.history, Some(64));
+    parser
+        .grammar_json(r#"{"options":{"rewind":{"history":false}}}"#)
+        .unwrap();
     assert_eq!(parser.options.rewind.history, None);
+    parser
+        .grammar_json(r#"{"options":{"rewind":{"history":0}}}"#)
+        .unwrap();
+    assert_eq!(parser.options.rewind.history, Some(0));
+    parser
+        .grammar_json(r#"{"options":{"rewind":{"history":-3}}}"#)
+        .unwrap();
+    assert_eq!(parser.options.rewind.history, Some(0));
+    assert!(parser
+        .grammar_json(r#"{"options":{"rewind":{"history":true}}}"#)
+        .is_err());
+}
+
+// A cap of 0 retains nothing, as in TypeScript: every rewind that needs
+// a token back is outside the window. It used to mean unbounded here.
+#[test]
+fn zero_history_retains_nothing() {
+    let (mut parser, [ta, _, _]) = rewind_parser(Some(Some(0)));
+    let seen = Arc::new(Mutex::new(usize::MAX));
+    let seen_action = seen.clone();
+    parser.action_with_context("count", move |_rule, context| {
+        *seen_action.lock().unwrap() = context.v.len();
+        Ok(())
+    });
+    let mut top = RuleSpec::new("top");
+    top.open.push(AltSpec {
+        s: vec![vec![ta], vec![ta], vec![ta]],
+        a: vec!["count".into()],
+        ..Default::default()
+    });
+    parser.rule(top);
+    parser.parse("a a a").unwrap();
+    assert_eq!(*seen.lock().unwrap(), 0);
 }

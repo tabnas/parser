@@ -173,7 +173,7 @@ Bounds the consumed-token history retained for `ctx.Rewind`.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; a non-positive value retains all (TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
+| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; `0` retains nothing, a negative value retains all (the serialized `false`, TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
 
 ## `Lex`
 

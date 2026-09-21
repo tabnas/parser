@@ -268,14 +268,16 @@ export type TabnasOptions = {
   rewind?: {                        // Token rewind history.
     // Maximum number of consumed tokens retained in ctx.v for
     // ctx.rewind(). Defaults to 64 (see defaults.ts) to keep parse-time
-    // memory bounded; set to Infinity for unbounded retention, or a
-    // larger finite value as needed. ctx.rewind(mark) throws if the
+    // memory bounded; an explicit null means the same default. Set to
+    // `false` for unbounded retention (the spelling every runtime
+    // reads; Infinity means the same here), or a larger finite value
+    // as needed. 0 retains nothing. ctx.rewind(mark) throws if the
     // mark has been evicted from the retained window — so a grammar
     // that probes/rewinds across a long span (e.g. the `$`-builtin
     // probe dispatcher scanning a long optional prefix) must raise
     // this above the longest prefix it can encounter, or it will throw
     // on otherwise-valid input.
-    history?: number
+    history?: number | false | null
   }
   config?: {                        // Config post-processing.
     modify?: {                      // Per-plugin config mutators.

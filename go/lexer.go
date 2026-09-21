@@ -150,7 +150,7 @@ type LexConfig struct {
 	EscapeRemoved      map[string]bool   // Built-in escapes removed via {"v": ""}; consulted before the hardcoded switch.
 	EscapeStrict       bool              // Disable the non-standard \xHH and \u{...} structural escapes.
 	AllowControl       bool              // Permit raw control chars (< 0x20) in a string body instead of erroring with "unprintable". Line chars are excluded — they stay governed by MultiChars.
-	RewindHistory      int               // Max consumed tokens retained for ctx.Rewind. <=0 means unbounded. Default 64.
+	RewindHistory      int               // Max consumed tokens retained for ctx.Rewind. 0 retains nothing; negative means unbounded. Default 64.
 	SpaceChars         map[rune]bool     // Characters lexed as space (#SP).
 	LineChars          map[rune]bool     // Characters lexed as line endings (#LN).
 	RowChars           map[rune]bool     // Line characters that increment the row counter.

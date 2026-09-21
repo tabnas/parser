@@ -220,6 +220,24 @@ fixed or quietly dropped.
   fleet grammar working, since all four declaration sites pair a config
   with its action on the same alternate.
 
+- **`rewind.history` at its edges.** Three spellings of the retained
+  rewind window meant different things in different ports, and none of
+  it was recorded: an explicit `null` resolved to `Infinity` in
+  TypeScript and to unbounded in Rust, against a documented default of
+  64 (#144); a cap of `0` retained nothing in TypeScript and everything
+  in Go and Rust, which inverted an operator's hardening intent on
+  exactly the bound `AGENTS.md` names against hostile input (#142).
+  Both sides moved, per defect: TypeScript reads `null` as 64, Go and
+  Rust read `0` as retain-nothing. The contract is now one table for
+  every runtime: absent or `null` is 64; `n >= 0` caps at `n`; a
+  negative cap is `0`; `false` is unbounded, the one spelling every
+  runtime can read (`Infinity` still works in TypeScript, and a
+  negative `History` in Go's typed struct, as each port's own way of
+  writing it). Pinned by `ts/test/rewind.test.js` ('a null history is
+  the documented default'), `go/rewind_test.go`
+  (`TestRewindZeroHistoryRetainsNothing`) and
+  `rs/tests/rewind_test.rs` (`serialized_rewind_history_spellings`).
+
 - **Bad-token spans and codes for invalid string escapes.** Carried a
   table of `len`/`pos`/`col` differences and, at one point, the claim
   that the error `code` always agreed. Both halves are repaired: the

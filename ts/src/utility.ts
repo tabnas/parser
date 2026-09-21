@@ -505,10 +505,22 @@ function configure(
     cfg.result.fail = [...opts.result.fail]
   }
 
-  // Parse-time consumed-token history cap (for ctx.rewind).
+  // Parse-time consumed-token history cap (for ctx.rewind). The
+  // spellings are the cross-runtime contract (#144, #142): absent or
+  // null is the documented default of 64, not unbounded, which is what
+  // the null branch used to read; `false` is the portable way to retain
+  // everything (Infinity is a JavaScript-only spelling of the same
+  // thing); 0 retains nothing, and so does a negative cap.
+  const history = opts.rewind?.history
   cfg.rewind = {
     history:
-      null == opts.rewind?.history ? Infinity : opts.rewind.history,
+      false === history
+        ? Infinity
+        : null == history
+          ? 64
+          : history < 0
+            ? 0
+            : history,
   }
 
   const optscolor = opts.color ?? {}

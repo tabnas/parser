@@ -231,7 +231,7 @@ impl Context {
             v_abs: 0,
             t: Vec::with_capacity(8),
             replay: VecDeque::new(),
-            history_limit: history_limit.filter(|limit| *limit > 0),
+            history_limit,
             root: None,
             recover_at: None,
             recover_si: None,
