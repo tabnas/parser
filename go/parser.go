@@ -985,6 +985,13 @@ func ruleDoneSubsOf(inst *Tabnas) []RuleDoneSub {
 // with only Err set when it had some and none matched — the same
 // distinction TS draws between a null _dalt and a failed one.
 //
+// B, P and R are the routing the pass RESOLVED, not the grammar's
+// static fields: a function-form PF, RF or BF is resolved into the
+// pass's copy of the alternate before the modifier runs (rule.go
+// Process), and ctx.dalt is that copy. TS reports the same resolved
+// value; the static field is recoverable from the grammar, the
+// resolution at this pass is not (#153).
+//
 // The group tags are split into a fresh slice on every call: AltSpec.G
 // is live grammar configuration, and a consumer must not be able to
 // reach it through the event.
