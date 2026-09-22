@@ -487,10 +487,59 @@ function checkGoWork(file, text, config, root, seen) {
 }
 
 
-// `[patch.*]` and `[replace]` redirect a dependency as surely as a `path` key in
-// `[dependencies]` does, so they are dependency tables for this gate's purposes.
-const CARGO_DEP_SECTION_RE =
-  /^\[\s*(?:workspace\s*\.\s*)?(?:(?:target\s*\.\s*(?:"[^"]*"|'[^']*'|[^.\]]+)\s*\.\s*)?(?:dev-|build-)?dependencies(?:\s*\.\s*[^\]]+)?|patch(?:\s*\.\s*[^\]]+)?|replace)\s*\]$/
+// A TOML key path, split on the dots that are not inside a quoted segment, so
+// `patch."https://github.com/o/r"` is two segments rather than five.
+function tomlKeyPath(s) {
+  const segs = []
+  let cur = ''
+  let quote = null
+
+  for (const ch of String(s)) {
+    if (null != quote) {
+      if (ch === quote) { quote = null } else { cur += ch }
+      continue
+    }
+    if ('"' === ch || "'" === ch) { quote = ch; continue }
+    if ('.' === ch) { segs.push(cur.trim()); cur = ''; continue }
+    cur += ch
+  }
+  segs.push(cur.trim())
+
+  return segs.filter((seg) => '' !== seg)
+}
+
+
+// Judged as a key PATH rather than as a bracketed spelling, because Cargo
+// accepts the same dependency three ways -- `[dependencies.dep]`, a `dep` entry
+// under `[dependencies]`, and a dotted `dependencies.dep.path = "…"` with no
+// header at all -- and all three redirect what gets built. `[patch.*]` and
+// `[replace]` redirect it too, so they count as dependency tables here.
+function isCargoDepPath(segs) {
+  let i = 0
+  if ('workspace' === segs[i]) i += 1
+  if ('target' === segs[i]) i += 2
+
+  const head = segs[i]
+  if ('patch' === head || 'replace' === head) return true
+
+  return 'dependencies' === head
+    || 'dev-dependencies' === head
+    || 'build-dependencies' === head
+}
+
+
+// The first `=` that is not inside a quoted segment; -1 when the line has none.
+function tomlAssignAt(line) {
+  let quote = null
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (null != quote) { if (ch === quote) quote = null; continue }
+    if ('"' === ch || "'" === ch) { quote = ch; continue }
+    if ('=' === ch) return i
+  }
+  return -1
+}
+
 
 // Only dependency tables, and never a commented-out line: a `path` key in
 // `[package]` or behind a `#` is not a dependency.
@@ -514,29 +563,60 @@ function checkCargoToml(file, text, config, root, seen) {
     return undefined === m[1] ? m[2] : m[1].replace(/\\(.)/g, '$1')
   }
 
+  const judgePath = (rel, spec) => {
+    if (null == rel) return
+    if (absoluteish(rel)) { add('cargo-absolute-path-dep', rel, spec); return }
+    if (insideRepo(Path.resolve(dir, rel), REPO_ROOT)) return
+    add('cargo-external-path-dep', rel, spec)
+  }
+
+  const judgeGit = (url, spec) => {
+    if (null == url) return
+    if (githubHost(hostOf(url))) return
+    add('cargo-non-github-git-dep', url, spec)
+  }
+
+  const scanInline = (line) => {
+    const pathRe = /\bpath\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
+    let m
+    while (null !== (m = pathRe.exec(line))) judgePath(str(m[1]), m[0])
+
+    const gitRe = /\bgit\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
+    while (null !== (m = gitRe.exec(line))) judgeGit(str(m[1]), m[0])
+  }
+
+  let section = []
+
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, '').trim()
     if ('' === line) continue
-    if ('[' === line[0]) { inDeps = CARGO_DEP_SECTION_RE.test(line); continue }
-    if (!inDeps) continue
 
-    const pathRe = /\bpath\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
-    let m
-    while (null !== (m = pathRe.exec(line))) {
-      const rel = str(m[1])
-      if (null == rel) continue
-      if (absoluteish(rel)) { add('cargo-absolute-path-dep', rel, m[0]); continue }
-      if (insideRepo(Path.resolve(dir, rel), REPO_ROOT)) continue
-      add('cargo-external-path-dep', rel, m[0])
+    if ('[' === line[0]) {
+      section = tomlKeyPath(line.replace(/^\[+/, '').replace(/\]+$/, ''))
+      inDeps = isCargoDepPath(section)
+      continue
     }
 
-    const gitRe = /\bgit\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
-    while (null !== (m = gitRe.exec(line))) {
-      const url = str(m[1])
-      if (null == url) continue
-      if (githubHost(hostOf(url))) continue
-      add('cargo-non-github-git-dep', url, m[0])
+    const eq = tomlAssignAt(line)
+    if (-1 === eq) continue
+
+    const full = section.concat(tomlKeyPath(line.slice(0, eq)))
+    const last = full[full.length - 1]
+
+    // A DOTTED key states the field itself: `dependencies.dep.path = "…"` has
+    // no dependency-table header to be inside of, which is how it escaped a
+    // check that only tracked section state.
+    if ('path' === last || 'git' === last) {
+      if (isCargoDepPath(full.slice(0, -1))) {
+        const value = line.slice(eq + 1).trim()
+        if ('path' === last) judgePath(str(value), last + ' = ' + value)
+        else judgeGit(str(value), last + ' = ' + value)
+      }
+      continue
     }
+
+    // Otherwise the field is inside the VALUE, as an inline table.
+    if (inDeps || isCargoDepPath(full)) scanInline(line)
   }
 
   return findings
@@ -602,7 +682,6 @@ function checkAll(config, root) {
 
   const rows = tracked(REPO_ROOT)
   const trackedPaths = new Set(rows.map((r) => r.path))
-  const modeOf = new Map(rows.map((r) => [r.path, r.mode]))
 
   const cfg = config || readConfig(REPO_ROOT, trackedPaths)
   const allow = cfg.allow || {}

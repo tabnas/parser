@@ -336,6 +336,43 @@ test('a cargo dependency is judged by path, by host, and only inside a dependenc
     'a GitHub patch must pass')
   assert.deepEqual(cargo('[workspace.package]\npath = "../../sibling"\n'), [],
     'a workspace package table is not a dependency table')
+
+  // A DOTTED key has no table header to be inside of, so section state alone
+  // never sees it. Cargo accepts all of these.
+  assert.deepEqual(rules(cargo('dependencies.dep.path = "../../sibling"\n')),
+    ['cargo-external-path-dep'], 'a dotted dependency path at the root was not read')
+  assert.deepEqual(rules(cargo('dependencies.dep.git = "https://gitlab.com/o/r"\n')),
+    ['cargo-non-github-git-dep'], 'a dotted dependency git at the root was not read')
+  assert.deepEqual(rules(cargo('patch.crates-io.dep.path = "/elsewhere"\n')),
+    ['cargo-absolute-path-dep'], 'a dotted patch path was not read')
+  assert.deepEqual(rules(cargo('workspace.dependencies.dep.path = "../../sibling"\n')),
+    ['cargo-external-path-dep'], 'a dotted workspace dependency path was not read')
+  assert.deepEqual(rules(cargo('[workspace]\ndependencies.dep.path = "../../sibling"\n')),
+    ['cargo-external-path-dep'], 'a header prefixes a dotted key, and did not')
+  assert.deepEqual(rules(cargo('[dependencies]\ndep.path = "../../sibling"\n')),
+    ['cargo-external-path-dep'], 'a dotted key under a dependency header was not read')
+  assert.deepEqual(rules(cargo('dependencies.dep = { path = "../../sibling" }\n')),
+    ['cargo-external-path-dep'], 'a dotted key holding an inline table was not read')
+  assert.deepEqual(rules(cargo('target."cfg(unix)".dependencies.dep.path = "../../s"\n')),
+    ['cargo-external-path-dep'], 'a dotted target dependency path was not read')
+
+  // The same spelling outside a dependency table still is not a dependency.
+  assert.deepEqual(cargo('package.path = "../../sibling"\n'), [],
+    'a dotted package path is not a dependency')
+  assert.deepEqual(cargo('workspace.package.path = "../../sibling"\n'), [],
+    'a dotted workspace package path is not a dependency')
+  assert.deepEqual(cargo('dependencies.dep.version = "1.2.3"\n'), [],
+    'a dotted version is not a path or a git reference')
+  assert.deepEqual(cargo('# dependencies.dep.path = "../../sibling"\n'), [],
+    'a commented-out dotted dependency path is not a dependency')
+  assert.deepEqual(cargo('dependencies.dep.path = "../other"\n'), [],
+    'a dotted path inside the repository must pass')
+  assert.deepEqual(cargo('patch.crates-io.dep.git = "https://github.com/o/r.git"\n'), [],
+    'a dotted GitHub patch must pass')
+
+  // One report, not two: the dotted branch handles the line and stops.
+  assert.equal(cargo('dependencies.dep.path = "../../sibling"\n').length, 1,
+    'the dotted key was judged twice')
 })
 
 
