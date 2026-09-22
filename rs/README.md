@@ -149,6 +149,34 @@ never emulate that. A parse that sets no value answers `Value::Null`, where
 TypeScript answers `undefined`; the engine's `Value::Undefined` is unwrapped
 at the parse boundary on purpose.
 
+Binary formats parse here, with three costs the other runtimes do not
+pay. `Lexer.src` is a `&str`, so it must hold valid UTF-8 and arbitrary
+bytes are not: map each byte to the `char` with that code point
+(U+0000..U+00FF) on the way in, which is lossless and makes the
+Unicode-scalar index equal to the byte offset. Read a position off
+`site.pos` and never off `site.si`, which is a UTF-8 byte offset into
+the transcoded source and runs ahead at the first byte above 0x7F. The
+memory cost of holding bytes this way is real: the transcoded `&str` is
+up to twice the input, and the lexer additionally materialises a
+`Vec<char>` and a `Vec<usize>` over it.
+
+The second cost is the one that shapes a grammar. `match_tokens`
+callbacks are gated on the rule's expected-token column exactly as in
+TypeScript and Go, but their signature is `Fn(&str)`, so they cannot see
+the rule. A field whose length was read from an earlier field therefore
+cannot use that path; it has to be an `ImperativeLexMatcher` under
+`lex.matchers`, which does receive `&mut Rule` but is NOT column-gated,
+so the matcher gates itself on the rule that wants it. Giving the
+column-gated callback a rule-aware form would remove the split.
+
+The third is that `Token.src` is an owned `TokenText`. TypeScript can
+defer a payload to a bare `(sI, len)` span and Go can slice its source
+string without copying; here a payload token copies its bytes.
+
+`tests/binary_grammar_test.rs` is the worked example, mirroring
+`ts/test/binary-grammar.test.js` and `go/binarygrammar_test.go` over
+byte-identical input.
+
 The portable serialized contract and native imperative tier have been audited
 against the TypeScript and Go surfaces, and the audit is executable rather
 than asserted: the fixture registration gate, the token-stream differential
