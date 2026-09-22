@@ -1268,6 +1268,14 @@ pub struct Rule {
     /// than kept alive by a reference.
     pub(crate) child_pushed_i: Option<usize>,
     pub(crate) child_cell: Option<Rc<RefCell<Value>>>,
+    /// The pushed rule's record, frozen at the moment it stopped being the
+    /// current rule. Deliberately NOT a [`RuleSnapshot`] field: the parse
+    /// loop writes it on a rule that is still buried on the stack, and
+    /// `Context::sync_rule_stack` requires a buried frame's snapshot to
+    /// keep describing it. It reaches `child_rule` only when the rule is
+    /// resumed, which is the moment TypeScript's live reference would
+    /// first be read from that rule again.
+    pub(crate) child_record: Option<Rc<RuleSnapshot>>,
     /// Where this rule's prepared state sits in the parser's table, or
     /// `usize::MAX` for a rule the parser did not bind.
     ///
@@ -1506,6 +1514,7 @@ impl Rule {
             child_node_is_self: false,
             child_pushed_i: None,
             child_cell: None,
+            child_record: None,
             slot: usize::MAX,
         }
     }
@@ -1563,6 +1572,7 @@ impl Rule {
             child_node_is_self: false,
             child_pushed_i: None,
             child_cell: None,
+            child_record: None,
             slot,
         }
     }
@@ -1662,20 +1672,27 @@ impl Rule {
     pub(crate) fn note_child_push(&mut self, child: &Rule) {
         self.child_pushed_i = Some(child.i);
         self.child_cell = Some(Rc::clone(&child.node));
+        self.child_record = Some(child.snapshot());
     }
 
     /// The pushed child is about to stop being the current rule, either
-    /// because it is being replaced or because it is popping. Freeze the
-    /// cell its `node` field ended on, which is what TypeScript would go on
+    /// because it is being replaced or because it is popping. Freeze both
+    /// halves of the link: the cell its `node` field ended on, and its
+    /// record as it stands. That pair is what TypeScript would go on
     /// reading through the live `rule.child` reference.
     ///
     /// A later link of a replacement chain is a DIFFERENT rule: it does not
-    /// match `child_pushed_i` and must not overwrite the frozen cell.
+    /// match `child_pushed_i` and must not overwrite either half. Freezing
+    /// only one of them would report a `rule.child` no canonical runtime
+    /// can produce -- the pushed rule's node under the chain tail's name.
     /// Holding the cell costs a refcount and no copy-on-write: the `Value`
-    /// itself is read out only when this rule is resumed.
+    /// itself is read out only when this rule is resumed. The record is
+    /// `Rc<RuleSnapshot>`, which the replaced rule is about to stop
+    /// writing to in any case.
     pub(crate) fn freeze_child(&mut self, child: &Rule) {
         if self.child_pushed_i == Some(child.i) {
             self.child_cell = Some(Rc::clone(&child.node));
+            self.child_record = Some(child.snapshot());
         }
     }
 
@@ -1726,6 +1743,29 @@ impl Rule {
         }
     }
 
+    /// Resume this rule with the child that has just stopped running: its
+    /// node, and the `rule.child` / `rule.next` links a grammar reads from
+    /// the resumed rule.
+    ///
+    /// Both links name the rule this one PUSHED, never whichever link of a
+    /// replacement chain happened to pop. TypeScript assigns `rule.child`
+    /// and `rule.next` once, in the push arm (`ts/src/rules.ts:665`,
+    /// `:720`), and relinks neither when a descendant pops; Go does the
+    /// same (`go/rule.go:1279`, `:1342`). The chain's later links are
+    /// separate rule objects there, so the parent goes on reading the
+    /// first. Here that rule has been dropped, so [`Rule::freeze_child`]
+    /// captured it at its replace and this call leaves that capture alone.
+    pub(crate) fn accept_child(&mut self, child: &Rule) {
+        self.accept_child_node(child);
+        // `child_record` is `None` only for a rule resumed by a child it
+        // did not push. No parse-loop path reaches that today -- the one
+        // `stack.push` is the push arm, which records the child first --
+        // and falling back to the popping rule keeps the link honest
+        // rather than leaving a stale one behind.
+        self.child_rule = self.child_record.clone().or_else(|| Some(child.snapshot()));
+        self.next_rule = self.child_rule.clone();
+    }
+
     /// Let go of `child_node` while this rule sits on the parse stack, in
     /// the one case where holding it is not free.
     ///
@@ -1744,8 +1784,8 @@ impl Rule {
     /// Parking is invisible because every pop that resumes a parked rule
     /// OVERWRITES the field before anything reads that rule. There are
     /// four pops in `parser.rs`: the two close-phase pops and the
-    /// forced-close loop hand the popped rule to `accept_child_node`,
-    /// which writes both `child_node` and `child_node_is_self` outright,
+    /// forced-close loop hand the popped rule to `accept_child`, which
+    /// writes both `child_node` and `child_node_is_self` outright,
     /// and nothing touches the rule in between. The fourth, the
     /// fixed-depth recovery pop in `attempt_recover`, does not, and that
     /// pop is taken only when `recover.pop_until_valid` is off -- which

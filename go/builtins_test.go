@@ -1317,3 +1317,73 @@ func TestBuiltinCaptureSeesThePushedRuleNotItsReplacement(t *testing.T) {
 			"pushed:\n got %s\nwant %s", got, want)
 	}
 }
+
+// The node was only half of `r.Child`: a repair that carried the pushed
+// rule's node but left the NAME on the tail of the replacement chain would
+// report a link no canonical runtime can produce. `top` pushes `child`,
+// which pushes `leaf` and then replaces itself twice, and one close
+// alternate reads seven rule-graph paths at once. Byte-identical to
+// TypeScript (ts/test/builtins.test.js) and Rust
+// (../rs/tests/child_link_chain_test.rs) on this serialized grammar.
+//
+// `child.next.next` and beyond are deliberately absent: they are a live
+// Rust-only split, registered in test/spec/divergent.tsv under "Forward
+// traversal of a replacement chain in Rust".
+func TestRuleGraphLinksNameThePushedRule(t *testing.T) {
+	document := []byte(`{
+	  "options": {
+	    "rule": { "start": "top" },
+	    "fixed": { "token": { "Ta": "a", "Tb": "b", "Tx": "x",
+	                          "Tc": "c", "Td": "d", "Te": "e" } }
+	  },
+	  "rule": {
+	    "top": {
+	      "open": [ { "s": "Ta", "p": "child" } ],
+	      "close": [
+	        { "s": "Te",
+	          "c": { "child.name": "child",
+	                 "child.parent.name": "top",
+	                 "child.child.name": "leaf",
+	                 "child.child.parent.name": "child",
+	                 "child.next.name": "child2",
+	                 "next.name": "child",
+	                 "next.next.name": "child2" },
+	          "a": "@node$",
+	          "k": { "node$": { "init": true, "rule": "ALL-MATCH",
+	                            "kind": "user", "nterms": 0 } } },
+	        { "s": "Te", "a": "@node$",
+	          "k": { "node$": { "init": true, "rule": "MISMATCH",
+	                            "kind": "user", "nterms": 0 } } }
+	      ]
+	    },
+	    "child": {
+	      "open": [ { "s": "Tb", "p": "leaf" } ],
+	      "close": [ { "r": "child2" } ]
+	    },
+	    "leaf":   { "open": [ { "s": "Tx" } ], "close": [ {} ] },
+	    "child2": { "open": [ { "s": "Tc", "r": "child3" } ] },
+	    "child3": { "open": [ { "s": "Td" } ], "close": [ {} ] }
+	  }
+	}`)
+	spec, err := GrammarSpecFromJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := Make()
+	if err := tn.Grammar(spec); err != nil {
+		t.Fatal(err)
+	}
+	out, err := tn.Parse("abxcde")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"kids":[],"rule":"ALL-MATCH","src":""}`
+	if string(got) != want {
+		t.Fatalf("a rule-graph path on top's close pass disagrees with "+
+			"TypeScript:\n got %s\nwant %s", got, want)
+	}
+}

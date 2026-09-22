@@ -1147,9 +1147,7 @@ impl Parser {
 
         self.notify_forced_close(current_rule, context, &src, stack)?;
         while let Some(mut parent) = stack.pop() {
-            parent.accept_child_node(current_rule);
-            parent.child_rule = Some(current_rule.snapshot());
-            parent.next_rule = parent.child_rule.clone();
+            parent.accept_child(current_rule);
             if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
                 *current_rule = parent;
                 return Ok(true);
@@ -3094,8 +3092,9 @@ impl Parser {
                     // The rule being replaced stops existing here. If it is
                     // the one its parent PUSHED, the parent's `child` link
                     // stays on it -- TypeScript never relinks `rule.child`
-                    // (rules.ts:665) and neither does Go (rule.go:1266) --
-                    // so freeze the node cell it ended on before it goes.
+                    // (rules.ts:665) and neither does Go (rule.go:1279) --
+                    // so freeze the node cell and the record it ended on
+                    // before it goes.
                     if let Some(parent) = stack.last_mut() {
                         parent.freeze_child(&current_rule);
                     }
@@ -3168,9 +3167,7 @@ impl Parser {
                     let parent = stack.pop();
                     completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
-                        parent.accept_child_node(&current_rule);
-                        parent.child_rule = Some(current_rule.snapshot());
-                        parent.next_rule = parent.child_rule.clone();
+                        parent.accept_child(&current_rule);
                         current_rule = parent;
                     } else {
                         // Root rule popped! Done.
@@ -3264,9 +3261,7 @@ impl Parser {
                     let parent = stack.pop();
                     completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
-                        parent.accept_child_node(&current_rule);
-                        parent.child_rule = Some(current_rule.snapshot());
-                        parent.next_rule = parent.child_rule.clone();
+                        parent.accept_child(&current_rule);
                         current_rule = parent;
                     } else {
                         completed_value = Some(current_rule.node.borrow().clone());

@@ -133,6 +133,56 @@ describe('builtins', () => {
         { rule: 'top', src: 'a', kids: [{ rule: 'mid', src: 'a', kids: [] }] })
     })
 
+    it('the whole rule-graph link names the pushed rule, node and all', () => {
+      // The node was only half of `rule.child`. This pins the other half in
+      // the canonical runtime, so the Rust port has a TypeScript answer to
+      // match rather than a Rust decision to defend: `top` pushes `child`,
+      // which pushes `leaf` and then replaces itself twice, and one close
+      // alternate reads seven rule-graph paths at once. All three ports
+      // answer ALL-MATCH on this grammar (go/builtins_test.go,
+      // rs/tests/child_link_chain_test.rs).
+      //
+      // `child.next.next` and beyond are deliberately absent: they are a
+      // live Rust-only split, registered in test/spec/divergent.tsv under
+      // 'Forward traversal of a replacement chain in Rust'.
+      const j = new Tabnas({
+        rule: { start: 'top' },
+        fixed: { token: { Ta: 'a', Tb: 'b', Tx: 'x', Tc: 'c', Td: 'd', Te: 'e' } },
+      })
+      j.grammar({
+        rule: {
+          top: {
+            open: [{ s: ['Ta'], p: 'child' }],
+            close: [
+              { s: ['Te'],
+                c: {
+                  'child.name': 'child',
+                  'child.parent.name': 'top',
+                  'child.child.name': 'leaf',
+                  'child.child.parent.name': 'child',
+                  'child.next.name': 'child2',
+                  'next.name': 'child',
+                  'next.next.name': 'child2',
+                },
+                a: '@node$',
+                k: { node$: { init: true, rule: 'ALL-MATCH', kind: 'user', nterms: 0 } } },
+              { s: ['Te'], a: '@node$',
+                k: { node$: { init: true, rule: 'MISMATCH', kind: 'user', nterms: 0 } } },
+            ],
+          },
+          child: {
+            open: [{ s: ['Tb'], p: 'leaf' }],
+            close: [{ r: 'child2' }],
+          },
+          leaf: { open: [{ s: ['Tx'] }], close: [{}] },
+          child2: { open: [{ s: ['Tc'], r: 'child3' }] },
+          child3: { open: [{ s: ['Td'] }], close: [{}] },
+        },
+      })
+      assert.deepEqual(j.parse('abxcde'),
+        { rule: 'ALL-MATCH', src: '', kids: [] })
+    })
+
     it('@bubble$ lifts the child node without merging', () => {
       const j = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
       j.grammar({

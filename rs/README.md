@@ -157,8 +157,13 @@ is what those gates run. The claim is not that no difference remains. The
 ABNF arm of the compiler-consumer gate found one in September 2026, on the
 optional-prefix shape `R = [ A "@" ] A`: a parent read its child link from
 the rule that popped, which is the last link of a replacement chain, where
-TypeScript and Go both keep the link on the rule they pushed. Known remaining
-differences are listed under "Gaps against the canonical surface" below.
+TypeScript and Go both keep the link on the rule they pushed. That link is
+now the pushed rule in whole, name and node together, and one narrower split
+survives it: walking `rule.child.next.next` and beyond reaches the rest of a
+replacement chain in TypeScript and Go and reaches nothing here. It is
+registered, with a control row, as "Forward traversal of a replacement chain
+in Rust". Known remaining API differences are listed under "Gaps against the
+canonical surface" below.
 
 Rust ownership is expressed explicitly:
 grammar and next-rule views are immutable snapshots, live mutation is limited
@@ -177,8 +182,10 @@ Audited against `ts/src` (`tabnas.ts`, `parser.ts`, `lexer.ts`, `rules.ts`,
 `context.ts`, `utility.ts`) in September 2026. Parse behavior is not on this
 list: where a behavior differs it is a defect, it is repaired, and until it is
 repaired it lives in the repository's `DIVERGENCE.md` and its executable
-register. What follows is public API surface that TypeScript offers a plugin
-author and this crate does not, or offers in another shape.
+register, `test/spec/divergent.tsv`, whose `rust` column this crate's own
+suite asserts. One entry there is Rust's today, the chain walk named above.
+What follows is public API surface that TypeScript offers a plugin author and
+this crate does not, or offers in another shape.
 
 - **The shared utility bag.** TypeScript exports a `util` object and this
   crate's `tabnas::utility` carries four of its members: `deep`, `modlist`,
