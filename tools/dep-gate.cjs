@@ -487,38 +487,106 @@ function checkGoWork(file, text, config, root, seen) {
 }
 
 
+// TOML basic-string escapes. A quoted KEY may carry them, and Cargo reads the
+// decoded form: `"dependenc\u0069es"` is the dependencies table.
+const TOML_ESCAPE = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' }
+
+function tomlUnescape(s) {
+  return String(s).replace(
+    /\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|.)/g,
+    (all, esc) => {
+      const head = esc[0]
+      if ('u' === head || 'U' === head) {
+        const code = parseInt(esc.slice(1), 16)
+        return Number.isFinite(code) ? String.fromCodePoint(code) : all
+      }
+      return Object.prototype.hasOwnProperty.call(TOML_ESCAPE, esc) ? TOML_ESCAPE[esc] : all
+    })
+}
+
+
 // A TOML key path, split on the dots that are not inside a quoted segment, so
-// `patch."https://github.com/o/r"` is two segments rather than five.
+// `patch."https://github.com/o/r"` is two segments rather than five. A
+// basic-quoted segment is DECODED; a literal-quoted one takes no escapes.
 function tomlKeyPath(s) {
   const segs = []
   let cur = ''
   let quote = null
+
+  const flush = () => { segs.push(cur.trim()); cur = '' }
 
   for (const ch of String(s)) {
     if (null != quote) {
       if (ch === quote) { quote = null } else { cur += ch }
       continue
     }
-    if ('"' === ch || "'" === ch) { quote = ch; continue }
-    if ('.' === ch) { segs.push(cur.trim()); cur = ''; continue }
+    if ('"' === ch) { quote = ch; cur += '\u0000'; continue }
+    if ("'" === ch) { quote = ch; continue }
+    if ('.' === ch) { flush(); continue }
     cur += ch
   }
-  segs.push(cur.trim())
+  flush()
 
-  return segs.filter((seg) => '' !== seg)
+  return segs
+    .map((seg) => seg.startsWith('\u0000') ? tomlUnescape(seg.slice(1)) : seg)
+    .filter((seg) => '' !== seg)
 }
 
 
-// Judged as a key PATH rather than as a bracketed spelling, because Cargo
-// accepts the same dependency three ways -- `[dependencies.dep]`, a `dep` entry
-// under `[dependencies]`, and a dotted `dependencies.dep.path = "…"` with no
-// header at all -- and all three redirect what gets built. `[patch.*]` and
-// `[replace]` redirect it too, so they count as dependency tables here.
-//
-// Returns how many segments the table DESIGNATOR occupies, or -1 for a table
-// that is not a dependency table. The count is what tells a FIELD from a
-// dependency NAME: `dependencies.dep.path` names a field, while
-// `[dependencies]` + `path = "1.0"` names a crate called `path` at a version.
+// One LOGICAL assignment per entry: a comment stripped outside strings, and an
+// inline table or array continued until its brackets balance. Cargo accepts
+// `dep = {` with its fields on the lines below, so a physical-line reader sees
+// each field as its own assignment and the dependency name nowhere near it.
+function tomlLogicalLines(text) {
+  const out = []
+  let buf = ''
+  let depth = 0
+
+  for (const raw of text.split(/\r?\n/)) {
+    let line = ''
+    let quote = null
+    let open = 0
+
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i]
+      if (null != quote) {
+        line += ch
+        if ('"' === quote && '\\' === ch && i + 1 < raw.length) { line += raw[++i]; continue }
+        if (ch === quote) quote = null
+        continue
+      }
+      if ('#' === ch) break
+      if ('"' === ch || "'" === ch) { quote = ch; line += ch; continue }
+      if ('{' === ch || '[' === ch) open += 1
+      if ('}' === ch || ']' === ch) open -= 1
+      line += ch
+    }
+
+    line = line.trim()
+    if ('' === line && 0 === depth) continue
+
+    // A table header is balanced on its own line and never continues.
+    if (0 === depth && '[' === line[0]) { out.push(line); continue }
+
+    buf = '' === buf ? line : buf + ' ' + line
+    depth += open
+    if (0 < depth) continue
+
+    depth = 0
+    if ('' !== buf) out.push(buf)
+    buf = ''
+  }
+
+  if ('' !== buf) out.push(buf)
+
+  return out
+}
+
+
+// How many segments the table DESIGNATOR occupies, or -1 for a table that is
+// not a dependency table. The COUNT, not the leaf name, tells a field from a
+// dependency name: `dependencies.dep.path` is a field, while `[dependencies]`
+// plus `path = "1.0"` is a crate called `path`.
 function cargoDepDesignator(segs) {
   let i = 0
   if ('workspace' === segs[i]) i += 1
@@ -603,10 +671,7 @@ function checkCargoToml(file, text, config, root, seen) {
 
   let section = []
 
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)#.*$/, '').trim()
-    if ('' === line) continue
-
+  for (const line of tomlLogicalLines(text)) {
     if ('[' === line[0]) {
       section = tomlKeyPath(line.replace(/^\[+/, '').replace(/\]+$/, ''))
       inDeps = isCargoDepPath(section)
@@ -619,15 +684,8 @@ function checkCargoToml(file, text, config, root, seen) {
     const full = section.concat(tomlKeyPath(line.slice(0, eq)))
     const last = full[full.length - 1]
 
-    // A DOTTED key states the field itself: `dependencies.dep.path = "…"` has
-    // no dependency-table header to be inside of, which is how it escaped a
-    // check that only tracked section state.
-    //
-    // `path` and `git` are also legal dependency NAMES, so the leaf is a field
-    // only where a dependency name already sits between it and the table
-    // designator. Without that test `[dependencies]` + `path = "1.0"` -- a
-    // crate called `path` at version 1.0 -- reads as a path dependency, and a
-    // crate called `path` that carries a real one goes unread.
+    // The leaf is a FIELD only where a dependency name already sits between it
+    // and the designator; `path` and `git` are legal dependency NAMES too.
     const prefix = full.slice(0, -1)
     const designator = cargoDepDesignator(prefix)
     const leafIsField = ('path' === last || 'git' === last)
@@ -645,9 +703,8 @@ function checkCargoToml(file, text, config, root, seen) {
       // the value as an inline table.
     }
 
-    // Otherwise the field is inside the VALUE, as an inline table -- and only
-    // the value is scanned, because the KEY here is a dependency name, and a
-    // dependency may legally be called `path` or `git`.
+    // Otherwise the field is inside the VALUE: the key here is a dependency
+    // name, so scanning the whole line would read it as a field.
     if (inDeps || isCargoDepPath(full)) scanInline(line.slice(eq + 1))
   }
 
@@ -884,6 +941,8 @@ module.exports = {
   checkGoMod,
   checkGoWork,
   checkCargoToml,
+  tomlKeyPath,
+  tomlLogicalLines,
   checkGitmodules,
   checkAll,
   report,

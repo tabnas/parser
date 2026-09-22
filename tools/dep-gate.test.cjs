@@ -393,6 +393,36 @@ test('a cargo dependency is judged by path, by host, and only inside a dependenc
     'a crate named git at a version is not a git dependency')
   assert.deepEqual(cargo('patch.crates-io.path = "1.0"\n'), [],
     'a patch entry named path is not a path field')
+
+  // Cargo accepts an inline table across several lines. Read physically, each
+  // field is its own assignment with the dependency name nowhere near it, so
+  // the value-only scan never sees the `path =` key.
+  assert.deepEqual(
+    rules(cargo('[dependencies]\ndep = {\n  version = "1",\n  path = "../../outside"\n}\n')),
+    ['cargo-external-path-dep'], 'a multiline inline table hid a path')
+  assert.deepEqual(
+    rules(cargo('[dependencies]\ndep = {\n  git = "https://gitlab.com/o/r"\n}\n')),
+    ['cargo-non-github-git-dep'], 'a multiline inline table hid a git host')
+  assert.deepEqual(cargo('[dependencies]\ndep = {\n  path = "../other"\n}\n'), [],
+    'a multiline path inside the repository must pass')
+  assert.deepEqual(cargo('[dependencies]\ndep = { version = "1", features = [\n "a",\n "b",\n] }\n'),
+    [], 'an array across lines is not a dependency source')
+
+  // A quoted key segment carries TOML escapes, and Cargo reads the DECODED
+  // name, so the table is the dependencies table however it is spelled.
+  assert.deepEqual(rules(cargo('"dependenc\\u0069es".dep.path = "../../outside"\n')),
+    ['cargo-external-path-dep'], 'an escaped table name was not decoded')
+  assert.deepEqual(cargo('"dependenc\\u0069es".dep.path = "../other"\n'), [],
+    'an escaped table name inside the repository must pass')
+  assert.deepEqual(cargo('"packag\\u0065".path = "../../outside"\n'), [],
+    'an escaped non-dependency table is still not a dependency')
+
+  // A `#` inside a quoted value is part of the path, not a comment.
+  assert.deepEqual(cargo('[dependencies]\ndep = { path = "../a#b" }\n'), [],
+    'a hash inside a value truncated the path')
+  assert.deepEqual(
+    rules(cargo('[dependencies]\ndep = { path = "../../outside" } # note\n')),
+    ['cargo-external-path-dep'], 'a trailing comment hid the dependency')
 })
 
 
