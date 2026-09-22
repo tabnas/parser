@@ -425,8 +425,9 @@ runtimes:
 | [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
 
-Working on the codebase itself? Each directory has an `AGENTS.md` with
-build, test, and contribution notes; start with [`AGENTS.md`](AGENTS.md).
+Working on the codebase itself? Start with [`AGENTS.md`](AGENTS.md) for
+build, test, and contribution notes. `ts/`, `go/` and `test/` add one of
+their own for the detail specific to them.
 
 ## Legacy version
 

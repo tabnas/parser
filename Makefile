@@ -1,8 +1,11 @@
-# Build, test and publish both the TypeScript (ts/) and Go (go/)
-# implementations. ts/ is canonical; go/ tracks it.
+# Build, test and publish the TypeScript (ts/), Go (go/) and Rust (rs/)
+# implementations. ts/ is canonical; go/ and rs/ track it.
 #
-# Local build/test resolve the unpublished @tabnas siblings via the
-# repo-set go.work + node_modules symlinks (admin/scripts/link.sh).
+# These targets assume nothing about the machine beyond the toolchain each
+# one invokes: a plain checkout with no sibling @tabnas repos linked in
+# builds and tests fine. Pointing this checkout at unpublished siblings is
+# local wiring you add deliberately and must not commit -- see AGENTS.md,
+# "Never commit the local wiring".
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
         clean-ts clean-go clean-rs publish-ts publish-go tags-go reset prose \
@@ -77,9 +80,14 @@ reset:
 
 # The prose gate (see docs/STYLE-GUIDE.md). Vale over the reader-facing
 # pages, at the levels set in .vale.ini, on the same file list
-# ts/test/docs.test.js reads. Requires `vale` on PATH and one
-# `vale sync` to fetch the pinned Google package; CI does both in
-# .github/workflows/docs.yml. Warnings are advisory, errors fail.
+# ts/test/docs.test.js reads. Warnings are advisory, errors fail.
+#
+# Needs `vale` on PATH and one `vale sync` to fetch the pinned Google
+# package -- neither is present on every machine, and where vale is
+# missing this target fails rather than reporting a pass it did not earn.
+# The fast half of the same gate is ts/test/docs.test.js, which runs in
+# `make test-ts` and needs nothing but node. The workflow form of the
+# Vale half is staged, not wired: ci/workflows/docs.yml, see ci/README.md.
 prose:
 	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)
 	node ts/scripts/vale-counts.cjs

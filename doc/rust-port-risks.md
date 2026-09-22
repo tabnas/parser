@@ -1266,8 +1266,9 @@ cheaper claim than "unverifiable".
   cannot redden the other 30 repos. Fix the two stale paths first:
   `ci/workflows/gate.yml:71` points at `json/ts/test/spec`, which the
   fleet moved (the corrected path yields 125 inputs against
-  `ci/README.md:74`'s "84/84"), and `AGENTS.md:50` still names a
-  `.github/workflows/build.yml` that no longer exists.
+  `ci/README.md:74`'s "84/84"). The second stale path recorded here --
+  `AGENTS.md`'s CI section naming a `.github/workflows/build.yml` that no
+  longer exists -- has since been corrected.
 - **ADR-12** (`/workspace/admin/DECISIONS.md:207-216`) still says
   languages beyond TypeScript and Go get tabnas through C-ABI bindings,
   "not native ports". Its status is "proposed", the only ADR in the file

@@ -8,7 +8,7 @@ review them and move them to `.github/workflows/` to activate.
 pages, see `docs/STYLE-GUIDE.md`). It needs no sibling checkouts and no
 secrets; `make prose` runs the same check locally.
 
-Layout assumption (matches the existing build.yml convention): sibling
+Layout assumption (the org-wide sibling-checkout convention): sibling
 checkouts next to this repo — `<root>/parser`, `<root>/json`,
 `<root>/jsonic` (override the root with `TABNAS_ROOT`).
 
