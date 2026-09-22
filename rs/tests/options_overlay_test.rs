@@ -42,3 +42,36 @@ fn token_set_overlay_is_index_wise() {
     assert!(!parses(r##"["#SP"]"##));
     assert!(parses(r##"["#SP",null,null]"##));
 }
+
+/// A null WHOLE VALUE is a load error, not a deletion.
+///
+/// It used to remove the named set here and load cleanly, while the same
+/// JSON grammar was a fault in TypeScript and a silent no-op in Go --
+/// three answers for one document on the door that is meant to be the
+/// portable one. TypeScript defines the language (ADR-13), so all three
+/// now refuse it. A null MEMBER is untouched and still clears its
+/// position, which the test above pins.
+#[test]
+fn a_null_whole_value_is_a_load_error() {
+    for name in ["IGNORE", "KEY", "CUSTOM"] {
+        let mut parser = Tabnas::new();
+        let before = parser.options.token_set.get(name).map(|v| v.len());
+        let result = parser.grammar_json(&format!(
+            r##"{{"options":{{"tokenSet":{{"{name}":null}}}}}}"##
+        ));
+        let err = match result {
+            Ok(_) => panic!("tokenSet.{name} = null loaded"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains(&format!("options.tokenSet.{name}")) && msg.contains("must be an array"),
+            "{name}: error does not name the leaf: {msg}"
+        );
+        assert_eq!(
+            parser.options.token_set.get(name).map(|v| v.len()),
+            before,
+            "{name}: the set changed although the load failed"
+        );
+    }
+}

@@ -24,6 +24,13 @@ func TestOptionsFromMapNamesAnIllTypedLeaf(t *testing.T) {
 		{`{"options":{"comment":{"def":{"hash":{"line":"yes"}}}}}`, "options.comment.def.hash.line: expected boolean"},
 		{`{"options":{"rewind":{"history":true}}}`, "options.rewind.history"},
 		{`{"options":{"tokenSet":{"IGNORE":["#SP",7]}}}`, "options.tokenSet.IGNORE[1]: expected string"},
+		// A null WHOLE VALUE. It used to load here and leave the set
+		// untouched, while the same document was a fault in TypeScript
+		// and a deletion in Rust -- three answers for one JSON grammar.
+		// A null MEMBER is unaffected and still clears its position;
+		// the `["#SP",null,null]` case elsewhere in this file covers it.
+		{`{"options":{"tokenSet":{"KEY":null}}}`, "options.tokenSet.KEY: expected array, got null"},
+		{`{"options":{"tokenSet":{"CUSTOM":null}}}`, "options.tokenSet.CUSTOM: expected array, got null"},
 	} {
 		gs, err := GrammarSpecFromJSON([]byte(c.spec))
 		if err != nil {

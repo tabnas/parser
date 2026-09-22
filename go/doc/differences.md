@@ -1161,9 +1161,22 @@ How the value combines with the built-in set differs:
 
 | Area | TypeScript | Go |
 |---|---|---|
-| Type | `{ [name: string]: (string \| null)[] }` | `map[string][]string` |
-| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` yields `[#ST, #NR, #ST, #VL]`; shortening a set needs explicit `null` padding (`['#ST', null, null, null]`) | replacement: `{"KEY": {"#ST"}}` yields `[#ST]`. Go's `Options` carries no `tokenSet` defaults to merge against (the defaults live in the config's `KeySet`/`ValSet`/`IgnoreSet`) |
-| "Drop this entry" marker | `null` | `""` (an empty name is skipped) |
+| Type | `{ [name: string]: (string \| null \| undefined \| typeof SKIP)[] \| typeof SKIP \| undefined }` | `map[string][]string` |
+| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` keeps the tail and yields `[#ST, #NR, #ST, #VL]` | index-wise as well, since #151: `{"KEY": {"#ST"}}` yields `[#ST, #NR, #ST, #VL]`, the same shape |
+| Clear one position | `null` at that index | `""` at that index (an empty name is skipped) |
+| Empty a set, keeping the name | clear every position: `['#ST', null, null, null]` narrows to one, `[null, null, null, null]` empties it | the same: `{"#ST", "", "", ""}` narrows to one |
+| `[]` / `{}` as the whole value | **not** an empty set: an array overlays index-wise, so overlaying nothing leaves every default standing | the same |
+| Whole value "leave this name alone" | `undefined` or `SKIP`; a name with no default behind it is then dropped rather than installed empty | no spelling: Go has no sentinel here, and an absent map key is the only way to say it |
+| Whole value `null` | a load fault on every door: `options.tokenSet.KEY: expected array, got object` | a load fault on the **serialized** door, `options.tokenSet.KEY: expected array, got null`. The typed door has no such value: `map[string][]string{"KEY": nil}` is an empty slice, not a null, and installs a present, empty set |
+
+The last two rows are an API-shape difference and not a parity one: `SKIP`
+and a JSON `null` are values a document can carry and Go's typed map
+cannot, while a `nil` slice is a value Go's map can carry and a document
+cannot. The one place both runtimes read the SAME input is the serialized
+door, and there all three runtimes now answer alike: TypeScript, Go and
+Rust each refuse a null whole value. They did not before: it was a fault
+in TypeScript, a silent no-op in Go and a deletion in Rust, for one JSON
+grammar.
 
 Both runtimes late-bind token-set references in rule alternates, so an
 override applies to alternates that were declared before it. In Go the

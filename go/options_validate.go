@@ -247,6 +247,22 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 			if isFalse(entry) && t.Elem().Kind() == reflect.Ptr {
 				continue
 			}
+			// A tokenSet name takes an array, or the two spellings of
+			// "not supplied" -- an absent key, and SKIP. An explicit
+			// null is a fault, exactly as TypeScript's
+			// `options.tokenSet` validator makes it, rather than a
+			// silent way to delete a built-in set.
+			//
+			// It cannot go in validateLeaf: that function's first rule
+			// is that a nil leaf means "not supplied", which is right
+			// for every other leaf and is also what makes a `null`
+			// MEMBER legal (it clears that position). Only the whole
+			// value is refused, so the check sits here, where the map's
+			// entries are walked and the members are not.
+			if entry == nil && path == "options.tokenSet" {
+				bad(errs, path+"."+name, "array", entry)
+				continue
+			}
 			validateLeaf(t.Elem(), entry, path+"."+name, errs)
 		}
 	case reflect.Struct:
@@ -265,6 +281,10 @@ func bad(errs *[]string, path, want string, val any) {
 		got = "a function reference, which is only allowed in a declared code slot"
 	} else {
 		switch val.(type) {
+		case nil:
+			// Otherwise "%T" of a nil interface prints "<nil>", which
+			// names Go's spelling rather than the document's.
+			got = "null"
 		case map[string]any:
 			got = "object"
 		case []any:

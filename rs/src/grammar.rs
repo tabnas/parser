@@ -2045,10 +2045,13 @@ fn apply_options(
     }
     if let Some(token_sets) = map.get("tokenSet").or_else(|| map.get("token_set")) {
         for (name, members) in object(token_sets, "options.tokenSet")? {
-            if members.is_null() {
-                options.token_set.remove(name.trim_start_matches('#'));
-                continue;
-            }
+            // A null whole value falls through to the array check below
+            // and is a load error, as it is in TypeScript and Go. It
+            // used to REMOVE the named set here, which made the same
+            // JSON document mean three different things: a fault in
+            // TypeScript, a silent no-op in Go, and a deletion here.
+            // Only a null MEMBER has a meaning, and it clears that
+            // position -- see the index-wise merge below.
             let members = members.as_array().ok_or_else(|| {
                 GrammarError(format!("Grammar: options.tokenSet.{name} must be an array"))
             })?;
