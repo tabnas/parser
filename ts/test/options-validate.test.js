@@ -274,3 +274,42 @@ describe('options-validate SKIP', () => {
     )
   })
 })
+
+describe('options-validate absent token sets', () => {
+  const { SKIP } = require('..')
+
+  // A caller-defined name with no default has nothing to leave alone, so
+  // it must be dropped rather than carried through as a set with no
+  // members. `deep()` assigns `base[k] = deep(base[k], over[k])`
+  // unconditionally, so it leaves an own property holding the absent
+  // value, and `configure()` then called `.filter()` on it. All three
+  // spellings of "leave this alone" reached that: `null` and `undefined`
+  // always did, and SKIP joined them when the validator learned to accept
+  // it. Each died with a raw TypeError rather than a load fault or a
+  // quiet no-op.
+  it('ignores a token set whose members are absent', () => {
+    for (const members of [null, undefined, SKIP]) {
+      const label = 'CUSTOM = ' + String(members)
+      assert.doesNotThrow(() => new Tabnas({ tokenSet: { CUSTOM: members } }), label)
+      const parser = new Tabnas({ tokenSet: { CUSTOM: members } })
+      assert.equal(
+        'CUSTOM' in parser.internal().config.tokenSet,
+        false,
+        label + ': the name reached the config',
+      )
+    }
+  })
+
+  it('leaves a name that DOES have a default alone', () => {
+    // The other half of the same rule: SKIP over a set that exists is a
+    // no-op, not a deletion.
+    const base = new Tabnas({}).internal().config.tokenSet.KEY.length
+    assert.equal(new Tabnas({ tokenSet: { KEY: SKIP } }).internal().config.tokenSet.KEY.length, base)
+    // ...and a real list still replaces it.
+    assert.equal(
+      new Tabnas({ tokenSet: { KEY: ['#ST', null, null, null] } })
+        .internal().config.tokenSet.KEY.length,
+      1,
+    )
+  })
+})

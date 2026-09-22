@@ -212,15 +212,29 @@ function configure(
     ((matcher.tin$ = +tin), matcher),
   ])
 
-  // Convert tokenSet tokens names to tins
+  // Convert tokenSet tokens names to tins.
+  //
+  // A name whose members are absent is dropped rather than carried through
+  // as a set with no members. `null`, `undefined` and the SKIP sentinel all
+  // mean "leave this name as it was", and for a name with no base there is
+  // nothing to leave, so it must not reach the tin mapping at all. Without
+  // the guard `deep()` leaves an own property holding the absent value --
+  // it assigns `base[k] = deep(base[k], over[k])` unconditionally -- and
+  // this reduce then called `.filter()` on it, so a caller-defined name
+  // with no default (`{tokenSet: {CUSTOM: null}}`) died with a raw
+  // TypeError instead of being ignored.
   const tokenSet = opts.tokenSet
     ? Object.keys(opts.tokenSet).reduce(
-      (a: any, n: string) => (
-        (a[n] = (opts.tokenSet as any)[n]
+      (a: any, n: string) => {
+        const members = (opts.tokenSet as any)[n]
+        if (null == members || SKIP === members) {
+          return a
+        }
+        a[n] = members
           .filter((x: any) => null != x)
-          .map((n: string) => t(n))),
-        a
-      ),
+          .map((n: string) => t(n))
+        return a
+      },
       {},
     )
     : {}
