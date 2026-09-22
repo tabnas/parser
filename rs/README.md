@@ -183,7 +183,7 @@ Audited against `ts/src` (`tabnas.ts`, `parser.ts`, `lexer.ts`, `rules.ts`,
 list: where a behavior differs it is a defect, it is repaired, and until it is
 repaired it lives in the repository's `DIVERGENCE.md` and its executable
 register, `test/spec/divergent.tsv`, whose `rust` column this crate's own
-suite asserts. One entry there is Rust's today, the chain walk named above.
+suite asserts. One entry there is Rust's alone today, the chain walk named above.
 What follows is public API surface that TypeScript offers a plugin author and
 this crate does not, or offers in another shape.
 
