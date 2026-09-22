@@ -147,7 +147,11 @@ impl<'a> Lexer<'a> {
     /// site below passes `esc_point.site.pos - 1`, which additionally
     /// needs `1 <= pos`; that holds because `esc_point` is captured
     /// after the escape character has been consumed. These three are
-    /// the preconditions proved in `rs/verus/lexer_span.rs`.
+    /// the preconditions `rs/verus/lexer_span.rs` ASSUMES: it proves the
+    /// span arithmetic is in bounds given them, and does not model the
+    /// call sites, so nothing machine-checks that they hold here. A
+    /// refactor that captured the point before the advance would still
+    /// pass `rs/verus/run.sh`.
     fn source_span(&self, start: usize, end: usize) -> String {
         self.chars[start..end.min(self.char_len)].iter().collect()
     }

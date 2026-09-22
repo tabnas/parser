@@ -16,14 +16,25 @@ const ChildProcess = require('node:child_process')
 const Path = require('node:path')
 
 const PARSER_ROOT = Path.resolve(__dirname, '..', '..')
-const MANIFEST = Path.join(PARSER_ROOT, 'rs', 'Cargo.toml')
+const CRATE = Path.join(PARSER_ROOT, 'rs')
+const MANIFEST = Path.join(CRATE, 'Cargo.toml')
 
 function targetDir() {
+  // Asked from rs/, not from wherever the caller happens to stand.
+  // `--manifest-path` does not set the directory cargo resolves from, and
+  // two things depend on that directory rather than on the manifest: a
+  // relative `CARGO_TARGET_DIR` is taken relative to it, and cargo's config
+  // search starts there, so an `rs/.cargo/config.toml` is invisible from the
+  // repository root. `ci/rust/run.sh` builds from rs/ (it cds there) and
+  // then runs these gates from the root, so asking from the root answers
+  // for a different build: with `CARGO_TARGET_DIR=cache` the binaries are
+  // written to rs/cache/debug and this reported <root>/cache/debug, which
+  // is the missing-runner-after-a-successful-build failure all over again.
   const out = ChildProcess.execFileSync(
     'cargo',
     ['metadata', '--format-version', '1', '--no-deps',
       '--manifest-path', MANIFEST],
-    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    { cwd: CRATE, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
   const meta = JSON.parse(out)
   if (!meta.target_directory) {

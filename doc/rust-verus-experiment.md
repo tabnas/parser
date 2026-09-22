@@ -86,8 +86,17 @@ proved, and it cannot be, which is covered in section 3.
 `Lexer::source_span` is `self.chars[start..end.min(self.char_len)]`. It
 clips the end and does nothing to the start, so the indexing is in bounds
 only if the caller supplies `start <= end` and `start <= char_len`.
-Neither is written down anywhere in the shipped code. Stated as a
-`requires`, both are discharged at all five call sites.
+Neither is written down anywhere in the shipped code. Both are stated as
+a `requires`, and the model proves the span arithmetic is in bounds
+*given* them.
+
+They are assumed, not discharged. The model has no callers: none of the
+five real call sites is modelled, and nothing derives `start <= end` or
+`start <= char_len` from `advance()` or from where `esc_point` is
+captured. So `rs/verus/run.sh` stays green whatever those call sites do.
+Reading the `requires` as a proof obligation the shipped code meets is
+reading more than is there; it is the obligation written down, which is
+what the shipped code was missing.
 
 Four of those call sites pass `esc_point.site.pos - 1`, an unchecked
 subtraction on a `usize`. Verus rejects it outright without `1 <= pos`:

@@ -1256,7 +1256,23 @@ pub struct Rule {
     pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
-    /// `i` of the rule this one PUSHED, and the node cell that rule's
+    /// This rule's identity, as the engine tracks it. Assigned from the
+    /// same counter as `i` and never touched again.
+    ///
+    /// Deliberately NOT `i`, and deliberately not a [`RuleSnapshot`]
+    /// field: `i` is `pub`, and `Rule` derefs mutably to its snapshot, so
+    /// an imperative action or a subscriber can write it. Matching the
+    /// pushed child on a field a callback can change means a grammar that
+    /// renumbers a rule silently stops the freeze below from firing, and
+    /// the parent then reads the node cell the child had at the PUSH.
+    /// That is not a stale-looking value, it is the wrong one: `@node$`,
+    /// `@value$`, `@object$`, `@fold$` and `@bubble$` all REPLACE
+    /// `rule.node` with a fresh cell rather than writing through it
+    /// (`rs/src/builtins.rs`), so the push-time cell holds the value from
+    /// before the child did its work. `uid` is crate-private and absent
+    /// from the snapshot, so no callback can reach it.
+    pub(crate) uid: usize,
+    /// `uid` of the rule this one PUSHED, and the node cell that rule's
     /// `node` field ended on.
     ///
     /// TypeScript links `rule.child` at the push (`ts/src/rules.ts:665`)
@@ -1266,7 +1282,7 @@ pub struct Rule {
     /// doc comment in `ts/src/builtins.ts`). These two fields are how the
     /// same link survives here, where the replaced rule is dropped rather
     /// than kept alive by a reference.
-    pub(crate) child_pushed_i: Option<usize>,
+    pub(crate) child_pushed_uid: Option<usize>,
     pub(crate) child_cell: Option<Rc<RefCell<Value>>>,
     /// The pushed rule's record, frozen at the moment it stopped being the
     /// current rule. Deliberately NOT a [`RuleSnapshot`] field: the parse
@@ -1512,7 +1528,8 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
-            child_pushed_i: None,
+            uid: 0,
+            child_pushed_uid: None,
             child_cell: None,
             child_record: None,
             slot: usize::MAX,
@@ -1570,7 +1587,8 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
-            child_pushed_i: None,
+            uid: 0,
+            child_pushed_uid: None,
             child_cell: None,
             child_record: None,
             slot,
@@ -1670,7 +1688,7 @@ impl Rule {
     /// Remember which rule this one pushed, and where its node cell was at
     /// the push. Called by the parse loop's push arm.
     pub(crate) fn note_child_push(&mut self, child: &Rule) {
-        self.child_pushed_i = Some(child.i);
+        self.child_pushed_uid = Some(child.uid);
         self.child_cell = Some(Rc::clone(&child.node));
         self.child_record = Some(child.snapshot());
     }
@@ -1682,7 +1700,7 @@ impl Rule {
     /// reading through the live `rule.child` reference.
     ///
     /// A later link of a replacement chain is a DIFFERENT rule: it does not
-    /// match `child_pushed_i` and must not overwrite either half. Freezing
+    /// match `child_pushed_uid` and must not overwrite either half. Freezing
     /// only one of them would report a `rule.child` no canonical runtime
     /// can produce -- the pushed rule's node under the chain tail's name.
     /// Holding the cell costs a refcount and no copy-on-write: the `Value`
@@ -1690,7 +1708,7 @@ impl Rule {
     /// `Rc<RuleSnapshot>`, which the replaced rule is about to stop
     /// writing to in any case.
     pub(crate) fn freeze_child(&mut self, child: &Rule) {
-        if self.child_pushed_i == Some(child.i) {
+        if self.child_pushed_uid == Some(child.uid) {
             self.child_cell = Some(Rc::clone(&child.node));
             self.child_record = Some(child.snapshot());
         }
@@ -1812,5 +1830,74 @@ impl Rule {
 impl fmt::Display for Rule {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "[Rule {}~{}]", self.name, self.i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The parent's child link must survive a grammar renumbering its child.
+    ///
+    /// `i` is `pub` and `Rule` derefs mutably to its snapshot, so an
+    /// imperative action or a subscriber can write it. If the freeze is
+    /// gated on `i`, a renumbered child stops matching, the freeze silently
+    /// does nothing, and the parent keeps the cell the child had at the
+    /// PUSH. That is not a slightly stale answer: `@node$` and `@value$`
+    /// REPLACE `rule.node` with a fresh cell rather than writing through it
+    /// (`rs/src/builtins.rs`), so the push-time cell holds the value from
+    /// before the child did any work at all. Keying the match on the
+    /// crate-private `uid` is what makes this pass -- comparing `child.i`
+    /// here instead fails it with the push-time `Undefined`.
+    #[test]
+    fn freeze_child_still_matches_a_child_that_renumbered_itself() {
+        let mut parent = Rule::new("parent", Value::Undefined);
+        let mut child = Rule::new("child", Value::Undefined);
+
+        // What the parse loop does at the push: same number into both, one
+        // of which the grammar owns and one of which it cannot reach.
+        child.i = 7;
+        child.uid = 7;
+        parent.note_child_push(&child);
+
+        // The child runs: a builtin swaps its node cell for a fresh one...
+        child.node = Rc::new(RefCell::new(Value::String("done".into())));
+        // ...and a grammar action rewrites the number it is entitled to.
+        child.i = usize::MAX;
+
+        parent.freeze_child(&child);
+
+        let frozen = parent.child_cell.as_ref().expect("a frozen child cell");
+        assert_eq!(
+            *frozen.borrow(),
+            Value::String("done".into()),
+            "the freeze missed a renumbered child and kept the push-time cell"
+        );
+    }
+
+    /// The other half of the same guard: a DIFFERENT rule must still not
+    /// overwrite the link. A replacement chain's later links are separate
+    /// rules, and freezing on one of them would report a `rule.child` no
+    /// canonical runtime can produce.
+    #[test]
+    fn freeze_child_ignores_a_rule_the_parent_did_not_push() {
+        let mut parent = Rule::new("parent", Value::Undefined);
+        let mut pushed = Rule::new("pushed", Value::Undefined);
+        pushed.i = 7;
+        pushed.uid = 7;
+        parent.note_child_push(&pushed);
+
+        let mut other = Rule::new("other", Value::Undefined);
+        other.i = 8;
+        other.uid = 8;
+        other.node = Rc::new(RefCell::new(Value::String("not mine".into())));
+        parent.freeze_child(&other);
+
+        let frozen = parent.child_cell.as_ref().expect("a frozen child cell");
+        assert_eq!(
+            *frozen.borrow(),
+            Value::Undefined,
+            "a rule the parent never pushed overwrote the child link"
+        );
     }
 }
