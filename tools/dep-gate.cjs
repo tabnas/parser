@@ -514,17 +514,33 @@ function tomlKeyPath(s) {
 // under `[dependencies]`, and a dotted `dependencies.dep.path = "…"` with no
 // header at all -- and all three redirect what gets built. `[patch.*]` and
 // `[replace]` redirect it too, so they count as dependency tables here.
-function isCargoDepPath(segs) {
+//
+// Returns how many segments the table DESIGNATOR occupies, or -1 for a table
+// that is not a dependency table. The count is what tells a FIELD from a
+// dependency NAME: `dependencies.dep.path` names a field, while
+// `[dependencies]` + `path = "1.0"` names a crate called `path` at a version.
+function cargoDepDesignator(segs) {
   let i = 0
   if ('workspace' === segs[i]) i += 1
   if ('target' === segs[i]) i += 2
 
   const head = segs[i]
-  if ('patch' === head || 'replace' === head) return true
 
-  return 'dependencies' === head
+  // A patch table is keyed by REGISTRY first, so its designator takes one more
+  // segment than the others before any dependency name appears.
+  if ('patch' === head) return i + 2
+  if ('replace' === head) return i + 1
+
+  if ('dependencies' === head
     || 'dev-dependencies' === head
-    || 'build-dependencies' === head
+    || 'build-dependencies' === head) return i + 1
+
+  return -1
+}
+
+
+function isCargoDepPath(segs) {
+  return -1 !== cargoDepDesignator(segs)
 }
 
 
@@ -606,17 +622,33 @@ function checkCargoToml(file, text, config, root, seen) {
     // A DOTTED key states the field itself: `dependencies.dep.path = "…"` has
     // no dependency-table header to be inside of, which is how it escaped a
     // check that only tracked section state.
-    if ('path' === last || 'git' === last) {
-      if (isCargoDepPath(full.slice(0, -1))) {
-        const value = line.slice(eq + 1).trim()
-        if ('path' === last) judgePath(str(value), last + ' = ' + value)
-        else judgeGit(str(value), last + ' = ' + value)
+    //
+    // `path` and `git` are also legal dependency NAMES, so the leaf is a field
+    // only where a dependency name already sits between it and the table
+    // designator. Without that test `[dependencies]` + `path = "1.0"` -- a
+    // crate called `path` at version 1.0 -- reads as a path dependency, and a
+    // crate called `path` that carries a real one goes unread.
+    const prefix = full.slice(0, -1)
+    const designator = cargoDepDesignator(prefix)
+    const leafIsField = ('path' === last || 'git' === last)
+      && -1 !== designator && prefix.length > designator
+
+    if (leafIsField) {
+      const value = line.slice(eq + 1).trim()
+      const parsed = str(value)
+      if (null != parsed) {
+        if ('path' === last) judgePath(parsed, last + ' = ' + value)
+        else judgeGit(parsed, last + ' = ' + value)
+        continue
       }
-      continue
+      // Not a string, so not the field it looked like; fall through and read
+      // the value as an inline table.
     }
 
-    // Otherwise the field is inside the VALUE, as an inline table.
-    if (inDeps || isCargoDepPath(full)) scanInline(line)
+    // Otherwise the field is inside the VALUE, as an inline table -- and only
+    // the value is scanned, because the KEY here is a dependency name, and a
+    // dependency may legally be called `path` or `git`.
+    if (inDeps || isCargoDepPath(full)) scanInline(line.slice(eq + 1))
   }
 
   return findings

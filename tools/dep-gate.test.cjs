@@ -373,6 +373,26 @@ test('a cargo dependency is judged by path, by host, and only inside a dependenc
   // One report, not two: the dotted branch handles the line and stops.
   assert.equal(cargo('dependencies.dep.path = "../../sibling"\n').length, 1,
     'the dotted key was judged twice')
+
+  // `path` and `git` are legal dependency NAMES, so the leaf is a field only
+  // where a dependency name sits between it and the table designator. Both
+  // directions matter: the name must not read as a field, and a crate with
+  // that name must still have its own fields read.
+  assert.deepEqual(rules(cargo('[dependencies]\npath = { package = "o", path = "../../outside" }\n')),
+    ['cargo-external-path-dep'], 'a dependency named path hid a real path')
+  assert.deepEqual(rules(cargo('[dependencies]\ngit = { package = "x", git = "https://gitlab.com/o/r" }\n')),
+    ['cargo-non-github-git-dep'], 'a dependency named git hid a foreign host')
+  assert.deepEqual(rules(cargo('dependencies.path.path = "../../outside"\n')),
+    ['cargo-external-path-dep'], 'a crate named path with a path field was not read')
+
+  assert.deepEqual(cargo('[dependencies]\npath = "1.0"\n'), [],
+    'a crate named path at a version is not a path dependency')
+  assert.deepEqual(cargo('[dependencies]\npath = "/1.0"\n'), [],
+    'a version that looks absolute is still a version')
+  assert.deepEqual(cargo('[dependencies]\ngit = "1.0"\n'), [],
+    'a crate named git at a version is not a git dependency')
+  assert.deepEqual(cargo('patch.crates-io.path = "1.0"\n'), [],
+    'a patch entry named path is not a path field')
 })
 
 
