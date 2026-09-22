@@ -859,6 +859,32 @@ carries the defaults those overlays merge onto (the three token sets,
 the three comment definitions, the three value keywords), exactly as
 `tn.options` carries them in TS. `Options()` reports them.
 
+Inside a definition the merge is field by field, and it keeps the base
+wherever the overlay's field is the ZERO value. That is right where zero
+means "not supplied" and wrong for a field with three states, so every
+such field on `CommentDef` is a `*bool` -- `Line` as well as `Lex` and
+`EatLine` -- and `Bool` is how a caller writes one:
+
+| spelling | `hash` becomes |
+|---|---|
+| `{Line: Bool(false), Start: "#", End: "@@"}` | a block comment `# ... @@` |
+| `{End: "@@"}` | still a line comment `#`, with an end marker it never reaches |
+| `{Start: "%%"}` under a NEW name | a block comment: unset `Line` is `false`, as an absent `line` is in TS |
+
+TypeScript needs no equivalent, because a property a caller omits is
+absent from the object and a property set to `false` is present with that
+value. Measured on built instances, the merged `hash` definition:
+
+```
+TS  default                             {line:true,  start:"#",             lex:true, eatline:false}
+TS  {line:false, start:'#', end:'@@'}   {line:false, start:"#", end:"@@", lex:true, eatline:false}
+TS  {end:'@@'}                          {line:true,  start:"#", end:"@@", lex:true, eatline:false}
+```
+
+The third row is the one that decides the design: TS falls back for
+fields the caller omits, so merging a supplied definition as a whole
+record would zero four fields TS demonstrably keeps.
+
 Go cannot spell TS's `undefined` inside a typed slice, so there is no
 "keep this index" element: **an empty name in a `TokenSet` slice is the
 removed position**, which is what TS's `null` does, and a serialized

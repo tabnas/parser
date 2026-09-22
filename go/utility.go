@@ -1122,7 +1122,7 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 				}
 				cd := &CommentDef{}
 				if line, ok := dm["line"].(bool); ok {
-					cd.Line = line
+					cd.Line = &line
 				}
 				if start, ok := dm["start"].(string); ok {
 					cd.Start = start

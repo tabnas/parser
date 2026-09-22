@@ -207,7 +207,18 @@ type NumberOptions struct {
 
 // CommentDef defines a single comment type.
 type CommentDef struct {
-	Line    bool   // true = line comment, false = block comment.
+	// Line is a POINTER, like Lex and EatLine below and for the same
+	// reason: the options overlay merges field by field and keeps the
+	// base wherever the overlay's field is zero, so a plain `bool`
+	// cannot say `false`. It was one, and an explicit `Line: false`
+	// was dropped -- a caller could not redefine a default line comment
+	// as a block comment, and the def that reached the lexer was a
+	// record no caller wrote: a line comment carrying a block
+	// terminator. Use Bool(false) to say it.
+	//
+	// nil means "not supplied", which is a BLOCK comment for a name
+	// with no default behind it, as it is in the canonical runtime.
+	Line    *bool  // true = line comment, false/nil = block comment.
 	Start   string // Start marker, e.g. "#", "//", "/*".
 	End     string // End marker for block comments, e.g. "*/".
 	Lex     *bool  // Enable this comment type. Default: true.
@@ -542,9 +553,9 @@ func DefaultOptions() Options {
 			"KEY":    {"#TX", "#NR", "#ST", "#VL"},
 		},
 		Comment: &CommentOptions{Def: map[string]*CommentDef{
-			"hash":  {Line: true, Start: "#"},
-			"slash": {Line: true, Start: "//"},
-			"multi": {Line: false, Start: "/*", End: "*/"},
+			"hash":  {Line: Bool(true), Start: "#"},
+			"slash": {Line: Bool(true), Start: "//"},
+			"multi": {Line: Bool(false), Start: "/*", End: "*/"},
 		}},
 		Value: &ValueOptions{Def: map[string]*ValueDef{
 			"true":  {Val: true},
@@ -815,6 +826,19 @@ func boolPtr(b bool) *bool {
 }
 
 // boolVal returns the value of a *bool, or the default if nil.
+// Bool returns a pointer to b, for the option fields that are *bool.
+//
+// Those fields are pointers so that an explicit `false` survives the
+// options overlay, which keeps the base wherever an overlay field is
+// zero. Writing `&b` needs a variable; this does not.
+//
+//	Make(Options{Comment: &CommentOptions{Def: map[string]*CommentDef{
+//		"hash": {Line: Bool(false), Start: "#", End: "@@"},
+//	}}})
+func Bool(b bool) *bool {
+	return &b
+}
+
 func boolVal(p *bool, def bool) bool {
 	if p != nil {
 		return *p
@@ -964,7 +988,7 @@ func buildConfig(o *Options) *LexConfig {
 			}
 			eatLine := boolVal(def.EatLine, false)
 			suffixStrs, suffixFn := normalizeCommentSuffix(def.Suffix)
-			if def.Line {
+			if boolVal(def.Line, false) {
 				cfg.CommentLine = append(cfg.CommentLine, def.Start)
 				if eatLine {
 					cfg.CommentLineEatLine[def.Start] = true
