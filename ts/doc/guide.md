@@ -164,3 +164,115 @@ tn.parse(src)
 
 See [`sub()`](api.md#tnsub-lex-rule-ruledone-) and, for plugin-side logging,
 [subscribing to events](plugins.md#subscribing-to-events).
+
+## Parse a binary format
+
+The engine is byte-agnostic. A JavaScript string is an array of 16-bit
+code units, and latin1 maps bytes 0 to 255 onto code units 0 to 255 one
+for one, so `buf.toString('latin1')` hands the lexer the bytes unchanged.
+`Point.sI`, `Token.sI` and `Token.len` are then byte offsets.
+
+Register field matchers under `match.token`, not under `lex.match`. Only
+`match.token` matchers are gated on the rule's expected-token column, and
+that gating is what makes a binary format parsable at all: the bytes do
+not say what they are, so the grammar has to. A matcher is handed the
+live rule, so a field whose length came from an earlier field reads that
+length off `rule.k`.
+
+```js
+const { Tabnas } = require('@tabnas/parser')
+
+// `[u8 length][that many bytes]`, repeated to end of input.
+function blobs(tn) {
+  tn.options({
+    rule: { start: 'blobs', exclude: 'tabnas,imp' },
+
+    // Nothing in a binary stream is ignorable.
+    tokenSet: { IGNORE: [null, null, null] },
+
+    // Switch the text-oriented built-ins off, and drop them from the
+    // matcher pipeline: `lex: false` alone leaves each one installed and
+    // called once per token only to decline.
+    fixed: { lex: false }, space: { lex: false }, line: { lex: false },
+    text: { lex: false }, number: { lex: false }, comment: { lex: false },
+    string: { lex: false }, value: { lex: false },
+    lex: { match: { fixed: null, space: null, line: null, string: null,
+                    comment: null, number: null, text: null } },
+
+    match: { lex: true, token: {
+      '#LEN': (lex) => {
+        const pnt = lex.pnt
+        if (pnt.len <= pnt.sI) return undefined
+        const tkn = lex.token('#LEN', lex.src.charCodeAt(pnt.sI), undefined,
+                              pnt, undefined, undefined, 1)
+        pnt.sI += 1
+        return tkn
+      },
+
+      // Length from the RULE, not from the bytes. No `val` and no `src`:
+      // the token is a bare (sI, len) span, so nothing is copied until
+      // something reads it.
+      '#BODY': (lex, rule) => {
+        const n = rule.rawk()?.len
+        if (null == n) return undefined
+        const pnt = lex.pnt
+        if (pnt.len < pnt.sI + n) return undefined
+        const tkn = lex.token('#BODY', undefined, undefined, pnt,
+                              undefined, undefined, n)
+        pnt.sI += n
+        return tkn
+      },
+    } },
+  })
+
+  const { LEN, BODY, ZZ } = tn.token
+
+  tn.rule('blobs', (rs) => rs
+    .bo((r) => (r.node = (r.prev && r.prev.node) || []))
+    .open([
+      { s: [ZZ] },
+      { s: [LEN], a: (r) => (r.k.len = r.o[0].val), p: 'body' },
+    ])
+    .close([{ s: [ZZ] }, { s: [LEN], b: 1, r: 'blobs' }])
+    .bc((r) => {
+      if (r.child && null != r.child.node) r.node.push(r.child.node)
+    }))
+
+  tn.rule('body', (rs) =>
+    rs.open([{ s: [BODY], a: (r) => (r.node = r.o[0].src) }]))
+}
+
+const tn = new Tabnas({ plugins: [blobs] })
+const bytes = Buffer.from([3, 0x61, 0x62, 0x63, 2, 0x64, 0x65])
+tn.parse(bytes.toString('latin1'))    // => ['abc', 'de']
+```
+
+Column gating changes how the alternates are written:
+
+- An alternate that leads to a fetch has to name the token it expects.
+  `{ p: 'body' }` names nothing, so the column admits no matcher and the
+  fetch yields `#BD`. `{ s: [LEN], b: 1, p: 'body' }` matches the byte,
+  pushes it back, and hands it to the child.
+- Declaration order under `match.token` fixes token order, which is the
+  tie-break inside a column. Declare a narrow matcher (a two-byte
+  sentinel) before a wide one (a catch-all byte).
+- Put a length in `k`, not in `u`. Only `k` and `n` reach child rules.
+
+The same shape covers the other field kinds. A self-terminating field (a
+LEB128 varint) loops on its own continuation bit. A termination marker is
+`src.indexOf('\u0000', pnt.sI)`, with the token's `len` covering the
+terminator and its `val` not. A sub-byte field keeps a bit offset on
+`ctx.u` and advances `pnt.sI` only over the bytes it fully crossed,
+because the engine's cursor counts bytes and has no bit position of its
+own.
+
+For byte-oriented diagnostics, override the message template: the token
+fields are in scope, so `error: { unexpected: 'bad field at byte {sI}' }`
+reports an offset instead of a row and column. The source excerpt under
+the message is still rendered as text lines, which is of no use for
+binary input; the structured diagnostic (`JSON.stringify(err)`) carries
+`pos`, `expected` and `ruleStack` instead.
+
+A worked example covering every field kind, with the Go and Rust mirrors,
+is [`test/binary-grammar.test.js`](../test/binary-grammar.test.js). The
+cost model is in [Concepts](concepts.md#binary-input).

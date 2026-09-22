@@ -309,6 +309,11 @@ scan-spec primitives exposed via `Tabnas.util` (`scan`,
 [utility reference](api.md#tabnasutil-static) and the matchers in
 `src/lexer.ts`.
 
+A matcher under `match.token` is also handed the live rule, and runs
+only where the rule's expected-token column names its token. That is
+what a format whose bytes do not announce their own token kind needs;
+see [Parse a binary format](guide.md#parse-a-binary-format).
+
 ## Subscribing to Events
 
 A plugin can observe the parse without modifying it:

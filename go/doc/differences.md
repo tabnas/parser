@@ -622,6 +622,34 @@ The remaining difference is delivery: TypeScript throws `TabnasError` as an
 exception; Go returns `*TabnasError` as an `error` value and never panics
 (see "Error Delivery and the No-Panic Guarantee" below).
 
+### Error template placeholders
+
+The `{key}` vocabulary the two runtimes accept is NOT the same, because
+the reference bag each builds for `strinject` is built differently.
+Go's `errInjectRef` (`tabnas.go`) carries a fixed set plus the grammar's
+own `use` keys; TypeScript spreads the failing token, the rule, the
+context, the config and the options into the bag, so every field of each
+is addressable.
+
+| placeholder | TypeScript | Go |
+|---|---|---|
+| `{code}`, `{src}`, `{details}` | yes | yes |
+| `{row}`, `{col}` | yes | yes |
+| `{pos}` (source offset) | no | yes |
+| `{sI}`, `{rI}`, `{cI}`, `{len}`, `{name}` (token fields) | yes | no |
+| a key the grammar put in `token.use` | yes | yes |
+
+An unresolved placeholder is left in the message verbatim rather than
+raising, so this shows up as literal `{sI}` text rather than as an
+error. The case that meets it in practice is a byte-oriented template
+for a binary grammar, which is `{sI}` in TypeScript and `{pos}` in Go
+(see "Parse a binary format" in each runtime's guide).
+
+This is a difference in message TEXT, which
+[`DIVERGENCE.md`](../../DIVERGENCE.md) records as explicitly not in
+parity: only the error `code` is contractual. Aligning the two bags
+would be an improvement, not a bug fix.
+
 ### `Lex.Next` returns the raw stream: Aligned (was a Go difference)
 
 `Lex.Next` returns every token the matchers produce, IGNORE tokens
@@ -651,6 +679,32 @@ union across fields:
 
 Full custom matchers (with lexer ordering control) are available in both via
 `lex.match` / `Options.Lex.Match`.
+
+### The matcher pipeline is a list in TS and fixed in Go
+
+TypeScript keeps the active matchers in `cfg.lex.match`, an ordered list
+built from the `lex.match` registry, so setting a built-in's entry to
+`null` removes it from the pipeline entirely:
+
+```js
+lex: { match: { fixed: null, space: null, line: null, string: null,
+                comment: null, number: null, text: null } }
+```
+
+Go has no equivalent. `Lex.Next` calls the built-ins in a hard-coded
+order, interleaving custom matchers by priority band, and a `nil`
+`MatchSpec` is skipped rather than removing anything. Switching a
+built-in off with `Lex: &false` is the whole of what Go offers.
+
+The two end up close in cost for opposite reasons. A disabled built-in
+in Go is a boolean test inside one function; in TypeScript it is a call
+into `guardedMatcher` that returns immediately, which is why removing it
+from the list is worth doing there and impossible here. Measured on a
+binary grammar reading 116,508 length-prefixed frames, the TypeScript
+removal was about 1.3 times faster than disabling alone.
+
+Go also has no first-char dispatch table (TS `cfg.lex.dispatch`), so
+every eligible matcher is consulted at every position.
 
 ### Matcher `check` Hooks
 
