@@ -259,8 +259,20 @@ type LexConfig struct {
 	FinishRule bool   // Auto-close unclosed structures at EOF
 	RuleStart  string // Starting rule name. Default: "val".
 
-	// EnderChars lists additional characters that end text and number tokens.
+	// EnderChars lists additional single-character enders: a character that
+	// ends a text or number token wherever it occurs.
 	EnderChars map[rune]bool
+
+	// EnderSeqs lists additional MULTI-character enders. An `options.ender`
+	// ARRAY entry is one ender, so an entry longer than a single character
+	// is a SEQUENCE: a text or number token ends where the whole sequence
+	// starts, not at its first character alone. Canonical TypeScript reads
+	// the array that way (each entry is one regex alternative), and a
+	// sequence is not expressible as a member of EnderChars, so it is held
+	// here instead. Keeping the two apart is what leaves the
+	// single-character case -- the only one any published grammar uses --
+	// a map lookup on a byte the dispatch table already flagged.
+	EnderSeqs []string
 
 	// Per-instance fixed token map (cloned from global FixedTokens).
 	// Plugins can add custom fixed tokens here. Supports multi-char keys.
@@ -547,6 +559,23 @@ func buildLexTables(cfg *LexConfig) *lexTables {
 	stops(cfg.SpaceLex, cfg.SpaceChars)
 	stops(cfg.LineLex, cfg.LineChars)
 	stops(true, cfg.EnderChars)
+
+	// A multi-character ender cannot be a table entry of its own: the table
+	// answers "does a run end at this byte?" and a sequence ends one only
+	// when the WHOLE of it follows. Route its first byte to textVerify and
+	// let textStopBase decide, exactly as a multi-byte fixed token does. A
+	// first byte that already stops keeps stopping, which is also what TS
+	// does: the shorter ender alternative matches first there.
+	for _, es := range cfg.EnderSeqs {
+		if 0 == len(es) {
+			continue
+		}
+		if b := es[0]; b >= 128 {
+			wide = true
+		} else if l.text[b] == textContinue {
+			l.text[b] = textVerify
+		}
+	}
 
 	// JS's `.` will not cross a LINE TERMINATOR, and JS has four of them:
 	// \n, \r, U+2028 and U+2029. The TS text-ender regex omits the `s`
@@ -2354,10 +2383,17 @@ func (l *Lex) matchNumber() *Token {
 			sI = expStart
 		}
 		if sI == expStart {
-			// No exponent digits - check if trailing makes it text
-			if l.isFollowingText(sI) {
-				return nil
-			}
+			// No exponent digits: the 'e' is not part of the number, so
+			// backtrack and let the following-text check below ask its
+			// question AT THE 'e'. It used to be asked one position on,
+			// after the 'e', which is a different question and answers
+			// differently exactly when an ender STARTS at the 'e' while
+			// ordinary text follows it: TS's number regex drops the whole
+			// optional exponent group and then needs an ender where the
+			// 'e' is, so `12Ex` with `ender: ["E"]` is #NR:12 there and
+			// was #TX:12 here. A multi-character ender makes that the
+			// common case rather than a corner: `ender: ["END"]` over
+			// `12END` has text right after the 'E' by construction.
 			sI = eSI // backtrack, 'e' is not part of number
 		}
 		// Check for trailing text after exponent
@@ -2725,6 +2761,12 @@ func (l *Lex) textStopBase(pos int) bool {
 		l.Config.EnderChars[ch] {
 		return true
 	}
+	// Stop at a multi-character ender, which ends the run where it STARTS.
+	// The length test is at the call site so a config without one pays a
+	// load and a branch rather than a call.
+	if 0 < len(l.Config.EnderSeqs) && l.enderSeqAt(pos) {
+		return true
+	}
 	// Stop at fixed tokens (longest-first sorted list).
 	rest := src[pos:]
 	for _, fs := range l.Config.FixedSorted {
@@ -2774,6 +2816,7 @@ func (l *Lex) textFailsAt(pos int) bool {
 	}
 	ch, _ := utf8.DecodeRuneInString(l.Src[pos:])
 	if l.Config.EnderChars[ch] ||
+		(0 < len(l.Config.EnderSeqs) && l.enderSeqAt(pos)) ||
 		(l.Config.SpaceLex && l.Config.SpaceChars[ch]) ||
 		l.Config.LineChars[ch] ||
 		(l.Config.StringLex && l.Config.StringChars[ch]) {
@@ -2786,6 +2829,28 @@ func (l *Lex) textFailsAt(pos int) bool {
 		}
 	}
 	return !l.textStopComment(pos)
+}
+
+// enderSeqAt reports whether a MULTI-character ender starts at pos -- an
+// `options.ender` array entry longer than one character, which ends a text
+// or number run where the whole sequence begins.
+//
+// The loop is skipped outright when no such ender is configured, which is
+// every published grammar, and the predicate is reached at all only for a
+// byte the dispatch table flagged textVerify. So the single-character
+// ender, and the far commoner config with no ender at all, pay nothing for
+// this.
+func (l *Lex) enderSeqAt(pos int) bool {
+	if 0 == len(l.Config.EnderSeqs) {
+		return false
+	}
+	rest := l.Src[pos:]
+	for _, es := range l.Config.EnderSeqs {
+		if strings.HasPrefix(rest, es) {
+			return true
+		}
+	}
+	return false
 }
 
 // textStopComment reports whether a comment starts at pos (only when

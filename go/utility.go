@@ -1286,7 +1286,14 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 	if ender, ok := m["ender"]; ok {
 		switch v := ender.(type) {
 		case string:
-			opts.Ender = []string{v}
+			// A string ender is its CHARACTERS, one ender each, as
+			// TypeScript's `opts.ender.split('')` reads it (#201). An
+			// ARRAY entry is kept whole and is one ender, so an entry of
+			// more than one character is a SEQUENCE (#202) -- which is
+			// the whole reason the two forms cannot share a reading.
+			for _, r := range v {
+				opts.Ender = append(opts.Ender, string(r))
+			}
 		case []any:
 			for _, item := range v {
 				if s, ok := item.(string); ok {

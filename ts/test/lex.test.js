@@ -687,6 +687,58 @@ describe('lex', function () {
   })
 
 
+  // Shared cross-runtime fixture for what an `options.ender` ARRAY entry
+  // means (the Go counterpart is TestSpecLexEnderArray in
+  // go/lexer_optionplumbing_test.go, the Rust one ender_array_fixture in
+  // rs/tests/lexer_spec_test.rs). Columns: ender | input | expected, where
+  // `ender` is the JSON the option is given and expected keeps the
+  // ERROR:<code> / <name>:<value> contract of the fixtures above.
+  //
+  // The rule: EVERY ARRAY ENTRY IS ONE ENDER. `configure()` maps each entry
+  // to one alternative of the ender regex, so an entry of more than one
+  // character is a SEQUENCE -- a run ends where the whole of it starts, and
+  // not at its first character alone. The STRING form is the other reading:
+  // it splits into characters, so `';|'` is two enders where `[';|']` is
+  // one. Both spellings are here, over the same input, because a runtime
+  // that collapses them looks correct against either alone.
+  //
+  // Go read the array by iterating the runes of every entry into a
+  // character set, where a sequence cannot be expressed at all, so `[';|']`
+  // was two enders there and one here (#202). The number rows are not
+  // decoration: the number matcher shares the ender alternatives, and the
+  // `["END"]` pair pins the malformed-exponent backtrack, which asks
+  // whether an ender starts AT the `e` -- the case a multi-character ender
+  // makes ordinary.
+  it('ender-array-spec', () => {
+    for (const { cols, row } of loadTSV('lex-ender-array')) {
+      const [enderJSON, src, expected] = cols
+      try {
+        const inst = new Tabnas({ ender: JSON.parse(enderJSON) }).make()
+        const lexer = makeLex({
+          src: () => src,
+          cfg: inst.internal().config,
+          opts: inst.options,
+          sub: {},
+        })
+        const tkn = lexer.next()
+
+        const actual =
+          inst.token.BD === tkn.tin
+            ? 'ERROR:' + tkn.why
+            : tkn.name + ':' + tkn.val
+
+        assert.equal(actual, expected)
+      } catch (err) {
+        err.message =
+          `lex-ender-array row ${row}: ender=${enderJSON}` +
+          ` input=${JSON.stringify(src)}` +
+          ` expected=${JSON.stringify(expected)}\n` + err.message
+        throw err
+      }
+    }
+  })
+
+
   // options.string.check and options.comment.check were declared and
   // consulted by the lexer but never copied into the config, so the
   // hooks were dead. text.check (which always worked) is the control.

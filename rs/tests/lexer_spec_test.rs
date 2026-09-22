@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tabnas::lexer::Lexer;
 use tabnas::options::Options;
-use tabnas::{CommentDef, Value, ValueDef, TIN_ZZ};
+use tabnas::{CommentDef, Tabnas, Value, ValueDef, TIN_ZZ};
 
 fn unescape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -60,6 +60,22 @@ fn lex(input: &str, options: Options) -> Result<String, String> {
         }
     }
     Ok(first.unwrap_or_else(|| "#ZZ:".to_string()))
+}
+
+/// The FIRST token only, which is what the `lex` fixtures above compare and
+/// what the TypeScript and Go runners render. `lex` drains the whole input,
+/// so a row whose tail no matcher claims -- `;` left standing by a
+/// two-character ender, say -- reports the tail's error in place of the
+/// token the row is about.
+fn lex_first(input: &str, options: Options) -> Result<String, String> {
+    let token = Lexer::new(input, options)
+        .next_token()
+        .map_err(|error| error.code)?;
+    let value = match token.val {
+        Value::String(value) => value,
+        value => value.to_string(),
+    };
+    Ok(format!("{}:{value}", token.name))
 }
 
 #[test]
@@ -146,6 +162,34 @@ fn text_quote_fixture() {
         let actual =
             lex(&row[0], Options::default()).unwrap_or_else(|code| format!("ERROR:{code}"));
         assert_eq!(actual, row[1], "input {:?}", row[0]);
+    }
+}
+
+/// The shared lex-ender-array.tsv fixture (the TypeScript counterpart is
+/// 'ender-array-spec' in ts/test/lex.test.js, the Go one
+/// TestSpecLexEnderArray in go/lexer_optionplumbing_test.go). Columns:
+/// ender | input | expected, where `ender` is the JSON the option is given
+/// and expected keeps the ERROR:<code> / <name>:<value> contract.
+///
+/// The rule: EVERY ARRAY ENTRY IS ONE ENDER, so an entry of more than one
+/// character is a SEQUENCE and a run ends where the whole of it starts. The
+/// STRING form splits into characters instead, so `";|"` is two enders where
+/// `[";|"]` is one. This port already read both that way; the fixture holds
+/// it there while Go's lexer gains the sequence (#202).
+///
+/// The column goes through the serialized options door, which is this
+/// runtime's own reader for the two forms.
+#[test]
+fn ender_array_fixture() {
+    for row in rows("lex-ender-array.tsv") {
+        let mut tabnas = Tabnas::new();
+        let document = format!(r#"{{"options":{{"ender":{}}}}}"#, row[0]);
+        tabnas
+            .grammar_json(&document)
+            .unwrap_or_else(|error| panic!("ender {}: {error:?}", row[0]));
+        let actual =
+            lex_first(&row[1], tabnas.config()).unwrap_or_else(|code| format!("ERROR:{code}"));
+        assert_eq!(actual, row[2], "ender {} input {:?}", row[0], row[1]);
     }
 }
 

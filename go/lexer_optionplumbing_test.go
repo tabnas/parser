@@ -17,6 +17,7 @@ package tabnas
 //     the base, not be "merged" field-by-field into a corrupt zero value.
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -144,6 +145,47 @@ func TestSpecLexTextQuote(t *testing.T) {
 		if got := lexOne(src, buildConfig(&Options{})); got != want {
 			t.Errorf("lex-text-quote line %d: input=%q: got %q, want %q",
 				row.lineNo, src, got, want)
+		}
+	}
+}
+
+// TestSpecLexEnderArray runs the shared lex-ender-array.tsv fixture (the TS
+// counterpart is 'ender-array-spec' in ts/test/lex.test.js, the Rust one
+// ender_array_fixture in rs/tests/lexer_spec_test.rs). Columns:
+// ender | input | expected, where `ender` is the JSON the option is given
+// and expected keeps the ERROR:<code> / <name>:<value> contract.
+//
+// The rule: EVERY ARRAY ENTRY IS ONE ENDER. Canonical TypeScript maps each
+// entry to one alternative of its ender regex, so an entry of more than one
+// character is a SEQUENCE -- a run ends where the whole of it starts, not at
+// its first character. The STRING form is the other reading, splitting into
+// characters, so `";|"` is two enders where `[";|"]` is one; both spellings
+// are in the fixture over the same input, because a port that collapses them
+// looks correct against either alone.
+//
+// This port read the array by iterating the runes of every entry into
+// EnderChars, where a sequence has no expression, so `[";|"]` was two enders
+// here and one there (#202). The column is fed through OptionsFromMap on
+// purpose: the string/array split lives in the READER, since Options.Ender
+// is a []string that cannot tell the two forms apart afterwards.
+func TestSpecLexEnderArray(t *testing.T) {
+	for _, row := range loadSpecTSV(t, "lex-ender-array") {
+		enderJSON := tsvCol(row.cols, 0)
+		src := preprocessEscapes(tsvCol(row.cols, 1))
+		want := preprocessEscapes(tsvCol(row.cols, 2))
+
+		var ender any
+		if err := json.Unmarshal([]byte(enderJSON), &ender); err != nil {
+			t.Fatalf("lex-ender-array line %d: ender %s: %v", row.lineNo, enderJSON, err)
+		}
+		opts, err := OptionsFromMap(map[string]any{"ender": ender})
+		if err != nil {
+			t.Fatalf("lex-ender-array line %d: ender %s refused: %v", row.lineNo, enderJSON, err)
+		}
+
+		if got := lexOne(src, buildConfig(&opts)); got != want {
+			t.Errorf("lex-ender-array line %d: ender=%s input=%q: got %q, want %q",
+				row.lineNo, enderJSON, src, got, want)
 		}
 	}
 }
