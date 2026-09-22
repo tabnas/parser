@@ -1724,7 +1724,8 @@ impl Rule {
     /// The completed child's value, as TypeScript's `rule.child.node`
     /// reads: `child_node` when the child had a node of its own, and
     /// this rule's own node when the child shared this rule's cell (see
-    /// [`Rule::accept_child_node`]). Read this rather than `child_node`
+    /// `Rule::accept_child_node`, which is crate-private, so this is a
+    /// name and not a link). Read this rather than `child_node`
     /// wherever the shared case must be seen as a value.
     pub fn child_value(&self) -> Value {
         if self.child_node_is_self {
