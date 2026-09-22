@@ -15,8 +15,29 @@ the new material revision 5 added drawing its own scrutiny, not a regression.
 because the line numbers the items cite had themselves drifted: they match no
 committed state of `rs/src/parser.rs`, and the file has moved 350 to 580 lines
 since they were written. Every `rs/src/parser.rs:N` citation in the spec was
-re-derived at the same time and verified to name the construct its sentence
-describes; the spec's new header records what that pass did and did not cover.
+re-derived at the same time; the spec's header records what that pass did and
+did not cover.
+
+**That pass over-claimed, and the spec's header no longer makes the claim.** A
+review of it found qualified citations that name the wrong construct, some of
+them added by the same commit: the two `#[allow(clippy::too_many_arguments)]`
+attributes, the pending-snapshot stores in the push and replace arms (which
+the spec's own **R9** bullet already contradicted), the `Action` type alias and
+the `Rc::make_mut` in the `DerefMut` path. Those and eight more are corrected,
+and the header now states a property of the process rather than a promise
+about every sentence: the numbers are carried through each change to `rs/src`
+by mapping them through the diff, and a reader re-derives from the construct
+each citation names.
+
+A second thing has changed under the spec since. Part of what it schedules has
+LANDED, ahead of its own §8: the parent's child link is now carried on the
+rule it PUSHED, so the head of a replacement chain, its node, its parent, its
+own child and the first hop of `child.next` all read what TypeScript and Go
+read. What is left of that item is the rest of the forward walk, and it is
+registered in `test/spec/divergent.tsv` as `chain-next-two-hops` and
+`chain-next-three-hops` with a `DIVERGENCE.md` entry, so the PR that finishes
+**R7** deletes a register group instead of announcing a change nobody recorded.
+§4, §6 test 7 and §10's `[V4]` release note are updated to match.
 
 No Rust engine code was written for the design this spec describes. The design
 remains behind Gate G of
