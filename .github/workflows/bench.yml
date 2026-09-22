@@ -1,0 +1,71 @@
+# PROPOSED workflow — lives in ci/workflows/ for review; move to
+# .github/workflows/bench.yml to activate.
+#
+# Advisory benchmark run: numbers from shared CI runners are noisy, so
+# this NEVER gates a merge — it records the fixture-matrix results as a
+# build artifact for humans to compare across runs on the same runner
+# class. For decision-grade numbers, run ci/bench/run-bench.sh locally,
+# back-to-back against a baseline checkout on the same machine.
+name: bench
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'  # weekly, Monday 04:17 UTC
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        path: parser
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24.x
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+    # Node and Go are pinned above, and the Rust arm needs the same
+    # treatment for the same reason: without it the build takes whatever
+    # rustc the ubuntu-latest image happens to carry, so a runner image
+    # update lands in the recorded artifact looking like a parser change.
+    # `@stable` is what ci/workflows/rust.yml uses; the version is echoed
+    # into the results below so that when it does move, the artifact says
+    # so instead of leaving the step change invisible.
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Clone downstream repos
+      shell: bash
+      run: |
+        set -e
+        for dep in debug json jsonic; do
+          git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+        done
+    - name: Install and build TS
+      shell: bash
+      run: |
+        set -e
+        for pkg in parser debug json jsonic; do
+          ( cd "$pkg/ts" && npm i && npm run build --if-present )
+        done
+    # The install step above leaves each sibling resolving the PUBLISHED
+    # @tabnas/parser; run-bench.sh re-points them at this checkout's ts/
+    # (ci/lib/wire.sh) and fails if the swap does not take. Do not drop
+    # the install to "fix" that — a clean runner has no node_modules and
+    # no built dist at all, so the run would die before measuring.
+    - name: Run benchmarks
+      shell: bash
+      run: |
+        {
+          echo "toolchains: node $(node --version), go $(go version | awk '{print $3}'), $(rustc --version)"
+          parser/ci/bench/run-bench.sh
+        } | tee bench-results.txt
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: bench-results
+        path: bench-results.txt
