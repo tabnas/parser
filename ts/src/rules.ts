@@ -7,6 +7,7 @@
 import type {
   AltAction,
   AltCond,
+  AltError,
   AltModifier,
   AltSpec,
   AltSpecish,
@@ -202,6 +203,7 @@ class AltMatch {
   k?: Record<string, any>               // Custom props to add to Rule.k (propagated via push/replace).
   g?: string[]                          // Named group tags (lets plugins find alts).
   e?: Token                             // Token the match errored on.
+  ef?: AltError                         // The alternate's error hook, run after the modifier (see process).
 }
 
 const makeAltMatch = (...params: ConstructorParameters<typeof AltMatch>) =>
@@ -584,7 +586,17 @@ class RuleSpec {
     // null, matching the public RuleDone contract.
     ;(ctx as any)._dalt = 0 < alts.length ? alt : null
 
-    // Unconditional error.
+    // Unconditional error. A token already on `e` is a failed match (or
+    // a modifier's verdict). Otherwise the alternate's own error hook
+    // runs HERE, after the modifier and after the routing forms have
+    // resolved: the pass is a straight line of match, modify, check,
+    // and the hook sees what the modifier produced. It used to run
+    // inside parse_alts, before the modifier, which no other runtime
+    // did and no shipped grammar could observe (#154).
+    if (null == alt.e && alt.ef) {
+      const errTkn = alt.ef(rule, ctx, alt)
+      if (errTkn) alt.e = errTkn
+    }
     if (alt.e) {
       return this.bad(alt.e, rule, ctx, { is_open })
     }
@@ -624,19 +636,29 @@ class RuleSpec {
     // cap can evict old tokens from the front without invalidating
     // outstanding marks (marks older than the retained window will
     // simply fail at rewind time with a clear error).
-    const _cons = rule[is_open ? 'oN' : 'cN'] - (alt.b || 0)
-    if (0 < _cons) {
+    //
+    // Computed ONCE, here, and reused for the lookahead shift at the
+    // end of the pass. It used to be computed twice, straddling the
+    // action, from two reads of a field the action is handed and could
+    // write: an action writing alt.b made the two disagree, and a token
+    // already moved to ctx.v was then never shifted out of ctx.t. Go
+    // always computed it once, before the action; that is now the
+    // contract (#122). `consumed` is engine state fixed before the
+    // action runs, and alt.b is an input to the match, not a channel.
+    let consumed = rule[is_open ? 'oN' : 'cN'] - (alt.b || 0)
+    if (consumed < 0) consumed = 0
+    if (0 < consumed) {
       // Move consumed tokens from ctx.t → ctx.v. Clear the tbuf slots
       // so a ctx.rewind call inside the subsequent alt action can
       // distinguish "token already in v" (NOTOKEN here; will be
       // replayed from v) from "pre-lexed lookahead past consumed"
       // (real token in tbuf; needs re-queuing to preserve state).
       const NOTOKEN = ctx.NOTOKEN
-      for (let i = 0; i < _cons; i++) {
+      for (let i = 0; i < consumed; i++) {
         ctx.v.push(ctx.t[i])
         ctx.t[i] = NOTOKEN
       }
-      ;(ctx as any).vAbs += _cons
+      ;(ctx as any).vAbs += consumed
       // Amortised-O(1) ring-buffer cap: let v grow to twice the
       // capacity, then splice its front back down. Batch-eviction
       // makes each push O(1) on average even at the cap.
@@ -741,10 +763,7 @@ class RuleSpec {
       rule.state = CLOSE
     }
 
-    // Backtrack reduces consumed token count.
-    let consumed = rule[is_open ? 'oN' : 'cN'] - (alt.b || 0)
-    if (consumed < 0) consumed = 0
-
+    // Shift by the count computed before the action (see above).
     if (0 < consumed) {
       // Shift the lookahead buffer left by `consumed` slots, filling
       // vacated tail positions with NOTOKEN so later alts re-fetch.
@@ -1587,7 +1606,9 @@ function parse_alts(
     out.k = null != alt.k ? alt.k : out.k
     out.g = null != alt.g ? alt.g : out.g
 
-    out.e = (alt.e && alt.e(rule, ctx, out)) || undefined
+    // The error hook is carried, not called: process() runs it after
+    // the modifier (#154).
+    out.ef = alt.e || undefined
 
     out.p =
       null != alt.p && false !== alt.p

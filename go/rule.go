@@ -1251,7 +1251,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// backtrack) once, and record them on the rewind history BEFORE the
 	// action runs, so a ctx.Rewind() call inside the action sees the
 	// just-matched tokens. The same count drives the lookahead-buffer
-	// shift below. Mirrors the TS rules.ts ordering.
+	// shift below. TS computes it once at the same point (#122).
 	consumed := 0
 	if alt != nil {
 		// BF is already resolved into alt.B above; the check remains

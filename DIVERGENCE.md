@@ -220,6 +220,29 @@ fixed or quietly dropped.
   fleet grammar working, since all four declaration sites pair a config
   with its action on the same alternate.
 
+- **The order of a matched alternate's hooks, and when `consumed` is
+  read.** Two both-silent splits ruled before a third runtime
+  transcribed one side. TypeScript ran the alternate's error hook `e`
+  inside `parse_alts`, before the modifier `h`; Go ran `H` then `E`;
+  Rust ran one modifier form before `e` and the other after it. No
+  shipped grammar declares both, so nothing observed it (#154). Ruled
+  as Go's order, the straight line: the routing forms `p`/`r`/`b`
+  resolve, then the modifier, then the error hook, then counters and
+  the action. TypeScript's hook now runs in `process()` after `h`, and
+  the modifier sees resolved routing in every runtime. Pinned by the
+  same grammar in `ts/test/cover-engine.test.js`
+  ('fnref-strings-for-h-e-p-r-b'), `go/alt_order_test.go` and
+  `rs/tests/callback_test.rs`.
+
+  TypeScript also computed `consumed` (matched tokens minus `alt.b`)
+  twice, straddling the action, from two reads of a field the action is
+  handed; an action writing `alt.b` made the two disagree and left a
+  token in the lookahead that had already moved to the history. Go
+  computed it once, before the action, and that is the contract now
+  (#122): `consumed` is engine state fixed before the action, and
+  `alt.b` is an input to the match, not a channel. Pinned by
+  `ts/test/alt-consumed.test.js`.
+
 - **`rewind.history` at its edges.** Three spellings of the retained
   rewind window meant different things in different ports, and none of
   it was recorded: an explicit `null` resolved to `Infinity` in
