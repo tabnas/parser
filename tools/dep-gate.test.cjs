@@ -206,7 +206,9 @@ test('a yarn or pnpm lockfile is read as text rather than waved through', () => 
 test('a go replace is judged on where it points, and quoting does not hide it', () => {
   // The depths mirror the real case: a helper module three levels down, whose
   // ../../../go IS the repository's own module and whose ../../../../x is not.
-  const root = '/repo'
+  // Path.resolve makes the synthetic root native, so the containment checks
+  // mean the same thing on a Windows runner as on a POSIX one.
+  const root = Path.resolve('/repo')
   const mod = 'ci/parity/helper/go.mod'
 
   const inside = gate.checkGoMod(mod, 'replace example.com/m => ../../../go\n', EMPTY, root)
@@ -246,7 +248,9 @@ test('a go replace is judged on where it points, and quoting does not hide it', 
 
 
 test('a go.work is judged on its member paths, not on its name', () => {
-  const root = '/repo'
+  // Path.resolve makes the synthetic root native, so the containment checks
+  // mean the same thing on a Windows runner as on a POSIX one.
+  const root = Path.resolve('/repo')
   const internal = gate.checkGoWork('go.work', 'go 1.24\nuse ./go\nuse (\n\t./ci/helper\n)\n', EMPTY, root)
   assert.deepEqual(internal, [], 'a workspace entirely inside the repository must pass')
 
@@ -263,7 +267,9 @@ test('a go.work is judged on its member paths, not on its name', () => {
 
 
 test('a cargo dependency is judged by path, by host, and only inside a dependency table', () => {
-  const root = '/repo'
+  // Path.resolve makes the synthetic root native, so the containment checks
+  // mean the same thing on a Windows runner as on a POSIX one.
+  const root = Path.resolve('/repo')
   const cargo = (text) => gate.checkCargoToml('rs/Cargo.toml', text, EMPTY, root)
 
   assert.deepEqual(cargo('[dependencies]\ndep = { path = "../other" }\n'), [],
