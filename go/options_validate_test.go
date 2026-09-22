@@ -50,6 +50,13 @@ func TestOptionsFromMapNamesAnIllTypedLeaf(t *testing.T) {
 		// is the three deep() skips rather than "anything on the prototype".
 		{`{"options":{"comment":{"def":{"constructor":{"line":true}}}}}`,
 			"options.comment.def.constructor: \"constructor\" is a reserved name"},
+		// `options.plugin` is the one caller-keyed map this port's
+		// Options does not hold -- TypeScript keeps a plugin's namespace
+		// in its options and this port keeps it on the engine -- so the
+		// reflective walk cannot reach it and it used to load here while
+		// faulting there.
+		{`{"options":{"plugin":{"prototype":{"a":1}}}}`,
+			"options.plugin.prototype: \"prototype\" is a reserved name"},
 	} {
 		gs, err := GrammarSpecFromJSON([]byte(c.spec))
 		if err != nil {
@@ -237,5 +244,45 @@ func validateLeafAt(path string, val any, errs *[]string) {
 	}
 	if err := validateOptionsMap(node.(map[string]any)); err != nil {
 		*errs = append(*errs, err.Error())
+	}
+}
+
+// MapToOptions is the legacy door: it calls OptionsFromMap and DISCARDS
+// the error, and is documented to skip an entry it cannot carry. A
+// reserved name was reported by the validator and converted anyway, so
+// the one door that cannot report a refusal was also the one that
+// installed it.
+func TestMapToOptionsDropsARefusedEntry(t *testing.T) {
+	opts := MapToOptions(map[string]any{
+		"tokenSet": map[string]any{"constructor": []any{"#TX"}, "MINE": []any{"#TX"}},
+		"comment":  map[string]any{"def": map[string]any{"prototype": map[string]any{"line": true}}},
+		"fixed":    map[string]any{"token": map[string]any{"__proto__": "x", "#Q": "q"}},
+	})
+	if _, ok := opts.TokenSet["constructor"]; ok {
+		t.Error("tokenSet.constructor was refused and carried")
+	}
+	if opts.Comment != nil && opts.Comment.Def != nil {
+		if _, ok := opts.Comment.Def["prototype"]; ok {
+			t.Error("comment.def.prototype was refused and carried")
+		}
+	}
+	if opts.Fixed != nil && opts.Fixed.Token != nil {
+		if _, ok := opts.Fixed.Token["__proto__"]; ok {
+			t.Error("fixed.token.__proto__ was refused and carried")
+		}
+	}
+	// The legitimate neighbours in the same maps are untouched: the prune
+	// removes the three names, not the map.
+	if len(opts.TokenSet["MINE"]) != 1 {
+		t.Errorf("tokenSet.MINE = %v, want one member", opts.TokenSet["MINE"])
+	}
+	if opts.Fixed == nil || opts.Fixed.Token["#Q"] == nil {
+		t.Error("fixed.token.#Q was dropped with the refused entry")
+	}
+	// And the checked door still reports what the legacy one swallows.
+	if _, err := OptionsFromMap(map[string]any{
+		"tokenSet": map[string]any{"constructor": []any{"#TX"}},
+	}); err == nil {
+		t.Error("OptionsFromMap accepted a reserved name")
 	}
 }

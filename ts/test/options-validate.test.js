@@ -414,6 +414,49 @@ describe('options-validate absent token sets', () => {
 
   })
 
+  // The OTHER inherited-name hazard, by a different mechanism and with a
+  // worse failure. `options`, `token`, `tokenSet` and `fixed` are each a
+  // FUNCTION as well as a map, and a function's own `length` and `name`
+  // are non-writable while `caller` and `arguments` resolve to the
+  // poisoned accessors on Function.prototype. Copying a caller's map onto
+  // one of them, or merging into one, threw a raw TypeError naming the
+  // engine's own closure:
+  //
+  //   Cannot assign to read only property 'length' of function '(ref) => ...'
+  //
+  // Not a load fault and not a silent drop: a crash, for four names a
+  // caller is entitled to use, reachable four ways. Reading the base
+  // throws on its own for two of them, so the merge had to stop reading
+  // through the prototype as well as stop assigning.
+  const FNPROP = ['length', 'name', 'caller', 'arguments']
+
+  it('installs names that collide with a function property', () => {
+    // 1. A token set under each name.
+    for (const name of FNPROP) {
+      const tn = new Tabnas({ tokenSet: { [name]: ['#TX'] } })
+      const cfg = tn.internal().config
+      assert.equal(Object.hasOwn(cfg.tokenSet, name), true, name + ' as a set')
+      assert.equal(cfg.tokenSet[name].length, 1, name + ' set size')
+      assert.equal(cfg.tokenSetTins[name][cfg.t.TX], true, name + ' tin lookup')
+      // Overwriting `length`/`name` changes the function's metadata, not
+      // what it does: the member is still the lookup it was.
+      assert.deepEqual(tn.tokenSet('KEY'), cfg.tokenSet.KEY, name + ': still callable')
+    }
+
+    // 2. A top-level option group, which arrives through `deep()` rather
+    // than the copy, and which reads the base before writing it.
+    for (const name of FNPROP) {
+      const tn = new Tabnas({ [name]: { marker: 1 } })
+      assert.equal(tn.options()[name].marker, 1, name + ' as an option group')
+    }
+
+    // 3. A fixed token keyed by a bare name, and 4. a minted one: both
+    // write the bare name into a dual-shape member.
+    const fixedtn = new Tabnas({ fixed: { token: { '#length': 'xx' } } })
+    assert.equal(fixedtn.token('#length'), fixedtn.fixed('xx'), 'fixed token #length')
+    assert.equal('number', typeof new Tabnas().token('#length'), 'minted #length')
+  })
+
   // RESERVED, not dropped. `deep()` refuses to merge `__proto__`,
   // `constructor` and `prototype` on purpose -- merging them reaches the
   // prototype chain, which is prototype pollution -- and the cost used to
@@ -442,12 +485,81 @@ describe('options-validate absent token sets', () => {
       assert.equal(Object.hasOwn(cfg.tokenSet, name), true, name + ' still installs')
     }
 
-    // The same rule on another caller-keyed map.
-    assert.throws(
-      () => new Tabnas(JSON.parse('{"comment":{"def":{"constructor":{"line":true}}}}')),
-      re,
-      'comment.def.constructor',
+    // EVERY caller-keyed map, not `tokenSet` alone, and on the GRAMMAR
+    // door as well as the other two. The grammar door clones the spec
+    // with `deep()` before validating, and `deep()` SKIPS these three
+    // names as its prototype-pollution guard -- so the entry was gone
+    // before validation looked, and the document loaded in silence while
+    // the same options through the constructor were a load fault. One
+    // input, two answers depending on the door, which is the defect this
+    // option's contract has now had three times.
+    const MAPS = [
+      'fixed.token', 'match.token', 'match.value', 'tokenSet',
+      'comment.def', 'value.def', 'string.escape', 'string.replace',
+      'error', 'hint', 'parse.prepare', 'config.modify', 'lex.match',
+      'plugin',
+    ]
+    for (const map of MAPS) {
+      for (const name of ['__proto__', 'constructor', 'prototype']) {
+        // Built as JSON so `__proto__` is an OWN key, and nested from the
+        // dotted path so each map is reached where it actually lives.
+        const leaf = `{${JSON.stringify(name)}:{}}`
+        const body = map.split('.').reverse().reduce(
+          (inner, seg) => `{${JSON.stringify(seg)}:${inner}}`, leaf)
+        const opts = JSON.parse(body)
+        assert.throws(() => new Tabnas(opts), re, 'ctor ' + map + '.' + name)
+        assert.throws(() => new Tabnas({}).options(opts), re, 'options() ' + map + '.' + name)
+        assert.throws(
+          () => new Tabnas().grammar(JSON.parse(`{"options":${body}}`)),
+          re,
+          'grammar() ' + map + '.' + name,
+        )
+      }
+    }
+
+    // And an ordinary name in each of them still loads, so the refusal is
+    // the three names rather than the map. One legitimate value per map,
+    // since they do not take the same shape.
+    // The same documents the Rust suite loads, name for name and value
+    // for value, so the two are comparable: two of the maps constrain
+    // their keys, so the NAME varies as well as the value.
+    const ORDINARY = {
+      'fixed.token': ['#Q', '"~"'],
+      'match.token': ['mine', '"@/x/"'],
+      'match.value': ['mine', '{"match":"@/x/","val":1}'],
+      'tokenSet': ['MINE', '["#TX"]'],
+      'comment.def': ['mine', '{"line":true,"start":"%"}'],
+      'value.def': ['mine', '{"val":1}'],
+      'string.escape': ['q', '"x"'],
+      'string.replace': ['q', '"x"'],
+      'error': ['mine', '"boom"'],
+      'hint': ['mine', '"try"'],
+      'parse.prepare': ['mine', 'null'],
+      // `config.modify` is deliberately absent. Its entries are
+      // functions, so no JSON document carries a legitimate one, and the
+      // one spelling a document CAN carry -- a null, which validation
+      // takes as "not supplied" -- reaches the apply step and dies with
+      // a raw `opts.config.modify[modifer] is not a function`. That is
+      // pre-existing, measured on this branch's base, and is not what
+      // this test is about.
+      'lex.match': ['mine', 'false'],
+      'plugin': ['mine', '{"a":1}'],
+    }
+    assert.deepEqual(
+      Object.keys(ORDINARY),
+      MAPS.filter((m) => 'config.modify' !== m),
+      'every map but the excluded one has an ordinary value',
     )
+    for (const map of Object.keys(ORDINARY)) {
+      const [name, value] = ORDINARY[map]
+      const body = map.split('.').reverse().reduce(
+        (inner, seg) => `{${JSON.stringify(seg)}:${inner}}`,
+        `{${JSON.stringify(name)}:${value}}`)
+      assert.doesNotThrow(
+        () => new Tabnas().grammar(JSON.parse(`{"options":${body}}`)),
+        map + '.' + name,
+      )
+    }
 
     // And Object.prototype is untouched by any of it.
     assert.equal(undefined, {}.line)

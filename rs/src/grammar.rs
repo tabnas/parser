@@ -1085,6 +1085,74 @@ fn typed_data_refs(
     }
 }
 
+/// The option maps whose keys a CALLER chooses, dotted and relative to
+/// `options`. The list mirrors `DYNAMIC_MAPS` in `ts/src/utility.ts`,
+/// which is where the canonical runtime decides the same question;
+/// `token_set` is this port's snake alias for the same map.
+const CALLER_KEYED_MAPS: [&str; 15] = [
+    "fixed.token",
+    "match.token",
+    "match.value",
+    "tokenSet",
+    "token_set",
+    "comment.def",
+    "value.def",
+    "string.escape",
+    "string.replace",
+    "error",
+    "hint",
+    "parse.prepare",
+    "config.modify",
+    "lex.match",
+    "plugin",
+];
+
+/// Refuse the three names the canonical deep merge will not carry, in
+/// every map whose keys a caller chooses.
+///
+/// Rust has no prototype chain and could hold these names happily, but
+/// the canonical runtime cannot: its merge skips `__proto__`,
+/// `constructor` and `prototype` on purpose, because merging one of them
+/// reaches the prototype chain and that is prototype pollution. The CODE
+/// is the contract across runtimes, so a grammar naming an entry
+/// `constructor` must not load here and fault there -- and that has to
+/// hold for EVERY such map rather than for `tokenSet` alone, which is
+/// where both other runtimes refuse it.
+///
+/// One pass over the raw options, before anything is applied, so a
+/// refused document changes nothing: adding a map to the loader cannot
+/// silently opt out of the rule, since the list above is the only place
+/// it is declared.
+fn reject_reserved_names(map: &Map<String, JsonValue>) -> Result<(), GrammarError> {
+    for path in CALLER_KEYED_MAPS {
+        let mut node = map;
+        let mut segments = path.split('.').peekable();
+        let entries = loop {
+            let Some(segment) = segments.next() else {
+                break None;
+            };
+            let Some(child) = node.get(segment).and_then(JsonValue::as_object) else {
+                break None;
+            };
+            if segments.peek().is_none() {
+                break Some(child);
+            }
+            node = child;
+        };
+        let Some(entries) = entries else { continue };
+        for name in entries.keys() {
+            if RESERVED_MAP_KEYS.contains(&name.as_str()) {
+                let kind = path.rsplit('.').next().unwrap_or(path);
+                return Err(GrammarError(format!(
+                    "Grammar: options.{path}.{name}: `{name}` is a reserved name \
+                     and cannot be a {kind} entry (it would reach the prototype chain)"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn apply_options(
     options: &mut crate::Options,
     map: &Map<String, JsonValue>,
@@ -1095,6 +1163,7 @@ fn apply_options(
         unreachable!("an object maps to an object");
     };
     let map = &typed;
+    reject_reserved_names(map)?;
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
     }
@@ -2054,19 +2123,6 @@ fn apply_options(
     }
     if let Some(token_sets) = map.get("tokenSet").or_else(|| map.get("token_set")) {
         for (name, members) in object(token_sets, "options.tokenSet")? {
-            // Reserved, and refused. Rust has no prototype chain and
-            // could carry these names happily, but the canonical runtime
-            // cannot: its deep merge skips `__proto__`, `constructor`
-            // and `prototype` because merging them is prototype
-            // pollution. The CODE is the contract across runtimes, so a
-            // grammar naming a token set `constructor` must not load
-            // here and fault there.
-            if RESERVED_MAP_KEYS.contains(&name.as_str()) {
-                return Err(GrammarError(format!(
-                    "Grammar: options.tokenSet.{name}: `{name}` is a reserved name \
-                     and cannot be a tokenSet entry (it would reach the prototype chain)"
-                )));
-            }
             // A null whole value falls through to the array check below
             // and is a load error, as it is in TypeScript and Go. It
             // used to REMOVE the named set here, which made the same

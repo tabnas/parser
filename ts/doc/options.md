@@ -105,7 +105,7 @@ narrows nothing.
 | `[null, null, null, null]` | empty, with the name still declared |
 | `[]` | `#TX`, `#NR`, `#ST`, `#VL`: overlaying nothing changes nothing |
 | `SKIP` or `undefined` | unchanged |
-| `null` | a load fault: `options.tokenSet.KEY: expected array, got object` |
+| `null` | a load fault: `options.tokenSet.KEY: expected array, got null` |
 | `7`, `'#ST'`, `{}` | a load fault naming the leaf and the shape it got |
 
 `null` therefore means two different things by position. As a **member**
@@ -118,12 +118,25 @@ There is no default behind it, so its array installs as written, and
 `SKIP` or `undefined` leaves it **uninstalled** rather than installing it
 empty.
 
+Four names that collide with a function's own properties are ordinary
+set names and install as written: `length`, `name`, `caller` and
+`arguments`. `tokenSet` is callable as well as indexable, so a set under
+one of those names also overwrites that property of the callable; the
+lookup itself is unaffected.
+
 Three names are **reserved** and refused: `__proto__`, `constructor` and
 `prototype`. The option merge will not carry them, because merging a key
 that reaches the prototype chain is prototype pollution, so a set under
 one of those names could not be installed and is a load fault rather than
 a silent absence. Every other inherited name, `toString` and `valueOf`
 among them, is an ordinary set name.
+
+The refusal is not particular to `tokenSet`. It holds in every option map
+whose keys you choose: `fixed.token`, `match.token`, `match.value`,
+`tokenSet`, `comment.def`, `value.def`, `string.escape`,
+`string.replace`, `error`, `hint`, `parse.prepare`, `config.modify`,
+`lex.match` and `plugin`. All three doors report it, the serialized
+grammar included.
 
 `tokenSet` itself is the map, not a set. `SKIP` or `undefined` for the
 whole option means "not supplied"; `null` is a load fault, reported as

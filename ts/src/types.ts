@@ -88,22 +88,31 @@ export type TabnasOptions = {
     }
     check?: LexCheck                // Post-match validation hook.
   }
-  tokenSet?: {                      // Named groups of token names.
-    // A member is a token name, `null` to clear that position, or SKIP
-    // (equivalently `undefined`) to keep whatever the base holds there.
-    // The whole value is that array, or SKIP (equivalently `undefined`)
-    // to leave the name alone; an explicit `null` is refused.
-    //
-    // `undefined` is spelled out in both unions rather than left to the
-    // `?` above, which makes the tokenSet PROPERTY optional and says
-    // nothing about the index signature's values: without it, strict
-    // TypeScript refuses `{ tokenSet: { CUSTOM: undefined } }` with
-    // TS2322 although the validator treats it as a no-op.
+  // Named groups of token names.
+  //
+  // A member is a token name, `null` to clear that position, or SKIP
+  // (equivalently `undefined`) to keep whatever the base holds there.
+  // A named set is that array, or SKIP (equivalently `undefined`) to
+  // leave the name alone. The whole MAP is that object, or SKIP
+  // (equivalently `undefined`) to leave every set alone. An explicit
+  // `null` is refused at both levels.
+  //
+  // `undefined` is spelled out in every union rather than left to the
+  // `?` below, which makes the tokenSet PROPERTY optional and says
+  // nothing about the index signature's values: without it, strict
+  // TypeScript refuses `{ tokenSet: { CUSTOM: undefined } }` with
+  // TS2322 although the validator treats it as a no-op. The container
+  // union is the same question one level up: the validator treats
+  // `{ tokenSet: SKIP }` as a no-op too.
+  tokenSet?:
+  | {
     [name: string]:
     | (string | null | undefined | typeof SKIP)[]
     | typeof SKIP
     | undefined
   }
+  | typeof SKIP
+  | undefined
   space?: {                         // Whitespace (non-line) handling.
     lex?: boolean                   // Enable space lexing.
     chars?: string                  // Characters treated as space.

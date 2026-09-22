@@ -31,6 +31,26 @@ import (
 func validateOptionsMap(m map[string]any) error {
 	var errs []string
 	validateStruct(reflect.TypeOf(Options{}), m, "options", &errs)
+	// The caller-keyed maps this port's Options does not hold, so the
+	// walk above cannot reach them. `options.plugin` is the only one:
+	// TypeScript keeps a plugin's own namespace in its options, and this
+	// port keeps it on the engine (SetPluginOptions), so the key names no
+	// field and validateStruct skips it. The CODE is the contract across
+	// runtimes, so the reserved names are refused here instead of loading
+	// in one runtime and faulting in another.
+	for _, key := range []string{"plugin"} {
+		sub, ok := m[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		for name := range sub {
+			if reservedMapKeys[name] {
+				errs = append(errs, fmt.Sprintf(
+					"options.%s.%s: %q is a reserved name and cannot be a %s entry "+
+						"(it would reach the prototype chain)", key, name, name, key))
+			}
+		}
+	}
 	if len(errs) > 0 {
 		sort.Strings(errs)
 		return fmt.Errorf("tabnas: options: %s", strings.Join(errs, "; "))

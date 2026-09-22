@@ -51,6 +51,37 @@ const entries = <T>(
 // assign({a:1},{b:2}) // => {a:1,b:2};  assign(null,{b:2}) // => {b:2}
 const assign = (x: any, ...r: any[]) => Object.assign(null == x ? {} : x, ...r)
 
+// Copy a map onto one of the DUAL-SHAPE members -- `options`, `token`,
+// `tokenSet`, `fixed` -- each of which is a function as well as a map.
+//
+// `Object.assign` cannot do it. A function's own `length` and `name` are
+// non-writable, and `caller` and `arguments` resolve to the poisoned
+// accessors on Function.prototype, so assigning any of those four names
+// throws a raw TypeError instead of installing the entry. All four are
+// reachable from ordinary input: `{tokenSet: {length: ['#TX']}}`, a
+// plugin option group named `length`, `{fixed: {token: {length: 'x'}}}`,
+// and `tn.token('#length')`, which mints the bare name as a key.
+//
+// Defining an own data property installs every one of them: `length` and
+// `name` are configurable, and `caller`/`arguments` are inherited rather
+// than own, so neither setter is reached.
+//
+// Null/undefined target uses a new {}, as `assign` does, since these
+// members are absent while an engine is still being built.
+// assigndual(f, {length: [1]}) // => f (with f.length === [1])
+const assigndual = (target: any, source: any) => {
+  const into = null == target ? {} : target
+  for (const key of keys(source)) {
+    defprop(into, key, {
+      value: source[key],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+  }
+  return into
+}
+
 // True if value is an array.
 // isarr([1]) // => true;  isarr({}) // => false
 const isarr = (x: any) => Array.isArray(x)
@@ -572,10 +603,10 @@ function configure(
   cfg.color.lo = optscolor.lo ?? cfg.color.lo ?? '\x1b[2m'
   cfg.color.line = optscolor.line ?? cfg.color.line ?? '\x1b[34m'
 
-  assign(tabnas.options, opts)
-  assign(tabnas.token, cfg.t)
-  assign(tabnas.tokenSet, cfg.tokenSet)
-  assign(tabnas.fixed, cfg.fixed.ref)
+  assigndual(tabnas.options, opts)
+  assigndual(tabnas.token, cfg.t)
+  assigndual(tabnas.tokenSet, cfg.tokenSet)
+  assigndual(tabnas.fixed, cfg.fixed.ref)
 
   return cfg
 }
@@ -599,7 +630,7 @@ function tokenize<
     tokenmap[(ref as string).substring(1)] = token
 
     if (null != tabnas) {
-      assign(tabnas.token, cfg.t)
+      assigndual(tabnas.token, cfg.t)
     }
   }
 
@@ -710,7 +741,33 @@ function deep(base?: any, ...rest: any): any {
         ) {
           continue
         }
-        base[k] = deep(base[k], over[k])
+        // Injecting into a FUNCTION is a declared behaviour of this
+        // merge, and the engine's dual-shape members (`options`,
+        // `token`, `tokenSet`, `fixed`) are functions. Four names have
+        // to be handled there and nowhere else: a function's own
+        // `length` and `name` are non-writable, so assigning them
+        // throws a raw TypeError, and `caller`/`arguments` resolve to
+        // the poisoned accessors on Function.prototype, so even READING
+        // the base throws. All four are reachable from ordinary input --
+        // `{length: 1}` as a plugin option group is the shortest.
+        // Reading the own property and defining rather than assigning
+        // is the same thing for every other key.
+        const prev = base_isf
+          ? Object.prototype.hasOwnProperty.call(base, k)
+            ? base[k]
+            : undefined
+          : base[k]
+        const merged = deep(prev, over[k])
+        if (base_isf) {
+          defprop(base, k, {
+            value: merged,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          })
+        } else {
+          base[k] = merged
+        }
       }
     } else {
       base =
@@ -1507,6 +1564,47 @@ const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
   'options.plugin': () => {},
 }
 
+// Refuse the three names `deep()` will not merge, over the caller-keyed
+// maps DYNAMIC_MAPS declares, reading only OWN keys.
+//
+// The generic walk in `validateOptions` already refuses them on the
+// constructor and `options()` doors, where validation sees the caller's
+// own object. The GRAMMAR door does not reach it: it clones the spec
+// first, and the clone is `deep()`, whose prototype-pollution guard SKIPS
+// these three names -- so the entry was gone before validation looked and
+// the same document loaded in silence. One input with two answers
+// depending on the door, which is the defect this option's contract has
+// had twice before.
+//
+// Called on the caller's spec, BEFORE the clone. The list is
+// DYNAMIC_MAPS' own keys, so a map added there is covered here with
+// nothing to remember.
+function rejectReservedNames(options: any) {
+  if (null == options || S.object !== typeof options) return
+  for (const at of Object.keys(DYNAMIC_MAPS)) {
+    let node: any = options
+    const path = at.split('.').slice(1)
+    for (const segment of path) {
+      node =
+        null != node &&
+          S.object === typeof node &&
+          Object.prototype.hasOwnProperty.call(node, segment)
+          ? node[segment]
+          : undefined
+    }
+    if (null == node || S.object !== typeof node || Array.isArray(node)) continue
+    for (const name of Object.keys(node)) {
+      if (RESERVED_MAP_KEYS.has(name)) {
+        throw new Error(
+          `Tabnas: ${at}.${name}: \`${name}\` is a reserved name and cannot be a ` +
+          `${at.slice(at.lastIndexOf('.') + 1)} entry (it would reach the prototype chain)`,
+        )
+      }
+    }
+  }
+}
+
+
 // The shape one comment definition takes; `suffix` is a string, an
 // array of strings, or a function, so it is left unchecked here.
 const COMMENT_DEF_SHAPE = { line: true, start: '#', end: '*/', lex: true, eatline: false }
@@ -1652,6 +1750,7 @@ export {
   modlist,
   resolveFuncRefs,
   validateOptions,
+  rejectReservedNames,
   WIDENINGS,
   isMatcherToken,
   MATCHER_TOKEN_NAMES,

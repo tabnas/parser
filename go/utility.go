@@ -1656,10 +1656,52 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		}
 	}
 
+	// An entry under a reserved name is REFUSED, and the reads above
+	// converted it anyway. validateOptionsMap reports it and this
+	// function returns the error with the partial value, which is its
+	// contract -- but MapToOptions discards the error and keeps the
+	// value, and is documented to SKIP an entry it cannot carry. Without
+	// this the one door that cannot report a refusal was also the one
+	// that installed it.
+	pruneReservedNames(reflect.ValueOf(&opts))
+
 	if len(errs) > 0 {
 		return opts, fmt.Errorf("tabnas: options: %s", strings.Join(errs, "; "))
 	}
 	return opts, nil
+}
+
+// pruneReservedNames deletes every entry under a reserved name from the
+// string-keyed maps of a converted Options, walking exported fields and
+// following pointers.
+//
+// The names are refused everywhere rather than per map, because the
+// engine declares no option under one of them: deleting one can only
+// remove an entry validateOptionsMap has already reported.
+func pruneReservedNames(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			pruneReservedNames(v.Elem())
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			if t.Field(i).IsExported() {
+				pruneReservedNames(v.Field(i))
+			}
+		}
+	case reflect.Map:
+		if v.IsNil() || v.Type().Key().Kind() != reflect.String {
+			return
+		}
+		for name := range reservedMapKeys {
+			v.SetMapIndex(reflect.ValueOf(name), reflect.Value{})
+		}
+		for _, key := range v.MapKeys() {
+			pruneReservedNames(v.MapIndex(key))
+		}
+	}
 }
 
 // lexCheckOf reads a LexCheck hook out of a resolved map value, in either

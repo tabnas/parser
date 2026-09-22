@@ -1169,7 +1169,7 @@ How the value combines with the built-in set differs:
 | Whole value "leave this name alone" | `undefined` or `SKIP`; a name with no default behind it is then dropped rather than installed empty | no spelling: Go has no sentinel here, and an absent map key is the only way to say it |
 | Whole value `null` | a load fault on every door: `options.tokenSet.KEY: expected array, got null` | a load fault on the **serialized** door, `options.tokenSet.KEY: expected array, got null`. The typed door has no such value: `map[string][]string{"KEY": nil}` is an empty slice, not a null, and installs a present, empty set |
 
-| A reserved name (`__proto__`, `constructor`, `prototype`) | a load fault: the deep merge will not carry a key that reaches the prototype chain | the same, though Go has no such hazard: the code is the contract, so a grammar naming a set `constructor` must not load here and fault there |
+| A reserved name (`__proto__`, `constructor`, `prototype`) | a load fault, in every option map whose keys the caller chooses rather than in `tokenSet` alone: the deep merge will not carry a key that reaches the prototype chain | the same, though Go has no such hazard: the code is the contract, so a grammar naming a set `constructor` must not load here and fault there. The one map this port does not hold on `Options` is `plugin`, whose namespace lives on the engine, and it is checked at the door beside the reflective walk |
 | `tokenSet` itself `null` | a load fault, `options.tokenSet: expected object, got null` | the same |
 
 The last two rows are an API-shape difference and not a parity one: `SKIP`
