@@ -13,7 +13,7 @@ kept in step by hand, and the write-up says what that costs.
 | File | Mirrors | Proves |
 |---|---|---|
 | `inline_text.rs` | `rs/src/text.rs` | every constructor leaves `len <= INLINE_CAPACITY`, so the `unsafe` slice in `as_str` is in bounds, and the filled prefix is byte-for-byte its source |
-| `lexer_span.rs` | `rs/src/lexer.rs` | the invalid-escape diagnostic spans are valid ranges into the scalar buffer, so the indexing cannot panic |
+| `lexer_span.rs` | `rs/src/lexer.rs` | that the span arithmetic yields a valid range into the scalar buffer, and so cannot panic, GIVEN its `requires` clauses. Those preconditions are assumed, not established: none of the five production callers is modelled, so nothing here derives them from `advance()` or from where `esc_point` is captured, and `run.sh` stays green if a caller regresses |
 
 Run them:
 

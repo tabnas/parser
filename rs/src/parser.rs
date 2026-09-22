@@ -2979,10 +2979,6 @@ impl Parser {
                         push_slot,
                     );
                     child.i = next_rule_id;
-                    // `i` is what a grammar reads and may write; `uid` is
-                    // what the engine matches this rule by. Same number,
-                    // different guarantee -- see `Rule::uid`.
-                    child.uid = next_rule_id;
                     next_rule_id += 1;
                     child.d = stack.len() + 1;
                     child.parent_node = Some(current_rule.node.clone());
@@ -3051,7 +3047,6 @@ impl Parser {
                         replace_slot,
                     );
                     next.i = next_rule_id;
-                    next.uid = next_rule_id;
                     next_rule_id += 1;
                     next.d = current_rule.d;
                     next.parent_node = current_rule.parent_node.clone();
