@@ -174,10 +174,12 @@ fn rule_done_reports_resolved_function_form_routing() {
     parser.subscribe_rule_done(move |rule, _context, event| {
         if event.state == RuleState::Open {
             if let Some(alt) = event.alt.clone() {
-                routing_subscriber
-                    .lock()
-                    .unwrap()
-                    .push((rule.name.to_string(), alt.p, alt.r, alt.b));
+                routing_subscriber.lock().unwrap().push((
+                    rule.name.to_string(),
+                    alt.p,
+                    alt.r,
+                    alt.b,
+                ));
             }
         }
     });

@@ -126,6 +126,14 @@ both JSON and parser corpora. Additional compiler-consumer gates compare Rust
 against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
 and GBNF compilers.
 
+Two answers are deliberately this runtime's own, and both are recorded in
+the repository's divergence record. Object key order is out of the
+parsed-value contract (ADR-15): `Value::Object` keeps insertion order,
+TypeScript's plain object puts integer-like keys first, and this crate must
+never emulate that. A parse that sets no value answers `Value::Null`, where
+TypeScript answers `undefined`; the engine's `Value::Undefined` is unwrapped
+at the parse boundary on purpose.
+
 The portable serialized contract and native imperative tier have completed
 their TypeScript/Go surface audit. Rust ownership is expressed explicitly:
 grammar and next-rule views are immutable snapshots, live mutation is limited

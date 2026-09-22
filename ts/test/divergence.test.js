@@ -390,4 +390,34 @@ describe('divergence', () => {
     }
   })
 
+
+  it('integer-like keys sort first here, and stay in source order in Go and Rust', () => {
+    // DIVERGENCE.md "Key order in parsed objects": ADR-15 puts key order
+    // out of the parsed-value contract. A plain object's
+    // [[OwnPropertyKeys]] puts canonical array-index keys first in
+    // numeric order; the ports keep insertion order, and must never
+    // emulate this.
+    const { json } = require('../dist-test/json-plugin')
+    const tn = new Tabnas({ plugins: [json] })
+    assert.deepStrictEqual(Object.keys(tn.parse('{"2":"b","1":"a"}')), ['1', '2'])
+    assert.deepStrictEqual(
+      Object.keys(tn.parse('{"10":"j","9":"i","2":"b"}')), ['2', '9', '10'])
+    assert.deepStrictEqual(
+      Object.keys(tn.parse('{"b":1,"2":"two","a":2,"0":"zero"}')),
+      ['0', '2', 'b', 'a'])
+  })
+
+  it('a parse that sets no value is undefined here, nil in Go, Null in Rust', () => {
+    // DIVERGENCE.md "A parse that sets no value". Not lex.emptyResult,
+    // which is the answer for an EMPTY source and agrees everywhere.
+    const tn = new Tabnas({
+      rule: { start: 'top' },
+      fixed: { token: { '#A': 'a' } },
+      lex: { emptyResult: 'EMPTY' },
+    })
+    tn.rule('top', (rs) => rs.open([{ s: ['#A'] }]).close([{ s: ['#ZZ'] }]))
+    assert.strictEqual(tn.parse('a'), undefined)
+    assert.strictEqual(tn.parse(''), 'EMPTY')
+  })
+
 })

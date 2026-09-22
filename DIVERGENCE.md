@@ -145,6 +145,83 @@ change the column entry above defers. Recorded rather than fixed, and the
 scope sentence corrected so the next reader is not told this cannot reach
 a parsed value.
 
+### Key order in parsed objects
+
+Map key order is **out of the parsed-value contract** (ADR-15, admin
+`DECISIONS.md`, accepted 2026-08-19). Each runtime builds its result in
+its own native container and keeps whatever order that container keeps:
+
+| input | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `{"2":"b","1":"a"}` | `{"1":"a","2":"b"}` | `{"2":"b","1":"a"}` | `{"2":"b","1":"a"}` |
+| `{"10":"j","9":"i","2":"b"}` | `{"2":"b","9":"i","10":"j"}` | `{"10":"j","9":"i","2":"b"}` | `{"10":"j","9":"i","2":"b"}` |
+| `{"b":1,"2":"two","a":2,"0":"zero"}` | `{"0":"zero","2":"two","b":1,"a":2}` | `{"b":1,"2":"two","a":2,"0":"zero"}` | `{"b":1,"2":"two","a":2,"0":"zero"}` |
+
+TypeScript builds a plain object, so `[[OwnPropertyKeys]]` yields
+canonical array-index keys first in ascending numeric order and the
+remaining string keys in creation order. Go's `*OrderedMap` and Rust's
+`Value::Object` (`Arc<IndexMap<String, Value>>`, `rs/src/value.rs`) keep
+insertion order. All three are intended.
+
+**The Rust consequence, stated in as many words** (from
+`doc/rust-port-implementation-plan.md`): the Rust engine may use
+`IndexMap` and insertion order freely; **no ECMAScript integer-key
+emulation, ever.** The same holds for Go. A port that reorders keys to
+match JavaScript is implementing a defect, not parity. This has been
+rediscovered three times as a suspected fleet-wide defect (jsonic U6,
+then `ini`, then `jsonic-cli`), and one emulation was written and
+reverted before ADR-15 was found, which is why the prohibition is
+written here where the next reader will look first.
+
+**No shared fixture can detect this**, and none should try. The fixture
+loaders compare objects by key membership, and the register's `spec`
+probe renders map keys sorted by UTF-16 code unit in every runtime for
+exactly this reason, so the difference is invisible to every suite in
+the fleet. Prose is the only place it can live; the pins below assert
+each runtime's own order so a port that starts emulating another's
+fails loudly. Pinned by `ts/test/divergence.test.js` ('integer-like keys
+sort first here, and stay in source order in Go and Rust'),
+`go/divergence_test.go` `TestKeyOrderIsInsertionOrder` and
+`rs/tests/divergent_spec_test.rs` `key_order_is_insertion_order`.
+
+### A parse that sets no value
+
+A parse whose rules match the whole source but never set a node
+answers with each runtime's native absent value:
+
+| input | grammar | TypeScript | Go | Rust |
+| --- | --- | --- | --- | --- |
+| `a` | `top: {s:'#A'}` and no action | `undefined` | `nil` | `Value::Null` |
+
+Surfaced by `tabnas/json5` as `# c` under `{hashComment: true,
+requireValue: false}` (#196). It is not `lex.emptyResult`, which is the
+answer for an EMPTY source and agrees in all three; it is what an
+unset node becomes at the parse boundary.
+
+Deliberate, on both sides. TypeScript's `undefined` is JavaScript's
+absent value. Go's public value model is `any` over the JSON shapes,
+and Rust's public `Value` has no absent member once the engine is done
+with it: both ports carry an engine-internal `Undefined` sentinel and
+both **unwrap it at the parse boundary, recursively**
+(`UnwrapUndefined` in `go/rule.go`, `Value::unwrap_undefined` in
+`rs/src/value.rs`), so an unset element inside a container becomes
+`null` there exactly as `JSON.stringify` renders it from TypeScript.
+Returning the sentinel from `Parse` alone would make the top level
+disagree with every nested level, and Go's sentinel cannot pass
+through `encoding/json` at all. The repository's own parity rendering
+already folds `undefined` and `null` into one value (`divergentCanon`
+in both register runners), so the shared corpus cannot express the
+difference and does not need to.
+
+The cost: a grammar that distinguishes "parsed a null" from "parsed
+nothing" can do so in TypeScript and not in the ports, which is why
+`json5` normalises the former to `null` in all three plugins rather
+than reading the engine's answer. Pinned with opposite assertions by
+`ts/test/divergence.test.js` ('a parse that sets no value is undefined
+here, nil in Go, Null in Rust'), `go/divergence_test.go`
+`TestNoValueParseIsNil` and `rs/tests/divergent_spec_test.rs`
+`no_value_parse_is_null`.
+
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a

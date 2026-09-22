@@ -969,6 +969,14 @@ predictable:
 | Booleans | `bool` |
 | Null | `nil` |
 
+Two consequences of that table are deliberate, and both are recorded in
+the repository's divergence record. Object key order is out of the
+parsed-value contract (ADR-15): `*OrderedMap` keeps insertion order,
+TypeScript's plain object puts integer-like keys first, and this port must
+never emulate that. A parse that sets no value answers `nil`, where
+TypeScript answers `undefined`; the engine's `Undefined` sentinel is
+unwrapped at the parse boundary on purpose.
+
 ## `options.tokenSet`
 
 Both runtimes accept a `tokenSet` option and apply it identically from
