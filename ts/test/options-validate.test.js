@@ -300,16 +300,50 @@ describe('options-validate absent token sets', () => {
     }
   })
 
-  it('leaves a name that DOES have a default alone', () => {
-    // The other half of the same rule: SKIP over a set that exists is a
-    // no-op, not a deletion.
+  it('leaves a name that DOES have a default alone, for undefined and SKIP', () => {
+    // `deep()` keeps the base for these two, so the default array is still
+    // there when configure() runs and the guard never sees the name.
     const base = new Tabnas({}).internal().config.tokenSet.KEY.length
-    assert.equal(new Tabnas({ tokenSet: { KEY: SKIP } }).internal().config.tokenSet.KEY.length, base)
+    for (const members of [undefined, SKIP]) {
+      assert.equal(
+        new Tabnas({ tokenSet: { KEY: members } }).internal().config.tokenSet.KEY.length,
+        base,
+        'KEY = ' + String(members),
+      )
+    }
     // ...and a real list still replaces it.
     assert.equal(
       new Tabnas({ tokenSet: { KEY: ['#ST', null, null, null] } })
         .internal().config.tokenSet.KEY.length,
       1,
     )
+  })
+
+  it('clears a built-in set for an explicit null, which is the deep-merge reading', () => {
+    // `null` is NOT equivalent to undefined and SKIP here, and the
+    // difference is `deep()`'s rather than this guard's: deep replaces the
+    // base for any value but undefined and SKIP, so the default array is
+    // already gone. That matches null's meaning inside the array, where
+    // `['#ST', null, null, null]` clears three positions.
+    //
+    // Pinned because it is the kind of asymmetry a later reader would
+    // "tidy" into consistency, and because the consequence is quiet: a
+    // rule naming `#KEY` afterwards mints a single token of that name
+    // rather than failing, since Rule.parse resolves a set name as
+    // `tokenSet(n) ?? token(n)`.
+    const cleared = new Tabnas({ tokenSet: { KEY: null } }).internal().config.tokenSet
+    assert.equal('KEY' in cleared, false, 'an explicit null left the built-in KEY set in place')
+
+    // The way to empty a set while KEEPING the name is to clear every
+    // position. An empty array does not do it: an array overlays index by
+    // index, so overlaying nothing leaves all four defaults standing, which
+    // is worth pinning because it reads like the obvious spelling.
+    const emptied = new Tabnas({ tokenSet: { KEY: [null, null, null, null] } })
+      .internal().config.tokenSet
+    assert.equal('KEY' in emptied, true)
+    assert.equal(emptied.KEY.length, 0)
+
+    const notEmptied = new Tabnas({ tokenSet: { KEY: [] } }).internal().config.tokenSet
+    assert.equal(notEmptied.KEY.length, 4, 'an empty array emptied the set')
   })
 })

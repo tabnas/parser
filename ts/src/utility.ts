@@ -215,14 +215,34 @@ function configure(
   // Convert tokenSet tokens names to tins.
   //
   // A name whose members are absent is dropped rather than carried through
-  // as a set with no members. `null`, `undefined` and the SKIP sentinel all
-  // mean "leave this name as it was", and for a name with no base there is
-  // nothing to leave, so it must not reach the tin mapping at all. Without
-  // the guard `deep()` leaves an own property holding the absent value --
-  // it assigns `base[k] = deep(base[k], over[k])` unconditionally -- and
-  // this reduce then called `.filter()` on it, so a caller-defined name
-  // with no default (`{tokenSet: {CUSTOM: null}}`) died with a raw
-  // TypeError instead of being ignored.
+  // as a set with no members, because `.filter()` on the absent value is a
+  // raw TypeError. `deep()` assigns `base[k] = deep(base[k], over[k])`
+  // unconditionally, so an absent value still creates the own property that
+  // this reduce then walks.
+  //
+  // The three absent values do NOT all arrive here for the same reason, and
+  // the difference is `deep()`'s, not this guard's:
+  //
+  //   undefined, SKIP  `deep()` keeps the base, so a name with a default
+  //                    still holds its default array and never reaches the
+  //                    guard at all. Only a name with no base is dropped.
+  //   null             `deep()` REPLACES the base, as it does for any other
+  //                    value, so the base is already gone by the time this
+  //                    runs and the name is dropped whether or not it had
+  //                    a default.
+  //
+  // So `{tokenSet: {KEY: null}}` clears the built-in KEY set. That is the
+  // canonical deep-merge reading of `null` and matches its meaning inside
+  // the array (`['#ST', null, null, null]` clears three positions), but it
+  // is worth knowing that a rule naming `#KEY` afterwards does not fail:
+  // `Rule.parse` resolves a set name as `tokenSet(n) ?? token(n)`, so it
+  // quietly mints a single token of that name instead of expanding the
+  // group.
+  //
+  // To empty a set while KEEPING the name, clear every position:
+  // `{KEY: [null, null, null, null]}` gives a present, zero-length set.
+  // `{KEY: []}` does NOT: an array overlays index-wise, so overlaying
+  // nothing leaves all four defaults in place.
   const tokenSet = opts.tokenSet
     ? Object.keys(opts.tokenSet).reduce(
       (a: any, n: string) => {
