@@ -880,8 +880,17 @@ func NormAlt(alt *AltSpec) error {
 			subprop = parts[1]
 		}
 
+		// The plain-value cases must match condProblems' list exactly. They
+		// did not: condProblems accepted int, int64, float64, string and
+		// bool as "$eq shorthand, as in the TS port" while this switch built
+		// a condition for `int` alone. Every other plain value validated
+		// clean and then produced NO condition, so the alternate matched
+		// unconditionally -- and a spec loaded through GrammarSpecFromJSON
+		// or GrammarText has no `int` in it at all, since encoding/json
+		// decodes every number as float64 and every string as string. The
+		// `default` arm below is what stops the two lists drifting again.
 		switch v := pspec.(type) {
-		case int:
+		case int, int64, float64, string, bool:
 			cond, err := MakeRuleCond("$eq", prop, subprop, v)
 			if err != nil {
 				return err
@@ -893,6 +902,10 @@ func NormAlt(alt *AltSpec) error {
 				return err
 			}
 			conds = append(conds, cond)
+		default:
+			return fmt.Errorf(
+				"tabnas: unusable condition value on %q: want a plain value or "+
+					"CondOp, got %T", propdef, v)
 		}
 	}
 

@@ -647,3 +647,54 @@ func TestConditionParityWithTS(t *testing.T) {
 		}
 	}
 }
+
+// Every plain condition value ValidateAlt accepts must actually BUILD a
+// condition.
+//
+// condProblems accepts int, int64, float64, string and bool as "$eq
+// shorthand, as in the TS port", while NormAlt's switch built a condition for
+// `int` alone. The other four validated clean and produced no condition at
+// all, so the alternate matched unconditionally -- silently, since the
+// validator had already said the spec was fine.
+//
+// It is the serialized door that has none of the accepted types but `int`:
+// encoding/json decodes every number as float64 and every string as string,
+// so EVERY declarative condition in a grammar loaded through
+// GrammarSpecFromJSON or GrammarText was a no-op. TypeScript and Rust honour
+// them, which makes it a parity defect and not only a Go one: the same
+// serialized grammar chose different alternates in Go.
+func TestNormAltBuildsEveryPlainConditionValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		cd    map[string]any
+		match bool
+	}{
+		{"float64 eq", map[string]any{"d": float64(0)}, true},
+		{"float64 ne", map[string]any{"d": float64(3)}, false},
+		{"string eq", map[string]any{"name": "top"}, true},
+		{"string ne", map[string]any{"name": "nope"}, false},
+		{"int64 eq", map[string]any{"d": int64(0)}, true},
+		{"int64 ne", map[string]any{"d": int64(9)}, false},
+		{"bool ne", map[string]any{"node": true}, false},
+	}
+	for _, kase := range cases {
+		alt := &AltSpec{CD: kase.cd}
+		if err := NormAlt(alt); err != nil {
+			t.Fatalf("%s: NormAlt: %v", kase.name, err)
+		}
+		if alt.C == nil {
+			t.Fatalf("%s: NormAlt accepted %v and built no condition, so the "+
+				"alternate matches everything", kase.name, kase.cd)
+		}
+		rule := &Rule{Name: "top"}
+		if got := alt.C(rule, nil); got != kase.match {
+			t.Errorf("%s: condition %v gave %v, want %v", kase.name, kase.cd, got, kase.match)
+		}
+	}
+
+	// And a value neither list accepts is now an error rather than a
+	// silently dropped condition, so the two lists cannot drift apart again.
+	if err := NormAlt(&AltSpec{CD: map[string]any{"d": []int{1}}}); err == nil {
+		t.Error("an unusable condition value must fail the grammar, not vanish")
+	}
+}
