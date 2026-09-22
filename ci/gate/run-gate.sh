@@ -4,8 +4,9 @@
 # working-tree engine. An engine change that breaks a downstream grammar
 # fails here instead of after merge.
 #
-# Layout assumption (same as .github/workflows/build.yml): the sibling
-# repos are checked out next to this one:
+# Layout assumption (the org-wide sibling-checkout convention, which the
+# shared CI workflow also follows): the sibling repos are checked out next
+# to this one:
 #   <root>/parser   (this repo)
 #   <root>/json
 #   <root>/jsonic

@@ -2,8 +2,8 @@
 
 // The fast half of the prose gate (docs/STYLE-GUIDE.md).
 //
-// Vale is the other half and runs in .github/workflows/docs.yml. The two
-// read ONE file list (ts/scripts/gated-docs.cjs) and ONE banned list
+// Vale is the other half, run by `make prose` wherever vale is installed.
+// The two read ONE file list (ts/scripts/gated-docs.cjs) and ONE banned list
 // (.vale/styles/config/vocabularies/Tabnas/reject.txt) so neither can
 // drift from the other.
 //

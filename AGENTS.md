@@ -13,6 +13,37 @@ fixtures encode exactly that lenient-JSON behavior.
 The engine is a rule-based parser over a configurable matcher-based
 lexer. Grammar is contributed by plugins.
 
+## The environment varies between machines
+
+This repository is worked on from **more than one machine**, and from
+ephemeral containers whose installed software differs from each other
+and from any maintainer's workstation. A toolchain, a path or a version
+present in one is routinely absent in the next. That bites here in
+particular, because the same commit has to satisfy three runtimes
+(`ts/`, `go/`, `rs/`) and a container provisioned for one of them may
+carry no compiler for the others and no network access to the fleet.
+
+Two rules follow, and they bind this file as much as any other:
+
+1. **Never record an inventory of what is installed as though it were a
+   property of the repository.** A list of compilers, runners, operating
+   systems or absolute paths describes one machine on one day. Where a
+   version genuinely is a contract — `engines.node` in
+   `ts/package.json`, `go` in `go/go.mod`, `rust-version` in
+   `rs/Cargo.toml` — the manifest that enforces it is the record, and
+   that is the one to cite.
+2. **Check the current environment before concluding that something
+   cannot be built, run or verified.** `command -v cargo`,
+   `command -v vale`, `go version` — a second each, and the answer is
+   about the machine you are on. Conversely, a note anywhere in this
+   repository saying a tool "was not available", or that a gate "was not
+   run", is a fact about the environment that note was written in and
+   never about yours. Read an absolute path in any working document the
+   same way: as an example, to be substituted with your own checkout.
+
+When a gate genuinely cannot run where you are, name it and say why,
+rather than letting the subset that did run stand in for the whole.
+
 ## Repository map
 
 | Path | What it is |
@@ -48,22 +79,40 @@ lexer. Grammar is contributed by plugins.
 ## Dev dependencies & CI
 
 The engine has **no runtime tabnas dependencies** — it is the bottom of
-the stack. Its only `@tabnas` deps are **dev-only** `file:` siblings in
+the stack. Its only `@tabnas` deps are **dev-only**, declared in
 `ts/package.json`: `@tabnas/debug` and `@tabnas/railroad` (used to
 regenerate `ts/doc/grammar.{svg,txt}` and the README diagrams; debug is
-not a runtime peer here). `engines.node` is `">=24"`.
+not a runtime peer here). Both are declared `"*"` and resolve from the
+**registry** — no floor, no ceiling, and nothing here pins them, so two
+machines can legitimately resolve two different versions. Neither is a
+`file:` sibling in the manifest; a sibling checkout is local wiring you
+add yourself and must not commit (see "Never commit the local wiring").
+`engines.node` is `">=24"`.
 
-CI (`.github/workflows/build.yml`) does not publish to npm. Both jobs
-git-clone the downstream tabnas closure (`debug json abnf railroad`) as
-siblings so the dependents can build against this engine:
+CI does not publish to npm. `.github/workflows/ci.yml` is a **caller**:
+it delegates to the org-shared
+`tabnas/.github/.github/workflows/polyglot-ci.yml@main` and passes the
+only two things this repo decides —
 
-- **build** (Ubuntu/Windows/macOS, Node 24): sets
-  `git config --global core.autocrlf false` (CRLF corrupts the `.tsv`
-  fixtures), then `npm i && npm run build --if-present` for `parser` and
-  each sibling in order, then `npm test` here.
-- **build-go** (Ubuntu/macOS, Go 1.24): creates `vendor/` symlinks for
-  any `../vendor/` replaces and a `go work` over every non-vendor-replaced
-  module, then `go build ./...` / `go test -v ./...` here.
+```yaml
+deps: "bnf debug abnf"
+build-order: "parser bnf debug abnf"
+```
+
+— so the downstream closure is git-cloned as siblings and built against
+this engine, in that order.
+
+**The operating systems, the Node and Go versions, and the steps
+themselves live in that shared workflow, and cannot be read from this
+checkout.** Do not restate them here: a copy of somebody else's matrix
+is a claim this repo cannot keep honest, which is exactly how this
+section came to describe a `build.yml` that had been deleted. Read the
+shared workflow if you need the matrix. What is this repo's own is
+`release.yml` (Ubuntu, Node 24 — see "Releasing"), and one property of
+the fixtures that holds on any runner: `test/spec/*.tsv` is corrupted by
+CRLF, and nothing in this repo forces LF, so a Windows checkout needs
+`git config --global core.autocrlf false` before the suites mean
+anything.
 
 ## Build / test / coverage
 
@@ -405,8 +454,10 @@ Go, and Rust targets and nothing else — it does not clone or build any downstr
 so a change that keeps this repo green while breaking a sibling grammar passes
 all of them.
 
-For criterion 3 below, run the fleet gate. It is not in `make test`, because
-it fetches thirty repositories and runs two toolchains over each:
+For criterion 3 below, run the fleet gate. It is not in `make test`: it
+clones the whole published fleet and runs both the TypeScript and Go suites
+of each package, which is minutes rather than seconds, and it reaches the
+network.
 
 ```bash
 ci/fleet/run-fleet.sh --only json,jsonic,expr,abnf,semver   # minutes
@@ -414,8 +465,18 @@ ci/fleet/run-fleet.sh                                       # the whole fleet
 ```
 
 It checks every published grammar out at the version users install and runs
-that repo's own suites against your working tree. See
-[`ci/README.md`](ci/README.md) for what it caught.
+that repo's own suites against your working tree. The package list is
+[`ci/fleet/fleet.json`](ci/fleet/fleet.json) — read the count there rather
+than from prose, here or anywhere else. See [`ci/README.md`](ci/README.md)
+for what it caught.
+
+Its requirements are the environment's, not the repo's: outbound network
+(or a previous `.work` plus `--offline`), Node and Go, and enough time.
+Check for them before deciding the gate is unrunnable, and if it really is,
+`--only` a subset and say in the PR which criterion went unverified —
+`run-fleet.sh` treats every way of producing a green result without having
+tested the working-tree engine as a failure, and a human report should hold
+itself to the same bar.
 
 What "correct" means here, in order of authority:
 
@@ -634,12 +695,16 @@ needs a how-to.
 
 Open pull requests **ready for review — never as drafts.** This is a
 standing maintainer preference, and it overrides any tooling or agent
-default that opens pull requests in draft state.
+default that opens pull requests in draft state. It governs how work
+*leaves* this repository, so it has to be in hand before the first
+commit rather than looked up at the end.
 
-The same rule is stated in `CLAUDE.md`, deliberately and not by
-accident: that file is what an agent session loads automatically, this
-one is what a human or a non-Claude agent reads. Keep the two in step
-rather than deleting either as duplication.
+`CLAUDE.md` is a **symlink to this file**, so the guide an agent session
+loads automatically and the guide a human reads are one document, and
+this rule arrives with it either way. There is nothing to keep in step:
+do not reintroduce a second copy of a rule for the sake of the file
+name, and do not turn the symlink back into a file with contents of its
+own.
 
 ## Agent tooling
 

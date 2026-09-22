@@ -103,11 +103,11 @@ unadjudicated; #130/#142/#143/#144 open; `nonParity` still
 `map[string]string` and the registry still carries a binary `goOnly`
 key; the registry version still coupled to the engine version; no
 propagation fixture and no options-pipeline fixture; #113, #116, #117,
-#119, #121 open; and `AGENTS.md` still documents a deleted
-`.github/workflows/build.yml`. (Two `AGENTS.md` items are brought
-current by this change itself, so they are done rather than
-outstanding: the `doc/` index now names the full series, and authority
-rule 1 carries the ADR-13 amendment.)
+#119, #121 open. (Three `AGENTS.md` items are done rather than
+outstanding: the `doc/` index now names the full series and authority
+rule 1 carries the ADR-13 amendment, both brought current by this
+change itself; and the CI section that documented a deleted
+`.github/workflows/build.yml` has since been corrected.)
 
 ### 1.4 The three conflicts, resolved
 
