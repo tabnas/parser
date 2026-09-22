@@ -38,6 +38,53 @@ func validateOptionsMap(m map[string]any) error {
 	return nil
 }
 
+// optionWidenings declares, per leaf, the shapes the READER accepts
+// beyond the type of the field that holds it. It is the Go half of the
+// canonical table in ts/src/utility.ts (WIDENINGS), and it exists for the
+// same reason: #143 shipped a validator stricter than the readers it was
+// meant to describe, and a string `ender` — documented, read by
+// OptionsFromMap below, and passed by @tabnas/yaml — stopped loading in
+// every runtime. A leaf whose reader takes a second shape belongs here,
+// and nowhere else.
+//
+// A key ending in `.*` matches one dynamic entry of the map named by the
+// rest of it, whose entry names belong to the caller.
+//
+// Two widenings are NOT here because they are general rules rather than
+// per-leaf ones, and each already has exactly one home: a `false` entry
+// in a definition map removes that definition (the pointer-element case
+// in validateLeaf, which covers comment.def, value.def, lex.match and
+// match.value alike), and errmsg.suffix takes any shape because the field
+// it lands in is `any`.
+var optionWidenings = map[string]func(val any) bool{
+	// OptionsFromMap reads a string ender as a one-entry list, whose
+	// characters then each become an ender.
+	"options.ender": func(val any) bool { _, ok := val.(string); return ok },
+
+	// false is the portable spelling of "retain every consumed token"
+	// (#144, #142); TypeScript also accepts its Infinity spelling.
+	"options.rewind.history": isFalse,
+}
+
+func isFalse(val any) bool {
+	b, ok := val.(bool)
+	return ok && !b
+}
+
+// widenedOption reports whether the reader for `path` accepts `val`
+// beyond the type of the field that holds it.
+func widenedOption(path string, val any) bool {
+	if w, ok := optionWidenings[path]; ok && w(val) {
+		return true
+	}
+	if dot := strings.LastIndex(path, "."); dot >= 0 {
+		if w, ok := optionWidenings[path[:dot+1]+"*"]; ok && w(val) {
+			return true
+		}
+	}
+	return false
+}
+
 // optionsKeyNames is the serialized spelling of a Go field where
 // lowering the first letter does not give it (the TS option names).
 var optionsKeyNames = map[string]string{
@@ -77,14 +124,17 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 	if val == nil || IsSkip(val) {
 		return
 	}
-	// The one leaf with a spelling of its own: rewind.history takes false
-	// for unbounded (#142).
+	// A shape the reader takes beyond the field's own type. Declared in
+	// optionWidenings, never tested inline here — an inline widening
+	// drifts from the reader that motivates it, which is #143.
+	if widenedOption(path, val) {
+		return
+	}
+	// Not a widening but a sharper message: true reads as a cap and is
+	// not one, where the generic error would only name the shape (#142).
 	if path == "options.rewind.history" {
-		switch v := val.(type) {
-		case bool:
-			if v {
-				*errs = append(*errs, path+": true is not a cap; use false for unbounded")
-			}
+		if v, ok := val.(bool); ok && v {
+			*errs = append(*errs, path+": true is not a cap; use false for unbounded")
 			return
 		}
 	}
@@ -190,9 +240,11 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 			return
 		}
 		for name, entry := range sub {
-			// A false entry removes a definition (value.def, comment.def),
-			// as null does.
-			if b, ok := entry.(bool); ok && !b && t.Elem().Kind() == reflect.Ptr {
+			// A false entry removes a definition, as null does — the
+			// general form of an optionWidenings entry, covering every
+			// definition map (value.def, comment.def, lex.match,
+			// match.value) rather than naming each one.
+			if isFalse(entry) && t.Elem().Kind() == reflect.Ptr {
 				continue
 			}
 			validateLeaf(t.Elem(), entry, path+"."+name, errs)

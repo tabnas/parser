@@ -1495,7 +1495,11 @@ fn apply_options(
     if let Some(ender) = map.get("ender") {
         options.ender = match ender {
             JsonValue::Null => Vec::new(),
-            JsonValue::String(ender) => vec![ender.clone()],
+            // A string ender is its CHARACTERS, one ender each, as
+            // TypeScript's `opts.ender.split('')` reads it — not one
+            // multi-character ender. Single-character, which is what a
+            // grammar passes, is the same either way.
+            JsonValue::String(ender) => ender.chars().map(String::from).collect(),
             JsonValue::Array(enders) => enders
                 .iter()
                 .map(|ender| {

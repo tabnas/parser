@@ -1226,6 +1226,54 @@ function getpath(root: any, path: string | string[]): any {
 }
 
 
+// The shapes an option READER accepts beyond the type of its default,
+// declared in one table so the validator's acceptance set cannot drift
+// from the readers' (#143 shipped a validator stricter than the readers
+// and broke every grammar passing a string `ender`, @tabnas/yaml among
+// them). An option whose reader takes a second shape is entered here,
+// citing the reader; an option that is not entered here takes its
+// default's type and nothing else.
+//
+// A key ending in `.*` matches one dynamic entry of the map named by the
+// rest of it, whose entry names belong to the caller.
+//
+// This is the whole list, not a starting set: the readers were walked
+// for every coercion (`ts/src/utility.ts` configure(), the comment and
+// string matchers in `ts/src/lexer.ts`), and the values a reader merely
+// fails to crash on are deliberately absent — `string.escape.<c>: false`
+// renders the literal "false" into the string, `result.fail: 'x'` spreads
+// a string into characters, and a whole dynamic map set to `false` is
+// already spelled `null`, which every leaf accepts.
+const WIDENINGS: Record<string, (val: any) => boolean> = {
+  // configure(): a string ender is split into its characters, so
+  // `ender: ':'` is `ender: [':']`.
+  'options.ender': (val) => S.string === typeof val,
+
+  // configure(): a matcher set to false is dropped from the pipeline,
+  // exactly as null drops it. Go's door already accepted this.
+  'options.lex.match.*': (val) => false === val,
+
+  // configure(): false is the portable spelling of "retain every
+  // consumed token" (#144, #142); Infinity is the JavaScript-only one.
+  'options.rewind.history': (val) => false === val,
+
+  // error.ts: a string replaces the suffix and a function renders it.
+  'options.errmsg.suffix': (val) =>
+    S.string === typeof val || S.function === typeof val,
+}
+
+// True when `val` is a shape the reader for `at` accepts beyond the type
+// of its default.
+function widened(at: string, val: any): boolean {
+  const exact = WIDENINGS[at]
+  if (null != exact && exact(val)) return true
+  const dot = at.lastIndexOf('.')
+  if (0 > dot) return false
+  const wild = WIDENINGS[at.substring(0, dot + 1) + '*']
+  return null != wild && wild(val)
+}
+
+
 // Validate an options overlay against the shape of the defaults before it
 // is merged. The serialized options door (`grammar()`) and the in-process
 // doors (`new Tabnas(o)`, `tn.options(o)`) all pass through here, so an
@@ -1241,6 +1289,11 @@ function getpath(root: any, path: string | string[]): any {
 // The dynamic-key maps (a token set, a comment definition, a keyword) are
 // validated per entry against the shape their defaults show, spelled out
 // below because the entry names are the caller's.
+//
+// A leaf whose reader takes a SECOND shape is declared in WIDENINGS, not
+// tested inline here: the validator's job is to accept exactly what the
+// readers accept, and a widening written as an `if` in this function
+// drifts from the reader that motivates it. See WIDENINGS.
 // validateOptions({rule:{start:1}}, defaults) // => throws 'options.rule.start: expected string, got number'
 function validateOptions(opts: any, dflt: any, path = 'options'): void {
   if (null == opts || S.object !== typeof opts || Array.isArray(opts)) return
@@ -1248,6 +1301,7 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     const val = opts[key]
     const d = dflt?.[key]
     const at = path + '.' + key
+    if (widened(at, val)) continue
     const entry = DYNAMIC_MAPS[at]
     if (null != entry) {
       if (null == val || SKIP === val) continue
@@ -1255,7 +1309,9 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
         bad(at, 'object', val)
       }
       for (const name of Object.keys(val)) {
-        entry(val[name], at + '.' + name)
+        const nat = at + '.' + name
+        if (widened(nat, val[name])) continue
+        entry(val[name], nat)
       }
       continue
     }
@@ -1278,12 +1334,10 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
       validateOptions(val, d, at)
       continue
     }
-    // A primitive default: the same primitive, with the exceptions the
-    // documented option contracts carry.
+    // A primitive default: the same primitive. The leaves that take more
+    // than their default's type are declared in WIDENINGS above.
     const want = typeof d
     if (want !== typeof val) {
-      if ('options.rewind.history' === at && false === val) continue
-      if ('options.errmsg.suffix' === at && (S.string === typeof val || S.function === typeof val)) continue
       bad(at, want, val)
     }
   }
@@ -1493,6 +1547,7 @@ export {
   modlist,
   resolveFuncRefs,
   validateOptions,
+  WIDENINGS,
   isMatcherToken,
   MATCHER_TOKEN_NAMES,
 }
