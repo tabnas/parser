@@ -141,6 +141,13 @@ impl<'a> Lexer<'a> {
     /// The source from char index `start` up to `end`, clipped to the end
     /// of the source: the span of a bad token, cut as TypeScript's
     /// `lex.bad(why, pstart, pend)` cuts it (`ts/src/lexer.ts`).
+    ///
+    /// Only the END is clipped. The caller must supply `start <= end`
+    /// and `start <= self.char_len`, or the indexing panics. Every call
+    /// site below passes `esc_point.site.pos - 1`, which additionally
+    /// needs `1 <= pos`; that holds because `esc_point` is captured
+    /// after the escape character has been consumed. These three are
+    /// the preconditions proved in `rs/verus/lexer_span.rs`.
     fn source_span(&self, start: usize, end: usize) -> String {
         self.chars[start..end.min(self.char_len)].iter().collect()
     }
