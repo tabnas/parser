@@ -7,7 +7,6 @@
 // disk would both fail unstaged wiring and miss a staged violation the working
 // copy has since had reverted.
 
-const Fs = require('node:fs')
 const Path = require('node:path')
 const Child = require('node:child_process')
 
@@ -15,7 +14,10 @@ const REPO = process.env.DEP_GATE_REPO
   ? Path.resolve(process.env.DEP_GATE_REPO)
   : Path.join(__dirname, '..')
 
-const CONFIG_PATH = Path.join(__dirname, 'dep-gate.json')
+// Relative to the repository being judged, not to this file: the gate is
+// parameterised by root, and the allowlist that applies is the one that root
+// tracks.
+const CONFIG_REL = 'tools/dep-gate.json'
 
 const SPEC_SECTIONS = [
   'dependencies',
@@ -81,7 +83,7 @@ const WHY = {
   'go-module-replace':
     'a committed go.mod redirects a module to another module',
   'go-workspace':
-    'a committed go.work resolves a module from outside this repository',
+    'a go.work is committed, and a workspace belongs outside every repository it wires',
   'cargo-external-path-dep':
     'a Cargo.toml takes a dependency by a path outside this repository',
   'cargo-absolute-path-dep':
@@ -109,13 +111,18 @@ const WHY = {
 }
 
 
-function readConfig(path) {
+// From the index, like every other input. Read from disk, the allowlist would be
+// the one file a staged violation could excuse itself with while the entry
+// excusing it is still unstaged -- the asymmetry that reading manifests from the
+// index exists to close. An untracked allowlist excuses nothing.
+function readConfig(root, trackedPaths) {
+  if (!trackedPaths.has(CONFIG_REL)) return {}
   try {
-    return JSON.parse(Fs.readFileSync(path, 'utf8'))
+    return JSON.parse(indexBlob(root, CONFIG_REL))
   }
   catch (err) {
-    if ('ENOENT' === err.code) return {}
-    throw new Error('dep-gate: ' + path + ' is not readable JSON: ' + err.message)
+    throw new Error(
+      'dep-gate: ' + CONFIG_REL + ' is not readable JSON in the index: ' + err.message)
   }
 }
 
@@ -135,20 +142,19 @@ function localish(p) {
 
 
 // The host, not a substring of the whole spec: `https://evil.example/github.com/o/r`
-// has `github.com` in its PATH and is not a GitHub reference.
+// has `github.com` in its PATH and is not a GitHub reference. The authority is
+// read directly rather than through `new URL`, which REJECTS
+// `git+ssh://git@github.com:npm/cli.git` -- one of npm's own documented forms,
+// where what follows the colon is a path and not a port number.
 function hostOf(spec) {
-  const s = String(spec || '')
-  if (!/:\/\//.test(s)) {
+  const s = String(spec || '').replace(/^git\+/i, '')
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
     // scp-style, `user@host:owner/repo.git`, which git accepts and npm passes on.
     const m = /^[^@\s/]*@([^:\s/]+):/.exec(s)
     return m ? m[1].toLowerCase() : null
   }
-  try {
-    return new URL(s.replace(/^git\+/i, '')).hostname.toLowerCase()
-  }
-  catch {
-    return null
-  }
+  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/@]*@)?([^/:?#\s]+)/i.exec(s)
+  return m ? m[1].toLowerCase() : null
 }
 
 
@@ -438,21 +444,7 @@ function checkGoMod(file, text, config, root, seen, trackedPaths) {
 }
 
 
-// A go.work whose every member lives in this repository travels with the
-// checkout, so the file name alone is not the finding -- the paths are.
-function checkGoWork(file, text, config, root, seen) {
-  const findings = []
-  const allow = config.allow || {}
-  const REPO_ROOT = root || REPO
-  const dir = Path.dirname(Path.join(REPO_ROOT, file))
-
-  const add = (where, spec) => {
-    const key = file + ':go-workspace:' + where
-    if (seen) seen.add(key)
-    if (Object.prototype.hasOwnProperty.call(allow, key)) return
-    findings.push({ rule: 'go-workspace', file, where, spec, key })
-  }
-
+function goWorkTargets(text) {
   const targets = []
   let inUse = false
   let inReplace = false
@@ -475,18 +467,30 @@ function checkGoWork(file, text, config, root, seen) {
     if (rep) targets.push(unquoteGo(rep[1]))
   }
 
-  for (const target of targets) {
-    if (absoluteish(target)) { add(target, 'use ' + target); continue }
-    if (!/^\.{1,2}[\\/]/.test(target)) continue
-    if (!insideRepo(Path.resolve(dir, target), REPO_ROOT)) add(target, 'use ' + target)
-  }
-
-  return findings
+  return targets
 }
 
 
+// The FILE is the finding, whatever its members resolve to: a workspace belongs
+// one level above the repositories it wires together, precisely so that no
+// repository can track it. Its members are reported with it, because an
+// all-internal one reads as harmless until you see what it names.
+function checkGoWork(file, text, config, root, seen) {
+  const allow = config.allow || {}
+  const key = file + ':go-workspace'
+  if (seen) seen.add(key)
+  if (Object.prototype.hasOwnProperty.call(allow, key)) return []
+
+  const targets = goWorkTargets(text)
+  const spec = targets.length ? 'use ' + targets.join(' ') : 'a workspace with no members'
+  return [{ rule: 'go-workspace', file, where: file, spec, key }]
+}
+
+
+// `[patch.*]` and `[replace]` redirect a dependency as surely as a `path` key in
+// `[dependencies]` does, so they are dependency tables for this gate's purposes.
 const CARGO_DEP_SECTION_RE =
-  /^\[\s*(?:workspace\s*\.\s*)?(?:target\s*\.\s*(?:"[^"]*"|'[^']*'|[^.\]]+)\s*\.\s*)?(?:dev-|build-)?dependencies(?:\s*\.\s*[^\]]+)?\s*\]$/
+  /^\[\s*(?:workspace\s*\.\s*)?(?:(?:target\s*\.\s*(?:"[^"]*"|'[^']*'|[^.\]]+)\s*\.\s*)?(?:dev-|build-)?dependencies(?:\s*\.\s*[^\]]+)?|patch(?:\s*\.\s*[^\]]+)?|replace)\s*\]$/
 
 // Only dependency tables, and never a commented-out line: a `path` key in
 // `[package]` or behind a `#` is not a dependency.
@@ -592,10 +596,15 @@ function indexBlob(root, rel) {
 
 
 function checkAll(config, root) {
-  const cfg = config || readConfig(CONFIG_PATH)
   const REPO_ROOT = root || REPO
   const findings = []
   const seenKeys = new Set()
+
+  const rows = tracked(REPO_ROOT)
+  const trackedPaths = new Set(rows.map((r) => r.path))
+  const modeOf = new Map(rows.map((r) => [r.path, r.mode]))
+
+  const cfg = config || readConfig(REPO_ROOT, trackedPaths)
   const allow = cfg.allow || {}
   const has = (key) => Object.prototype.hasOwnProperty.call(allow, key)
 
@@ -609,10 +618,6 @@ function checkAll(config, root) {
   // Record every key the allowlist COULD have matched, so a stale entry is
   // detectable -- but only where the condition it excuses is actually present.
   const offer = (key) => seenKeys.add(key)
-
-  const rows = tracked(REPO_ROOT)
-  const trackedPaths = new Set(rows.map((r) => r.path))
-  const modeOf = new Map(rows.map((r) => [r.path, r.mode]))
 
   const judge = (rel, base, text) => {
     if ('package.json' === base) return checkManifest(rel, JSON.parse(text), cfg, seenKeys)

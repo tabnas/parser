@@ -247,22 +247,51 @@ test('a go replace is judged on where it points, and quoting does not hide it', 
 })
 
 
-test('a go.work is judged on its member paths, not on its name', () => {
+test('a committed go.work is a finding by name, whatever it wires', () => {
   // Path.resolve makes the synthetic root native, so the containment checks
   // mean the same thing on a Windows runner as on a POSIX one.
   const root = Path.resolve('/repo')
-  const internal = gate.checkGoWork('go.work', 'go 1.24\nuse ./go\nuse (\n\t./ci/helper\n)\n', EMPTY, root)
-  assert.deepEqual(internal, [], 'a workspace entirely inside the repository must pass')
+  const work = (text) => gate.checkGoWork('go.work', text, EMPTY, root)
 
-  const escaping = gate.checkGoWork('go.work', 'go 1.24\nuse (\n\t./go\n\t../sibling/go\n)\n', EMPTY, root)
-  assert.deepEqual(rules(escaping), ['go-workspace'], 'an escaping use missed')
+  // The all-internal case is the one a path rule waves through, and the one the
+  // guides forbid outright: a workspace lives above the repositories it wires.
+  assert.deepEqual(rules(work('go 1.24\nuse ./go\nuse (\n\t./ci/helper\n)\n')),
+    ['go-workspace'], 'an internal workspace must still be a finding')
+  assert.deepEqual(work('go 1.24\nuse ./go\n')[0].spec, 'use ./go',
+    'the report must name what the workspace wires')
 
-  const absolute = gate.checkGoWork('go.work', 'go 1.24\nuse /elsewhere/go\n', EMPTY, root)
-  assert.deepEqual(rules(absolute), ['go-workspace'], 'an absolute use missed')
+  assert.deepEqual(rules(work('go 1.24\nuse (\n\t./go\n\t../sibling/go\n)\n')),
+    ['go-workspace'], 'an escaping use missed')
+  assert.deepEqual(rules(work('go 1.24\nuse /elsewhere/go\n')),
+    ['go-workspace'], 'an absolute use missed')
+  assert.deepEqual(rules(work('go 1.24\n')),
+    ['go-workspace'], 'a memberless workspace missed')
 
-  const replaced = gate.checkGoWork('go.work',
-    'go 1.24\nuse ./go\nreplace example.com/m => ../../outside\n', EMPTY, root)
-  assert.deepEqual(rules(replaced), ['go-workspace'], 'an escaping workspace replace missed')
+  const allowed = gate.checkGoWork('go.work', 'go 1.24\nuse ./go\n',
+    { allow: { 'go.work:go-workspace': 'reason' } }, root)
+  assert.deepEqual(allowed, [], 'the allowlist key must suppress it')
+})
+
+
+test('a git host is read from the authority, in every spelling git accepts', () => {
+  // npm documents `git+ssh://git@github.com:npm/cli.git#v1.0.27`, where what
+  // follows the colon is a path. `new URL` rejects it outright.
+  for (const spec of [
+    'git+ssh://git@github.com:npm/cli.git#v1.0.27',
+    'git+ssh://git@github.com/npm/cli.git#v1.0.27',
+    'git+https://github.com/o/r.git',
+    'github:o/r',
+    'git@github.com:o/r.git',
+  ]) assert.equal(gate.classify(spec).source, 'github', JSON.stringify(spec))
+
+  for (const spec of [
+    'git+ssh://git@gitlab.com:o/r.git',
+    'git+ssh://git@gitlab.com/o/r.git',
+    'git+https://evil.example/github.com/o/r.git',
+  ]) assert.equal(gate.classify(spec).source, 'git-other', JSON.stringify(spec))
+
+  assert.equal(gate.hostOf('git+ssh://git@github.com:npm/cli.git'), 'github.com',
+    'the colon form must yield a host, not null')
 })
 
 
@@ -292,6 +321,21 @@ test('a cargo dependency is judged by path, by host, and only inside a dependenc
     'a path outside a dependency table is not a dependency')
   assert.deepEqual(rules(cargo('[target."cfg(unix)".dev-dependencies]\ndep = { path = "../../s" }\n')),
     ['cargo-external-path-dep'], 'a target dev-dependency table was not read')
+
+  // `[patch.*]` and `[replace]` redirect a resolved dependency, so they are
+  // dependency tables here however Cargo names them.
+  assert.deepEqual(rules(cargo('[patch.crates-io]\ndep = { path = "../../sibling" }\n')),
+    ['cargo-external-path-dep'], 'a patch table was not read')
+  assert.deepEqual(rules(cargo('[patch."https://github.com/o/r"]\ndep = { path = "/elsewhere" }\n')),
+    ['cargo-absolute-path-dep'], 'a patch table keyed by URL was not read')
+  assert.deepEqual(rules(cargo('[replace]\n"dep:0.1.0" = { path = "../../sibling" }\n')),
+    ['cargo-external-path-dep'], 'a replace table was not read')
+  assert.deepEqual(rules(cargo('[workspace.patch.crates-io]\ndep = { git = "https://gitlab.com/o/r" }\n')),
+    ['cargo-non-github-git-dep'], 'a workspace patch table was not read')
+  assert.deepEqual(cargo('[patch.crates-io]\ndep = { git = "https://github.com/o/r.git" }\n'), [],
+    'a GitHub patch must pass')
+  assert.deepEqual(cargo('[workspace.package]\npath = "../../sibling"\n'), [],
+    'a workspace package table is not a dependency table')
 })
 
 
@@ -326,6 +370,11 @@ test('the tree-level rules each go red on a real git index', () => {
     ['committed-archive', (d) => Fs.writeFileSync(Path.join(d, 'packed-1.0.0.tgz'), 'x')],
     ['committed-archive', (d) => Fs.writeFileSync(Path.join(d, 'packed.tar'), 'x')],
     ['go-workspace', (d) => Fs.writeFileSync(Path.join(d, 'go.work'), 'go 1.24\nuse ../sibling/go\n')],
+    ['go-workspace', (d) => {
+      Fs.mkdirSync(Path.join(d, 'go'))
+      Fs.writeFileSync(Path.join(d, 'go', 'go.mod'), 'module example.com/m\n\ngo 1.24\n')
+      Fs.writeFileSync(Path.join(d, 'go.work'), 'go 1.24\nuse ./go\n')
+    }],
     ['foreign-registry', (d) => Fs.writeFileSync(Path.join(d, '.npmrc'), 'registry=https://registry.example.com/\n')],
     ['escaping-symlink', (d) => Fs.symlinkSync('../outside', Path.join(d, 'escape'))],
     ['absolute-symlink', (d) => Fs.symlinkSync('/etc/hosts', Path.join(d, 'abs'))],
@@ -353,20 +402,48 @@ test('the tree-level rules each go red on a real git index', () => {
 })
 
 
-test('an in-repo symlink, an internal go.work and an npmjs registry are not findings', () => {
+test('an in-repo symlink, a go.mod without a replace and an npmjs registry are not findings', () => {
   const { dir, cleanup } = synthetic((d) => {
     Fs.writeFileSync(Path.join(d, 'AGENTS.md'), '# guide\n')
     Fs.symlinkSync('AGENTS.md', Path.join(d, 'CLAUDE.md'))
     Fs.writeFileSync(Path.join(d, '.npmrc'), 'registry=https://registry.npmjs.org/\n')
     Fs.mkdirSync(Path.join(d, 'go'))
     Fs.writeFileSync(Path.join(d, 'go', 'go.mod'), 'module example.com/m\n\ngo 1.24\n')
-    Fs.writeFileSync(Path.join(d, 'go.work'), 'go 1.24\nuse ./go\n')
     Fs.writeFileSync(Path.join(d, 'package.json'),
       JSON.stringify({ name: 'p', dependencies: { a: '^1.0.0', b: 'github:o/r' } }))
   })
   try {
     assert.deepEqual(gate.checkAll(EMPTY, dir), [],
-      'the CLAUDE.md convention, an internal workspace and a registry dep must all pass')
+      'the CLAUDE.md convention, a plain go.mod and a registry dep must all pass')
+  }
+  finally { cleanup() }
+})
+
+
+test('the allowlist is read from the index too, so it cannot excuse from the worktree', () => {
+  const pkg = JSON.stringify({ name: 'p', dependencies: { a: 'file:../x' } })
+  const key = 'package.json:dependencies:a'
+  const allow = JSON.stringify({ allow: { [key]: 'measuring something' } }, null, 2)
+
+  const { dir, git, cleanup } = synthetic((d) => {
+    Fs.writeFileSync(Path.join(d, 'package.json'), pkg)
+  })
+  try {
+    // Writing the allowance without staging it must change nothing: read from
+    // disk it would excuse a violation that is already staged.
+    Fs.mkdirSync(Path.join(dir, 'tools'))
+    Fs.writeFileSync(Path.join(dir, 'tools', 'dep-gate.json'), allow)
+    assert.deepEqual(rules(gate.checkAll(null, dir)), ['local-path-dep'],
+      'an unstaged allowlist entry excused a staged violation')
+
+    git('add', '-A')
+    assert.deepEqual(gate.checkAll(null, dir), [],
+      'a staged allowlist entry did not take effect')
+
+    // And once staged, reverting it on disk must not bring the finding back.
+    Fs.writeFileSync(Path.join(dir, 'tools', 'dep-gate.json'), '{"allow":{}}\n')
+    assert.deepEqual(gate.checkAll(null, dir), [],
+      'the worktree copy of the allowlist was read instead of the index')
   }
   finally { cleanup() }
 })
