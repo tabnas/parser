@@ -2990,6 +2990,7 @@ impl Parser {
                     current_rule.next_rule_name = Some(push_shared);
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
+                    current_rule.note_child_push(&child);
                     let after = self.run_after_actions(
                         spec,
                         prepared,
@@ -3090,6 +3091,14 @@ impl Parser {
                         current_rule.state = RuleState::Close;
                     }
                     next.prev_rule = Some(current_rule.snapshot());
+                    // The rule being replaced stops existing here. If it is
+                    // the one its parent PUSHED, the parent's `child` link
+                    // stays on it -- TypeScript never relinks `rule.child`
+                    // (rules.ts:665) and neither does Go (rule.go:1266) --
+                    // so freeze the node cell it ended on before it goes.
+                    if let Some(parent) = stack.last_mut() {
+                        parent.freeze_child(&current_rule);
+                    }
                     // Moved rather than cloned: this arm hands the
                     // finished rule over instead of copying it, so the
                     // gate above has nothing to save here.

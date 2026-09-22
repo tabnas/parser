@@ -1258,3 +1258,62 @@ func TestBuiltinFoldTailRepeat(t *testing.T) {
 		t.Fatalf("single: got %v", out7)
 	}
 }
+
+// A child that REPLACES itself leaves its parent's `child` link on the
+// first instance of the chain: `r.Child` is written in the push arm
+// (rule.go:1266) and nowhere else, exactly as TypeScript does it
+// (ts/src/rules.ts:665). That is the fact TestBuiltinFoldTailRepeat above
+// works around; without a fold, the later links are simply not captured.
+// Pinned here because it is cross-runtime contract, not a Go detail: the
+// Rust port had to carry the pushed rule's node cell to reproduce it
+// (../rs/tests/child_link_chain_test.rs), and the mirror case lives in
+// ts/test/builtins.test.js.
+func TestBuiltinCaptureSeesThePushedRuleNotItsReplacement(t *testing.T) {
+	tn := Make()
+	err := tn.Grammar(&GrammarSpec{
+		OptionsMap: map[string]any{
+			"rule": map[string]any{"start": "top"},
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {
+				Open: []*GrammarAltSpec{{P: "mid", A: "@node$",
+					K: map[string]any{"node$": map[string]any{
+						"init": true, "rule": "top", "kind": "user"}}}},
+				Close: []*GrammarAltSpec{{A: "@capture$",
+					K: map[string]any{"capture$": map[string]any{
+						"rule": "top", "kind": "user"}}}},
+			},
+			"mid": {
+				Open: []*GrammarAltSpec{{S: []string{"#TX"}, A: "@node$",
+					K: map[string]any{"node$": map[string]any{
+						"init": true, "rule": "mid", "kind": "user",
+						"nterms": 1}}}},
+				Close: []*GrammarAltSpec{{R: "tail"}},
+			},
+			"tail": {
+				Open: []*GrammarAltSpec{{S: []string{"#TX"}, A: "@node$",
+					K: map[string]any{"node$": map[string]any{
+						"init": true, "rule": "tail", "kind": "user",
+						"nterms": 1}}}},
+				Close: []*GrammarAltSpec{{}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tn.Parse("a b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Byte-identical to TypeScript and Rust on the same grammar.
+	want := `{"kids":[{"kids":[],"rule":"mid","src":"a"}],"rule":"top","src":"a"}`
+	if string(got) != want {
+		t.Fatalf("top captured the replacement chain's tail, not the rule it "+
+			"pushed:\n got %s\nwant %s", got, want)
+	}
+}

@@ -101,6 +101,38 @@ describe('builtins', () => {
       assert.equal(j.parse('12+3+45').kids.length, 3)
     })
 
+    it('@capture$ merges the PUSHED child, not its replacement chain', () => {
+      // `rule.child` is linked in the push arm (rules.ts:665) and never
+      // relinked, so a child that replaces itself leaves the parent on the
+      // first instance of the chain. That is the fact @fold$ above exists to
+      // work around, and it is contract: Go links the same way (rule.go:1266)
+      // and the Rust port carries the pushed rule's node cell to reproduce it
+      // (rs/tests/child_link_chain_test.rs). Without a fold, the later links
+      // of the chain are simply not captured.
+      const j = new Tabnas({ rule: { start: 'top' } })
+      j.grammar({
+        rule: {
+          top: {
+            open: [{ p: 'mid', a: '@node$',
+              k: { node$: { init: true, rule: 'top', kind: 'user', nterms: 0 } } }],
+            close: [{ a: '@capture$', k: { capture$: { rule: 'top', kind: 'user' } } }],
+          },
+          mid: {
+            open: [{ s: ['#TX'], a: '@node$',
+              k: { node$: { init: true, rule: 'mid', kind: 'user', nterms: 1 } } }],
+            close: [{ r: 'tail' }],
+          },
+          tail: {
+            open: [{ s: ['#TX'], a: '@node$',
+              k: { node$: { init: true, rule: 'tail', kind: 'user', nterms: 1 } } }],
+            close: [{}],
+          },
+        },
+      })
+      assert.deepEqual(j.parse('a b'),
+        { rule: 'top', src: 'a', kids: [{ rule: 'mid', src: 'a', kids: [] }] })
+    })
+
     it('@bubble$ lifts the child node without merging', () => {
       const j = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
       j.grammar({

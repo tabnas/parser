@@ -1256,6 +1256,18 @@ pub struct Rule {
     pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
+    /// `i` of the rule this one PUSHED, and the node cell that rule's
+    /// `node` field ended on.
+    ///
+    /// TypeScript links `rule.child` at the push (`ts/src/rules.ts:665`)
+    /// and never relinks it; Go does the same (`go/rule.go:1266`). A child
+    /// that REPLACES itself therefore leaves the parent reading the first
+    /// instance of the chain, which is why `@fold$` exists at all (see its
+    /// doc comment in `ts/src/builtins.ts`). These two fields are how the
+    /// same link survives here, where the replaced rule is dropped rather
+    /// than kept alive by a reference.
+    pub(crate) child_pushed_i: Option<usize>,
+    pub(crate) child_cell: Option<Rc<RefCell<Value>>>,
     /// Where this rule's prepared state sits in the parser's table, or
     /// `usize::MAX` for a rule the parser did not bind.
     ///
@@ -1492,6 +1504,8 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            child_pushed_i: None,
+            child_cell: None,
             slot: usize::MAX,
         }
     }
@@ -1547,6 +1561,8 @@ impl Rule {
             child_node: Value::Undefined,
             skip_befores: false,
             child_node_is_self: false,
+            child_pushed_i: None,
+            child_cell: None,
             slot,
         }
     }
@@ -1641,8 +1657,35 @@ impl Rule {
         Rc::clone(&self.shared)
     }
 
+    /// Remember which rule this one pushed, and where its node cell was at
+    /// the push. Called by the parse loop's push arm.
+    pub(crate) fn note_child_push(&mut self, child: &Rule) {
+        self.child_pushed_i = Some(child.i);
+        self.child_cell = Some(Rc::clone(&child.node));
+    }
+
+    /// The pushed child is about to stop being the current rule, either
+    /// because it is being replaced or because it is popping. Freeze the
+    /// cell its `node` field ended on, which is what TypeScript would go on
+    /// reading through the live `rule.child` reference.
+    ///
+    /// A later link of a replacement chain is a DIFFERENT rule: it does not
+    /// match `child_pushed_i` and must not overwrite the frozen cell.
+    /// Holding the cell costs a refcount and no copy-on-write: the `Value`
+    /// itself is read out only when this rule is resumed.
+    pub(crate) fn freeze_child(&mut self, child: &Rule) {
+        if self.child_pushed_i == Some(child.i) {
+            self.child_cell = Some(Rc::clone(&child.node));
+        }
+    }
+
     pub(crate) fn accept_child_node(&mut self, child: &Rule) {
-        self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
+        self.freeze_child(child);
+        let cell = self
+            .child_cell
+            .clone()
+            .unwrap_or_else(|| Rc::clone(&child.node));
+        self.child_node_is_self = Rc::ptr_eq(&self.node, &cell);
         // A child that shared this rule's node cell wrote into this
         // rule's own container, so the value it hands back IS this
         // rule's node. Holding a clone of it here would be a second
@@ -1657,7 +1700,7 @@ impl Rule {
         self.child_node = if self.child_node_is_self {
             Value::Undefined
         } else {
-            child.node.borrow().clone()
+            cell.borrow().clone()
         };
     }
 
