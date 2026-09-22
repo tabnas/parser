@@ -355,6 +355,11 @@ func TestDeriveInheritsExtendedState(t *testing.T) {
 		Ender:  []string{";"},
 		String: &StringOptions{Escape: map[string]string{"z": "ZED"}},
 	})
+	// A multi-character ender written onto the LIVE config, which is how
+	// fleet plugins add enders (the child's own options do not carry it,
+	// so the copy below is the only way it can arrive).
+	parent.Config().EnderSeqs = append(parent.Config().EnderSeqs, "END")
+	parent.Config().refreshLexTables()
 	parent.SetTokenSet("MYSET", []Tin{TinTX})
 	parent.Decorate("deco", "val")
 	parent.SetPluginOptions("plug", map[string]any{"a": 1})
@@ -364,6 +369,17 @@ func TestDeriveInheritsExtendedState(t *testing.T) {
 
 	if !child.Config().EnderChars[';'] {
 		t.Error("child should inherit ender chars")
+	}
+	// A multi-character ender is a SEQUENCE and lives in its own field, so
+	// it has to be inherited on its own terms -- including the dispatch
+	// table rebuild, without which the child scans straight past it.
+	if seqs := child.Config().EnderSeqs; len(seqs) != 1 || seqs[0] != "END" {
+		t.Errorf("child ender sequences = %v, want [END]", seqs)
+	}
+	cfg := child.Config()
+	cfg.IgnoreSet = map[Tin]bool{}
+	if got := lexOne("abcEND", cfg); got != "#TX:abc" {
+		t.Errorf("inherited sequence ender did not end the run: got %q", got)
 	}
 	if child.Config().EscapeMap["z"] != "ZED" {
 		t.Error("child should inherit escape map")

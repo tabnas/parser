@@ -201,7 +201,7 @@ export type TabnasOptions = {
       }
     }
   }
-  ender?: string | string[]         // Characters that end the current value.
+  ender?: string | string[]         // Extra text/number enders: a string is its characters, an array entry is one ender (a sequence if longer than one character).
   plugin?: Record<string, any>      // Per-plugin option storage.
   debug?: {                         // Debug output settings.
     get_console?: () => any         // Console provider.

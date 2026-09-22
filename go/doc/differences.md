@@ -155,7 +155,7 @@ behavior needs a relaxed grammar to run, so it lives and is exercised
 downstream: `alignment-number-text.tsv` in
 [`tabnas/jsonic`](https://github.com/tabnas/jsonic)'s `test/spec/`.
 
-Two exponent forms were previously misaligned and are now fixed in Go:
+These number forms were previously misaligned and are now fixed in Go:
 
 - **Trailing dot before an exponent** (`2.e3`, `0.e1`, `2.e+3`, `2.e-3`).
   TS's fraction group makes the digit optional, so these are numbers;
@@ -180,11 +180,23 @@ Two exponent forms were previously misaligned and are now fixed in Go:
   Other `ParseFloat` errors still yield NaN and drop to the text matcher.
   Go returns no error at all for underflow, so `1e-999` → `0` and
   `-1e-999` → negative zero were already correct.
+- **A malformed exponent where an ender starts at the `e`** (`12Ex` under
+  `ender: []string{"E"}`, `12END` under `ender: []string{"END"}`). When
+  the exponent has no digits, TS drops the whole optional exponent group
+  and then requires an ender WHERE THE `e` IS. `matchNumber` asked its
+  following-text question one position further on, after the `e`, which
+  is a different question: it answered "text follows" for `12Ex` and
+  abandoned a token TS reads as `#NR:12`. The backtrack now precedes the
+  check, so both ask at the `e`. The single-character case had diverged
+  since the port; a multi-character ender makes it ordinary rather than a
+  corner, since an entry like `END` has text right after the `E` by
+  construction.
 
-Both are pinned by `TestMatchNumberExponentTrailingDot` /
+These are pinned by `TestMatchNumberExponentTrailingDot` /
 `TestMatchNumberExponentRange` (`go/lexer_edge_test.go`) and the matching
 `number-exponent-trailing-dot` / `number-exponent-range` cases in
-`ts/test/lex.test.js`.
+`ts/test/lex.test.js`; the malformed-exponent case is pinned by the
+`["END"]` rows of the shared fixture `test/spec/lex-ender-array.tsv`.
 
 ### Raw Control Characters in Strings (`string.allowControl`)
 
@@ -565,6 +577,56 @@ Budget" above).
 
 When no grammar alternate matches, both implementations raise an immediate
 parse error. Token consumption behavior is aligned.
+
+### Ender Characters and Ender Sequences
+
+Aligned, after a repair to this port's lexer model (#202).
+
+`options.ender` has two forms and they are read differently. A STRING is
+its characters, one ender each; an ARRAY entry is ONE ender, so an entry
+longer than a single character is a SEQUENCE that ends a text or number
+run where the whole of it starts. TypeScript makes each array entry one
+alternative of `cfg.rePart.ender`, which is where that reading comes
+from, and the Rust port reads the entries whole.
+
+This port read the array by iterating the RUNES of every entry into
+`LexConfig.EnderChars`, a `map[rune]bool` consulted per character, in
+which a sequence has no expression at all: `ender: [";|"]` was the two
+enders `;` and `|` here and the one sequence `;|` there. Since every
+published grammar passes single-character enders, where the two readings
+coincide, nothing downstream had caught it.
+
+Two things make the Go representation of this option worth knowing when
+porting a grammar:
+
+- **`Options.Ender` is a `[]string` in which every entry is one ender.**
+  A string on the serialized door is split into characters by the
+  READER (`OptionsFromMap`), not by `buildConfig`, because the two forms
+  are indistinguishable once they are in that slice.
+- **The config keeps the two kinds apart.** A single-character entry
+  goes to `LexConfig.EnderChars` and a longer one to
+  `LexConfig.EnderSeqs`. The dispatch table routes a sequence's first
+  byte to the verify path, exactly as it does for a multi-byte fixed
+  token, so a config with no sequence ender pays nothing for the
+  feature.
+- **Set enders before the dispatch table is built, not after.** Both
+  fields are read once, by `buildLexTables`, and the result is what the
+  lexer consults: an ender character becomes a `textStop` entry and a
+  sequence's first byte a `textVerify` entry. Adding to either field on a
+  config that is already built therefore changes nothing, silently,
+  because the byte's entry still says `textContinue` and the verify path
+  is never reached. The rebuild is engine-internal
+  (`LexConfig.refreshLexTables` is unexported), so the supported routes
+  are the options door (`Options.Ender`, which `buildConfig` rebuilds
+  from) and a `ConfigModifier`, which runs before the tables are built.
+  `SortFixedTokens` also rebuilds them, but it is the fixed-token API and
+  relying on that side effect is not the contract.
+
+Number tokens end on the same alternatives, so a sequence ender ends
+them too: under `ender: []string{";|"}`, `1;|2` is `#NR:1` and `1;2` is
+`#TX:1;2`.
+
+Pinned cross-runtime by `test/spec/lex-ender-array.tsv`.
 
 ### Unquoted Text and Quote Characters
 
