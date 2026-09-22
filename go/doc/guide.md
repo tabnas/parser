@@ -183,11 +183,20 @@ existing name replaces it.
 
 ## Parse a binary format
 
-A Go string is a byte sequence, so binary input needs no conversion:
-`string(buf)` is the source, `lex.Src[i]` is a byte, and `lex.Src[a:b]`
-shares the backing array rather than copying. `Point.SI` and `Token.SI`
-are byte offsets already. (TypeScript reaches the same place through
-latin1, and Rust through a byte-to-char mapping.)
+A Go string is a byte sequence, so binary input needs no transcoding:
+`lex.Src[i]` is a byte, `lex.Src[a:b]` shares the backing array rather
+than copying, and `Point.SI` and `Token.SI` are byte offsets already.
+(TypeScript reaches the same place through latin1, and Rust through a
+byte-to-char mapping.)
+
+No transcoding is not the same as no copy. `Parse` takes a `string`, so
+a caller holding a `[]byte` pays one O(n) conversion at the boundary:
+`string(buf)` allocates a second buffer and copies the whole input,
+which doubles peak memory for a large one. Only the substrings taken
+afterwards are free. Where that copy matters, read the source as a
+string in the first place (`io.ReadAll` into a `strings.Builder`, or
+`os.ReadFile` followed by one conversion you then reuse) rather than
+converting per parse.
 
 Register field matchers under `Match.TokenFn`, not under `Lex.Match`.
 Only `Match.TokenFn` matchers are gated on the rule's expected-token

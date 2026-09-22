@@ -206,6 +206,7 @@ function blobs(tn) {
         const tkn = lex.token('#LEN', lex.src.charCodeAt(pnt.sI), undefined,
                               pnt, undefined, undefined, 1)
         pnt.sI += 1
+        pnt.cI += 1
         return tkn
       },
 
@@ -220,6 +221,7 @@ function blobs(tn) {
         const tkn = lex.token('#BODY', undefined, undefined, pnt,
                               undefined, undefined, n)
         pnt.sI += n
+        pnt.cI += n
         return tkn
       },
     } },
@@ -246,6 +248,13 @@ const tn = new Tabnas({ plugins: [blobs] })
 const bytes = Buffer.from([3, 0x61, 0x62, 0x63, 2, 0x64, 0x65])
 tn.parse(bytes.toString('latin1'))    // => ['abc', 'de']
 ```
+
+Every matcher advances `pnt.cI` alongside `pnt.sI`. A binary stream has
+no columns, so the value is not meaningful on its own, but it is what
+`Token.cI` and the `col` of a diagnostic report: leave it behind and
+every token after the first claims column 1. Advance it by the token's
+length and the reported column tracks the byte offset within the line,
+which is the most useful thing it can mean here.
 
 Column gating changes how the alternates are written:
 

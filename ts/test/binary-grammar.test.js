@@ -58,6 +58,10 @@ const record = (id, name, data) =>
 
 const SENTINEL = '\u0000\u00ff'
 
+// The widest LEB128 encoding a JS number holds exactly: 10 groups of 7
+// bits, matching the Go and Rust mirrors.
+const VARINT_MAX_BYTES = 10
+
 const file = (records) =>
   'TBN1' + u16be(records.length) + records.join('') + SENTINEL
 
@@ -143,6 +147,12 @@ function binaryPlugin(tn) {
         },
 
         // Self-terminating variable width: the high bit says "more".
+        //
+        // A malformed length declines like any other unmatched field
+        // rather than producing a garbage value: past VARINT_MAX_BYTES
+        // the encoding exceeds what a JS number holds exactly. The Go
+        // and Rust mirrors carry the same bound, where the same input
+        // truncates silently and panics respectively.
         '#VARINT': function vi(lex) {
           const pnt = lex.pnt
           let i = pnt.sI
@@ -150,9 +160,10 @@ function binaryPlugin(tn) {
           let shift = 0
           let b
           do {
-            if (pnt.len <= i) return undefined
+            if (pnt.len <= i || VARINT_MAX_BYTES <= i - pnt.sI) return undefined
             b = lex.src.charCodeAt(i++)
             val += (b & 0x7f) * Math.pow(2, shift)
+            if (!Number.isSafeInteger(val)) return undefined
             shift += 7
           } while (0 !== (b & 0x80))
           const tkn = lex.token('#VARINT', val, undefined, pnt,
@@ -360,6 +371,25 @@ describe('binary-grammar', function () {
     assert.equal(diag.pos, 0)          // byte offset, not a character index
     assert.equal(diag.rule, 'file')
     assert.deepEqual(diag.expected, ['#MAGIC'])
+  })
+
+  it('declines an oversized length instead of reading a garbage one', () => {
+    // Sixteen continuation bytes: past VARINT_MAX_BYTES and past what a
+    // JS number holds exactly. The matcher declines, the column admits
+    // nothing else, and the parse fails as a format error.
+    const tn = new Tabnas({ plugins: [binaryPlugin] })
+    const src = 'TBN1' + u16be(1) + '\u0001' + 'n' + '\u0000' +
+      '\u00ff'.repeat(16) + '\u0000'
+    assert.throws(() => tn.parse(src), (e) => {
+      assert.equal(e.code, 'unexpected')
+      return true
+    })
+
+    // The bound is not so tight that a legitimate wide length fails.
+    assert.equal(varint(0x10000000).length, 5)
+    const wide = 'TBN1' + u16be(1) + '\u0001' + 'n' + '\u0000' +
+      varint(200) + 'z'.repeat(200) + SENTINEL
+    assert.equal(tn.parse(wide).records[0].len, 200)
   })
 
   it('leaves the built-in matchers out of the pipeline', () => {

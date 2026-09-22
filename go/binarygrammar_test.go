@@ -5,6 +5,7 @@ package tabnas
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,6 +63,9 @@ func binRecord(id int, name string, data string) string {
 }
 
 const binSentinel = "\x00\xff"
+
+// The widest LEB128 encoding an int can hold: 10 groups of 7 bits.
+const binVarintMaxBytes = 10
 
 func binFile(records ...string) string {
 	return "TBN1" + binU16be(len(records)) + strings.Join(records, "") +
@@ -192,18 +196,29 @@ func makeBinaryGrammarWith(onData func(tkn *Token) any) *Tabnas {
 			},
 
 			// Self-terminating variable width: the high bit says "more".
+			//
+			// A malformed length declines like any other unmatched
+			// field rather than producing a garbage value: past
+			// binVarintMaxBytes the encoding is wider than an int can
+			// hold, and Go's shift would silently yield 0. The Rust
+			// mirror carries the same bound, where the same input
+			// panics instead. See rs/tests/binary_grammar_test.rs.
 			"#VARINT": func(lex *Lex, rule *Rule) *Token {
 				pnt := lex.Cursor()
 				i := pnt.SI
 				val := 0
 				shift := uint(0)
-				for {
-					if pnt.Len <= i {
+				for n := 0; ; n++ {
+					if pnt.Len <= i || binVarintMaxBytes <= n {
 						return nil
 					}
 					b := lex.Src[i]
 					i++
-					val += int(b&0x7f) << shift
+					part := int(b & 0x7f)
+					if part > (math.MaxInt >> shift) {
+						return nil
+					}
+					val += part << shift
 					shift += 7
 					if 0 == b&0x80 {
 						break
@@ -653,5 +668,33 @@ func TestBinaryGrammarSubByteFields(t *testing.T) {
 		if !reflect.DeepEqual(out, tc.want) {
 			t.Errorf("%x: got %#v want %#v", tc.src, out, tc.want)
 		}
+	}
+}
+
+func TestBinaryGrammarOversizedLengthDeclines(t *testing.T) {
+	// Sixteen continuation bytes: past the width of an int, and past
+	// binVarintMaxBytes. The matcher declines, the column admits nothing
+	// else, and the parse fails as a format error rather than reading a
+	// truncated length.
+	j := makeBinaryGrammar()
+	src := "TBN1" + binU16be(1) + "\x01" + "n" + "\x00" +
+		strings.Repeat("\xff", 16) + "\x00"
+	if _, err := j.Parse(src); err == nil {
+		t.Error("oversized length: expected an error")
+	}
+
+	// The bound is not so tight that a legitimate wide length fails.
+	if 5 != len(binVarint(0x10000000)) {
+		t.Errorf("varint(0x10000000) is %d bytes", len(binVarint(0x10000000)))
+	}
+	wide := "TBN1" + binU16be(1) + "\x01" + "n" + "\x00" +
+		binVarint(200) + strings.Repeat("z", 200) + binSentinel
+	out, err := j.Parse(wide)
+	if err != nil {
+		t.Fatalf("wide but valid length: %v", err)
+	}
+	rec := out.(map[string]any)["records"].([]any)[0].(map[string]any)
+	if 200 != rec["len"] {
+		t.Errorf("len: got %v", rec["len"])
 	}
 }

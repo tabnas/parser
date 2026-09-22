@@ -116,18 +116,37 @@ fn file(records: &[Vec<u8>]) -> Vec<u8> {
 
 // --- the grammar -----------------------------------------------------
 
+/// The widest LEB128 encoding a `usize` can hold: 10 groups of 7 bits.
+const VARINT_MAX_BYTES: usize = 10;
+
 /// Read a LEB128 varint from the char stream. Returns the value and how
-/// many chars (so, bytes) it took.
+/// many chars (so, bytes) it took, or `None` when the encoding is
+/// truncated, wider than `VARINT_MAX_BYTES`, or would overflow.
+///
+/// Declining is the point. A malformed length has to fail the way any
+/// other unmatched field fails, as a format error the grammar reports.
+/// Shifting past the width of a `usize` is an overflow panic in a debug
+/// build, and the engine's panic boundary would turn that into an
+/// `internal` diagnostic instead. The TypeScript and Go mirrors carry
+/// the same bound, where the same input would silently lose precision
+/// or truncate rather than panic.
 fn read_varint(remaining: &str) -> Option<(usize, usize)> {
-    let mut value = 0usize;
-    let mut shift = 0u32;
+    let mut value: usize = 0;
+    let mut shift: u32 = 0;
     for (taken, character) in remaining.chars().enumerate() {
+        if VARINT_MAX_BYTES <= taken {
+            return None;
+        }
         let byte = character as u32 as u8;
-        value += ((byte & 0x7f) as usize) << shift;
-        shift += 7;
+        let part = usize::from(byte & 0x7f);
+        if usize::BITS <= shift || part > (usize::MAX >> shift) {
+            return None;
+        }
+        value += part << shift;
         if 0 == byte & 0x80 {
             return Some((value, taken + 1));
         }
+        shift += 7;
     }
     None
 }
@@ -814,4 +833,29 @@ fn reads_sub_byte_fields_across_a_byte_boundary() {
         let out = parser.parse(&latin1(&bytes)).unwrap();
         assert_eq!(Value::from_json(&want), out, "bytes {bytes:02x?}");
     }
+}
+
+#[test]
+fn an_oversized_length_declines_instead_of_panicking() {
+    // Sixteen continuation bytes: past the width of a usize, and past
+    // VARINT_MAX_BYTES. The matcher declines, the column admits nothing
+    // else, and the parse fails as a format error. Before the bound,
+    // `usize << 70` panicked and the engine reported `internal`.
+    let parser = make_binary_grammar();
+    let mut src = b"TBN1".to_vec();
+    src.extend(u16be(1));
+    src.extend_from_slice(&[0x01, b'n', 0x00]);
+    src.extend_from_slice(&[0xff; 16]);
+    src.push(0x00);
+
+    let err = parser.parse(&latin1(&src)).unwrap_err();
+    assert_eq!("unexpected", err.code, "message: {err}");
+
+    // And the bound is not so tight that a legitimate wide length fails:
+    // five bytes still decode.
+    assert_eq!(
+        Some((0x1000_0000, 5)),
+        read_varint(&latin1(&varint(0x1000_0000)))
+    );
+    assert_eq!(None, read_varint(&latin1(&[0xff; 12])));
 }

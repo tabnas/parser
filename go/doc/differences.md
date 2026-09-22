@@ -637,13 +637,28 @@ is addressable.
 | `{row}`, `{col}` | yes | yes |
 | `{pos}` (source offset) | no | yes |
 | `{sI}`, `{rI}`, `{cI}`, `{len}`, `{name}` (token fields) | yes | no |
-| a key the grammar put in `token.use` | yes | yes |
+
+Both injectors walk a dotted path, so `{a.b}` reaches a nested value in
+either runtime wherever `a` is in the bag.
+
+A key the grammar put in `token.use` is NOT a stable placeholder in
+either runtime, and the shape it would take differs. Whether it reaches
+the bag at all depends on which site raised the error: the ordinary
+fetch paths in `rules.ts` pass it as `{use: tkn.use}` and Go's
+`parser.go` passes it positionally, while other sites pass no `use` at
+all. Where it does arrive, TypeScript leaves it nested (so `{use.foo}`,
+never `{foo}`) and Go's `errInjectRef` flattens every `use` map to top
+level (so `{foo}`, never `{use.foo}`). Two runtimes, opposite spellings,
+neither reliable across error sites: write the value into the message
+from the grammar rather than reaching for it from a template, until the
+bags are aligned.
 
 An unresolved placeholder is left in the message verbatim rather than
-raising, so this shows up as literal `{sI}` text rather than as an
-error. The case that meets it in practice is a byte-oriented template
-for a binary grammar, which is `{sI}` in TypeScript and `{pos}` in Go
-(see "Parse a binary format" in each runtime's guide).
+raising, so all of this shows up as literal `{sI}` or `{foo}` text
+rather than as an error. The case that meets it in practice is a
+byte-oriented template for a binary grammar, which is `{sI}` in
+TypeScript and `{pos}` in Go (see "Parse a binary format" in each
+runtime's guide).
 
 This is a difference in message TEXT, which
 [`DIVERGENCE.md`](../../DIVERGENCE.md) records as explicitly not in
