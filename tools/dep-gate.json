@@ -1,0 +1,4 @@
+{
+  "note": "Allowlist for the dependency-source gate. Every entry needs a reason, and the gate reports an entry that no longer matches anything, so the list cannot outlive what it excused.",
+  "allow": {}
+}

@@ -8,14 +8,14 @@
 # "Never commit the local wiring".
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
-        clean-ts clean-go clean-rs publish-ts publish-go tags-go reset prose \
-        prose-counts
+        clean-ts clean-go clean-rs deps deps-test publish-ts publish-go tags-go \
+        reset prose prose-counts
 
 all: build test
 
 build: build-ts build-go build-rs
 
-test: test-ts test-go test-rs
+test: deps deps-test test-ts test-go test-rs
 
 clean: clean-ts clean-go clean-rs
 
@@ -53,6 +53,24 @@ test-rs:
 
 clean-rs:
 	cd rs && cargo clean
+
+# --- Dependency sources (repo-wide) ---
+
+# A committed dependency names a published package or a GitHub reference.
+# Local wiring -- file:, a sibling path, a go replace leaving the tree, a
+# packed archive -- is how a change is tested before its dependency is
+# released, and it is correct right up to the commit; this is what stops it
+# arriving in one. It judges what git TRACKS, so the wiring stays legal
+# until it is staged, and it needs nothing but node. The same check runs
+# inside `make test-ts` as ts/test/deps.test.js, so `npm test` carries it
+# too.
+deps:
+	node tools/dep-gate.cjs
+
+# The gate's own suite: every rule is driven by a case that breaks exactly
+# one thing and requires that rule to go red.
+deps-test:
+	node --test tools/dep-gate.test.cjs
 
 # Publish the Go module: make publish-go V=x.y.z
 # Injects V into the Go `Version` const, commits, tags go/vX.Y.Z, and

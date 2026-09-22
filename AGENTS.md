@@ -369,6 +369,19 @@ red for a known dependency: a new breakage hides inside the expected
 failure, and only a job that resolves modules directly — `clib` in the
 sibling repos — will report it as itself.
 
+**`make deps` is the machine-checkable half of this section.**
+`tools/dep-gate.cjs` reads every npm manifest and lockfile, every `go.mod`
+and `Cargo.toml`, `.npmrc`, and every committed symlink and archive, and
+requires each committed dependency to name a published package or a
+GitHub reference. It judges what git TRACKS, deliberately — so a `replace`
+or a `file:` you added to measure something stays legal right up to the
+moment you stage it. It runs in `make test` (and, as
+`ts/test/deps.test.js`, in `make test-ts` and `npm test`), and
+`make deps-test` runs its own suite. A dependency it reports but that is
+genuinely legitimate goes in `tools/dep-gate.json` with a reason; the gate
+fails an entry with no reason, and fails an entry that no longer matches
+anything, so the list cannot outlive what it excused.
+
 **The shared engine version is declared in seven places here, not three.** The usual three are
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
 in `go/tabnas.go`; Rust adds `version` in `rs/Cargo.toml` and `pub const
@@ -447,6 +460,7 @@ make build && make test      # both runtimes, LOCALLY
 make -C ts test              # TypeScript alone, when iterating
 (cd go && go test ./...)     # Go alone
 (cd rs && cargo test --all-targets) # Rust slice alone
+make deps                    # committed dependency sources, on their own
 ```
 
 These are **local** checks. The root `Makefile` runs this repo's TypeScript,
