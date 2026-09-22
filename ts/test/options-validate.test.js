@@ -278,31 +278,46 @@ describe('options-validate SKIP', () => {
 describe('options-validate absent token sets', () => {
   const { SKIP } = require('..')
 
-  // A caller-defined name with no default has nothing to leave alone, so
-  // it must be dropped rather than carried through as a set with no
-  // members. `deep()` assigns `base[k] = deep(base[k], over[k])`
-  // unconditionally, so it leaves an own property holding the absent
-  // value, and `configure()` then called `.filter()` on it. All three
-  // spellings of "leave this alone" reached that: `null` and `undefined`
-  // always did, and SKIP joined them when the validator learned to accept
-  // it. Each died with a raw TypeError rather than a load fault or a
-  // quiet no-op.
-  it('ignores a token set whose members are absent', () => {
-    for (const members of [null, undefined, SKIP]) {
+  // Where the sentinel is actually wanted is a set's MEMBERS: `@SKIP`
+  // preserves the default at that position and `null` clears it, which is
+  // how a grammar narrows a built-in set. tabnas/jsonic's
+  // `skip-in-grammar-options-tokenset` is the case that drove it.
+  it('takes SKIP and null as members', () => {
+    const base = new Tabnas({}).internal().config.tokenSet.KEY.length
+    assert.equal(base, 4)
+    // SKIP keeps position 0's default, the nulls clear the rest.
+    assert.deepEqual(
+      new Tabnas({ tokenSet: { KEY: [SKIP, null, null, null] } })
+        .internal().config.tokenSet.KEY.length,
+      1,
+    )
+    assert.equal(
+      new Tabnas({ tokenSet: { KEY: ['#ST', null, null, null] } })
+        .internal().config.tokenSet.KEY.length,
+      1,
+    )
+  })
+
+  // The whole VALUE takes only an array, or the two spellings of "not
+  // supplied". A name with nothing behind it is dropped rather than
+  // carried through as a set with no members: `.filter()` on the absent
+  // value is a raw TypeError, and `deep()` creates the own property even
+  // for a value it did not merge.
+  it('ignores an absent whole value for a name with no default', () => {
+    for (const members of [undefined, SKIP]) {
       const label = 'CUSTOM = ' + String(members)
       assert.doesNotThrow(() => new Tabnas({ tokenSet: { CUSTOM: members } }), label)
-      const parser = new Tabnas({ tokenSet: { CUSTOM: members } })
       assert.equal(
-        'CUSTOM' in parser.internal().config.tokenSet,
+        'CUSTOM' in new Tabnas({ tokenSet: { CUSTOM: members } }).internal().config.tokenSet,
         false,
         label + ': the name reached the config',
       )
     }
   })
 
-  it('leaves a name that DOES have a default alone, for undefined and SKIP', () => {
-    // `deep()` keeps the base for these two, so the default array is still
-    // there when configure() runs and the guard never sees the name.
+  it('leaves a name that DOES have a default alone', () => {
+    // `deep()` keeps the base for both, so the default array is still there
+    // when configure() runs and the guard never sees the name.
     const base = new Tabnas({}).internal().config.tokenSet.KEY.length
     for (const members of [undefined, SKIP]) {
       assert.equal(
@@ -311,33 +326,43 @@ describe('options-validate absent token sets', () => {
         'KEY = ' + String(members),
       )
     }
-    // ...and a real list still replaces it.
-    assert.equal(
-      new Tabnas({ tokenSet: { KEY: ['#ST', null, null, null] } })
-        .internal().config.tokenSet.KEY.length,
-      1,
+  })
+
+  // An explicit null whole value is a load fault, not a silent delete.
+  // `deep()` replaces the base for it, so accepting it would clear a
+  // built-in set, and the clearing would be quiet: a rule naming `#KEY`
+  // afterwards mints a single token of that name rather than failing,
+  // since Rule.parse resolves a set name as `tokenSet(n) ?? token(n)`.
+  //
+  // Both doors are asserted because they reach configure() differently:
+  // the constructor builds a fresh config and `options()` hands the
+  // existing one back, so a guard that only dropped the name would clear
+  // the set in one and keep it in the other.
+  it('refuses an explicit null whole value, on every door', () => {
+    for (const name of ['KEY', 'CUSTOM']) {
+      const opts = { tokenSet: { [name]: null } }
+      const re = new RegExp('options\\.tokenSet\\.' + name + ': expected array')
+      assert.throws(() => new Tabnas(opts), re, 'constructor ' + name)
+      assert.throws(() => new Tabnas().options(opts), re, 'options() ' + name)
+      assert.throws(() => new Tabnas().grammar({ options: opts }), re, 'grammar() ' + name)
+    }
+  })
+
+  it('still rejects an ill-typed member', () => {
+    assert.throws(
+      () => new Tabnas({ tokenSet: { KEY: [SKIP, 7] } }),
+      /options\.tokenSet\.KEY\[1\]: expected string, got number/,
+    )
+    assert.throws(
+      () => new Tabnas({ tokenSet: { KEY: 7 } }),
+      /options\.tokenSet\.KEY: expected array, got number/,
     )
   })
 
-  it('clears a built-in set for an explicit null, which is the deep-merge reading', () => {
-    // `null` is NOT equivalent to undefined and SKIP here, and the
-    // difference is `deep()`'s rather than this guard's: deep replaces the
-    // base for any value but undefined and SKIP, so the default array is
-    // already gone. That matches null's meaning inside the array, where
-    // `['#ST', null, null, null]` clears three positions.
-    //
-    // Pinned because it is the kind of asymmetry a later reader would
-    // "tidy" into consistency, and because the consequence is quiet: a
-    // rule naming `#KEY` afterwards mints a single token of that name
-    // rather than failing, since Rule.parse resolves a set name as
-    // `tokenSet(n) ?? token(n)`.
-    const cleared = new Tabnas({ tokenSet: { KEY: null } }).internal().config.tokenSet
-    assert.equal('KEY' in cleared, false, 'an explicit null left the built-in KEY set in place')
-
-    // The way to empty a set while KEEPING the name is to clear every
-    // position. An empty array does not do it: an array overlays index by
-    // index, so overlaying nothing leaves all four defaults standing, which
-    // is worth pinning because it reads like the obvious spelling.
+  // The spelling that empties a set while keeping the name. An empty array
+  // does not do it: an array overlays index by index, so overlaying nothing
+  // leaves every default standing.
+  it('empties a set by clearing every position, not with an empty array', () => {
     const emptied = new Tabnas({ tokenSet: { KEY: [null, null, null, null] } })
       .internal().config.tokenSet
     assert.equal('KEY' in emptied, true)

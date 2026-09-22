@@ -89,7 +89,10 @@ export type TabnasOptions = {
     check?: LexCheck                // Post-match validation hook.
   }
   tokenSet?: {                      // Named groups of token names.
-    [name: string]: string[]
+    // A member is a token name, `null` to clear that position, or SKIP to
+    // keep whatever the base holds there. The whole value is that array,
+    // or SKIP to leave the name alone; an explicit `null` is refused.
+    [name: string]: (string | null | typeof SKIP)[] | typeof SKIP
   }
   space?: {                         // Whitespace (non-line) handling.
     lex?: boolean                   // Enable space lexing.

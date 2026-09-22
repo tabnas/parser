@@ -220,26 +220,14 @@ function configure(
   // unconditionally, so an absent value still creates the own property that
   // this reduce then walks.
   //
-  // The three absent values do NOT all arrive here for the same reason, and
-  // the difference is `deep()`'s, not this guard's:
+  // Only `undefined` and SKIP reach here: the validator refuses an explicit
+  // `null` whole value as a load fault. For both of those `deep()` keeps
+  // the base, so a name that HAS a default still holds its array and never
+  // reaches the guard. What the guard drops is a name with nothing behind
+  // it, which is what "leave this name as it was" means when there is
+  // nothing to leave.
   //
-  //   undefined, SKIP  `deep()` keeps the base, so a name with a default
-  //                    still holds its default array and never reaches the
-  //                    guard at all. Only a name with no base is dropped.
-  //   null             `deep()` REPLACES the base, as it does for any other
-  //                    value, so the base is already gone by the time this
-  //                    runs and the name is dropped whether or not it had
-  //                    a default.
-  //
-  // So `{tokenSet: {KEY: null}}` clears the built-in KEY set. That is the
-  // canonical deep-merge reading of `null` and matches its meaning inside
-  // the array (`['#ST', null, null, null]` clears three positions), but it
-  // is worth knowing that a rule naming `#KEY` afterwards does not fail:
-  // `Rule.parse` resolves a set name as `tokenSet(n) ?? token(n)`, so it
-  // quietly mints a single token of that name instead of expanding the
-  // group.
-  //
-  // To empty a set while KEEPING the name, clear every position:
+  // To empty a set while keeping the name, clear every position:
   // `{KEY: [null, null, null, null]}` gives a present, zero-length set.
   // `{KEY: []}` does NOT: an array overlays index-wise, so overlaying
   // nothing leaves all four defaults in place.
@@ -1408,8 +1396,16 @@ const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
   // these validators with a symbol in hand. Rejecting it made the sentinel
   // usable everywhere except the three places that have a validator of
   // their own, which is not a rule anyone would write down.
+  // A set's MEMBERS are where the sentinel is actually wanted: `@SKIP`
+  // preserves the default at that position and `null` clears it, which is
+  // what a grammar writes to narrow a built-in set. The whole VALUE takes
+  // only an array, or the two spellings of "not supplied": `undefined`,
+  // which JavaScript cannot tell from an absent key, and SKIP, which the
+  // generic walk accepts at every other level. An explicit `null` there is
+  // a load fault like any other non-array, rather than a silent way to
+  // delete a built-in set.
   'options.tokenSet': (val, at) => {
-    if (null == val || SKIP === val) return
+    if (undefined === val || SKIP === val) return
     if (!Array.isArray(val)) bad(at, 'array', val)
     for (let i = 0; i < val.length; i++) {
       if (null != val[i] && SKIP !== val[i] && S.string !== typeof val[i]) {
