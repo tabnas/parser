@@ -85,6 +85,66 @@ Errors lean on the platform too: `TabnasError` extends the built-in
 injection (`strinject`) so it can be customised or localised through
 the `error` / `hint` / `errmsg` options.
 
+## Binary input
+
+The engine never inspects a character as text. It indexes, compares code
+units, and hands spans to matchers, so a binary format is a grammar
+question rather than an engine question. The only crossing that needs
+care is getting bytes into a JavaScript string: latin1 maps bytes 0 to
+255 onto code units 0 to 255 one for one, so `buf.toString('latin1')` is
+lossless and every position the engine tracks stays a byte offset.
+
+What makes binary tractable is that the lexer is parser-directed. A
+matcher registered under `match.token` runs only where the active rule's
+expected-token column names its token (`rspec.def.tcol[oc][tI]`), and it
+is handed the live rule. Text formats rarely need either property,
+because a quote or a digit announces its own token kind. Binary formats
+have no such signal: the same byte is a length here and a payload two
+offsets later, and only the grammar knows which. Registering the same
+matchers under `lex.match` instead puts them in an ungated
+priority-ordered pipeline, where the first matcher that can consume a
+byte takes it, and a fixed-width integer matcher swallows the first four
+bytes of every variable-length payload.
+
+Throughput is governed by tokens rather than by bytes. Holding total
+input at 4 MB and varying only the payload size of a length-prefixed
+frame (so, the token count) gives a flat rate of roughly 0.7 to 1.4
+million lex calls per second on one development machine, while the byte
+rate moves across three orders of magnitude:
+
+| payload | lex calls | MB/s | M lex/s |
+|---|---|---|---|
+| 8 B | 699,052 | 3 | 0.55 |
+| 128 B | 63,552 | 46 | 0.73 |
+| 512 B | 16,258 | 198 | 0.81 |
+| 8 KB | 1,024 | 5530 | 1.42 |
+
+The design question is therefore how many tokens the grammar cuts, not
+how many bytes it reads. Folding a whole record into one matcher, where
+the grammar does not need to see inside it, measured about five times
+faster than splitting the same record into four tokens across three
+rules. Dropping the built-in matchers out of the pipeline rather than
+only disabling them measured about 1.3 times faster again. Both of those
+are grammar choices; the engine cost per token is what it is.
+
+A token built with `src` undefined and an explicit `len` is a bare
+`(sI, len)` span, and its `src` accessor materialises the substring on
+first read. A payload that the grammar only needs to address, never to
+inspect, can stay a span: keep the original `Buffer` on `ctx.meta` and
+slice it with `ctx.meta.buf.subarray(tkn.sI, tkn.sI + tkn.len)`, which
+shares memory rather than copying.
+
+Two limits are structural. There is no streaming entry point, so a parse
+holds its whole source as one string, and V8 caps that at 512 MB
+(`require('buffer').constants.MAX_STRING_LENGTH`). And `Point` counts
+bytes with no bit position, so a sub-byte field has to carry its own bit
+offset on `ctx.u`.
+
+The Go and Rust ports reach the same place by different routes, and the
+differences are recorded in
+[`go/doc/differences.md`](../../go/doc/differences.md) and
+[`rs/README.md`](../../rs/README.md).
+
 ## Design notes
 
 Longer-form explorations live alongside this doc:
