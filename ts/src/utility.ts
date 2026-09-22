@@ -1354,7 +1354,7 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
       // for the same reason a null NAME is: there is no map a null could
       // name, and wiping every set is not what a caller writing it meant.
       if (null === val) {
-        if (NULL_CONTAINER_FAULT[at]) bad(at, 'object', val)
+        if (NULL_CONTAINER_FAULT.has(at)) bad(at, 'object', val)
         continue
       }
       if (S.object !== typeof val || Array.isArray(val)) {
@@ -1369,7 +1369,7 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
         // in silence, while the option reference says a name the engine
         // does not declare installs as written. Saying so at the door is
         // the honest half of that guard.
-        if (RESERVED_MAP_KEYS[name]) {
+        if (RESERVED_MAP_KEYS.has(name)) {
           throw new Error(
             `Tabnas: ${nat}: \`${name}\` is a reserved name and cannot be a ` +
             `${at.slice(at.lastIndexOf('.') + 1)} entry (it would reach the prototype chain)`,
@@ -1429,26 +1429,20 @@ function bad(at: string, want: string, val: any): never {
 // nothing on the other. The definition maps are deliberately absent --
 // `{comment: {def: null}}` means "no comment definitions", which is a
 // thing a caller can want and both doors already agree on.
-const NULL_CONTAINER_FAULT: { [path: string]: boolean } =
-  Object.assign(Object.create(null), { 'options.tokenSet': true })
+const NULL_CONTAINER_FAULT = new Set(['options.tokenSet'])
 
 // The names `deep()` refuses to merge, for the prototype-pollution
 // reason given where it refuses them. Keep the two lists in step.
 //
-// NULL-PROTOTYPE, and the first draft of this table was not: it is keyed
-// by CALLER-CHOSEN names, so `RESERVED_MAP_KEYS['toString']` answered
-// with the inherited method, which is truthy, and a set legitimately
-// named `toString` was refused as reserved. That is the same defect this
-// pull request fixes twice over, arriving in the fix for it.
-const RESERVED_MAP_KEYS: { [name: string]: boolean } = Object.create(null)
-// Assigned, not written as a literal. `{__proto__: true}` in an object
-// literal is a PROTOTYPE assignment, not a key -- it is ignored for a
-// non-object and the table came out without the entry, so the one name
-// of the three that arrives from real JSON went unrefused. On a
-// null-prototype object this is an ordinary own key.
-RESERVED_MAP_KEYS['__proto__'] = true
-RESERVED_MAP_KEYS['constructor'] = true
-RESERVED_MAP_KEYS['prototype'] = true
+// A SET, because this is a set of names and an object is not. Two drafts
+// of it as an object were bitten by the very hazard it guards: keyed by
+// caller-chosen names, `RESERVED['toString']` answered with the
+// inherited method and refused a set legitimately named `toString`; and
+// `{__proto__: true}` in a literal is a prototype assignment rather than
+// a key, so the table came out missing the one of the three that arrives
+// from real JSON. A Set has neither problem, and `has()` says what it
+// means to a reader and to a static analyser alike.
+const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 type DynamicEntry = (val: any, at: string) => void
 
