@@ -1510,7 +1510,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// Tell the lexer which slot it is filling, so its matcher
 				// gate can ask about this position rather than slot 0.
 				lex.tI = i
-				tkn := lex.Next(rule)
+				tkn := lex.next(rule)
 				// Lexer soft mode: with recovery on and relex off, an
 				// unlexable span is absorbed HERE rather than handed to
 				// the alternates, so the parse carries on as though it
@@ -1519,7 +1519,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// instead — one of them may re-cut the span.
 				if !relex && ctx.Cfg != nil && ctx.Cfg.Recover.Enabled {
 					for tkn != nil && TinBD == tkn.Tin && absorbBad(ctx, lex, rule, tkn) {
-						tkn = lex.Next(rule)
+						tkn = lex.next(rule)
 					}
 				}
 				lex.tI = 0

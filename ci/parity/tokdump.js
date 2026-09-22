@@ -25,8 +25,9 @@
 // Successful parses are compared token-for-token.
 //
 // Only tokens the parser CONSUMES are dumped (space/line/comment are
-// filtered): the Go engine's public Sub contract fires after IGNORE
-// skipping, so consumed tokens are the cross-runtime comparable stream.
+// filtered here, by name, in both dumpers): both engines' Sub contracts
+// fire for EVERY token, ignored ones included, before any skipping, so
+// the consumed tokens are the cross-runtime comparable stream.
 // The end token is recorded once (re-delivery count during rule-stack
 // wind-down is engine-internal).
 //

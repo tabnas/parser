@@ -896,11 +896,19 @@ func (l *Lex) nextUnfiltered(r *Rule) *Token {
 	return tkn
 }
 
-// Next returns the next non-IGNORE token, passing the current parsing rule
-// to custom matchers for context-sensitive lexing.
-// On error (unterminated string, unterminated comment, unexpected character),
-// the error is stored in l.Err and a ZZ (end) token is returned to allow
-// the parser to wind down gracefully.
+// Next returns the next token, passing the current parsing rule to custom
+// matchers for context-sensitive lexing. On error (unterminated string,
+// unterminated comment, unexpected character), the error is stored in
+// l.Err and a ZZ (end) token is returned to allow the parser to wind down
+// gracefully.
+//
+// IGNORE tokens (space, line, comment by default) are RETURNED, as
+// TypeScript's Lex.next returns them; the parser skips them in its own
+// fetch (see next). This port used to skip them here, so a plugin
+// driving the lexer directly had to filter in one runtime and must not
+// in the other, and @tabnas/c carried exactly that split (#152). The
+// contract is now TypeScript's: Next is the raw stream, the parser
+// filters.
 func (l *Lex) Next(rule ...*Rule) *Token {
 	var r *Rule
 	if len(rule) > 0 {
@@ -909,7 +917,7 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 	if l.Ctx != nil && r != nil {
 		l.Ctx.Rule = r
 	}
-	for {
+	{
 		// If an error has already occurred, return end-of-source to stop parsing
 		if l.Err != nil {
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: l.pnt.Site}
@@ -971,8 +979,17 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: tkn.Site}
 		}
-		// Skip IGNORE tokens (per-instance set, matching TS
-		// cfg.tokenSetTins.IGNORE; dense snapshot built in NewLex)
+		return tkn
+	}
+}
+
+// next is the parser's fetch: Next with the IGNORE set skipped (the
+// per-instance set, matching TS cfg.tokenSetTins.IGNORE, as the dense
+// snapshot built in NewLex), which is what the TS parse_alts fetch loop
+// does around its own lex.next.
+func (l *Lex) next(r *Rule) *Token {
+	for {
+		tkn := l.Next(r)
 		if tin := tkn.Tin; 0 <= tin && tin < len(l.ignoreDense) && l.ignoreDense[tin] {
 			continue
 		}

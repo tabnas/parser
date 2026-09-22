@@ -88,8 +88,8 @@ Per-runtime notes:
   the candidate list rather than trusting the table's single-byte answer.
   Same result, one array load slower on the renegotiation path only.
 - **Differs (cosmetic).** TS preserves a recut token's attached
-  `ignored` token; Go's token carries no such field (its lexer skips
-  ignored tokens in `Lex.Next` rather than attaching them), so there is
+  `ignored` token; Go's token carries no such field (the parser's fetch
+  skips ignored tokens rather than attaching them), so there is
   nothing to preserve.
 - **Both runtimes skip rule-position gating under a want,
   deliberately.** Go's match matcher makes a two-pass
@@ -616,6 +616,21 @@ Both implementations now share the same error model:
 The remaining difference is delivery: TypeScript throws `TabnasError` as an
 exception; Go returns `*TabnasError` as an `error` value and never panics
 (see "Error Delivery and the No-Panic Guarantee" below).
+
+### `Lex.Next` returns the raw stream: Aligned (was a Go difference)
+
+`Lex.Next` returns every token the matchers produce, IGNORE tokens
+(space, line, comment) included, exactly as TypeScript's `lex.next`
+does; the parser skips the IGNORE set in its own fetch, as the
+TypeScript `parse_alts` loop does around `lex.next`. This port used to
+skip them inside `Next` itself, so a plugin driving the lexer directly
+from an alternate condition had to filter in one runtime and must not
+in the other. `@tabnas/c` carried exactly that split: its TypeScript
+side filters and its Go side did not. A Go plugin that reads `Next`
+directly and wants only grammar-significant tokens now filters on the
+instance's IGNORE set, as the TypeScript plugin does. Lex subscribers
+are unaffected: they always saw every token, before any skipping.
+Pinned by `TestLexNextReturnsIgnoredTokens`.
 
 ## Custom Matchers
 

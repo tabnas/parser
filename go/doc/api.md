@@ -363,7 +363,7 @@ context-sensitive lexing. See the [recipe](guide.md#add-a-custom-matcher).
 | `(*Lex) Fwd(maxlen int) string` | substring | look ahead up to `maxlen` bytes from the cursor |
 | `(*Lex) Token(name string, tin Tin, val any, src string) *Token` | new token | build a token at the current point |
 | `(*Lex) Bad(why string) *Token` | error token | signal a lex error (`why` is an error code) |
-| `(*Lex) Next(rule ...*Rule) *Token` | next token | next non-IGNORE token |
+| `(*Lex) Next(rule ...*Rule) *Token` | next token | the raw stream, IGNORE tokens included, as TypeScript's `lex.next`; the parser skips the IGNORE set in its own fetch |
 
 ### Scan primitives
 

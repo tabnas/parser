@@ -703,14 +703,14 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 	if !trailing && !gaveUp {
 		// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
-		// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
+		// `rule` is NoRule here (the loop has ended) and the fetch assigns its
 		// rule argument to ctx.Rule — which would clobber the last REAL rule
 		// before finishErr reads it for the diagnostic (TS lex.next performs
 		// no such assignment, so its ctx.rule keeps the last processed rule).
 		// Save/restore rather than passing ctx.Rule so the lex call itself
 		// still sees NoRule, exactly as before.
 		curRule := ctx.Rule
-		endTkn := lex.Next(rule)
+		endTkn := lex.next(rule)
 		ctx.Rule = curRule
 		if endTkn.Tin != TinZZ {
 			if !soft {
