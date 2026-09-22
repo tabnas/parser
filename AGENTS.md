@@ -373,7 +373,10 @@ sibling repos — will report it as itself.
 `ts/package.json`, `const VERSION` in `ts/src/tabnas.ts`, and `const VERSION`
 in `go/tabnas.go`; Rust adds `version` in `rs/Cargo.toml` and `pub const
 VERSION` in `rs/src/lib.rs`. Drift within each runtime is caught by
-`ts/test/version.test.*`, `go/version_test.go`, and `rs/tests/version_test.rs`.
+`ts/test/version.test.*`, `go/version_test.go`, and `rs/tests/version_test.rs`;
+`go/version_test.go` and `rs/tests/version_test.rs` also read
+`ts/package.json`, so a port left behind on the canonical version fails
+before it ships.
 The sixth is `schema/error-codes.json`, which
 embeds the engine version in its payload — so **a version bump on its own
 makes the registry stale**, with no code change involved. Both runtimes then
