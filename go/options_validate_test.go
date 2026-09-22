@@ -121,8 +121,12 @@ func TestOptionsFromMapAcceptsAStringEnder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("string ender refused: %v", err)
 	}
-	if len(opts.Ender) != 1 || opts.Ender[0] != ";|" {
-		t.Fatalf("string ender read as %v, want [;|]", opts.Ender)
+	// Split per character, exactly as the array form of the same
+	// characters: `';|'` is two enders, `[';|']` is one (#202). Reading
+	// the string into a single entry made the two forms indistinguishable
+	// downstream, which is why this reader, not buildConfig, splits it.
+	if len(opts.Ender) != 2 || opts.Ender[0] != ";" || opts.Ender[1] != "|" {
+		t.Fatalf("string ender read as %v, want [; |]", opts.Ender)
 	}
 	// Both characters end text, which is what the string form means.
 	j := Make(opts)
@@ -131,6 +135,22 @@ func TestOptionsFromMapAcceptsAStringEnder(t *testing.T) {
 		if !chars[r] {
 			t.Errorf("ender char %q missing from %v", r, chars)
 		}
+	}
+	if seqs := j.Config().EnderSeqs; len(seqs) != 0 {
+		t.Errorf("string ender contributed sequences %v, want none", seqs)
+	}
+	// The discriminator: the same two characters as ONE array entry are
+	// one two-character ender, and neither character ends text alone.
+	arr, err := OptionsFromMap(map[string]any{"ender": []any{";|"}})
+	if err != nil {
+		t.Fatalf("array ender refused: %v", err)
+	}
+	cfg := Make(arr).Config()
+	if len(cfg.EnderChars) != 0 {
+		t.Errorf("array entry %q split into characters %v", ";|", cfg.EnderChars)
+	}
+	if len(cfg.EnderSeqs) != 1 || cfg.EnderSeqs[0] != ";|" {
+		t.Errorf("array entry sequences = %v, want [;|]", cfg.EnderSeqs)
 	}
 	// And through the serialized door, as a grammar carries it.
 	gs, err := GrammarSpecFromJSON([]byte(`{"options":{"ender":":"}}`))

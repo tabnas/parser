@@ -149,8 +149,51 @@ never emulate that. A parse that sets no value answers `Value::Null`, where
 TypeScript answers `undefined`; the engine's `Value::Undefined` is unwrapped
 at the parse boundary on purpose.
 
-The portable serialized contract and native imperative tier have completed
-their TypeScript/Go surface audit. Rust ownership is expressed explicitly:
+Binary formats parse here, with three costs the other runtimes do not
+pay. `Lexer.src` is a `&str`, so it must hold valid UTF-8 and arbitrary
+bytes are not: map each byte to the `char` with that code point
+(U+0000..U+00FF) on the way in, which is lossless and makes the
+Unicode-scalar index equal to the byte offset. Read a position off
+`site.pos` and never off `site.si`, which is a UTF-8 byte offset into
+the transcoded source and runs ahead at the first byte above 0x7F. The
+memory cost of holding bytes this way is real: the transcoded `&str` is
+up to twice the input, and the lexer additionally materialises a
+`Vec<char>` and a `Vec<usize>` over it.
+
+The second cost is the one that shapes a grammar. `match_tokens`
+callbacks are gated on the rule's expected-token column exactly as in
+TypeScript and Go, but their signature is `Fn(&str)`, so they cannot see
+the rule. A field whose length was read from an earlier field therefore
+cannot use that path; it has to be an `ImperativeLexMatcher` under
+`lex.matchers`, which does receive `&mut Rule` but is NOT column-gated,
+so the matcher gates itself on the rule that wants it. Giving the
+column-gated callback a rule-aware form would remove the split.
+
+The third is that `Token.src` is an owned `TokenText`. TypeScript can
+defer a payload to a bare `(sI, len)` span and Go can slice its source
+string without copying; here a payload token copies its bytes.
+
+`tests/binary_grammar_test.rs` is the worked example, mirroring
+`ts/test/binary-grammar.test.js` and `go/binarygrammar_test.go` over
+byte-identical input.
+
+The portable serialized contract and native imperative tier have been audited
+against the TypeScript and Go surfaces, and the audit is executable rather
+than asserted: the fixture registration gate, the token-stream differential
+and the compiler-consumer gates are what hold it, and what the prose claims
+is what those gates run. The claim is not that no difference remains. The
+ABNF arm of the compiler-consumer gate found one in September 2026, on the
+optional-prefix shape `R = [ A "@" ] A`: a parent read its child link from
+the rule that popped, which is the last link of a replacement chain, where
+TypeScript and Go both keep the link on the rule they pushed. That link is
+now the pushed rule in whole, name and node together, and one narrower split
+survives it: walking `rule.child.next.next` and beyond reaches the rest of a
+replacement chain in TypeScript and Go and reaches nothing here. It is
+registered, with a control row, as "Forward traversal of a replacement chain
+in Rust". Known remaining API differences are listed under "Gaps against the
+canonical surface" below.
+
+Rust ownership is expressed explicitly:
 grammar and next-rule views are immutable snapshots, live mutation is limited
 to the `&mut Rule`, `&mut Context`, `&mut Lexer`, and `&mut AltMatch` arguments
 supplied to a callback, and JavaScript function references are registered as
@@ -160,6 +203,58 @@ ignored. See
 `../doc/rust-port-implementation-plan.md` for the original architecture and
 gates; the implementation has intentionally advanced beyond that document's
 v0.1 scope.
+
+## Gaps against the canonical surface
+
+Audited against `ts/src` (`tabnas.ts`, `parser.ts`, `lexer.ts`, `rules.ts`,
+`context.ts`, `utility.ts`) in September 2026. Parse behavior is not on this
+list: where a behavior differs it is a defect, it is repaired, and until it is
+repaired it lives in the repository's `DIVERGENCE.md` and its executable
+register, `test/spec/divergent.tsv`, whose `rust` column this crate's own
+suite asserts. One entry there is Rust's alone today, the chain walk named above.
+What follows is public API surface that TypeScript offers a plugin author and
+this crate does not, or offers in another shape.
+
+- **The shared utility bag.** TypeScript exports a `util` object and this
+  crate's `tabnas::utility` carries four of its members: `deep`, `modlist`,
+  `str_value` and `str_inject`, which are the ones the shared `utility-*.tsv`
+  fixtures pin. `escre`, `mesc`, `regexp`, `getpath`, `charset`,
+  `charsBitmap`, `snip`, `srcfmt`, `clean`, `configure`, `filterRules`,
+  `makelog`, `badlex`, `findTokenSet`, `keyOrder`, `recordKeyOrder` and
+  `KEY_ORDER` have no public Rust equivalent. Several exist inside the crate
+  and are simply not exported; the rest are internal to how the TypeScript
+  engine is built. The members that only shim JavaScript (`isarr`, `omap`,
+  `keys`, `values`, `entries`, `assign`, `clone`, `str`) have no meaning here
+  and are not gaps.
+- **The matcher factories.** TypeScript exports `makeCommentMatcher`,
+  `makeFixedMatcher`, `makeLineMatcher`, `makeNumberMatcher`,
+  `makeSpaceMatcher`, `makeStringMatcher`, `makeTextMatcher` and `makeLex`, so
+  a plugin can build a matcher from config and install it beside the built-in
+  bands. Here the eight bands are internal and a plugin reaches the same
+  outcome through `lex_match_ref`, `imperative_lex_match_ref` and
+  `lex_match_factory_ref`, which compose rather than construct. The
+  capability is present; the shape is not the same.
+- **Constructors exported for plugins.** `makeRule`, `makeRuleSpec`,
+  `makeToken`, `makePoint` and `makeParser` are public in TypeScript. Here
+  `Rule`, `Token` and `Parser` are constructed by the engine, and a plugin
+  receives them.
+- **Per-alternate validation of a grammar held as data.** TypeScript exports
+  `validateAlt` and `validateAlts` alongside `validateGrammar`, and Go exports
+  `ValidateAlt`/`ValidateAlts`, so a generator or an editor can check one
+  alternate before any parser exists. This crate exposes
+  `grammar::validate_grammar` over a whole rule table and nothing finer.
+- **The builtin reference set is not public.** TypeScript exports
+  `BUILTIN_REFS` and `BUILTIN_SCHEMA_VERSION`, and Go exports both under the
+  same names, so a compiler emitting pure-data grammars can ask the engine
+  which builtin references it honours. Here `BUILTIN_SCHEMA_VERSION` is public
+  as `tabnas::grammar::BUILTIN_SCHEMA_VERSION` and is not re-exported at the
+  crate root, and the name set is `pub(crate)`. The three sets are not
+  identical between the runtimes, so exposing one here is a contract decision
+  rather than a transcription, and it is left to the maintainer.
+- **`internal()`.** TypeScript hands back one bag of engine internals. The
+  same material is reachable here through named accessors (`config`,
+  `rule_names`, `rule_specs`, `token_set`, `token_name`, `installed_plugins`,
+  `describe`), which is a deliberate difference and not an absence.
 
 ## Building a release that uses this
 
@@ -215,9 +310,24 @@ which is why both of these are written down rather than configured.
 ```sh
 cargo build --all-targets
 cargo test --all-targets
+cargo test --doc
 cargo clippy --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
 The crate declares Rust 1.85 as its minimum supported toolchain. From the
 repository root, `./ci/rust/run.sh` also runs the shared cross-runtime and
 compiler-consumer parity gates.
+
+### Formal verification (experiment, not a gate)
+
+`rs/verus/` holds standalone [Verus](https://github.com/verus-lang/verus)
+copies of two pieces of `src/`, with specifications and machine-checked
+proofs: the `InlineText` length invariant behind the crate's only
+`unsafe` block, and the lexer's scalar-index span arithmetic.
+
+Nothing there is compiled by the crate. Verus pins its own Rust
+toolchain, which is not the 1.85 above, so no gate runs it and it is not
+a build dependency. Run it by hand with `VERUS=/path/to/verus
+rs/verus/run.sh`. `doc/rust-verus-experiment.md` records what verified,
+what did not, and why the crate was not adopted onto Verus.

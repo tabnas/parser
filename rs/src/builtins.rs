@@ -245,7 +245,10 @@ fn list_push(node: &mut Value, value: Value) {
 /// Run a built-in with metadata wrappers disabled.
 ///
 /// This keeps the original public helper stable for embedders. Parser-owned
-/// execution uses [`run_builtin_action_with_info`] with its configured options.
+/// execution goes through the crate-internal `run_builtin_action_with_info`,
+/// which is handed the parse's own [`InfoOptions`]; the public way to the same
+/// behaviour is [`run_builtin_action_with_context`], which reads them off the
+/// context it is given.
 pub fn run_builtin_action(name: &str, rule: &mut Rule, config: Option<&Value>) -> bool {
     let options = std::sync::Arc::new(crate::Options::default());
     let mut context = Context::new(

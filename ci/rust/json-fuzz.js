@@ -19,8 +19,7 @@ const SEED = Number(process.argv[3] || 2551599)
 const GENERATOR = Path.join(PARSER_ROOT, 'ci', 'fuzz', 'gencorpus.js')
 const FIXTURE = Path.join(PARSER_ROOT, 'ts', 'test',
   'json-builder.fixture.json')
-const RUNNER = Path.join(PARSER_ROOT, 'rs', 'target', 'debug',
-  process.platform === 'win32' ? 'spec_runner.exe' : 'spec_runner')
+const RUNNER = require('./target-dir').binary('spec_runner')
 
 for (const path of [GENERATOR, FIXTURE, RUNNER]) {
   if (!Fs.existsSync(path)) {

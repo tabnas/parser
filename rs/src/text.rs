@@ -60,11 +60,19 @@ impl InlineText {
 
     pub(crate) fn as_str(&self) -> &str {
         match self {
-            // SAFETY: both constructors of this arm leave
-            // `bytes[..len]` valid UTF-8 — `new` copies it whole out of
-            // a `&str`, `Default` writes none and sets `len` 0. `len`
-            // cannot exceed the buffer: `new` takes this arm only when
-            // it does not, and `Default` is 0.
+            // SAFETY: two claims, and both cover every constructor
+            // of this arm, which is `new` AND `Default` -- an earlier
+            // version of this comment named only `new`, and `Default`
+            // builds an `Inline` too.
+            //
+            // Valid UTF-8: `new` copies `bytes[..len]` whole out of a
+            // `&str`; `Default` leaves `len` 0, and the empty slice is
+            // valid. Nothing else writes the buffer.
+            //
+            // `len` in bounds: `new` takes this arm only when
+            // `text.len() <= INLINE_CAPACITY`, and `Default` uses 0.
+            // This half is machine-checked, over every constructor, by
+            // `rs/verus/inline_text.rs`.
             InlineText::Inline { len, bytes } => unsafe {
                 std::str::from_utf8_unchecked(&bytes[..*len as usize])
             },

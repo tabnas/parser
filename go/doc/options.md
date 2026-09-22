@@ -253,7 +253,7 @@ Controls ANSI color codes in formatted error messages (TS:
 
 | Field | Type | Description |
 |---|---|---|
-| `Ender` | `[]string` | Additional characters that end text tokens |
+| `Ender` | `[]string` | Additional enders for text and number tokens. Each entry is ONE ender: a single-character entry is an ender character, and a longer entry is a SEQUENCE that ends a run where the whole of it starts. `[]string{"END"}` ends a run at `END` and leaves `abcEX` one text token. A string on the serialized door (`"ender": ":;"`) is split into its characters by the reader, one ender each, so the two forms stay distinguishable in this `[]string` |
 | `TokenSet` | `map[string][]string` | Customize named token sets (for example, `VAL`, `KEY`); values are token names, merged index-wise onto the default set. An empty name removes that position (the serialized `null`); a shorter slice keeps the default tail |
 | `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (for example, `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |

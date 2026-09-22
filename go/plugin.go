@@ -745,6 +745,27 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		child.parser.Config.refreshLexTables()
 	}
 
+	// Copy parent's multi-character enders, which the child inherits on the
+	// same terms. A sequence the child already carries is not added twice.
+	if 0 < len(j.parser.Config.EnderSeqs) {
+		have := make(map[string]bool, len(child.parser.Config.EnderSeqs))
+		for _, es := range child.parser.Config.EnderSeqs {
+			have[es] = true
+		}
+		added := false
+		for _, es := range j.parser.Config.EnderSeqs {
+			if !have[es] {
+				child.parser.Config.EnderSeqs = append(child.parser.Config.EnderSeqs, es)
+				have[es] = true
+				added = true
+			}
+		}
+		if added {
+			// A sequence's first byte feeds the text dispatch table too.
+			child.parser.Config.refreshLexTables()
+		}
+	}
+
 	// Copy parent's escape map.
 	if j.parser.Config.EscapeMap != nil {
 		if child.parser.Config.EscapeMap == nil {

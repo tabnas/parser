@@ -239,8 +239,38 @@ new Tabnas({
 
 ## `ender`
 
-Additional text-ending characters. String or string array. Default
-`[]`.
+Additional enders for an unquoted text or number token. A string or an
+array of strings. Default `[]`.
+
+**Every array entry is one ender.** `configure()` maps each entry to one
+alternative of the ender regexp, so an entry longer than a single
+character is a SEQUENCE: a run ends where the whole of it starts, and not
+at its first character alone.
+
+A string is read the other way, as its characters, one ender each. The
+two forms therefore differ as soon as more than one character is given:
+
+- `ender: ';'` and `ender: [';']` both end a run at `;`.
+- `ender: ';|'` ends a run at `;` or at `|`, one ender per character.
+- `ender: [';|']` ends a run at the two-character sequence `;|`. Under
+  it, `ab;|c` is the text `ab`, while `ab;c` is the single text token
+  `ab;c`, because `;` alone is not an ender.
+- `ender: [';', '|']` is the array spelling of the string form: two
+  single-character enders.
+
+So write one entry per character when characters are what is meant, and
+one entry per sequence otherwise.
+
+The enders apply to numbers on the same terms, because the number
+matcher is anchored on the same alternatives: a number has to be
+followed by an ender, a fixed token, whitespace or the end of the
+source. Under `ender: [';|']`, `1;|2` lexes as the number `1`, and
+`1;2` as the text `1;2`.
+
+All three runtimes read both forms this way, pinned by the shared
+fixture `test/spec/lex-ender-array.tsv`. The Go port used to read an
+array entry as a set of characters, so `[';|']` was two enders there and
+one here; see [`go/doc/differences.md`](../../go/doc/differences.md).
 
 ## `rule`
 

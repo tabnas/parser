@@ -237,3 +237,40 @@ function optsFor(at, val) {
   node[parts[parts.length - 1]] = val
   return out
 }
+
+describe('options-validate SKIP', () => {
+  // `@SKIP` resolves to the SKIP symbol BEFORE validation runs, so a
+  // grammar that writes it hands these validators a symbol. The generic
+  // walk has always accepted that; the three leaves with a validator of
+  // their own rejected it, which made the sentinel usable everywhere
+  // except the three places it is most useful. Reported from
+  // tabnas/jsonic, whose `skip-in-grammar-options-tokenset` and
+  // `skip-in-grammar-options-value-def` suites this failed.
+  const { SKIP } = require('..')
+
+  it('accepts the SKIP sentinel in tokenSet, value.def and comment.def', () => {
+    const cases = [
+      { tokenSet: { KEY: [SKIP, null, null, null] } },
+      { tokenSet: { KEY: SKIP } },
+      { value: { def: { yes: SKIP } } },
+      { comment: { def: { hash: SKIP } } },
+    ]
+    for (const opts of cases) {
+      assert.doesNotThrow(() => new Tabnas(opts), 'constructor ' + Object.keys(opts)[0])
+      assert.doesNotThrow(() => new Tabnas().options(opts), 'options() ' + Object.keys(opts)[0])
+    }
+  })
+
+  it('still rejects an ill-typed leaf beside a SKIP', () => {
+    // The fix must not turn the validator off: a real type fault in the
+    // same shape is still a load fault.
+    assert.throws(
+      () => new Tabnas({ tokenSet: { KEY: [SKIP, 7] } }),
+      /options\.tokenSet\.KEY\[1\]: expected string, got number/,
+    )
+    assert.throws(
+      () => new Tabnas({ tokenSet: { KEY: 7 } }),
+      /options\.tokenSet\.KEY: expected array, got number/,
+    )
+  })
+})

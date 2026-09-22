@@ -37,7 +37,18 @@ rm -rf "$GOWORK_DIR"
 
 if [ "$GRAMMAR" = json ]; then
   echo "=== build parity_tokdump ==="
-  cargo build --quiet --manifest-path "$PARSER_ROOT/rs/Cargo.toml" --bin parity_tokdump
+  # Built FROM rs/, not with --manifest-path from wherever this script was
+  # invoked. `--manifest-path` does not set the directory cargo resolves
+  # from, and a relative `CARGO_TARGET_DIR` is taken relative to that
+  # directory: built from the repository root it lands in <root>/<dir>, and
+  # from rs/ in rs/<dir>. `target-dir.js` asks from rs/, so the build has to
+  # as well or the two name different paths and this gate dies with "No such
+  # file or directory" on a build that just succeeded.
+  ( cd "$PARSER_ROOT/rs" && cargo build --quiet --bin parity_tokdump )
+  # Ask cargo where it wrote it. `CARGO_TARGET_DIR`, or a `[build] target-dir`
+  # in an applicable cargo config, moves the directory away from rs/target,
+  # and hardcoding that path made this gate die the same way.
+  RS_TOKDUMP="$(node "$DIR/../rust/target-dir.js" parity_tokdump)"
 fi
 
 # Extract input columns from the TSV fixtures (skip header). Unescape mode
@@ -80,7 +91,7 @@ console.log(`extracted ${n} inputs (${mode})`)
 node "$DIR/tokdump.js" "$GRAMMAR" "$WORK" > "$WORK/ts.tok"
 "$WORK/gotokdump" "$GRAMMAR" "$WORK" > "$WORK/go.tok"
 if [ "$GRAMMAR" = json ]; then
-  "$PARSER_ROOT/rs/target/debug/parity_tokdump" "$GRAMMAR" "$WORK" > "$WORK/rs.tok"
+  "$RS_TOKDUMP" "$GRAMMAR" "$WORK" > "$WORK/rs.tok"
 fi
 
 total=$(grep -c '^== ' "$WORK/ts.tok")

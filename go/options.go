@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // Options configures a Tabnas parser instance; nil pointer fields mean "use default".
@@ -27,7 +28,7 @@ type Options struct {
 	Map      *MapOptions         // Object/map merging behavior.
 	List     *ListOptions        // Array/list behavior.
 	Value    *ValueOptions       // Keyword literal matching (true, false, null, etc.).
-	Ender    []string            // Additional characters that end text tokens.
+	Ender    []string            // Additional text/number enders; each entry is one ender, single-character or a multi-character sequence.
 	Rule     *RuleOptions        // Parser rule behavior.
 	Lex      *LexOptions         // Global lexer behavior (empty source, etc.).
 	Parse    *ParseOptions       // Parse-time hooks (TS options.parse); distinct from Parser.
@@ -1063,12 +1064,23 @@ func buildConfig(o *Options) *LexConfig {
 		}
 	}
 
-	// Ender
+	// Ender. Each entry is ONE ender: a single-character entry is an ender
+	// CHARACTER, and a longer one is a SEQUENCE that ends a run where the
+	// whole of it starts. That is what canonical TypeScript makes of the
+	// array -- every entry becomes one alternative of the ender regex --
+	// and a sequence has no expression as a member of EnderChars, so the
+	// two are held apart (#202). The STRING form is split into characters
+	// by the option readers, so it never arrives here as a sequence.
 	if len(o.Ender) > 0 {
 		cfg.EnderChars = make(map[rune]bool)
 		for _, e := range o.Ender {
-			for _, r := range e {
+			if "" == e {
+				continue
+			}
+			if r, size := utf8.DecodeRuneInString(e); size == len(e) {
 				cfg.EnderChars[r] = true
+			} else {
+				cfg.EnderSeqs = append(cfg.EnderSeqs, e)
 			}
 		}
 	}

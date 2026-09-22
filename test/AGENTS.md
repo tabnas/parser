@@ -62,7 +62,7 @@ Every fixture here, and the runner that executes it:
 |---|---|---|---|
 | `include-json.tsv`, `include-json-errors.tsv`, `include-json-utf8.tsv`, `include-json-utf8-errors.tsv` | `ts/test/json-spec.test.js` | `go/spec_test.go` | `rs/tests/json_spec_test.rs` |
 | `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` | `rs/tests/utility_spec_test.rs` |
-| `lex-string-control.tsv`, `lex-text-line-terminator.tsv`, `lex-text-quote.tsv` | `ts/test/lex.test.js` | Go lexer tests | `rs/tests/lexer_spec_test.rs` |
+| `lex-string-control.tsv`, `lex-text-line-terminator.tsv`, `lex-text-quote.tsv`, `lex-ender-array.tsv` | `ts/test/lex.test.js` | Go lexer tests | `rs/tests/lexer_spec_test.rs` |
 | `diagnostic.tsv` | `ts/test/diagnostic.test.js` | `go/diagnostic_spec_test.go` | `rs/tests/diagnostic_spec_test.rs` |
 | `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — | — |
 | `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |

@@ -300,8 +300,10 @@ Go, and Rust.
 ## rust/ — native-port gate
 
 - `run.sh` checks formatting, builds and tests every Rust target at the
-  locked dependency graph, runs strict Clippy, then executes both shared TSV
-  token-stream parity arms against TypeScript and Go. It then compiles the
+  locked dependency graph, runs the README doctests (`--all-targets` does not
+  include them), runs strict Clippy and a warning-free `cargo doc`, then
+  executes both shared TSV token-stream parity arms against TypeScript and
+  Go. It then compiles the
   shared strict-JSON grammar against a seeded generated value/error corpus,
   checks 35 acceptance/rejection cases produced by the sibling ABNF and EBNF
   compilers, then compiles the sibling GBNF repo's explicit llama.cpp corpus

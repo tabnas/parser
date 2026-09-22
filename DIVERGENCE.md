@@ -609,6 +609,52 @@ that set an empty value, only css's was live. `csv` sets `Lex: false`
 alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
 never a quote character to begin with.
 
+### Forward traversal of a replacement chain in Rust
+
+**Deferred, not deliberate** — a Rust defect with a designed repair
+already scheduled, recorded here so nobody is told the rule graph is at
+parity when a grammar can still see the difference.
+
+`rule.child` names the rule its parent PUSHED in all three ports, and a
+rule that replaces itself leaves the parent on the first link of the
+chain. That is what `@fold$` exists to work around, and all three ports
+now agree on it, on the link's node, and on its immediate `next` — the
+replacement that took its place.
+
+They part company on the SECOND hop. TypeScript and Go hold a replaced
+rule as a live object, so its `next` goes on being written long after the
+parent stopped looking, and `child.next.next` reaches the chain's third
+link. Rust cannot: it holds a frozen record, taken when each link stopped
+being the current rule, and that record's `next_rule` is its successor as
+the successor stood at its own creation — before it had a successor of
+its own.
+
+| grammar | path read on the parent's close | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `child` replaced by `child2`, `child2` by `child3` | `child.next.name` | `child2` | `child2` | `child2` |
+| same | `child.next.next.name` | `child3` | `child3` | **nothing** |
+| same | `child.next.next.next.name` | `top` | `top` | **nothing** |
+
+Repair direction: **Rust changes.** TypeScript defines the language and
+Go already agrees with it.
+
+Not repaired here because the forward pointer cannot be patched in place
+once it is stored: by the time the grandchild exists, the successor's
+record is shared through an `Rc` and the link that would have to be
+rewritten sits in the middle of the chain. The chain IS still reachable,
+backwards, through `prev_rule` — every link holds the one it replaced —
+and resolving a successor from that walk instead of from a stored
+forward pointer is item **R7** of
+[`doc/rust-callback-contract-spec.md`](doc/rust-callback-contract-spec.md),
+announced by its `[V4]` release note. Writing a second mechanism here
+would collide with that one and add a cost to every pop, so the split is
+registered until R7 lands.
+
+Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
+`chain-next-one-hop` as their control. **The control row is the load-bearing
+one:** it is what tells a later reader that the child link itself is at
+parity and only the walk past it is not.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

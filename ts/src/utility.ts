@@ -1368,20 +1368,28 @@ const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
   'options.fixed.token': oneOf(['string']),
   'options.match.token': oneOf(['regexp', 'function', 'string']),
   'options.match.value': oneOf(['regexp', 'function', 'object']),
+  // SKIP is accepted here, and in the two `def` validators below, for the
+  // same reason the generic walk accepts it above: `@SKIP` resolves to the
+  // sentinel BEFORE validation runs, so a grammar that writes it reaches
+  // these validators with a symbol in hand. Rejecting it made the sentinel
+  // usable everywhere except the three places that have a validator of
+  // their own, which is not a rule anyone would write down.
   'options.tokenSet': (val, at) => {
-    if (null == val) return
+    if (null == val || SKIP === val) return
     if (!Array.isArray(val)) bad(at, 'array', val)
     for (let i = 0; i < val.length; i++) {
-      if (null != val[i] && S.string !== typeof val[i]) bad(at + '[' + i + ']', 'string', val[i])
+      if (null != val[i] && SKIP !== val[i] && S.string !== typeof val[i]) {
+        bad(at + '[' + i + ']', 'string', val[i])
+      }
     }
   },
   'options.comment.def': (val, at) => {
-    if (null == val || false === val) return
+    if (null == val || false === val || SKIP === val) return
     if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
     validateOptions(val, COMMENT_DEF_SHAPE, at)
   },
   'options.value.def': (val, at) => {
-    if (null == val || false === val) return
+    if (null == val || false === val || SKIP === val) return
     if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
     if (undefined !== val.consume && null !== val.consume && 'boolean' !== typeof val.consume) {
       bad(at + '.consume', 'boolean', val.consume)

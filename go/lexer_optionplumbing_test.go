@@ -17,6 +17,7 @@ package tabnas
 //     the base, not be "merged" field-by-field into a corrupt zero value.
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -144,6 +145,47 @@ func TestSpecLexTextQuote(t *testing.T) {
 		if got := lexOne(src, buildConfig(&Options{})); got != want {
 			t.Errorf("lex-text-quote line %d: input=%q: got %q, want %q",
 				row.lineNo, src, got, want)
+		}
+	}
+}
+
+// TestSpecLexEnderArray runs the shared lex-ender-array.tsv fixture (the TS
+// counterpart is 'ender-array-spec' in ts/test/lex.test.js, the Rust one
+// ender_array_fixture in rs/tests/lexer_spec_test.rs). Columns:
+// ender | input | expected, where `ender` is the JSON the option is given
+// and expected keeps the ERROR:<code> / <name>:<value> contract.
+//
+// The rule: EVERY ARRAY ENTRY IS ONE ENDER. Canonical TypeScript maps each
+// entry to one alternative of its ender regex, so an entry of more than one
+// character is a SEQUENCE -- a run ends where the whole of it starts, not at
+// its first character. The STRING form is the other reading, splitting into
+// characters, so `";|"` is two enders where `[";|"]` is one; both spellings
+// are in the fixture over the same input, because a port that collapses them
+// looks correct against either alone.
+//
+// This port read the array by iterating the runes of every entry into
+// EnderChars, where a sequence has no expression, so `[";|"]` was two enders
+// here and one there (#202). The column is fed through OptionsFromMap on
+// purpose: the string/array split lives in the READER, since Options.Ender
+// is a []string that cannot tell the two forms apart afterwards.
+func TestSpecLexEnderArray(t *testing.T) {
+	for _, row := range loadSpecTSV(t, "lex-ender-array") {
+		enderJSON := tsvCol(row.cols, 0)
+		src := preprocessEscapes(tsvCol(row.cols, 1))
+		want := preprocessEscapes(tsvCol(row.cols, 2))
+
+		var ender any
+		if err := json.Unmarshal([]byte(enderJSON), &ender); err != nil {
+			t.Fatalf("lex-ender-array line %d: ender %s: %v", row.lineNo, enderJSON, err)
+		}
+		opts, err := OptionsFromMap(map[string]any{"ender": ender})
+		if err != nil {
+			t.Fatalf("lex-ender-array line %d: ender %s refused: %v", row.lineNo, enderJSON, err)
+		}
+
+		if got := lexOne(src, buildConfig(&opts)); got != want {
+			t.Errorf("lex-ender-array line %d: ender=%s input=%q: got %q, want %q",
+				row.lineNo, enderJSON, src, got, want)
 		}
 	}
 }
@@ -419,5 +461,84 @@ func TestStringAllowControlThroughParse(t *testing.T) {
 	if _, err := strict.Parse("{\"a\":\"x\ty\"}"); err == nil ||
 		!strings.Contains(err.Error(), "unprintable") {
 		t.Errorf("strict parse should fail with unprintable, got %v", err)
+	}
+}
+
+// TestEnderFieldsAreReadOnlyOnceTheTablesAreBuilt pins the claim
+// go/doc/differences.md makes under "Ender Characters and Ender Sequences":
+// both ender fields are consumed by buildLexTables, so writing to them on a
+// config that is already built changes nothing.
+//
+// The failure it guards against is silent. A plugin that appends to
+// EnderSeqs on a live config gets no error and no effect: the first byte's
+// dispatch entry still says textContinue, so textStopBase is never reached
+// and the run swallows the ender. This asserts the inertness, that the
+// rebuild is what makes the write land, and that the options door does the
+// rebuild for you.
+func TestEnderFieldsAreReadOnlyOnceTheTablesAreBuilt(t *testing.T) {
+	built := func(ender ...string) *LexConfig {
+		opts := Options{}
+		if 0 < len(ender) {
+			opts.Ender = ender
+		}
+		return buildConfig(&opts)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		src   string
+		write func(cfg *LexConfig)
+		ender []string
+		ended string
+	}{
+		{
+			name:  "sequence",
+			src:   "abcEND",
+			write: func(cfg *LexConfig) { cfg.EnderSeqs = append(cfg.EnderSeqs, "END") },
+			ender: []string{"END"},
+			ended: "#TX:abc",
+		},
+		{
+			name: "character",
+			src:  "abc;d",
+			write: func(cfg *LexConfig) {
+				// Nil on a config built with no enders at all, so a
+				// plugin has to allocate before it can write. That is
+				// not the point being made here, but it is the shape
+				// the write has to take.
+				if nil == cfg.EnderChars {
+					cfg.EnderChars = map[rune]bool{}
+				}
+				cfg.EnderChars[';'] = true
+			},
+			ender: []string{";"},
+			ended: "#TX:abc",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			whole := lexOne(tc.src, built())
+			if whole == tc.ended {
+				t.Fatalf("%q already ends without any ender: got %q", tc.src, whole)
+			}
+
+			// The write the documentation warns about: accepted, and inert.
+			live := built()
+			tc.write(live)
+			if got := lexOne(tc.src, live); got != whole {
+				t.Errorf("writing the ender onto a built config took effect: got %q, want %q (unchanged)",
+					got, whole)
+			}
+
+			// It is the dispatch table, not the field, that the lexer reads.
+			live.refreshLexTables()
+			if got := lexOne(tc.src, live); got != tc.ended {
+				t.Errorf("after refreshLexTables: got %q, want %q", got, tc.ended)
+			}
+
+			// The supported route rebuilds for you.
+			if got := lexOne(tc.src, built(tc.ender...)); got != tc.ended {
+				t.Errorf("through Options.Ender: got %q, want %q", got, tc.ended)
+			}
+		})
 	}
 }
