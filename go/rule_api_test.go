@@ -694,7 +694,39 @@ func TestNormAltBuildsEveryPlainConditionValue(t *testing.T) {
 
 	// And a value neither list accepts is now an error rather than a
 	// silently dropped condition, so the two lists cannot drift apart again.
-	if err := NormAlt(&AltSpec{CD: map[string]any{"d": []int{1}}}); err == nil {
-		t.Error("an unusable condition value must fail the grammar, not vanish")
+	unusable := &AltSpec{CD: map[string]any{"d": []int{1}}}
+	err := NormAlt(unusable)
+	if err == nil {
+		t.Fatal("an unusable condition value must fail the grammar, not vanish")
+	}
+
+	// The refusal is reported twice, by two functions, and they must
+	// describe the same accepted set. ValidateAlt said "want int or CondOp"
+	// long after NormAlt had started accepting four more plain types, so a
+	// spec checked by an editor was told to write the one type the
+	// serialized door cannot even carry (encoding/json emits float64 and
+	// string, never int). Messages are not the contract; a message that
+	// sends the reader the wrong way is still a defect.
+	problems := ValidateAlt(&AltSpec{CD: map[string]any{"d": []int{1}}})
+	if len(problems) != 1 {
+		t.Fatalf("ValidateAlt on an unusable condition value: got %d problems, want 1: %v",
+			len(problems), problems)
+	}
+	for _, want := range []string{"a plain value or CondOp", "[]int"} {
+		if !strings.Contains(problems[0], want) {
+			t.Errorf("ValidateAlt problem %q does not mention %q", problems[0], want)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("NormAlt error %q does not mention %q", err.Error(), want)
+		}
+	}
+
+	// Every type NormAlt builds a condition for must also validate clean,
+	// or a generator is told its grammar is bad and the engine then loads
+	// it, which is the same drift running the other way.
+	for _, plain := range []any{int(0), int64(0), float64(0), "top", true} {
+		if problems := ValidateAlt(&AltSpec{CD: map[string]any{"d": plain}}); len(problems) != 0 {
+			t.Errorf("ValidateAlt rejects %T, which NormAlt accepts: %v", plain, problems)
+		}
 	}
 }

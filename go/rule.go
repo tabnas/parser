@@ -790,7 +790,8 @@ func condProblems(propdef string, pspec any) []string {
 		// Anything else was silently ignored, leaving the alternate with one
 		// fewer condition than it reads as having — or none at all.
 		out = append(out, fmt.Sprintf(
-			"unusable condition value on %q: want int or CondOp, got %T", propdef, v))
+			"unusable condition value on %q: want a plain value or CondOp, got %T",
+			propdef, v))
 	}
 
 	return out
