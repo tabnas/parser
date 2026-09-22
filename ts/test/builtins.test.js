@@ -101,6 +101,88 @@ describe('builtins', () => {
       assert.equal(j.parse('12+3+45').kids.length, 3)
     })
 
+    it('@capture$ merges the PUSHED child, not its replacement chain', () => {
+      // `rule.child` is linked in the push arm (rules.ts:665) and never
+      // relinked, so a child that replaces itself leaves the parent on the
+      // first instance of the chain. That is the fact @fold$ above exists to
+      // work around, and it is contract: Go links the same way (rule.go:1280)
+      // and the Rust port carries the pushed rule's node cell to reproduce it
+      // (rs/tests/child_link_chain_test.rs). Without a fold, the later links
+      // of the chain are simply not captured.
+      const j = new Tabnas({ rule: { start: 'top' } })
+      j.grammar({
+        rule: {
+          top: {
+            open: [{ p: 'mid', a: '@node$',
+              k: { node$: { init: true, rule: 'top', kind: 'user', nterms: 0 } } }],
+            close: [{ a: '@capture$', k: { capture$: { rule: 'top', kind: 'user' } } }],
+          },
+          mid: {
+            open: [{ s: ['#TX'], a: '@node$',
+              k: { node$: { init: true, rule: 'mid', kind: 'user', nterms: 1 } } }],
+            close: [{ r: 'tail' }],
+          },
+          tail: {
+            open: [{ s: ['#TX'], a: '@node$',
+              k: { node$: { init: true, rule: 'tail', kind: 'user', nterms: 1 } } }],
+            close: [{}],
+          },
+        },
+      })
+      assert.deepEqual(j.parse('a b'),
+        { rule: 'top', src: 'a', kids: [{ rule: 'mid', src: 'a', kids: [] }] })
+    })
+
+    it('the whole rule-graph link names the pushed rule, node and all', () => {
+      // The node was only half of `rule.child`. This pins the other half in
+      // the canonical runtime, so the Rust port has a TypeScript answer to
+      // match rather than a Rust decision to defend: `top` pushes `child`,
+      // which pushes `leaf` and then replaces itself twice, and one close
+      // alternate reads seven rule-graph paths at once. All three ports
+      // answer ALL-MATCH on this grammar (go/builtins_test.go,
+      // rs/tests/child_link_chain_test.rs).
+      //
+      // `child.next.next` and beyond are deliberately absent: they are a
+      // live Rust-only split, registered in test/spec/divergent.tsv under
+      // 'Forward traversal of a replacement chain in Rust'.
+      const j = new Tabnas({
+        rule: { start: 'top' },
+        fixed: { token: { Ta: 'a', Tb: 'b', Tx: 'x', Tc: 'c', Td: 'd', Te: 'e' } },
+      })
+      j.grammar({
+        rule: {
+          top: {
+            open: [{ s: ['Ta'], p: 'child' }],
+            close: [
+              { s: ['Te'],
+                c: {
+                  'child.name': 'child',
+                  'child.parent.name': 'top',
+                  'child.child.name': 'leaf',
+                  'child.child.parent.name': 'child',
+                  'child.next.name': 'child2',
+                  'next.name': 'child',
+                  'next.next.name': 'child2',
+                },
+                a: '@node$',
+                k: { node$: { init: true, rule: 'ALL-MATCH', kind: 'user', nterms: 0 } } },
+              { s: ['Te'], a: '@node$',
+                k: { node$: { init: true, rule: 'MISMATCH', kind: 'user', nterms: 0 } } },
+            ],
+          },
+          child: {
+            open: [{ s: ['Tb'], p: 'leaf' }],
+            close: [{ r: 'child2' }],
+          },
+          leaf: { open: [{ s: ['Tx'] }], close: [{}] },
+          child2: { open: [{ s: ['Tc'], r: 'child3' }] },
+          child3: { open: [{ s: ['Td'] }], close: [{}] },
+        },
+      })
+      assert.deepEqual(j.parse('abxcde'),
+        { rule: 'ALL-MATCH', src: '', kids: [] })
+    })
+
     it('@bubble$ lifts the child node without merging', () => {
       const j = new Tabnas({ rule: { start: 'top' }, fixed: { token: { Ta: 'a' } } })
       j.grammar({

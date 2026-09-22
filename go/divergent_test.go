@@ -624,15 +624,22 @@ func TestDivergenceRegisterCoversEveryEntry(t *testing.T) {
 				row.lineNo, row.cols[0])
 			continue
 		}
-		if row.cols[4] != row.cols[5] {
+		// Any two columns disagreeing is a divergence. Reading only `go`
+		// against `ts` would refuse to accept a group whose odd port is
+		// Rust -- which the two canonical ports agree against, so the
+		// gate would demand the group be deleted as repaired while the
+		// split it records is live in a shipped runtime.
+		if row.cols[4] != row.cols[5] ||
+			row.cols[4] != row.cols[6] {
 			divergentRow[group] = true
 		}
 	}
 
 	for g := range registered {
 		if !divergentRow[g] {
-			t.Errorf("register group %q has no row where the `go` and `ts` "+
-				"columns differ. Either the divergence was repaired — in which "+
+			t.Errorf("register group %q has no row where two of the `go`, "+
+				"`ts` and `rust` columns differ. Either the divergence was "+
+				"repaired — in which "+
 				"case delete the group AND its DIVERGENCE.md entry, which is "+
 				"what the repair is for — or its divergent row was lost and the "+
 				"control rows are now pinning agreement under a heading that "+
