@@ -26,11 +26,20 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
       with:
         go-version: '1.24'
+    # rustup, NOT dtolnay/rust-toolchain: these repos allow only
+    # GitHub-owned and verified-creator actions (allowed_actions:
+    # selected, patterns_allowed: []), so that action is refused before
+    # any job starts -- the run reports startup_failure, which reads as
+    # a broken workflow file rather than a blocked action. The runners
+    # ship rustup, so the action was buying nothing here.
+    #
+    # `default` is what makes the MSRV the toolchain the gate runs
+    # under; installing it alone leaves cargo on the runner's
+    # pre-installed stable.
     - name: Set up Rust MSRV
-      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable @ 2026-09-22
-      with:
-        toolchain: '1.85'
-        components: rustfmt, clippy
+      run: |
+        rustup toolchain install 1.85 --profile minimal --component rustfmt,clippy
+        rustup default 1.85
     - name: Clone serialized grammar producers
       shell: bash
       run: |
