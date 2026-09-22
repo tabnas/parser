@@ -463,3 +463,82 @@ func TestStringAllowControlThroughParse(t *testing.T) {
 		t.Errorf("strict parse should fail with unprintable, got %v", err)
 	}
 }
+
+// TestEnderFieldsAreReadOnlyOnceTheTablesAreBuilt pins the claim
+// go/doc/differences.md makes under "Ender Characters and Ender Sequences":
+// both ender fields are consumed by buildLexTables, so writing to them on a
+// config that is already built changes nothing.
+//
+// The failure it guards against is silent. A plugin that appends to
+// EnderSeqs on a live config gets no error and no effect: the first byte's
+// dispatch entry still says textContinue, so textStopBase is never reached
+// and the run swallows the ender. This asserts the inertness, that the
+// rebuild is what makes the write land, and that the options door does the
+// rebuild for you.
+func TestEnderFieldsAreReadOnlyOnceTheTablesAreBuilt(t *testing.T) {
+	built := func(ender ...string) *LexConfig {
+		opts := Options{}
+		if 0 < len(ender) {
+			opts.Ender = ender
+		}
+		return buildConfig(&opts)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		src   string
+		write func(cfg *LexConfig)
+		ender []string
+		ended string
+	}{
+		{
+			name:  "sequence",
+			src:   "abcEND",
+			write: func(cfg *LexConfig) { cfg.EnderSeqs = append(cfg.EnderSeqs, "END") },
+			ender: []string{"END"},
+			ended: "#TX:abc",
+		},
+		{
+			name: "character",
+			src:  "abc;d",
+			write: func(cfg *LexConfig) {
+				// Nil on a config built with no enders at all, so a
+				// plugin has to allocate before it can write. That is
+				// not the point being made here, but it is the shape
+				// the write has to take.
+				if nil == cfg.EnderChars {
+					cfg.EnderChars = map[rune]bool{}
+				}
+				cfg.EnderChars[';'] = true
+			},
+			ender: []string{";"},
+			ended: "#TX:abc",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			whole := lexOne(tc.src, built())
+			if whole == tc.ended {
+				t.Fatalf("%q already ends without any ender: got %q", tc.src, whole)
+			}
+
+			// The write the documentation warns about: accepted, and inert.
+			live := built()
+			tc.write(live)
+			if got := lexOne(tc.src, live); got != whole {
+				t.Errorf("writing the ender onto a built config took effect: got %q, want %q (unchanged)",
+					got, whole)
+			}
+
+			// It is the dispatch table, not the field, that the lexer reads.
+			live.refreshLexTables()
+			if got := lexOne(tc.src, live); got != tc.ended {
+				t.Errorf("after refreshLexTables: got %q, want %q", got, tc.ended)
+			}
+
+			// The supported route rebuilds for you.
+			if got := lexOne(tc.src, built(tc.ender...)); got != tc.ended {
+				t.Errorf("through Options.Ender: got %q, want %q", got, tc.ended)
+			}
+		})
+	}
+}

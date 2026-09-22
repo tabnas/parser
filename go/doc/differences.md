@@ -608,8 +608,19 @@ porting a grammar:
   `LexConfig.EnderSeqs`. The dispatch table routes a sequence's first
   byte to the verify path, exactly as it does for a multi-byte fixed
   token, so a config with no sequence ender pays nothing for the
-  feature. A plugin writing enders onto a live config should add to the
-  field that matches the kind.
+  feature.
+- **Set enders before the dispatch table is built, not after.** Both
+  fields are read once, by `buildLexTables`, and the result is what the
+  lexer consults: an ender character becomes a `textStop` entry and a
+  sequence's first byte a `textVerify` entry. Adding to either field on a
+  config that is already built therefore changes nothing, silently,
+  because the byte's entry still says `textContinue` and the verify path
+  is never reached. The rebuild is engine-internal
+  (`LexConfig.refreshLexTables` is unexported), so the supported routes
+  are the options door (`Options.Ender`, which `buildConfig` rebuilds
+  from) and a `ConfigModifier`, which runs before the tables are built.
+  `SortFixedTokens` also rebuilds them, but it is the fixed-token API and
+  relying on that side effect is not the contract.
 
 Number tokens end on the same alternatives, so a sequence ender ends
 them too: under `ender: []string{";|"}`, `1;|2` is `#NR:1` and `1;2` is
