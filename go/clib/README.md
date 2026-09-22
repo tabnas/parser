@@ -27,16 +27,20 @@ is deliberately **no text-form loader**: `GrammarText` needs a registered
 text parser and a grammar-free engine ships none, so a text entry point
 would be dead here.
 
-Scope is validation — does this input parse against this grammar. The
-AST does not cross the boundary.
+Accepted input comes back with its parse result as `value`, as the
+canonical header (`include/tabnas.h`) has always specified: the
+grammar-agnostic library is a parser, not only an acceptance oracle. Key
+order inside `value` is the engine's insertion order and is out of
+contract (ADR-15, recorded in the repository's `DIVERGENCE.md`); a
+consumer that needs a particular order sorts.
 
 ## The contract
 
 | Function | Returns |
 |---|---|
-| `tabnas_version()` | `{"ok":true,"version":"…"}` |
-| `tabnas_grammar_json(spec, len)` | `{"ok":true,"handle":N}` |
-| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true}` or `{"ok":true,"accept":false,"error":{…}}` |
+| `tabnas_version()` | `{"ok":true,"version":"…","lib":"libtabnas","template":"v1"}` (the header's members, plus `version`; no `format`, since this library is grammar-agnostic) |
+| `tabnas_grammar_json(spec, len)` | `{"ok":true,"handle":N}` (in place of the per-format template's `tabnas_grammar`, which has no slot for a spec) |
+| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true,"value":…}` or `{"ok":true,"accept":false,"error":{…}}`; `value` is omitted only when the result is not JSON-representable |
 | `tabnas_grammar_free(handle)` | — |
 | `tabnas_free(str)` | — |
 

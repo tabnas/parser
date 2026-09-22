@@ -21,6 +21,8 @@ grammar.accepts('{"a": 1,}')     # False
 v = grammar.check('{"a": 1,}')
 v.accept                          # False
 v.error["message"]                # why
+
+grammar.check('{"a": 1}').value   # {'a': 1}: the parse result
 ```
 
 Supply a **serialized GrammarSpec** — the pure-data form a front-end
