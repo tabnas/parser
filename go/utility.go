@@ -39,14 +39,18 @@ func deepMerge(base, over any) any {
 		return base
 	}
 
-	// Extract maps from MapRef if present.
-	baseMap, baseIsMap := base.(map[string]any)
+	// Extract maps from MapRef if present. A declared map type (`type
+	// Field map[string]any`) is read the same way as a plain one: TS
+	// deep() sees only a plain object, so a merge here that recognised
+	// three concrete types and let every other map kind REPLACE the
+	// base dropped defaults the canonical keeps (#198).
+	baseMap, baseIsMap := stringKeyedMap(base)
 	baseMR, baseIsMR := base.(MapRef)
 	if baseIsMR {
 		baseMap = baseMR.Val
 		baseIsMap = true
 	}
-	overMap, overIsMap := over.(map[string]any)
+	overMap, overIsMap := stringKeyedMap(over)
 	overMR, overIsMR := over.(MapRef)
 	if overIsMR {
 		overMap = overMR.Val
@@ -160,6 +164,13 @@ func deepMerge(base, over any) any {
 		return result
 	}
 
+	// Any other slice kind, both sides the same type: index-wise, as TS
+	// deep() merges arrays. Every index the overlay reaches wins, the
+	// positions beyond its length keep the base (#151).
+	if merged, ok := deepMergeSlices(base, over); ok {
+		return merged
+	}
+
 	// Struct handling via reflection — matches TS deep() on plain objects.
 	if merged, ok := deepMergeStruct(base, over); ok {
 		return merged
@@ -267,17 +278,38 @@ func deepMergeStruct(base, over any) (any, bool) {
 				result.Field(i).Set(of)
 			}
 		case reflect.Map:
-			// Merge map entries: base first, then over overwrites.
+			// Merge map entries, and RECURSE into an entry both sides
+			// carry, as TS deep() does for `comment.def`, `value.def`
+			// and `match.value`: an overlay `{hash: {start: "%"}}` keeps
+			// the default hash definition's other fields, and keeps the
+			// other definitions. A nil overlay entry is the delete
+			// marker and replaces (#151).
 			merged := reflect.MakeMap(bf.Type())
 			for _, k := range bf.MapKeys() {
 				merged.SetMapIndex(k, bf.MapIndex(k))
 			}
 			for _, k := range of.MapKeys() {
-				merged.SetMapIndex(k, of.MapIndex(k))
+				ov := of.MapIndex(k)
+				bv := bf.MapIndex(k)
+				if !bv.IsValid() || isNilValue(ov) {
+					merged.SetMapIndex(k, ov)
+					continue
+				}
+				m := deepMerge(bv.Interface(), ov.Interface())
+				if m == nil {
+					merged.SetMapIndex(k, reflect.Zero(bf.Type().Elem()))
+				} else {
+					merged.SetMapIndex(k, reflect.ValueOf(m))
+				}
 			}
 			result.Field(i).Set(merged)
+		case reflect.Slice:
+			// Index-wise, as TS deep() merges arrays: `tokenSet.IGNORE:
+			// ["#SP"]` keeps the default set's other two entries (#151).
+			merged, _ := deepMergeSlices(bf.Interface(), of.Interface())
+			result.Field(i).Set(reflect.ValueOf(merged))
 		default:
-			// String, slice, func, etc.: over wins.
+			// String, func, etc.: over wins.
 			result.Field(i).Set(of)
 		}
 	}
@@ -299,6 +331,55 @@ func hasExportedField(t reflect.Type) bool {
 		if t.Field(i).IsExported() {
 			return true
 		}
+	}
+	return false
+}
+
+// deepMergeSlices merges two slices of one type index by index, the way
+// TS deep() merges arrays and the []any branch of deepMerge already did:
+// every index the overlay reaches wins (its element merged onto the
+// base element when both are containers), and the positions beyond the
+// overlay's length keep the base. Go cannot spell TS's `undefined`
+// inside a typed slice, so there is no "keep this index" element: an
+// empty string in a []string is a present value and wins, which is what
+// makes it the serialized `null` marker for tokenSet (a name that
+// removes its position). Returns (nil, false) when the two are not
+// slices of the same type.
+func deepMergeSlices(base, over any) (any, bool) {
+	bv, ov := reflect.ValueOf(base), reflect.ValueOf(over)
+	if bv.Kind() != reflect.Slice || ov.Kind() != reflect.Slice || bv.Type() != ov.Type() {
+		return nil, false
+	}
+	if bv.IsNil() {
+		return deepClone(over), true
+	}
+	n := bv.Len()
+	if ov.Len() > n {
+		n = ov.Len()
+	}
+	result := reflect.MakeSlice(bv.Type(), n, n)
+	for i := 0; i < n; i++ {
+		switch {
+		case i < bv.Len() && i < ov.Len():
+			m := deepMerge(bv.Index(i).Interface(), ov.Index(i).Interface())
+			if m != nil {
+				result.Index(i).Set(reflect.ValueOf(m))
+			}
+		case i < ov.Len():
+			result.Index(i).Set(cloneElem(ov.Index(i), map[uintptr]any{}))
+		default:
+			result.Index(i).Set(cloneElem(bv.Index(i), map[uintptr]any{}))
+		}
+	}
+	return result.Interface(), true
+}
+
+// isNilValue reports a nil pointer, interface, map, slice or func held
+// in a reflect.Value: the delete marker in an options map.
+func isNilValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return v.IsNil()
 	}
 	return false
 }
@@ -341,12 +422,6 @@ func mapish(v any) (keys []string, vals map[string]any, ok bool) {
 	switch m := v.(type) {
 	case *OrderedMap:
 		return m.Keys, m.Vals, true
-	case map[string]any:
-		ks := make([]string, 0, len(m))
-		for k := range m {
-			ks = append(ks, k)
-		}
-		return ks, m, true
 	case MapRef:
 		ks := make([]string, 0, len(m.Val))
 		for k := range m.Val {
@@ -354,17 +429,72 @@ func mapish(v any) (keys []string, vals map[string]any, ok bool) {
 		}
 		return ks, m.Val, true
 	}
+	if m, ok := stringKeyedMap(v); ok {
+		ks := make([]string, 0, len(m))
+		for k := range m {
+			ks = append(ks, k)
+		}
+		return ks, m, true
+	}
 	return nil, nil, false
 }
 
-// deepClone returns a recursive copy of a value (maps, slices, ListRef, MapRef); other types are returned as-is.
+// stringKeyedMap reads any map KIND whose key type is string as a
+// map[string]any: a plain map[string]any as itself, and a declared map
+// type (`type Field map[string]any`, `map[string]int`) through a copy
+// made by reflection. Go's type switch matches concrete types, so the
+// declared form fell through every map branch of the merge and the
+// clone, where the canonical runtime sees nothing but a plain object.
+// A nil map is a map here too; MapRef and *OrderedMap are structs, not
+// maps, and are handled by their own branches.
+func stringKeyedMap(v any) (map[string]any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+	out := make(map[string]any, rv.Len())
+	iter := rv.MapRange()
+	for iter.Next() {
+		out[iter.Key().String()] = iter.Value().Interface()
+	}
+	return out, true
+}
+
+// deepClone returns a recursive copy of a value (maps, slices, ListRef,
+// MapRef, and any declared map or slice kind); other types are returned
+// as-is.
+//
+// A cyclic value is cloned as a cyclic value, never walked forever: a
+// container is cloned once and every later reference to it inside the
+// same value resolves to that one clone. Without that memo a
+// self-referencing option value took the PROCESS down with a fatal
+// stack overflow inside the option merge, before any plugin ran, where
+// the canonical runtime throws a RangeError a caller can catch (#197).
+// The clone is what TS deep() hands out for an acyclic value; for a
+// cyclic one the caller now at least gets to decide what to do with it.
+//
+// Declared kinds keep their type: `type Ring []any` clones to a Ring.
 // deepClone([]any{1, 2}) // => [1 2] (new slice)
 func deepClone(val any) any {
+	return cloneWithMemo(val, map[uintptr]any{})
+}
+
+// cloneWithMemo is deepClone's recursion, carrying the seen-set. Maps
+// and slices are keyed by the address of their backing store, which is
+// what makes two references to one container resolve to one clone.
+func cloneWithMemo(val any, memo map[uintptr]any) any {
 	if val == nil {
 		return nil
 	}
 	switch v := val.(type) {
 	case *OrderedMap:
+		key := reflect.ValueOf(v).Pointer()
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
 		// Prototype-pollution guard: cloning is TS deep()'s copy path too,
 		// where the same key filter runs, so a dangerous key nested under a
 		// freshly-added key is dropped here rather than copied through. See
@@ -374,36 +504,21 @@ func deepClone(val any) any {
 			Vals:   make(map[string]any, len(v.Vals)),
 			Sorted: v.Sorted,
 		}
+		memo[key] = result
 		for _, k := range v.Keys {
 			if isDangerousMergeKey(k) {
 				continue
 			}
 			result.Keys = append(result.Keys, k)
-			result.Vals[k] = deepClone(v.Vals[k])
-		}
-		return result
-	case map[string]any:
-		result := make(map[string]any)
-		for k, val := range v {
-			// Prototype-pollution guard (see isDangerousMergeKey).
-			if isDangerousMergeKey(k) {
-				continue
-			}
-			result[k] = deepClone(val)
-		}
-		return result
-	case []any:
-		result := make([]any, len(v))
-		for i, val := range v {
-			result[i] = deepClone(val)
+			result.Vals[k] = cloneWithMemo(v.Vals[k], memo)
 		}
 		return result
 	case ListRef:
 		result := make([]any, len(v.Val))
 		for i, val := range v.Val {
-			result[i] = deepClone(val)
+			result[i] = cloneWithMemo(val, memo)
 		}
-		return ListRef{Val: result, Implicit: v.Implicit, Child: deepClone(v.Child), Meta: cloneMeta(v.Meta)}
+		return ListRef{Val: result, Implicit: v.Implicit, Child: cloneWithMemo(v.Child, memo), Meta: cloneMeta(v.Meta)}
 	case MapRef:
 		result := make(map[string]any)
 		for k, val := range v.Val {
@@ -411,12 +526,76 @@ func deepClone(val any) any {
 			if isDangerousMergeKey(k) {
 				continue
 			}
-			result[k] = deepClone(val)
+			result[k] = cloneWithMemo(val, memo)
 		}
 		return MapRef{Val: result, Implicit: v.Implicit, Meta: cloneMeta(v.Meta)}
-	default:
-		return v
 	}
+
+	// Every other map or slice kind, plain or declared, by reflection.
+	// The result keeps the value's own type, so a caller that declared
+	// `type Ring []any` gets a Ring back.
+	rv := reflect.ValueOf(val)
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return val
+		}
+		key := rv.Pointer()
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
+		stringKeys := rv.Type().Key().Kind() == reflect.String
+		result := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		memo[key] = result.Interface()
+		iter := rv.MapRange()
+		for iter.Next() {
+			// Prototype-pollution guard (see isDangerousMergeKey).
+			if stringKeys && isDangerousMergeKey(iter.Key().String()) {
+				continue
+			}
+			result.SetMapIndex(iter.Key(), cloneElem(iter.Value(), memo))
+		}
+		return result.Interface()
+	case reflect.Slice:
+		if rv.IsNil() {
+			return val
+		}
+		// A slice's identity for the memo is its backing array plus its
+		// length: two slices over one array are distinct values, but the
+		// self-reference that matters (a[0] = a) shares both.
+		key := rv.Pointer() ^ uintptr(rv.Len())<<48
+		if seen, ok := memo[key]; ok {
+			return seen
+		}
+		result := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		memo[key] = result.Interface()
+		for i := 0; i < rv.Len(); i++ {
+			result.Index(i).Set(cloneElem(rv.Index(i), memo))
+		}
+		return result.Interface()
+	}
+	return val
+}
+
+// cloneElem clones one map entry or slice element, keeping the static
+// element type of the container it came from: an `any` element is
+// cloned through the type switch above, a concrete one (a string in a
+// []string, a *CommentDef in its map) is copied as it is.
+func cloneElem(ev reflect.Value, memo map[uintptr]any) reflect.Value {
+	if ev.Kind() != reflect.Interface {
+		if ev.Kind() == reflect.Map || ev.Kind() == reflect.Slice {
+			return reflect.ValueOf(cloneWithMemo(ev.Interface(), memo))
+		}
+		return ev
+	}
+	if ev.IsNil() {
+		return ev
+	}
+	cloned := cloneWithMemo(ev.Interface(), memo)
+	if cloned == nil {
+		return reflect.Zero(ev.Type())
+	}
+	return reflect.ValueOf(cloned)
 }
 
 // Snip truncates s to maxlen bytes and replaces \r, \n, \t with '.' (for debug/display output).
@@ -766,7 +945,42 @@ func mapInt(v any) (int, bool) {
 }
 
 func MapToOptions(m map[string]any) Options {
+	opts, _ := OptionsFromMap(m)
+	return opts
+}
+
+// OptionsFromMap builds an Options struct from a map[string]any whose
+// FuncRefs have already been resolved, and reports the entries it cannot
+// carry rather than dropping or panicking on them.
+//
+// This is the checked form of MapToOptions. It exists because
+// MapToOptions signalled a serialized regex that RE2 could not compile
+// by PANICKING out to its caller, which Grammar() then recovered and
+// mislabelled as an internal error (#119). A caller's unsupported
+// regex is a user error and is reported as one here; MapToOptions keeps
+// its signature and skips the entry, so prefer this function wherever
+// there is an error to return.
+//
+// Coverage is the other half of the contract (#130): every pure-data
+// leaf of Options is read here, and TestOptionsFromMapCoversEveryLeaf
+// walks the struct by reflection to keep it that way, so a field added
+// to Options cannot fall silently out of the serialized surface again.
+// Function-valued leaves are read when the map carries a function of the
+// right type (a resolved ref); a spec carrying only JSON cannot reach
+// them, which is what makes them unportable rather than unread.
+func OptionsFromMap(m map[string]any) (Options, error) {
 	var opts Options
+	var errs []string
+	fail := func(format string, args ...any) {
+		errs = append(errs, fmt.Sprintf(format, args...))
+	}
+	// Type the door first (#143): an ill-typed leaf is reported, never
+	// dropped, and a function reference outside a declared code slot is
+	// one such leaf. The reads below then only see values of the right
+	// shape, or nothing.
+	if err := validateOptionsMap(m); err != nil {
+		fail("%s", strings.TrimPrefix(err.Error(), "tabnas: options: "))
+	}
 
 	if v, ok := m["tag"].(string); ok {
 		opts.Tag = v
@@ -783,6 +997,9 @@ func MapToOptions(m map[string]any) Options {
 	// fixed
 	if fm, ok := m["fixed"].(map[string]any); ok {
 		opts.Fixed = &FixedOptions{}
+		if fn, ok := lexCheckOf(fm["check"]); ok {
+			opts.Fixed.Check = fn
+		}
 		if lex, ok := fm["lex"].(bool); ok {
 			opts.Fixed.Lex = &lex
 		}
@@ -805,6 +1022,9 @@ func MapToOptions(m map[string]any) Options {
 	// space
 	if sp, ok := m["space"].(map[string]any); ok {
 		opts.Space = &SpaceOptions{}
+		if fn, ok := lexCheckOf(sp["check"]); ok {
+			opts.Space.Check = fn
+		}
 		if lex, ok := sp["lex"].(bool); ok {
 			opts.Space.Lex = &lex
 		}
@@ -816,6 +1036,9 @@ func MapToOptions(m map[string]any) Options {
 	// line
 	if ln, ok := m["line"].(map[string]any); ok {
 		opts.Line = &LineOptions{}
+		if fn, ok := lexCheckOf(ln["check"]); ok {
+			opts.Line.Check = fn
+		}
 		if lex, ok := ln["lex"].(bool); ok {
 			opts.Line.Lex = &lex
 		}
@@ -833,6 +1056,19 @@ func MapToOptions(m map[string]any) Options {
 	// text
 	if tm, ok := m["text"].(map[string]any); ok {
 		opts.Text = &TextOptions{}
+		if mods, ok := tm["modify"].([]any); ok {
+			for _, v := range mods {
+				switch fn := v.(type) {
+				case ValModifier:
+					opts.Text.Modify = append(opts.Text.Modify, fn)
+				case func(val any) any:
+					opts.Text.Modify = append(opts.Text.Modify, fn)
+				}
+			}
+		}
+		if fn, ok := lexCheckOf(tm["check"]); ok {
+			opts.Text.Check = fn
+		}
 		if lex, ok := tm["lex"].(bool); ok {
 			opts.Text.Lex = &lex
 		}
@@ -841,6 +1077,9 @@ func MapToOptions(m map[string]any) Options {
 	// number
 	if nm, ok := m["number"].(map[string]any); ok {
 		opts.Number = &NumberOptions{}
+		if fn, ok := lexCheckOf(nm["check"]); ok {
+			opts.Number.Check = fn
+		}
 		if lex, ok := nm["lex"].(bool); ok {
 			opts.Number.Lex = &lex
 		}
@@ -868,6 +1107,9 @@ func MapToOptions(m map[string]any) Options {
 	// comment
 	if cm, ok := m["comment"].(map[string]any); ok {
 		opts.Comment = &CommentOptions{}
+		if fn, ok := lexCheckOf(cm["check"]); ok {
+			opts.Comment.Check = fn
+		}
 		if lex, ok := cm["lex"].(bool); ok {
 			opts.Comment.Lex = &lex
 		}
@@ -920,6 +1162,9 @@ func MapToOptions(m map[string]any) Options {
 	// string
 	if sm, ok := m["string"].(map[string]any); ok {
 		opts.String = &StringOptions{}
+		if fn, ok := lexCheckOf(sm["check"]); ok {
+			opts.String.Check = fn
+		}
 		if lex, ok := sm["lex"].(bool); ok {
 			opts.String.Lex = &lex
 		}
@@ -983,7 +1228,10 @@ func MapToOptions(m map[string]any) Options {
 		if plain, ok := mm["plain"].(bool); ok {
 			opts.Map.Plain = &plain
 		}
-		if fn, ok := mm["merge"].(func(any, any, *Rule, *Context) any); ok {
+		switch fn := mm["merge"].(type) {
+		case MapMergeFunc:
+			opts.Map.Merge = fn
+		case func(any, any, *Rule, *Context) any:
 			opts.Map.Merge = fn
 		}
 	}
@@ -1086,6 +1334,31 @@ func MapToOptions(m map[string]any) Options {
 		if relex, ok := lx["relex"].(bool); ok {
 			opts.Lex.Relex = &relex
 		}
+		if specs, ok := lx["match"].(map[string]any); ok {
+			for name, v := range specs {
+				sm, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				spec := &MatchSpec{}
+				if n, ok := mapInt(sm["order"]); ok {
+					spec.Order = n
+				}
+				switch mk := sm["make"].(type) {
+				case MakeLexMatcher:
+					spec.Make = mk
+				case func(cfg *LexConfig, opts *Options) LexMatcher:
+					spec.Make = mk
+				}
+				if spec.Make == nil {
+					continue
+				}
+				if opts.Lex.Match == nil {
+					opts.Lex.Match = make(map[string]*MatchSpec)
+				}
+				opts.Lex.Match[name] = spec
+			}
+		}
 	}
 
 	// error
@@ -1148,23 +1421,33 @@ func MapToOptions(m map[string]any) Options {
 					opts.Match.Token[name] = re
 				case string:
 					// A leftover @/…/ or @~/…/ string means its regex did
-					// not compile (an unsupported RE2 construct) — fail loud
+					// not compile (an unsupported RE2 construct). Report it
 					// rather than silently drop the token, which would make
-					// the lexer mis-recognize input (recovered by Grammar()
-					// into an install error). Any other non-regex string is
+					// the lexer mis-recognize input; Grammar() returns it as
+					// an install error. Any other non-regex string is
 					// ignored, as before.
 					if strings.HasPrefix(re, "@/") || strings.HasPrefix(re, "@~/") {
-						panic(fmt.Sprintf(
-							"tabnas: match token %q regex did not compile (got %q) — "+
-								"unsupported regex construct for Go RE2", name, re))
+						fail("match token %q regex did not compile (got %q): "+
+							"unsupported regex construct for Go RE2", name, re)
 					}
+				case LexMatcher:
+					if opts.Match.TokenFn == nil {
+						opts.Match.TokenFn = make(map[string]LexMatcher)
+					}
+					opts.Match.TokenFn[name] = re
+				case func(lex *Lex, rule *Rule) *Token:
+					if opts.Match.TokenFn == nil {
+						opts.Match.TokenFn = make(map[string]LexMatcher)
+					}
+					opts.Match.TokenFn[name] = re
 				}
 			}
 		}
 		if val, ok := mm["value"].(map[string]any); ok {
 			opts.Match.Value = make(map[string]*MatchValueSpec, len(val))
 			for name, v := range val {
-				if spec, ok := v.(map[string]any); ok {
+				switch spec := v.(type) {
+				case map[string]any:
 					mvs := &MatchValueSpec{}
 					if re, ok := spec["match"].(*regexp.Regexp); ok {
 						mvs.Match = re
@@ -1172,22 +1455,40 @@ func MapToOptions(m map[string]any) Options {
 					if fn, ok := spec["val"].(func([]string) any); ok {
 						mvs.Val = fn
 					}
+					if fn, ok := spec["fn"].(LexMatcher); ok {
+						mvs.Fn = fn
+					} else if fn, ok := spec["fn"].(func(lex *Lex, rule *Rule) *Token); ok {
+						mvs.Fn = fn
+					}
 					opts.Match.Value[name] = mvs
+				case LexMatcher:
+					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
+				case func(lex *Lex, rule *Rule) *Token:
+					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
 				}
 			}
 		}
+		if fn, ok := lexCheckOf(mm["check"]); ok {
+			opts.Match.Check = fn
+		}
+		if order, ok := stringList(mm["tokenOrder"]); ok {
+			opts.Match.TokenOrder = order
+		}
 	}
 
-	// tokenSet
+	// tokenSet. Positions are kept: the merge is index-wise onto the
+	// default set, so a JSON `null` at a position (which removes it in
+	// TS) becomes the "" marker here, and a shorter array keeps the
+	// default set's tail, as it does in TS (#151).
 	if ts, ok := m["tokenSet"].(map[string]any); ok {
 		opts.TokenSet = make(map[string][]string, len(ts))
 		for name, v := range ts {
 			switch arr := v.(type) {
 			case []any:
-				var names []string
-				for _, item := range arr {
+				names := make([]string, len(arr))
+				for i, item := range arr {
 					if s, ok := item.(string); ok {
-						names = append(names, s)
+						names[i] = s
 					}
 				}
 				opts.TokenSet[name] = names
@@ -1234,7 +1535,154 @@ func MapToOptions(m map[string]any) Options {
 		}
 	}
 
-	return opts
+	// rewind. The spellings are the cross-runtime contract (#144, #142):
+	// absent leaves the merge alone, null is the documented default, false
+	// is unbounded (a negative History here), a negative cap is 0.
+	if rw, ok := m["rewind"].(map[string]any); ok {
+		opts.Rewind = &RewindOptions{}
+		if raw, present := rw["history"]; present {
+			switch h := raw.(type) {
+			case nil:
+				d := DefaultRewindHistory
+				opts.Rewind.History = &d
+			case bool:
+				if h {
+					fail("rewind.history: true is not a cap; use false for unbounded")
+				} else {
+					unbounded := -1
+					opts.Rewind.History = &unbounded
+				}
+			default:
+				if n, ok := mapInt(raw); ok {
+					if n < 0 {
+						n = 0
+					}
+					opts.Rewind.History = &n
+				} else {
+					fail("rewind.history: expected an integer, null or false, got %T", raw)
+				}
+			}
+		}
+	}
+
+	// result
+	if rm, ok := m["result"].(map[string]any); ok {
+		opts.Result = &ResultOptions{}
+		if fail, ok := rm["fail"].([]any); ok {
+			opts.Result.Fail = append([]any{}, fail...)
+		}
+	}
+
+	// parse: the container of budget and recover, which is why dropping
+	// it left opt-in recovery unreachable from any serialized spec.
+	if pm, ok := m["parse"].(map[string]any); ok {
+		opts.Parse = &ParseOptions{}
+		if prep, ok := pm["prepare"].(map[string]any); ok {
+			for name, v := range prep {
+				if fn, ok := v.(func(ctx *Context)); ok {
+					if opts.Parse.Prepare == nil {
+						opts.Parse.Prepare = make(map[string]func(ctx *Context))
+					}
+					opts.Parse.Prepare[name] = fn
+				}
+			}
+		}
+		if bm, ok := pm["budget"].(map[string]any); ok {
+			opts.Parse.Budget = &BudgetOptions{}
+			if n, ok := mapInt(bm["checkEveryN"]); ok {
+				opts.Parse.Budget.CheckEveryN = n
+			}
+			if fn, ok := bm["onCheck"].(func(ctx *Context) bool); ok {
+				opts.Parse.Budget.OnCheck = fn
+			}
+		}
+		if rm, ok := pm["recover"].(map[string]any); ok {
+			opts.Parse.Recover = &RecoverOptions{}
+			if enabled, ok := rm["enabled"].(bool); ok {
+				opts.Parse.Recover.Enabled = enabled
+			}
+			if groups, ok := stringList(rm["syncGroups"]); ok {
+				opts.Parse.Recover.SyncGroups = groups
+			}
+			if toks, ok := stringList(rm["syncTokens"]); ok {
+				opts.Parse.Recover.SyncTokens = toks
+			}
+			if b, ok := rm["popUntilValid"].(bool); ok {
+				opts.Parse.Recover.PopUntilValid = &b
+			}
+			if n, ok := mapInt(rm["maxSkip"]); ok {
+				opts.Parse.Recover.MaxSkip = &n
+			}
+			if n, ok := mapInt(rm["maxRecoveries"]); ok {
+				opts.Parse.Recover.MaxRecoveries = &n
+			}
+			if n, ok := mapInt(rm["suppress"]); ok {
+				opts.Parse.Recover.Suppress = &n
+			}
+		}
+	}
+
+	// parser: function-valued only, so it reaches here solely through a
+	// resolved ref.
+	if pm, ok := m["parser"].(map[string]any); ok {
+		if fn, ok := pm["start"].(func(src string, j *Tabnas, meta map[string]any) (any, error)); ok {
+			opts.Parser = &ParserOptions{Start: fn}
+		}
+	}
+
+	// property: Go-only, function-valued.
+	if pm, ok := m["property"].(map[string]any); ok {
+		if mods, ok := pm["configModify"].(map[string]any); ok {
+			for name, v := range mods {
+				if fn, ok := v.(func(cfg *LexConfig, opts *Options)); ok {
+					if opts.Property == nil {
+						opts.Property = &PropertyOptions{ConfigModify: map[string]ConfigModifier{}}
+					}
+					opts.Property.ConfigModify[name] = fn
+				} else if fn, ok := v.(ConfigModifier); ok {
+					if opts.Property == nil {
+						opts.Property = &PropertyOptions{ConfigModify: map[string]ConfigModifier{}}
+					}
+					opts.Property.ConfigModify[name] = fn
+				}
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return opts, fmt.Errorf("tabnas: options: %s", strings.Join(errs, "; "))
+	}
+	return opts, nil
+}
+
+// lexCheckOf reads a LexCheck hook out of a resolved map value, in either
+// the named or the bare function spelling.
+func lexCheckOf(v any) (LexCheck, bool) {
+	switch fn := v.(type) {
+	case LexCheck:
+		return fn, fn != nil
+	case func(lex *Lex) *LexCheckResult:
+		return fn, fn != nil
+	}
+	return nil, false
+}
+
+// stringList reads a []string out of a resolved map value: a JSON array
+// (whose non-string entries are skipped) or a Go []string.
+func stringList(v any) ([]string, bool) {
+	switch arr := v.(type) {
+	case []any:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	case []string:
+		return append([]string{}, arr...), true
+	}
+	return nil, false
 }
 
 // ResolveFuncRefs recursively rewrites FuncRef strings within nested maps/slices:

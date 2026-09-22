@@ -149,3 +149,30 @@ describe('ruledone-review', () => {
     assert.equal(JSON.stringify(out), '{"b":2}', 'mutation did not corrupt the grammar')
   })
 })
+
+describe('ruledone-resolved-routing', () => {
+  // The payload reports the routing the pass RESOLVED for a function-form
+  // p, r or b, which is the contract every port follows (#153). The
+  // static grammar field is recoverable from the grammar; the
+  // resolution at this pass is not.
+  it('reports the resolved value of a function-form p, r and b', () => {
+    const tn = new Tabnas({
+      rule: { start: 'top' },
+      fixed: { token: { '#A': 'a', '#B': 'b' } },
+    })
+    tn.rule('top', (rs) =>
+      rs
+        .open([{ s: ['#A', '#B'], p: () => 'child', b: () => 1 }])
+        .close([{ s: ['#ZZ'] }]),
+    )
+    tn.rule('child', (rs) => rs.open([{ s: ['#B'], r: () => 'tail' }]))
+    tn.rule('tail', (rs) => rs.open([{}]))
+    const events = collect(tn)
+    tn.parse('ab')
+    const top = events.find((e) => 'top' === e.name && 'o' === e.state)
+    assert.equal(top.alt.p, 'child')
+    assert.equal(top.alt.b, 1)
+    const child = events.find((e) => 'child' === e.name && 'o' === e.state)
+    assert.equal(child.alt.r, 'tail')
+  })
+})

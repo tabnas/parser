@@ -173,7 +173,7 @@ Bounds the consumed-token history retained for `ctx.Rewind`.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; a non-positive value retains all (TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
+| `History` | `*int` | `64` | Consumed tokens retained for `ctx.Rewind`; `0` retains nothing, a negative value retains all (the serialized `false`, TS `Infinity`). `ctx.Rewind` returns an error if its target mark has been evicted |
 
 ## `Lex`
 
@@ -254,7 +254,7 @@ Controls ANSI color codes in formatted error messages (TS:
 | Field | Type | Description |
 |---|---|---|
 | `Ender` | `[]string` | Additional characters that end text tokens |
-| `TokenSet` | `map[string][]string` | Customize named token sets (for example, `VAL`, `KEY`); values are token names |
+| `TokenSet` | `map[string][]string` | Customize named token sets (for example, `VAL`, `KEY`); values are token names, merged index-wise onto the default set. An empty name removes that position (the serialized `null`); a shorter slice keeps the default tail |
 | `Error` | `map[string]string` | Error message templates by code; `{key}` placeholders are injected (for example, `{src}`, `{code}`, `{row}`, `{col}`). Merged over defaults |
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
 | `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook and `Recover` the opt-in error recovery (both below) |

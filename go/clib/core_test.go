@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -50,6 +51,11 @@ func TestVersionDoc(t *testing.T) {
 	if got["ok"] != true || got["version"] == "" {
 		t.Errorf("version: %v", got)
 	}
+	// The header's members, alongside the `version` the Python binding
+	// reads (#117).
+	if got["lib"] != "libtabnas" || got["template"] != "v1" {
+		t.Errorf("header shape: %v", got)
+	}
 }
 
 func TestLoadAndParse(t *testing.T) {
@@ -76,7 +82,45 @@ func TestLoadAndParse(t *testing.T) {
 			if _, has := got["error"]; !has {
 				t.Errorf("%q: a rejection must carry an error", c.src)
 			}
+			if _, has := got["value"]; has {
+				t.Errorf("%q: a rejection must not carry a value", c.src)
+			}
 		}
+	}
+}
+
+// Accepted input carries the parse result, as the canonical header has
+// always said and the README and the implementation did not (#117).
+// The value is what the engine parsed, in the engine's key order.
+func TestAcceptedInputCarriesTheValue(t *testing.T) {
+	h := mustLoad(t)
+	src := `{"b":[1,2],"a":{"c":true}}`
+	raw := parseWith(h, src)
+	got := doc(t, raw)
+	if got["accept"] != true {
+		t.Fatalf("not accepted: %v", got)
+	}
+	value, has := got["value"]
+	if !has {
+		t.Fatalf("no value on an accepted parse: %s", raw)
+	}
+	var want any
+	if err := json.Unmarshal([]byte(src), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(value, want) {
+		t.Errorf("value = %v, want %v", value, want)
+	}
+	// Insertion order crosses as-is: the engine's object node marshals in
+	// source order.
+	var probe struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		t.Fatal(err)
+	}
+	if string(probe.Value) != src {
+		t.Errorf("value bytes %s, want %s", probe.Value, src)
 	}
 }
 

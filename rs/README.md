@@ -126,6 +126,29 @@ both JSON and parser corpora. Additional compiler-consumer gates compare Rust
 against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
 and GBNF compilers.
 
+Cost, not only answers, is tracked against the canonical runtime. A rule
+with N elements is flattened by the tree builders once per level of the
+repetition that produced it, in every runtime: TypeScript spreads each
+level's kids into the level above, and so does this crate, so both curves
+are quadratic in the element count of one rule. This crate's constant was
+an order of magnitude worse (`tabnas/proto` measured 46 s for 800 fields
+against a tenth of a second) until a level whose own kids were still empty
+stopped cloning the level below element by element and took its array by
+handle, and `Rule::accept_child_node` stopped holding a second handle on a
+parent's own accumulator. Measured on `list = item *( "," item )` compiled
+with builtins, release profile, 4000 and 8000 items: TypeScript 0.38 s and
+2.1 s, this crate 0.7 s and 6.8 s, down from 2.7 s at 4000 and beyond the
+60 s budget at 8000. What remains is the algorithm the canonical runtime
+also runs, at this crate's per-element cost for a refcounted value.
+
+Two answers are deliberately this runtime's own, and both are recorded in
+the repository's divergence record. Object key order is out of the
+parsed-value contract (ADR-15): `Value::Object` keeps insertion order,
+TypeScript's plain object puts integer-like keys first, and this crate must
+never emulate that. A parse that sets no value answers `Value::Null`, where
+TypeScript answers `undefined`; the engine's `Value::Undefined` is unwrapped
+at the parse boundary on purpose.
+
 The portable serialized contract and native imperative tier have completed
 their TypeScript/Go surface audit. Rust ownership is expressed explicitly:
 grammar and next-rule views are immutable snapshots, live mutation is limited

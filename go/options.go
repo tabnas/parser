@@ -85,11 +85,21 @@ type InfoOptions struct {
 	Marker string // Key under which info metadata is stored on wrapped values. Default: "__info__".
 }
 
+// DefaultRewindHistory is the retained rewind window when
+// RewindOptions.History is unset, and what a serialized `null` means.
+const DefaultRewindHistory = 64
+
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
-	// History caps consumed tokens retained for ctx.Rewind; non-positive means
-	// unbounded (TS Infinity). Default: 64. ctx.Rewind errors if its target mark
-	// has been evicted from the retained window.
+	// History caps the consumed tokens retained for ctx.Rewind. Nil is
+	// the default of 64; 0 retains nothing; a negative value retains
+	// everything, which is this port's spelling of the serialized
+	// `false` (TypeScript also accepts Infinity). ctx.Rewind errors if
+	// its target mark has been evicted from the retained window.
+	//
+	// A cap of 0 used to mean unbounded here, the opposite of the
+	// canonical runtime on exactly the bound AGENTS.md names against
+	// hostile input; the sign now carries that meaning instead (#142).
 	History *int
 }
 
@@ -512,10 +522,41 @@ func (j *Tabnas) SetPluginOptions(name string, opts map[string]any) {
 // Make is safe for concurrent use: any number of goroutines may construct
 // parsers simultaneously. (Each *Tabnas instance is itself NOT safe for
 // concurrent Parse calls — one instance per goroutine, or serialize.)
+// DefaultOptions returns the options every instance starts from: the
+// TS-visible defaults of the fields whose overlays MERGE rather than
+// replace. TS keeps its whole default tree in options and deep-merges a
+// caller's options onto it, so `tokenSet: {IGNORE: ["#SP"]}` keeps the
+// other two entries and `comment: {def: {hash: {start: "%"}}}` keeps
+// the hash definition's other fields and the other definitions. This
+// port kept those defaults in the config and read a caller's field as
+// a wholesale replacement, which is the class B, C and D split of #151.
+// Carrying them here lets the same deep merge produce the same result.
+// Scalar defaults stay in buildConfig, where a zero value already means
+// "unset".
+func DefaultOptions() Options {
+	return Options{
+		TokenSet: map[string][]string{
+			"IGNORE": {"#SP", "#LN", "#CM"},
+			"VAL":    {"#TX", "#NR", "#ST", "#VL"},
+			"KEY":    {"#TX", "#NR", "#ST", "#VL"},
+		},
+		Comment: &CommentOptions{Def: map[string]*CommentDef{
+			"hash":  {Line: true, Start: "#"},
+			"slash": {Line: true, Start: "//"},
+			"multi": {Line: false, Start: "/*", End: "*/"},
+		}},
+		Value: &ValueOptions{Def: map[string]*ValueDef{
+			"true":  {Val: true},
+			"false": {Val: false},
+			"null":  {Val: nil},
+		}},
+	}
+}
+
 func Make(opts ...Options) *Tabnas {
-	var o Options
+	o := DefaultOptions()
 	if len(opts) > 0 {
-		o = opts[0]
+		o = Deep(o, opts[0]).(Options)
 	}
 
 	// An unset tag defaults to "-", matching the TS default
@@ -1086,9 +1127,9 @@ func buildConfig(o *Options) *LexConfig {
 	copy(cfg.KeySet, TinSetKEY)
 
 	// Rewind history cap (consumed-token retention for ctx.Rewind).
-	// Default 64, matching TS defaults.ts; a non-positive value is
-	// unbounded.
-	cfg.RewindHistory = 64
+	// Default 64, matching TS defaults.ts; a negative value is
+	// unbounded and 0 retains nothing (see RewindOptions).
+	cfg.RewindHistory = DefaultRewindHistory
 	if o.Rewind != nil && o.Rewind.History != nil {
 		cfg.RewindHistory = *o.Rewind.History
 	}

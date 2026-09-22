@@ -81,12 +81,14 @@ fn canonical_callbacks_share_the_resolved_alt_match_in_canonical_order() {
     assert_eq!(parser.parse("ab").unwrap(), Value::Null);
     assert_eq!(
         *calls.lock().unwrap(),
+        // Routing resolves, then the modifier, then the error hook: the
+        // ruling of #154, which every runtime follows.
         [
             "condition",
-            "error",
             "push",
             "backtrack",
             "modifier",
+            "error",
             "action"
         ]
     );
@@ -266,9 +268,9 @@ fn serialized_function_refs_cover_condition_modifier_error_and_dynamic_routing()
         [
             "condition",
             "modifier",
-            "error",
             "push",
             "backtrack",
+            "error",
             "modified-action",
             "child-action",
         ]

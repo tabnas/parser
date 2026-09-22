@@ -425,4 +425,51 @@ describe('rewind', () => {
     assert.ok(maxV >= 200, `expected >= 200 retained, got ${maxV}`)
   })
 
+
+  // The spellings are the cross-runtime contract (#144, #142). An
+  // explicit null used to resolve to Infinity here, silently disabling
+  // the retention cap that the documented default of 64 exists to keep.
+  it('a null history is the documented default, not unbounded', () => {
+    let j = make_norules({
+      rule: { start: 'top' },
+      fixed: { token: { Ta: 'a' } },
+      rewind: { history: null },
+    })
+    assert.equal(j.internal().config.rewind.history, 64)
+    assert.equal(
+      new Tabnas({ rewind: null }).internal().config.rewind.history, 64)
+  })
+
+  it('false is the portable spelling of unbounded', () => {
+    let j = make_norules({
+      rule: { start: 'top' },
+      fixed: { token: { Ta: 'a' } },
+      rewind: { history: false },
+    })
+    assert.equal(j.internal().config.rewind.history, Infinity)
+  })
+
+  it('a history of 0 retains nothing, and a negative one the same', () => {
+    for (const history of [0, -1]) {
+      let j = make_norules({
+        rule: { start: 'top' },
+        fixed: { token: { Ta: 'a' } },
+        rewind: { history },
+      })
+      let { Ta } = j.token
+      let maxV = -1
+      j.rule('top', (rs) =>
+        rs
+          .open([{
+            s: [Ta, Ta, Ta],
+            a: (r, ctx) => { maxV = ctx.v.length },
+          }])
+          .close([{ s: '#ZZ' }]),
+      )
+      j.parse('a a a')
+      assert.equal(maxV, 0, `history ${history}`)
+      assert.equal(j.internal().config.rewind.history, 0)
+    }
+  })
+
 })

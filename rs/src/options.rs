@@ -798,8 +798,11 @@ pub struct LexOptions {
 
 #[derive(Debug, Clone)]
 pub struct RewindOptions {
-    /// Maximum retained consumed-token history. `None` and `Some(0)` are
-    /// unbounded, matching the serialized `null` / non-positive forms.
+    /// Maximum retained consumed-token history. `None` is unbounded,
+    /// the serialized `false`; `Some(0)` retains nothing; the default is
+    /// `Some(64)`, which a serialized `null` also means. `Some(0)` used
+    /// to be read as unbounded, the opposite of the canonical runtime
+    /// (#142), and `null` as unbounded rather than the default (#144).
     pub history: Option<usize>,
 }
 

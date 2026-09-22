@@ -27,9 +27,12 @@ func tinSet(tins []Tin) map[Tin]bool {
 // SetOptions(opts) worked. The two construction paths must agree.
 func TestOptionsTokenSetMakeEqualsSetOptions(t *testing.T) {
 	opts := Options{TokenSet: map[string][]string{
-		"KEY":   {"#ST"},
-		"VAL":   {"#ST", "#NR"},
-		"MYSET": {"#TX", "", "#NR"}, // empty names are dropped (TS `null` filter)
+		// The merge is index-wise onto the default sets (#151): an empty
+		// name removes its position (the TS `null`), a shorter slice keeps
+		// the default set's tail. KEY and VAL are written to REPLACE.
+		"KEY":   {"#ST", "", "", ""},
+		"VAL":   {"#ST", "#NR", "", ""},
+		"MYSET": {"#TX", "", "#NR"}, // no default set: the empty name is dropped
 	}}
 
 	made := Make(opts)
@@ -59,7 +62,7 @@ func TestOptionsTokenSetMakeEqualsSetOptions(t *testing.T) {
 
 // A token set applied at Make() must survive Derive.
 func TestOptionsTokenSetSurvivesDerive(t *testing.T) {
-	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST"}}})
+	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST", "", "", ""}}})
 	child, err := j.Derive()
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
@@ -178,7 +181,7 @@ func TestStaticAltUnchangedWithoutOverride(t *testing.T) {
 // ResolveGrammarAltStatic where a *Tabnas is in hand: it resolves the set
 // against the instance up front rather than relying on late binding.
 func TestResolveGrammarAltUsesInstanceTokenSet(t *testing.T) {
-	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST"}}})
+	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST", "", "", ""}}})
 
 	alt, err := j.ResolveGrammarAlt(&GrammarAltSpec{S: "#KEY #CL"}, nil)
 	if err != nil {
@@ -405,7 +408,7 @@ func TestMatchTokenGateHonoursTokenSetOverride(t *testing.T) {
 // know must be left exactly as resolved: re-resolving it would have to mint a
 // token during the parse.
 func TestUnknownNameLeavesSlotAlone(t *testing.T) {
-	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST"}}})
+	j := Make(Options{TokenSet: map[string][]string{"KEY": {"#ST", "", "", ""}}})
 	if err := registerJSONGrammar(j); err != nil {
 		t.Fatalf("registerJSONGrammar: %v", err)
 	}

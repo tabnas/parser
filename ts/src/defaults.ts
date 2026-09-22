@@ -425,7 +425,7 @@ The parse was cancelled by the caller's parse.budget.onCheck callback
   // Token-rewind options. `history` bounds how many consumed tokens
   // are retained on ctx.v for ctx.rewind(). The default of 64 keeps
   // parse-time memory bounded for large inputs; raise it if a
-  // grammar needs to rewind further, or set to Infinity to retain
+  // grammar needs to rewind further, or set it to `false` to retain
   // every consumed token. ctx.rewind(mark) throws if `mark` falls
   // outside the retained window.
   rewind: {

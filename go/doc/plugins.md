@@ -172,7 +172,7 @@ func myPlugin(j *tabnas.Tabnas, opts map[string]any) error {
 | `B`  | `int` | backtrack: tokens to put back |
 | `C`  | `AltCond` | match condition |
 | `G`  | `string` | group tags (for example, `"json"`, `"tabnas,map"`) |
-| `H`  | `AltModifier` | modifier: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec` |
+| `H`  | `AltModifier` | modifier: `func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec`; receives the pass's copy of the alternate, with `PF`/`RF`/`BF` already resolved into `P`/`R`/`B`, so a write to it ends with the pass |
 | `E`  | `AltError` | error function |
 | `PF` | `func(r *Rule, ctx *Context) string` | dynamic push |
 | `RF` | `func(r *Rule, ctx *Context) string` | dynamic replace |

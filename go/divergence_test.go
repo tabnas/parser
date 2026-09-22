@@ -29,6 +29,7 @@ package tabnas
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -544,5 +545,69 @@ func TestBuiltinConfigIsAlternateScoped(t *testing.T) {
 				"reaching the child through r.K again, which is the "+
 				"divergence #120 repaired", c.label, v)
 		}
+	}
+}
+
+// DIVERGENCE.md "Key order in parsed objects": ADR-15 puts key order out
+// of the parsed-value contract, and this port keeps insertion order.
+// TypeScript's plain object puts integer-like keys first in numeric
+// order. Asserted here so a port that starts emulating JavaScript's
+// order, which ADR-15 forbids, fails loudly.
+func TestKeyOrderIsInsertionOrder(t *testing.T) {
+	// The builtin object builder yields the ordered container; the test
+	// fixture grammar builds plain Go maps, which have no order at all.
+	spec := fixtureSpec(t, "json-builder.fixture.json")
+	if spec.Options == nil {
+		spec.Options = &Options{}
+	}
+	spec.Options.Rule = &RuleOptions{Start: "val"}
+	j := Make()
+	if err := j.Grammar(spec); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	for src, want := range map[string][]string{
+		`{"2":"b","1":"a"}`:                  {"2", "1"},
+		`{"10":"j","9":"i","2":"b"}`:         {"10", "9", "2"},
+		`{"b":1,"2":"two","a":2,"0":"zero"}`: {"b", "2", "a", "0"},
+	} {
+		v, err := j.Parse(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		om, ok := v.(*OrderedMap)
+		if !ok {
+			t.Fatalf("%s: got %T, want *OrderedMap", src, v)
+		}
+		if strings.Join(om.Keys, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: keys %v, want source order %v", src, om.Keys, want)
+		}
+	}
+}
+
+// DIVERGENCE.md "A parse that sets no value": nil here, undefined in
+// TypeScript, Null in Rust. The engine's Undefined sentinel is unwrapped
+// at the parse boundary by design; a change to that is a change to the
+// public value model and must be made on purpose.
+func TestNoValueParseIsNil(t *testing.T) {
+	a := "a"
+	j := Make(Options{
+		Rule:  &RuleOptions{Start: "top"},
+		Fixed: &FixedOptions{Token: map[string]*string{"#A": &a}},
+		Lex:   &LexOptions{EmptyResult: "EMPTY"},
+	})
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{j.Token("#A")}}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	v, err := j.Parse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != nil {
+		t.Errorf("a parse that set no value answered %#v, want nil", v)
+	}
+	// Not the empty-source answer, which is a different option.
+	if v, _ := j.Parse(""); v != "EMPTY" {
+		t.Errorf("empty source answered %#v, want the declared emptyResult", v)
 	}
 }

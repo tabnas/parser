@@ -470,7 +470,10 @@ describe('cover-engine', () => {
         ]).close([{ s: ['#ZZ'] }])
       })
       j.parse('ab')
-      assert.deepEqual(used, ['e', 'h', 'child'])
+      // The modifier runs before the error hook: the ruling of #154,
+      // which every runtime follows and go/alt_order_test.go and
+      // rs/tests/callback_test.rs pin with the same grammar.
+      assert.deepEqual(used, ['h', 'e', 'child'])
 
       // Function form of r.
       let j2 = new Tabnas({

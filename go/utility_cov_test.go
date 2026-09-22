@@ -500,7 +500,9 @@ func TestMapToOptionsAllKeys(t *testing.T) {
 	if len(opts.Match.Value) != 1 || opts.Match.Value["v"].Match == nil || opts.Match.Value["v"].Val == nil {
 		t.Errorf("match.value: %v", opts.Match.Value)
 	}
-	if len(opts.TokenSet["S1"]) != 1 || opts.TokenSet["S1"][0] != "#TX" {
+	// Positions are kept: a non-string entry becomes the "" marker that
+	// removes that position of a default set (#151).
+	if len(opts.TokenSet["S1"]) != 2 || opts.TokenSet["S1"][0] != "#TX" || opts.TokenSet["S1"][1] != "" {
 		t.Errorf("tokenSet S1: %v", opts.TokenSet)
 	}
 	if len(opts.TokenSet["S2"]) != 1 || opts.TokenSet["S2"][0] != "#NR" {

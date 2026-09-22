@@ -146,3 +146,51 @@ fn rule_done_exposes_push_and_backtrack_routing() {
     assert_eq!(route.p, "child");
     assert_eq!(route.r, "");
 }
+
+// The payload reports the routing the pass RESOLVED for a function-form
+// p, r or b, which is the contract every port follows (#153). The
+// static grammar field is recoverable from the grammar; the resolution
+// at this pass is not.
+#[test]
+fn rule_done_reports_resolved_function_form_routing() {
+    let mut parser = Tabnas::new();
+    parser.alt_push("@to-child", |_rule, _context| Some("child".into()));
+    parser.alt_replace("@to-tail", |_rule, _context| Some("tail".into()));
+    parser.alt_backtrack("@back-one", |_rule, _context| 1);
+    parser
+        .grammar_json(
+            r##"{"clear":true,
+              "options":{"rule":{"start":"top"},"fixed":{"token":{"#A":"a","#B":"b"}}},
+              "rule":{
+                "top":{"open":[{"s":"#A #B","p":"@to-child","b":"@back-one"}],"close":[{"s":"#ZZ"}]},
+                "child":{"open":[{"s":"#B","r":"@to-tail"}]},
+                "tail":{"open":[{}]}
+              }}"##,
+        )
+        .unwrap();
+
+    let routing = Arc::new(Mutex::new(Vec::new()));
+    let routing_subscriber = routing.clone();
+    parser.subscribe_rule_done(move |rule, _context, event| {
+        if event.state == RuleState::Open {
+            if let Some(alt) = event.alt.clone() {
+                routing_subscriber.lock().unwrap().push((
+                    rule.name.to_string(),
+                    alt.p,
+                    alt.r,
+                    alt.b,
+                ));
+            }
+        }
+    });
+    parser.parse("ab").unwrap();
+    let seen = routing.lock().unwrap().clone();
+    assert!(
+        seen.contains(&("top".into(), "child".into(), "".into(), 1)),
+        "top open did not report resolved routing: {seen:?}"
+    );
+    assert!(
+        seen.contains(&("child".into(), "".into(), "tail".into(), 0)),
+        "child open did not report resolved routing: {seen:?}"
+    );
+}

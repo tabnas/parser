@@ -51,6 +51,12 @@ class TestSurface(unittest.TestCase):
     def test_version(self):
         self.assertRegex(tabnas.version(), r"^\d+\.\d+\.\d+")
 
+    def test_value_crosses_the_boundary(self):
+        with load_grammar() as g:
+            self.assertEqual(g.check('{"a":1,"b":[1,2]}').value,
+                             {"a": 1, "b": [1, 2]})
+            self.assertIsNone(g.check("{oops").value)
+
     def test_accept_and_reject(self):
         with load_grammar() as g:
             self.assertTrue(g.accepts('{"a":1}'))

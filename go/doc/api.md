@@ -130,12 +130,28 @@ Nil/zero fields do not overwrite existing values. Existing grammar
 rules (including plugin modifications) are preserved. Returns the
 instance for chaining.
 
+### `(*Tabnas) ApplyOptions(opts Options) error`
+
+`SetOptions` with an error channel. The options are validated first
+(a matcher-owned token bound to a fixed literal is refused) and the
+caller's mistake is returned rather than panicked. `SetOptions` panics
+on the same input because it has nowhere to put the error.
+
 ### `(*Tabnas) SetOptionsText(text string) (*Tabnas, error)`
 
 As `SetOptions`, but parses a tabnas-format options string. Requires a
 text parser registered via `tabnas.RegisterTextParser`; the engine
 ships none, so this returns an error until you register one (typically
 your own grammar package does so in its `init`).
+
+### `OptionsFromMap(m map[string]any) (Options, error)`
+
+Package-level. Build an `Options` from a map whose FuncRefs are already
+resolved, as a serialized `GrammarSpec` carries one. Every pure-data
+leaf of `Options` is read (a reflection gate in the tests keeps it so),
+and an entry that cannot be carried, such as a serialized regex RE2
+cannot compile, is returned as an error. `MapToOptions(m) Options` is
+the same conversion without the error: it skips what it cannot carry.
 
 ### `RegisterTextParser(p func(src string) (any, error))`
 
@@ -347,7 +363,7 @@ context-sensitive lexing. See the [recipe](guide.md#add-a-custom-matcher).
 | `(*Lex) Fwd(maxlen int) string` | substring | look ahead up to `maxlen` bytes from the cursor |
 | `(*Lex) Token(name string, tin Tin, val any, src string) *Token` | new token | build a token at the current point |
 | `(*Lex) Bad(why string) *Token` | error token | signal a lex error (`why` is an error code) |
-| `(*Lex) Next(rule ...*Rule) *Token` | next token | next non-IGNORE token |
+| `(*Lex) Next(rule ...*Rule) *Token` | next token | the raw stream, IGNORE tokens included, as TypeScript's `lex.next`; the parser skips the IGNORE set in its own fetch |
 
 ### Scan primitives
 

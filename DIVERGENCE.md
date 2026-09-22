@@ -145,6 +145,83 @@ change the column entry above defers. Recorded rather than fixed, and the
 scope sentence corrected so the next reader is not told this cannot reach
 a parsed value.
 
+### Key order in parsed objects
+
+Map key order is **out of the parsed-value contract** (ADR-15, admin
+`DECISIONS.md`, accepted 2026-08-19). Each runtime builds its result in
+its own native container and keeps whatever order that container keeps:
+
+| input | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `{"2":"b","1":"a"}` | `{"1":"a","2":"b"}` | `{"2":"b","1":"a"}` | `{"2":"b","1":"a"}` |
+| `{"10":"j","9":"i","2":"b"}` | `{"2":"b","9":"i","10":"j"}` | `{"10":"j","9":"i","2":"b"}` | `{"10":"j","9":"i","2":"b"}` |
+| `{"b":1,"2":"two","a":2,"0":"zero"}` | `{"0":"zero","2":"two","b":1,"a":2}` | `{"b":1,"2":"two","a":2,"0":"zero"}` | `{"b":1,"2":"two","a":2,"0":"zero"}` |
+
+TypeScript builds a plain object, so `[[OwnPropertyKeys]]` yields
+canonical array-index keys first in ascending numeric order and the
+remaining string keys in creation order. Go's `*OrderedMap` and Rust's
+`Value::Object` (`Arc<IndexMap<String, Value>>`, `rs/src/value.rs`) keep
+insertion order. All three are intended.
+
+**The Rust consequence, stated in as many words** (from
+`doc/rust-port-implementation-plan.md`): the Rust engine may use
+`IndexMap` and insertion order freely; **no ECMAScript integer-key
+emulation, ever.** The same holds for Go. A port that reorders keys to
+match JavaScript is implementing a defect, not parity. This has been
+rediscovered three times as a suspected fleet-wide defect (jsonic U6,
+then `ini`, then `jsonic-cli`), and one emulation was written and
+reverted before ADR-15 was found, which is why the prohibition is
+written here where the next reader will look first.
+
+**No shared fixture can detect this**, and none should try. The fixture
+loaders compare objects by key membership, and the register's `spec`
+probe renders map keys sorted by UTF-16 code unit in every runtime for
+exactly this reason, so the difference is invisible to every suite in
+the fleet. Prose is the only place it can live; the pins below assert
+each runtime's own order so a port that starts emulating another's
+fails loudly. Pinned by `ts/test/divergence.test.js` ('integer-like keys
+sort first here, and stay in source order in Go and Rust'),
+`go/divergence_test.go` `TestKeyOrderIsInsertionOrder` and
+`rs/tests/divergent_spec_test.rs` `key_order_is_insertion_order`.
+
+### A parse that sets no value
+
+A parse whose rules match the whole source but never set a node
+answers with each runtime's native absent value:
+
+| input | grammar | TypeScript | Go | Rust |
+| --- | --- | --- | --- | --- |
+| `a` | `top: {s:'#A'}` and no action | `undefined` | `nil` | `Value::Null` |
+
+Surfaced by `tabnas/json5` as `# c` under `{hashComment: true,
+requireValue: false}` (#196). It is not `lex.emptyResult`, which is the
+answer for an EMPTY source and agrees in all three; it is what an
+unset node becomes at the parse boundary.
+
+Deliberate, on both sides. TypeScript's `undefined` is JavaScript's
+absent value. Go's public value model is `any` over the JSON shapes,
+and Rust's public `Value` has no absent member once the engine is done
+with it: both ports carry an engine-internal `Undefined` sentinel and
+both **unwrap it at the parse boundary, recursively**
+(`UnwrapUndefined` in `go/rule.go`, `Value::unwrap_undefined` in
+`rs/src/value.rs`), so an unset element inside a container becomes
+`null` there exactly as `JSON.stringify` renders it from TypeScript.
+Returning the sentinel from `Parse` alone would make the top level
+disagree with every nested level, and Go's sentinel cannot pass
+through `encoding/json` at all. The repository's own parity rendering
+already folds `undefined` and `null` into one value (`divergentCanon`
+in both register runners), so the shared corpus cannot express the
+difference and does not need to.
+
+The cost: a grammar that distinguishes "parsed a null" from "parsed
+nothing" can do so in TypeScript and not in the ports, which is why
+`json5` normalises the former to `null` in all three plugins rather
+than reading the engine's answer. Pinned with opposite assertions by
+`ts/test/divergence.test.js` ('a parse that sets no value is undefined
+here, nil in Go, Null in Rust'), `go/divergence_test.go`
+`TestNoValueParseIsNil` and `rs/tests/divergent_spec_test.rs`
+`no_value_parse_is_null`.
+
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a
@@ -220,6 +297,84 @@ fixed or quietly dropped.
   fleet grammar working, since all four declaration sites pair a config
   with its action on the same alternate.
 
+- **The serialized options door was untyped.** An ill-typed leaf in a
+  spec's `options` (`line.chars: {}`, `tokenSet.VAL: "str"`,
+  `string.escapeChar: []`) crashed TypeScript with a raw `TypeError`
+  from inside `configure()` and was dropped in silence by Go, and a
+  FuncRef resolved in ANY slot, so `@node$` could land in `rule.start`
+  (#143). Ruled, per the D4 proposal on #130: an ill-typed leaf is a
+  load fault naming the leaf, in every runtime, on every door (the
+  constructor, `options()`, and a serialized grammar), and a function
+  reference resolves only in a declared code slot; in a data slot it is
+  the same fault. TypeScript validates the overlay against the shape of
+  its defaults before merging; Go validates the map against `Options` by
+  reflection inside `OptionsFromMap`; Rust, whose door already refused
+  ill-typed leaves, now refuses a resolvable reference in a data slot
+  and applies the `@@` escape door-wide. Pinned by
+  `ts/test/options-validate.test.js`, `go/options_validate_test.go` and
+  `rs/tests/grammar_spec_test.rs` (`a_reference_in_a_data_slot_is_a_load_fault`).
+
+- **The options overlay: slices, definition maps and `tokenSet`.** On
+  Go's typed options path, a slice (`ender`, `result.fail`, the
+  recovery sync lists, `match.tokenOrder`), a map of definitions
+  (`comment.def`, `value.def`, `match.value`) and `tokenSet` each
+  REPLACED the default, where TypeScript merges index-wise, recurses
+  into the entry, and merges the set index-wise (#151). Invisible to
+  any fixture that drove `deep`/`Deep` directly, where the two agree;
+  measured on the options pipeline as `css` and `zon` carrying dead
+  `tokenSet` declarations whose Go twins worked as a replace, and three
+  Go fleet packages carrying workarounds naming the engine merge. Ruled
+  as TypeScript's semantics for all three, and Go moves: its instances
+  now start from `DefaultOptions()` so the overlays have the same base
+  to merge onto, an empty name in a `TokenSet` slice is the removed
+  position TypeScript spells `null`, and the strict-JSON fixture spells
+  its `KEY` replacement with explicit removals in both runtimes. Rust's
+  serialized `tokenSet` door replaced too and now merges index-wise.
+  Pinned by `go/options_overlay_test.go`,
+  `ts/test/options-overlay.test.js` and
+  `rs/tests/options_overlay_test.rs`, which drive the options pipeline.
+
+- **The order of a matched alternate's hooks, and when `consumed` is
+  read.** Two both-silent splits ruled before a third runtime
+  transcribed one side. TypeScript ran the alternate's error hook `e`
+  inside `parse_alts`, before the modifier `h`; Go ran `H` then `E`;
+  Rust ran one modifier form before `e` and the other after it. No
+  shipped grammar declares both, so nothing observed it (#154). Ruled
+  as Go's order, the straight line: the routing forms `p`/`r`/`b`
+  resolve, then the modifier, then the error hook, then counters and
+  the action. TypeScript's hook now runs in `process()` after `h`, and
+  the modifier sees resolved routing in every runtime. Pinned by the
+  same grammar in `ts/test/cover-engine.test.js`
+  ('fnref-strings-for-h-e-p-r-b'), `go/alt_order_test.go` and
+  `rs/tests/callback_test.rs`.
+
+  TypeScript also computed `consumed` (matched tokens minus `alt.b`)
+  twice, straddling the action, from two reads of a field the action is
+  handed; an action writing `alt.b` made the two disagree and left a
+  token in the lookahead that had already moved to the history. Go
+  computed it once, before the action, and that is the contract now
+  (#122): `consumed` is engine state fixed before the action, and
+  `alt.b` is an input to the match, not a channel. Pinned by
+  `ts/test/alt-consumed.test.js`.
+
+- **`rewind.history` at its edges.** Three spellings of the retained
+  rewind window meant different things in different ports, and none of
+  it was recorded: an explicit `null` resolved to `Infinity` in
+  TypeScript and to unbounded in Rust, against a documented default of
+  64 (#144); a cap of `0` retained nothing in TypeScript and everything
+  in Go and Rust, which inverted an operator's hardening intent on
+  exactly the bound `AGENTS.md` names against hostile input (#142).
+  Both sides moved, per defect: TypeScript reads `null` as 64, Go and
+  Rust read `0` as retain-nothing. The contract is now one table for
+  every runtime: absent or `null` is 64; `n >= 0` caps at `n`; a
+  negative cap is `0`; `false` is unbounded, the one spelling every
+  runtime can read (`Infinity` still works in TypeScript, and a
+  negative `History` in Go's typed struct, as each port's own way of
+  writing it). Pinned by `ts/test/rewind.test.js` ('a null history is
+  the documented default'), `go/rewind_test.go`
+  (`TestRewindZeroHistoryRetainsNothing`) and
+  `rs/tests/rewind_test.rs` (`serialized_rewind_history_spellings`).
+
 - **Bad-token spans and codes for invalid string escapes.** Carried a
   table of `len`/`pos`/`col` differences and, at one point, the claim
   that the error `code` always agreed. Both halves are repaired: the
@@ -250,10 +405,11 @@ That Go column was not true when first written: `MapToOptions` handled
 `rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
 entirely, so a shared options blob set the multiplier in TypeScript and
 left Go on its default with nothing to notice. Plumbed, and pinned by
-`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. `maxmul` is
-the only numeric option that path carries; the others (`rewind.history`,
-the `error.recover` caps, `parse.budget.checkEveryN`) are still dropped,
-which is an API gap rather than a divergence and is noted in
+`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. The other
+numeric options that path once dropped (`rewind.history`, the
+`parse.recover` caps, `parse.budget.checkEveryN`) are carried now, and
+a reflection gate keeps every data leaf on the surface; see "The
+serialized options surface" in
 [`go/doc/differences.md`](go/doc/differences.md).
 
 Everything else about this guard is aligned, and was not. Three separate

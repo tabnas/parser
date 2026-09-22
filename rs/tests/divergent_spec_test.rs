@@ -176,3 +176,42 @@ fn shared_divergence_register_has_a_live_rust_lane() {
     }
     assert!(ran > 0, "divergence register ran no rows");
 }
+
+// DIVERGENCE.md "Key order in parsed objects": ADR-15 puts key order out
+// of the parsed-value contract, and this port keeps insertion order. No
+// ECMAScript integer-key emulation, ever.
+#[test]
+fn key_order_is_insertion_order() {
+    let parser = Tabnas::make_json();
+    for (src, want) in [
+        (r#"{"2":"b","1":"a"}"#, vec!["2", "1"]),
+        (r#"{"10":"j","9":"i","2":"b"}"#, vec!["10", "9", "2"]),
+        (
+            r#"{"b":1,"2":"two","a":2,"0":"zero"}"#,
+            vec!["b", "2", "a", "0"],
+        ),
+    ] {
+        let value = parser.parse(src).unwrap();
+        let Value::Object(entries) = value else {
+            panic!("{src}: not an object");
+        };
+        let keys: Vec<&str> = entries.keys().map(String::as_str).collect();
+        assert_eq!(keys, want, "{src}");
+    }
+}
+
+// DIVERGENCE.md "A parse that sets no value": Null here, undefined in
+// TypeScript, nil in Go. The engine's Undefined is unwrapped at the
+// parse boundary by design.
+#[test]
+fn no_value_parse_is_null() {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{"options":{"rule":{"start":"top"},"fixed":{"token":{"#A":"a"}},"lex":{"emptyResult":"EMPTY"}},
+                 "rule":{"top":{"open":[{"s":"#A"}],"close":[{"s":"#ZZ"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(parser.parse("a").unwrap(), Value::Null);
+    assert_eq!(parser.parse("").unwrap(), Value::String("EMPTY".into()));
+}

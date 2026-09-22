@@ -385,7 +385,7 @@ state.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `history` | number | `64` | Consumed tokens retained for `ctx.rewind()`; `Infinity` to retain all |
+| `history` | number \| false | `64` | Consumed tokens retained for `ctx.rewind()`; `null` is the default, `0` retains nothing, `false` (or `Infinity`) retains all |
 
 ## `safe`
 

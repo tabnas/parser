@@ -54,8 +54,14 @@ func failDoc(code, message string) string {
 	})
 }
 
+// versionDoc answers with the header's shape (`lib`, `template`) plus
+// `version`, which py/tabnas.py reads. The grammar-agnostic library has
+// no `format`: the format is whatever spec the caller loads.
 func versionDoc() string {
-	return reply(map[string]any{"ok": true, "version": tabnas.VERSION})
+	return reply(map[string]any{
+		"ok": true, "version": tabnas.VERSION,
+		"lib": "libtabnas", "template": "v1",
+	})
 }
 
 // loadGrammar installs a serialized GrammarSpec and returns a handle.
@@ -96,7 +102,8 @@ func loadGrammar(specJSON string) string {
 	return reply(map[string]any{"ok": true, "handle": id})
 }
 
-// parseWith answers whether src is in the grammar's language.
+// parseWith answers whether src is in the grammar's language, and with
+// what value.
 //
 // A rejection is an ANSWER, not a failure of the call: it returns
 // ok:true with accept:false. ok:false is reserved for the call itself
@@ -112,7 +119,7 @@ func parseWith(handle int64, src string) string {
 	}
 
 	g.mu.Lock()
-	_, err := g.tn.Parse(src)
+	value, err := g.tn.Parse(src)
 	g.mu.Unlock()
 
 	if err != nil {
@@ -137,7 +144,18 @@ func parseWith(handle int64, src string) string {
 			},
 		})
 	}
-	return reply(map[string]any{"ok": true, "accept": true})
+	// The header's contract: accepted input carries `value` where the
+	// parse result is JSON-representable, which for a serialized grammar
+	// it always is unless a ref-bag callback built something else. An
+	// unrepresentable value is omitted rather than failing the call: the
+	// verdict is still an answer. Key order in a `value` is the engine's
+	// insertion order, which the repository's divergence record places
+	// out of contract (ADR-15); a consumer must not depend on it.
+	out := map[string]any{"ok": true, "accept": true}
+	if encoded, jerr := json.Marshal(value); jerr == nil {
+		out["value"] = json.RawMessage(encoded)
+	}
+	return reply(out)
 }
 
 func freeGrammar(handle int64) {

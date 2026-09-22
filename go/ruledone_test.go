@@ -331,3 +331,51 @@ func TestRuleDoneStateIsPrePassState(t *testing.T) {
 		t.Fatal("no close-state events")
 	}
 }
+
+// The event reports the routing the pass RESOLVED for a function-form
+// P, R or B, as TS does. It used to report the static grammar field,
+// which is empty (or zero) exactly when the function form is in use
+// (#153).
+func TestRuleDoneReportsResolvedFunctionFormRouting(t *testing.T) {
+	a, b := "a", "b"
+	j := Make(Options{
+		Rule:  &RuleOptions{Start: "top"},
+		Fixed: &FixedOptions{Token: map[string]*string{"#A": &a, "#B": &b}},
+	})
+	ta, tb := j.Token("#A"), j.Token("#B")
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{
+			S:  [][]Tin{{ta}, {tb}},
+			PF: func(r *Rule, ctx *Context) string { return "child" },
+			BF: func(r *Rule, ctx *Context) int { return 1 },
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	j.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{
+			S:  [][]Tin{{tb}},
+			RF: func(r *Rule, ctx *Context) string { return "tail" },
+		})
+	})
+	j.Rule("tail", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{})
+	})
+	events := collectDone(j)
+	if _, err := j.Parse("ab"); err != nil {
+		t.Fatal(err)
+	}
+	top := findDone(*events, "top", OPEN)
+	if top == nil || top.Alt == nil {
+		t.Fatal("no top open event")
+	}
+	if top.Alt.P != "child" || top.Alt.B != 1 {
+		t.Errorf("top open reported static routing: p=%q b=%d, want child/1", top.Alt.P, top.Alt.B)
+	}
+	child := findDone(*events, "child", OPEN)
+	if child == nil || child.Alt == nil {
+		t.Fatal("no child open event")
+	}
+	if child.Alt.R != "tail" {
+		t.Errorf("child open reported static routing: r=%q, want tail", child.Alt.R)
+	}
+}

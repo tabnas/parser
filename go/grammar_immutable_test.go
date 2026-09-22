@@ -107,3 +107,51 @@ func TestGrammarInstallsSameSpecTwice(t *testing.T) {
 		t.Fatalf("second parse = %s, want {\"port\":8080} — spec was consumed by the first install", got)
 	}
 }
+
+// A modifier that writes to the alternate it is handed must not change
+// the grammar for the next parse. It used to: H received the instance's
+// own *AltSpec, so a write survived into every later parse on the
+// instance (#121). TS hands its modifier a per-pass AltMatch, which is
+// what the pass copy here reproduces.
+func TestMutatingAltModifierDoesNotReachTheGrammar(t *testing.T) {
+	var seen []string
+	gs := &GrammarSpec{
+		Clear: true,
+		OptionsMap: map[string]any{
+			"rule":  map[string]any{"start": "top"},
+			"fixed": map[string]any{"token": map[string]any{"#A": "a"}},
+		},
+		Rule: map[string]*GrammarRuleSpec{
+			"top": {
+				Open:  []*GrammarAltSpec{{S: "#A", H: "@mod", G: "orig"}},
+				Close: []*GrammarAltSpec{{S: "#ZZ"}},
+			},
+		},
+		Ref: map[FuncRef]any{
+			"@mod": AltModifier(func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec {
+				seen = append(seen, alt.G)
+				alt.G = "MUTATED"
+				alt.P = "nowhere"
+				return alt
+			}),
+		},
+	}
+	tn := Make()
+	if err := tn.Grammar(gs); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		// The modifier's push to an unknown rule is its own pass's
+		// business: it raises unknown_rule, which is the proof the write
+		// reached THIS pass.
+		if _, err := tn.Parse("a"); err == nil {
+			t.Fatalf("parse %d: the modifier's routing did not take effect", i+1)
+		}
+	}
+	if len(seen) != 2 || seen[0] != "orig" || seen[1] != "orig" {
+		t.Fatalf("the second parse saw the first parse's write: %v", seen)
+	}
+	if got := tn.RSM()["top"].open[0].G; got != "orig" {
+		t.Fatalf("grammar alternate mutated through the modifier: G = %q", got)
+	}
+}

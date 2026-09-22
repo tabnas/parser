@@ -221,3 +221,26 @@ func TestContinuationsDoesNotDisturbLaterParses(t *testing.T) {
 }
 
 func strp(s string) *string { return &s }
+
+// Mirrors ts/test/continuations.test.js 'treats an empty end capture as
+// "only the end is legal"'. top matches one A and closes on anything:
+// `a` parses and nothing may follow it, so the answer is exactly #ZZ,
+// NOT the start rule's openers, which would offer #A and imply `aa`
+// parses. Go answered #A until the capture stopped discarding the
+// trailing end-of-source fetch, which arrives with no rule (#155).
+func TestContinuationsOfACompletePrefixIsOnlyTheEnd(t *testing.T) {
+	j := Make(Options{Fixed: &FixedOptions{Token: map[string]*string{"#A": strp("a")}}})
+	j.Rule("top", func(rs *RuleSpec, p *Parser) {
+		rs.ClearOpen()
+		rs.AddOpen(&AltSpec{S: [][]Tin{{j.Token("#A")}}})
+		rs.AddClose(&AltSpec{})
+	})
+	j.SetOptions(Options{Rule: &RuleOptions{Start: "top"}})
+
+	if got := names(j, "a"); !eqNames(got, "#ZZ") {
+		t.Fatalf("got %v, want [#ZZ]", got)
+	}
+	if _, err := j.Parse("aa"); err == nil {
+		t.Fatal("`aa` should not parse")
+	}
+}

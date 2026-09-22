@@ -551,6 +551,17 @@ var notRegistered = map[string]string{
 		"which no probe builds yet; pinned by ts/test/rule-budget.test.js ('a " +
 		"fractional maxmul is expressible here and not in Go') and " +
 		"go/rule_budget_test.go TestMaxMulSurvivesTheOptionsMap",
+	"Key order in parsed objects": "cannot be registered by design: the spec " +
+		"probe renders map keys sorted by UTF-16 code unit in every runtime " +
+		"(ADR-15 puts key order out of contract), so no row can observe it; " +
+		"pinned per runtime by TestKeyOrderIsInsertionOrder, the TS " +
+		"divergence test 'integer-like keys sort first here' and the Rust " +
+		"key_order_is_insertion_order",
+	"A parse that sets no value": "cannot be registered: divergentCanon folds " +
+		"undefined and null into one rendering in every runner, so a row " +
+		"would show OK:null three times; pinned per runtime by " +
+		"TestNoValueParseIsNil, the TS divergence test 'a parse that sets no " +
+		"value' and the Rust no_value_parse_is_null",
 }
 
 // TestDivergenceRegisterCoversEveryEntry ties the register to the prose.

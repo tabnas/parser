@@ -228,10 +228,11 @@ func (ctx *Context) recordConsumed(consumed int) {
 	}
 	ctx.VAbs += consumed
 	// Amortised-O(1) ring buffer: let V grow to twice the cap, then trim
-	// its front back down to the cap. A non-positive cap means unbounded
-	// (TS Infinity).
+	// its front back down to the cap. A negative cap means unbounded
+	// (the serialized `false`, TS Infinity); 0 retains nothing, as it
+	// does in TypeScript, where this port used to read it as unbounded.
 	cap := ctx.Cfg.RewindHistory
-	if cap > 0 && len(ctx.V) > 2*cap {
+	if cap >= 0 && len(ctx.V) > 2*cap {
 		ctx.V = append([]*Token(nil), ctx.V[len(ctx.V)-cap:]...)
 	}
 }
@@ -702,14 +703,14 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 	if !trailing && !gaveUp {
 		// Also explicitly ask lexer for more (matching TS parser.ts:187-189).
-		// `rule` is NoRule here (the loop has ended) and Lex.Next assigns its
+		// `rule` is NoRule here (the loop has ended) and the fetch assigns its
 		// rule argument to ctx.Rule — which would clobber the last REAL rule
 		// before finishErr reads it for the diagnostic (TS lex.next performs
 		// no such assignment, so its ctx.rule keeps the last processed rule).
 		// Save/restore rather than passing ctx.Rule so the lex call itself
 		// still sees NoRule, exactly as before.
 		curRule := ctx.Rule
-		endTkn := lex.Next(rule)
+		endTkn := lex.next(rule)
 		ctx.Rule = curRule
 		if endTkn.Tin != TinZZ {
 			if !soft {
@@ -983,6 +984,13 @@ func ruleDoneSubsOf(inst *Tabnas) []RuleDoneSub {
 // payload. Nil when the rule state had no alternates at all; non-nil
 // with only Err set when it had some and none matched — the same
 // distinction TS draws between a null _dalt and a failed one.
+//
+// B, P and R are the routing the pass RESOLVED, not the grammar's
+// static fields: a function-form PF, RF or BF is resolved into the
+// pass's copy of the alternate before the modifier runs (rule.go
+// Process), and ctx.dalt is that copy. TS reports the same resolved
+// value; the static field is recoverable from the grammar, the
+// resolution at this pass is not (#153).
 //
 // The group tags are split into a fresh slice on every call: AltSpec.G
 // is live grammar configuration, and a consumer must not be able to

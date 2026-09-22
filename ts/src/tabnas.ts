@@ -69,6 +69,7 @@ import {
   parserwrap,
   regexp,
   resolveFuncRefs,
+  validateOptions,
   srcfmt,
   str,
   tokenize,
@@ -254,6 +255,8 @@ class Tabnas {
     }
     this.#internal = internal
 
+    // Typed before it is merged (#143), as tn.options(o) is.
+    if (opts) validateOptions(opts, defaults)
     const merged_options = deep(
       {},
       parent
@@ -347,6 +350,9 @@ class Tabnas {
   // Hash-private options setter. Public callers go through `options(change)`.
   #setOptions(change?: Record<string, any>): Record<string, any> {
     if (null != change) {
+      // An ill-typed leaf is a load fault here, with the leaf named,
+      // rather than a raw TypeError from inside configure() (#143).
+      validateOptions(change, defaults)
       deep(this.#internal.merged, change)
       configure(this, this.#internal.config, this.#internal.merged)
       this.#internal.parser = this.#internal.parser.clone(

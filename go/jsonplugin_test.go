@@ -60,7 +60,10 @@ func jsonOptions() Options {
 		Lex:     &LexOptions{Empty: &f},
 		Rule:    &RuleOptions{Finish: &f},
 		// Strict JSON keys are quoted strings only.
-		TokenSet: map[string][]string{"KEY": {"#ST"}},
+		// The explicit-removal idiom: an empty name removes that position
+		// of the default set, as `null` does in the TS fixture (#151). A
+		// bare {"#ST"} would keep the default set's other three entries.
+		TokenSet: map[string][]string{"KEY": {"#ST", "", "", ""}},
 	}
 }
 

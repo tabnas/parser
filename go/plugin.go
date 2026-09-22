@@ -379,19 +379,26 @@ func IsMatcherToken(name string) bool {
 // Called from BOTH Make and SetOptions: `Make(opts)` and
 // `Make().SetOptions(opts)` must be equivalent for the same Options.
 func (j *Tabnas) applyTokenSets(opts *Options) {
-	if opts == nil || opts.TokenSet == nil {
+	j.applyTokenSetsNamed(opts, opts)
+}
+
+// applyTokenSetsNamed installs, from the merged options `from`, every
+// token set that `named` mentions. An empty name is the removed
+// position (the serialized `null`, see OptionsFromMap) and is skipped.
+func (j *Tabnas) applyTokenSetsNamed(from, named *Options) {
+	if from == nil || from.TokenSet == nil || named == nil || named.TokenSet == nil {
 		return
 	}
 	// Deterministic order: a set may reference another set by name, and
 	// map iteration order would otherwise make the outcome vary per run.
-	names := make([]string, 0, len(opts.TokenSet))
-	for setName := range opts.TokenSet {
+	names := make([]string, 0, len(named.TokenSet))
+	for setName := range named.TokenSet {
 		names = append(names, setName)
 	}
 	sort.Strings(names)
 	for _, setName := range names {
 		var tins []Tin
-		for _, name := range opts.TokenSet[setName] {
+		for _, name := range from.TokenSet[setName] {
 			if name == "" {
 				continue
 			}
@@ -399,6 +406,33 @@ func (j *Tabnas) applyTokenSets(opts *Options) {
 		}
 		j.SetTokenSet(setName, tins)
 	}
+}
+
+// checkFixedTokenNames refuses a fixed.token entry that binds a
+// matcher-owned name to a literal. Binding one adds a second producer
+// for the same tin instead of replacing the matcher, and values then
+// vanish without an error. Mirrors the TS checkFixedTokenNames guard,
+// which throws; here the error is returned, and the doors with an error
+// channel report it as the caller's mistake rather than laundering it
+// through a recover guard into an "internal" error (#119).
+func checkFixedTokenNames(opts *Options) error {
+	if opts == nil || opts.Fixed == nil || opts.Fixed.Token == nil {
+		return nil
+	}
+	for name, srcPtr := range opts.Fixed.Token {
+		if srcPtr != nil && matcherTokenNames[name] {
+			return fmt.Errorf(
+				"tabnas: %s is produced by a lexer matcher and cannot be bound "+
+					"to the fixed literal %q. Doing so adds a second producer for "+
+					"the same token rather than replacing the matcher, and values "+
+					"silently vanish. Configure the matcher instead (options.number, "+
+					"options.string, options.text, options.value, options.space, "+
+					"options.line, options.comment), or use a token name of your own. "+
+					"Fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) may be "+
+					"rebound freely.", name, *srcPtr)
+		}
+	}
+	return nil
 }
 
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
@@ -412,26 +446,20 @@ func (j *Tabnas) applyFixedTokens(opts *Options) {
 	if opts.Fixed == nil || opts.Fixed.Token == nil {
 		return
 	}
+	// Fail loud rather than silently mis-lex. This is the typed door,
+	// which has no error channel: Make and SetOptions return the
+	// instance for chaining, so a caller error here is a panic, as the
+	// TS guard is a throw. The doors that CAN return an error (Grammar,
+	// SetOptionsText, ApplyOptions) run checkFixedTokenNames first and
+	// never reach this.
+	if err := checkFixedTokenNames(opts); err != nil {
+		panic(err.Error())
+	}
 	if j.parser.Config.FixedTokens == nil {
 		j.parser.Config.FixedTokens = make(map[string]Tin)
 	}
 	changed := false
 	for name, srcPtr := range opts.Fixed.Token {
-		if srcPtr != nil && matcherTokenNames[name] {
-			// Fail loud rather than silently mis-lex: binding a
-			// matcher-owned name adds a second producer for the same tin
-			// instead of replacing the matcher, and values then vanish
-			// without an error. Mirrors the TS checkFixedTokenNames guard.
-			panic(fmt.Sprintf(
-				"tabnas: %s is produced by a lexer matcher and cannot be bound "+
-					"to the fixed literal %q. Doing so adds a second producer for "+
-					"the same token rather than replacing the matcher, and values "+
-					"silently vanish. Configure the matcher instead (options.number, "+
-					"options.string, options.text, options.value, options.space, "+
-					"options.line, options.comment), or use a token name of your own. "+
-					"Fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) may be "+
-					"rebound freely.", name, *srcPtr))
-		}
 		tin, ok := j.tinByName[name]
 		if !ok {
 			if srcPtr == nil {
@@ -804,6 +832,19 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 // When called from within a plugin (during re-apply), skips plugin
 // re-application to avoid infinite recursion.
 // Returns the instance for chaining.
+// ApplyOptions is SetOptions with an error channel: it validates the
+// options first and returns the caller's mistake as an error instead of
+// panicking. SetOptions keeps its chaining signature and panics on the
+// same input, because it has nowhere to put the error; every engine door
+// that can return one (Grammar, SetOptionsText) goes through here.
+func (j *Tabnas) ApplyOptions(opts Options) error {
+	if err := checkFixedTokenNames(&opts); err != nil {
+		return err
+	}
+	j.SetOptions(opts)
+	return nil
+}
+
 func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	merged := Deep(*j.options, opts).(Options)
 	j.options = &merged
@@ -913,7 +954,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	j.applyMatchTokens(&opts)
 
 	// Apply tokenSet: resolve token names and update per-instance sets.
-	j.applyTokenSets(&opts)
+	// Read from the MERGED options, for the sets this call names: the
+	// merge is index-wise onto the default set (#151), so the incoming
+	// slice alone is not the set. Sets this call does not name keep
+	// whatever SetTokenSet last gave them.
+	j.applyTokenSetsNamed(j.options, &opts)
 
 	// Re-alias the parser error fields to the rebuilt config maps.
 	// buildConfig resolved Error/Hint/ErrMsg from the merged options.
@@ -980,8 +1025,10 @@ func parseText(api, text string) (any, error) {
 // desired options tree. Requires a registered text parser (see
 // RegisterTextParser).
 func (j *Tabnas) SetOptionsText(text string) (result *Tabnas, err error) {
-	// Text parsing + MapToOptions + SetOptions can panic on malformed
-	// input; convert any panic into an "internal" error.
+	// Text parsing and option application can panic on malformed
+	// input; convert any panic into an "internal" error. A caller's
+	// own mistake (a matcher-owned token bound to a literal, a regex
+	// RE2 cannot compile) is returned as a plain error before that.
 	defer func() {
 		if r := recover(); r != nil {
 			result = j
@@ -1004,7 +1051,13 @@ func (j *Tabnas) SetOptionsText(text string) (result *Tabnas, err error) {
 	if !ok {
 		return j, fmt.Errorf("SetOptionsText: expected map, got %T", parsed)
 	}
-	j.SetOptions(MapToOptions(m))
+	opts, err := OptionsFromMap(m)
+	if err != nil {
+		return j, fmt.Errorf("SetOptionsText: %w", err)
+	}
+	if err := j.ApplyOptions(opts); err != nil {
+		return j, fmt.Errorf("SetOptionsText: %w", err)
+	}
 	return j, nil
 }
 

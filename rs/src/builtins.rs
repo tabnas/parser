@@ -143,14 +143,32 @@ fn capture_child(node: &mut IndexMap<String, Value>, child: Value) {
             {
                 append_kid(node, child);
             } else if let Some(Value::Array(children)) = child_map.get("kids") {
-                for nested in children.iter() {
-                    append_kid(node, nested.clone());
-                }
+                extend_kids(node, children);
             }
             return;
         }
     }
     append_kid(node, child);
+}
+
+/// Flatten an untagged child's kids into `node`'s.
+///
+/// A repetition compiles to untagged rules nested one per element, and
+/// each level flattens the level below it, so a rule with N elements
+/// flattens N + (N-1) + ... kids: quadratic in the element count of ONE
+/// rule. TypeScript spreads the same way, but a JavaScript push is a
+/// pointer store; here each kid cost a hash lookup, an `Arc` clone and a
+/// later drop, and 800 fields took 46 seconds against a tenth of a
+/// second (#195). A level whose own kids are still empty, which is every
+/// level of that chain, now takes the child's array by handle instead:
+/// one refcount bump, and the chain is linear again. Copy-on-write keeps
+/// the child's own view intact should anything still read it.
+fn extend_kids(node: &mut IndexMap<String, Value>, children: &Arc<Vec<Value>>) {
+    match node.get_mut("kids") {
+        Some(Value::Array(kids)) if kids.is_empty() => *kids = Arc::clone(children),
+        Some(Value::Array(kids)) => Arc::make_mut(kids).extend(children.iter().cloned()),
+        _ => {}
+    }
 }
 
 fn map_value(info: &InfoOptions, implicit: bool) -> Value {
@@ -288,8 +306,8 @@ pub(crate) fn run_builtin_action_with_info(
             }
         }
         "@bubble$" => {
-            if !rule.child_node.is_undefined() {
-                rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
+            if rule.has_child_value() {
+                rule.node = Rc::new(RefCell::new(rule.child_value()));
             }
         }
         "@fold$" => {
@@ -314,16 +332,16 @@ pub(crate) fn run_builtin_action_with_info(
         "@val-bc" => {
             let is_undef = rule.node.borrow().is_undefined();
             if is_undef {
-                if !rule.child_node.is_undefined() {
-                    rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
+                if rule.has_child_value() {
+                    rule.node = Rc::new(RefCell::new(rule.child_value()));
                 } else if rule.os() > 0 {
                     rule.node = Rc::new(RefCell::new(token_value(rule, context, 0, info)));
                 }
             }
         }
         "@value$" => {
-            if !rule.child_node.is_undefined() {
-                rule.node = Rc::new(RefCell::new(rule.child_node.clone()));
+            if rule.has_child_value() {
+                rule.node = Rc::new(RefCell::new(rule.child_value()));
             } else {
                 let value = config_index(config, "from").map_or(Value::Undefined, |index| {
                     token_value(rule, context, index, info)
@@ -382,7 +400,7 @@ pub(crate) fn run_builtin_action_with_info(
                 }
             };
             if let Some(Value::String(key)) = rule.u.get(&slot).cloned() {
-                let mut val = rule.child_node.clone();
+                let mut val = rule.child_value();
                 if config_bool(config, "src") {
                     val = src_val(val);
                 }
@@ -390,8 +408,8 @@ pub(crate) fn run_builtin_action_with_info(
             }
         }
         "@push$" => {
-            if !rule.child_node.is_undefined() {
-                let mut val = rule.child_node.clone();
+            if rule.has_child_value() {
+                let mut val = rule.child_value();
                 if config_bool(config, "src") {
                     val = src_val(val);
                 }
@@ -418,13 +436,15 @@ pub(crate) fn run_builtin_action_with_info(
         }
         "@pair-bc" => {
             if let Some(Value::String(key)) = rule.u.get("key").cloned() {
+                let child = rule.child_value();
                 let mut node = rule.node.borrow_mut();
-                map_insert(&mut node, key, rule.child_node.clone());
+                map_insert(&mut node, key, child);
             }
         }
-        "@elem-bc" if !rule.child_node.is_undefined() => {
+        "@elem-bc" if rule.has_child_value() => {
+            let child = rule.child_value();
             let mut node = rule.node.borrow_mut();
-            list_push(&mut node, rule.child_node.clone());
+            list_push(&mut node, child);
         }
         _ => return false,
     }

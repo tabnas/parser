@@ -88,8 +88,8 @@ Per-runtime notes:
   the candidate list rather than trusting the table's single-byte answer.
   Same result, one array load slower on the renegotiation path only.
 - **Differs (cosmetic).** TS preserves a recut token's attached
-  `ignored` token; Go's token carries no such field (its lexer skips
-  ignored tokens in `Lex.Next` rather than attaching them), so there is
+  `ignored` token; Go's token carries no such field (the parser's fetch
+  skips ignored tokens rather than attaching them), so there is
   nothing to preserve.
 - **Both runtimes skip rule-position gating under a want,
   deliberately.** Go's match matcher makes a two-pass
@@ -526,22 +526,40 @@ of those three trades.
 `TestCustomActionNodeSurvivesOwnerResolution` pin the two shapes that the
 reverted attempts broke; any repair has to keep both passing.
 
-### `MapToOptions` carries only some options
+### The serialized options surface: every data leaf
 
-Not a divergence: an API gap here, recorded so it is not mistaken for
-one. `MapToOptions` (the path `SetOptionsText` and a shared options blob
-take) builds `Options` field by field, and a field it does not name is
-dropped in silence rather than refused. `rule.maxmul` was dropped that
-way until it was plumbed for the repair above, so a shared blob
-configured the runaway guard in TypeScript and left this port on its
-default.
+Not a divergence: an API gap, now closed, recorded so the shape of the
+gap is not forgotten. `OptionsFromMap` (the path `Grammar`,
+`SetOptionsText` and a shared options blob take) builds `Options` from a
+map, and it used to be a hand-written extractor that named 18 of the 24
+option groups: a field it did not name was dropped in silence. Six
+groups fell out that way, among them `rewind.history`, `result.fail` and
+all of `parse.recover`, so a caller who lowered the rewind bound in a
+serialized spec to harden a service got the default instead.
 
-The remaining numeric options take the same path and are still dropped:
-`rewind.history`, `error.recover`'s `maxSkip` / `maxRecoveries` /
-`suppress`, and `parse.budget.checkEveryN`. Set those on the `Options`
-struct directly. Unmarshalling JSON straight into `Options` is not a
-workaround for the fractional case: it rejects a fractional number
-rather than truncating it.
+The surface is now defined by type rather than by list: **every
+pure-data leaf of `Options` is read, and a gate asserts it.**
+`TestOptionsFromMapCoversEveryLeaf` walks `Options` by reflection,
+builds a map that sets every leaf, and fails on any that does not
+arrive, so a field added to `Options` cannot fall out of the serialized
+surface again. Function-valued leaves (`parser.start`, `map.merge`,
+the `check` hooks, `parse.prepare`, `budget.onCheck`) are read when the
+map carries a function of the right type, which is what a resolved
+FuncRef is; a spec carrying only JSON cannot reach them, and that is
+what makes them unportable rather than unread.
+
+`MapToOptions` keeps its signature and delegates to `OptionsFromMap`,
+which also returns an error for an entry it cannot carry: a serialized
+regex that RE2 cannot compile, an ill-typed leaf (`line.chars: {}`,
+`tokenSet.VAL: "str"`), or a function reference resolved into a slot
+that holds data. The door is typed against `Options` by reflection
+before any field is read, so a mistake is named rather than dropped,
+which is also what TypeScript now does against the shape of its
+defaults; Rust's door was strict already. Prefer
+`OptionsFromMap` wherever there is an error to return. Unmarshalling
+JSON straight into `Options` is still not a substitute: it rejects a
+fractional `rule.maxmul` rather than truncating it (see "Rule-Iteration
+Budget" above).
 
 ### Token Consumption
 
@@ -603,6 +621,21 @@ Both implementations now share the same error model:
 The remaining difference is delivery: TypeScript throws `TabnasError` as an
 exception; Go returns `*TabnasError` as an `error` value and never panics
 (see "Error Delivery and the No-Panic Guarantee" below).
+
+### `Lex.Next` returns the raw stream: Aligned (was a Go difference)
+
+`Lex.Next` returns every token the matchers produce, IGNORE tokens
+(space, line, comment) included, exactly as TypeScript's `lex.next`
+does; the parser skips the IGNORE set in its own fetch, as the
+TypeScript `parse_alts` loop does around `lex.next`. This port used to
+skip them inside `Next` itself, so a plugin driving the lexer directly
+from an alternate condition had to filter in one runtime and must not
+in the other. `@tabnas/c` carried exactly that split: its TypeScript
+side filters and its Go side did not. A Go plugin that reads `Next`
+directly and wants only grammar-significant tokens now filters on the
+instance's IGNORE set, as the TypeScript plugin does. Lex subscribers
+are unaffected: they always saw every token, before any skipping.
+Pinned by `TestLexNextReturnsIgnoredTokens`.
 
 ## Custom Matchers
 
@@ -677,9 +710,33 @@ field and handed back a zero value (so `Deep(reA, reB)` produced a regexp
 matching the empty pattern). Both now let the overlay win, which is what
 `tn.make({number: {exclude: /new/}})` has always meant.
 
-Structs with exported fields (the `Options` tree) still merge field by
-field in Go, and plain objects/arrays still merge key by key in TS.
-`undefined`/zero on the overlay side still loses in both.
+Structs with exported fields (the `Options` tree) merge field by field
+in Go, and plain objects/arrays merge key by key in TS. `undefined`/zero
+on the overlay side loses in both.
+
+Three classes of the typed overlay used to REPLACE where TS merges, and
+now merge as TS does (the ruling of #151):
+
+| class | fields | both runtimes now |
+|---|---|---|
+| slices | `Ender`, `Result.Fail`, `Parse.Recover.SyncGroups`/`SyncTokens`, `Match.TokenOrder` | index-wise: an overlay index wins, positions beyond it keep the base |
+| maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
+| `TokenSet` | every set | index-wise onto the default set |
+
+For that to hold, an instance starts from `DefaultOptions()`, which
+carries the defaults those overlays merge onto (the three token sets,
+the three comment definitions, the three value keywords), exactly as
+`tn.options` carries them in TS. `Options()` reports them.
+
+Go cannot spell TS's `undefined` inside a typed slice, so there is no
+"keep this index" element: **an empty name in a `TokenSet` slice is the
+removed position**, which is what TS's `null` does, and a serialized
+`null` arrives as one. `{"KEY": {"#ST", "", "", ""}}` is therefore the
+replacement the TS fixture spells `['#ST', null, null, null]`, and a
+bare `{"KEY": {"#ST"}}` keeps the default set's other three entries. The
+strict-JSON fixtures in both runtimes are written that way. Pinned by
+`go/options_overlay_test.go` and `ts/test/options-overlay.test.js`,
+which drive the options pipeline rather than `Deep`.
 
 ## Go-Specific Features
 
@@ -859,8 +916,8 @@ RE2 accepts `(?U)`, and it means *swap greedy*. A letter passed through
 because it was unrecognised could therefore change the language a grammar
 matches, silently. Refusing is the safe default, and it is not silent
 either: an unbuildable serialized regex leaves the original `@/…/` string
-in place, which `MapToOptions` turns into an install error naming the
-token.
+in place, which `OptionsFromMap` reports as an error naming the token,
+and `Grammar` returns as an install error.
 
 ### Two related non-equivalences this does NOT fix
 
@@ -926,7 +983,15 @@ guarantees it **never panics**:
   recovery result, while Go returns it as fatal. That is true of every
   panic in this port, not only a preserved one, and predates the
   exception above.
-- `Grammar` has the same guard for malformed specs.
+- `Grammar` has the same guard for malformed specs. The guard is for
+  panics the engine did not expect; the engine's own validators do not
+  use it. A caller's mistake that the engine detects (a matcher-owned
+  token bound to a fixed literal, a serialized regex RE2 cannot
+  compile) comes back from `Grammar`, `SetOptionsText`, `ApplyOptions`
+  and `OptionsFromMap` as a plain error naming the mistake, never as an
+  `"internal"` error. The chaining doors that have no error channel,
+  `Make` and `SetOptions`, panic on the same input, as the TypeScript
+  guard throws; `ApplyOptions` is `SetOptions` with the error returned.
 - APIs that previously panicked now return errors: `Derive` returns
   `(*Tabnas, error)` (a failing plugin during child derivation mirrors
   TS `make()` throwing), and `MakeRuleCond` returns
@@ -947,6 +1012,14 @@ predictable:
 | Numbers | `float64` |
 | Booleans | `bool` |
 | Null | `nil` |
+
+Two consequences of that table are deliberate, and both are recorded in
+the repository's divergence record. Object key order is out of the
+parsed-value contract (ADR-15): `*OrderedMap` keeps insertion order,
+TypeScript's plain object puts integer-like keys first, and this port must
+never emulate that. A parse that sets no value answers `nil`, where
+TypeScript answers `undefined`; the engine's `Undefined` sentinel is
+unwrapped at the parse boundary on purpose.
 
 ## `options.tokenSet`
 
@@ -1214,7 +1287,13 @@ Shared semantics:
 - **Prefixes that parse still answer**, with `#ZZ` included to mean
   "stopping here is legal". It is a sentinel, not something a user
   types: a completion provider should drop it and read it as "this
-  document is already valid".
+  document is already valid". A prefix that parsed completely and was
+  never asked for more answers exactly `#ZZ`, not the start rule's
+  openers: `a` against a grammar that accepts one `a` must not offer a
+  second. Go answered `#A` there until its capture stopped discarding
+  the parser's trailing end-of-source fetch, which arrives with no rule
+  in hand; pinned in all three runtimes by the "only the end is legal"
+  test.
 - **Recovery never changes the answer.** The query forces its own parse
   fail-fast whatever the instance is configured for, since it must stop
   AT the query point rather than skip past it.

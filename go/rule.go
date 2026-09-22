@@ -97,7 +97,15 @@ type AltAction func(r *Rule, ctx *Context)
 // AltError is an error function for an alternate.
 type AltError func(r *Rule, ctx *Context) *Token
 
-// AltModifier can modify an alt match result. Returns the (possibly modified) AltSpec.
+// AltModifier can modify an alt match result. Returns the (possibly
+// modified) AltSpec; a nil return keeps the match as it was.
+//
+// The alternate it receives is the PASS's copy of the matched grammar
+// alternate, with the function forms of P, R and B already resolved
+// into P, R and B: the same thing TypeScript's modifier gets as its
+// AltMatch. Writes to it last for the pass and never reach the
+// grammar. It is a shallow copy, so the slices and maps it shares with
+// the grammar (S, N, U, K) must not be written through it.
 type AltModifier func(alt *AltSpec, r *Rule, ctx *Context) *AltSpec
 
 // StateAction is a before/after action on a rule state transition.
@@ -1129,7 +1137,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// Record this pass's outcome for the post-process event, which
 	// fires from the parse loop once Process returns (TS records the
 	// equivalent as ctx._dalt, inside parse_alts).
-	ctx.dalt = alt
+	ctx.dalt = nil
 	ctx.daltAny = len(alts) > 0
 	ctx.daltErr = nil
 
@@ -1148,10 +1156,50 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		return next
 	}
 
-	// Alt modifier
-	if alt != nil && alt.H != nil {
-		alt = alt.H(alt, r, ctx)
+	// The pass's own copy of the matched alternate, which is what TS
+	// hands out as its per-pass AltMatch. Two things depend on it:
+	//
+	//   - The modifier used to receive the grammar's own *AltSpec, so a
+	//     mutating H rewrote the grammar for every later parse on the
+	//     instance (#121). It now receives a shallow copy, which is
+	//     what TS's modifier effectively gets, and its writes end with
+	//     the pass.
+	//   - The function forms of P, R and B are resolved into the copy
+	//     BEFORE the modifier and before the action, where TS resolves
+	//     them (parse_alts). The modifier then sees resolved routing, as
+	//     TS's does, and the post-process event reports the routing the
+	//     pass actually took rather than the grammar's static field
+	//     (#153).
+	//
+	// An alternate with none of those keeps the grammar pointer: most
+	// alternates have none, and the copy is not free.
+	if alt != nil && (alt.H != nil || alt.PF != nil || alt.RF != nil || alt.BF != nil) {
+		pass := *alt
+		if alt.PF != nil {
+			pass.P = alt.PF(r, ctx)
+			pass.PF = nil
+		}
+		if alt.RF != nil {
+			pass.R = alt.RF(r, ctx)
+			pass.RF = nil
+		}
+		if alt.BF != nil {
+			pass.B = alt.BF(r, ctx)
+			pass.BF = nil
+		}
+		alt = &pass
+		// Alt modifier. A nil return keeps the copy, as TS falls back
+		// to the match on a falsy return.
+		if pass.H != nil {
+			if mod := pass.H(&pass, r, ctx); mod != nil {
+				alt = mod
+			}
+		}
 	}
+
+	// Exposed post-modifier, so a replacement from H is what the
+	// post-process event's consumers see (TS: ctx._dalt).
+	ctx.dalt = alt
 
 	// Error check: if alt.E returns a token, signal a parse error.
 	// The diagnostic context is snapshotted HERE, not when the parser
@@ -1203,9 +1251,11 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// backtrack) once, and record them on the rewind history BEFORE the
 	// action runs, so a ctx.Rewind() call inside the action sees the
 	// just-matched tokens. The same count drives the lookahead-buffer
-	// shift below. Mirrors the TS rules.ts ordering.
+	// shift below. TS computes it once at the same point (#122).
 	consumed := 0
 	if alt != nil {
+		// BF is already resolved into alt.B above; the check remains
+		// for an alternate a modifier substituted.
 		backtrack := alt.B
 		if alt.BF != nil {
 			backtrack = alt.BF(r, ctx)
@@ -1241,12 +1291,13 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 
 	// Push / Replace / Pop
 	if alt != nil {
-		// Resolve push rule name (static or dynamic)
+		// PF and RF are resolved into the pass copy above, before the
+		// modifier and the action; these checks remain for an
+		// alternate a modifier substituted.
 		pushName := alt.P
 		if alt.PF != nil {
 			pushName = alt.PF(r, ctx)
 		}
-		// Resolve replace rule name (static or dynamic)
 		replaceName := alt.R
 		if alt.RF != nil {
 			replaceName = alt.RF(r, ctx)
@@ -1459,7 +1510,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// Tell the lexer which slot it is filling, so its matcher
 				// gate can ask about this position rather than slot 0.
 				lex.tI = i
-				tkn := lex.Next(rule)
+				tkn := lex.next(rule)
 				// Lexer soft mode: with recovery on and relex off, an
 				// unlexable span is absorbed HERE rather than handed to
 				// the alternates, so the parse carries on as though it
@@ -1468,7 +1519,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// instead — one of them may re-cut the span.
 				if !relex && ctx.Cfg != nil && ctx.Cfg.Recover.Enabled {
 					for tkn != nil && TinBD == tkn.Tin && absorbBad(ctx, lex, rule, tkn) {
-						tkn = lex.Next(rule)
+						tkn = lex.next(rule)
 					}
 				}
 				lex.tI = 0

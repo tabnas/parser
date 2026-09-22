@@ -207,8 +207,8 @@ func TestRewindDefaultHistory64(t *testing.T) {
 }
 
 func TestRewindUnbounded(t *testing.T) {
-	zero := 0 // non-positive history → unbounded
-	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, &zero)
+	unbounded := -1 // a negative history retains everything (TS Infinity)
+	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, &unbounded)
 	maxV := 0
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
 		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
@@ -253,4 +253,31 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// A cap of 0 retains nothing, matching TypeScript. This port used to read
+// a non-positive cap as unbounded, which inverted the operator's intent
+// on exactly the bound AGENTS.md names against hostile input (#142). A
+// negative cap is now the unbounded spelling (TestRewindUnbounded).
+func TestRewindZeroHistoryRetainsNothing(t *testing.T) {
+	zero := 0
+	j, tn := rewindParser(t, map[string]string{"Ta": "a"}, &zero)
+	maxV := -1
+	var rewindErr error
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tn["Ta"]}, {tn["Ta"]}, {tn["Ta"]}}, A: func(r *Rule, ctx *Context) {
+			maxV = len(ctx.V)
+			rewindErr = ctx.Rewind(0)
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	if _, err := j.Parse("a a a"); err != nil {
+		t.Fatal(err)
+	}
+	if maxV != 0 {
+		t.Errorf("ctx.V = %d, want 0", maxV)
+	}
+	if rewindErr == nil || !strings.Contains(rewindErr.Error(), "outside the retained history") {
+		t.Errorf("expected out-of-window error, got %v", rewindErr)
+	}
 }

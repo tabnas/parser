@@ -2433,43 +2433,6 @@ impl Parser {
                     matched.action_configs = alt.action_configs.clone();
                 }
 
-                // Canonical parse-alternate resolution order is error, push,
-                // replace, backtrack. Each callback observes the same live
-                // AltMatch record, before counters/user state are applied.
-                if let Some(error_hook) = alt.e.clone() {
-                    context.set_rule(&current_rule);
-                    let result = self.catch_callback("alternate error", src, || {
-                        error_hook(&mut current_rule, &mut context)
-                    });
-                    matched.e = result
-                        .map_err(|error| {
-                            self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                Self::phase_token(&current_rule),
-                            )
-                        })?
-                        .map(Box::new);
-                }
-                if let Some(error_hook) = alt.e_match.clone() {
-                    context.set_rule(&current_rule);
-                    let result = self.catch_callback("matched alternate error", src, || {
-                        error_hook(&mut current_rule, &mut context, &mut matched)
-                    });
-                    matched.e = result
-                        .map_err(|error| {
-                            self.attach_error(
-                                error,
-                                &current_rule,
-                                &stack,
-                                alts,
-                                Self::phase_token(&current_rule),
-                            )
-                        })?
-                        .map(Box::new);
-                }
                 if let Some(route) = &alt.p_fn {
                     context.set_rule(&current_rule);
                     matched.p = self
@@ -2604,8 +2567,48 @@ impl Parser {
                         })?;
                 }
 
+                // The alternate's error hook runs AFTER the routing forms
+                // have resolved and after both modifiers, and sees what the
+                // modifier produced: routing, then modify, then check, in
+                // every runtime (#154). It ran before the routing forms and
+                // between the two modifiers here, which no grammar could
+                // observe and no other port did.
+                if let Some(error_hook) = alt.e.clone() {
+                    context.set_rule(&current_rule);
+                    let result = self.catch_callback("alternate error", src, || {
+                        error_hook(&mut current_rule, &mut context)
+                    });
+                    matched.e = result
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .map(Box::new);
+                }
+                if let Some(error_hook) = alt.e_match.clone() {
+                    context.set_rule(&current_rule);
+                    let result = self.catch_callback("matched alternate error", src, || {
+                        error_hook(&mut current_rule, &mut context, &mut matched)
+                    });
+                    matched.e = result
+                        .map_err(|error| {
+                            self.attach_error(
+                                error,
+                                &current_rule,
+                                &stack,
+                                alts,
+                                Self::phase_token(&current_rule),
+                            )
+                        })?
+                        .map(Box::new);
+                }
                 // Function-valued alternate errors are raised at the match
-                // site, before counters, actions, consumption, or routing.
+                // site, before counters, actions and consumption.
                 if let Some(token) = matched.e.clone() {
                     let code = raised_error_code(&token);
                     let error = TabnasError::new(

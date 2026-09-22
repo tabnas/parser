@@ -8,7 +8,10 @@ package tabnas
 // the bare engine (which lexes these by default) and the strict-JSON
 // fixture.
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLexNumberFormats(t *testing.T) {
 	j := pmTopVal()
@@ -158,5 +161,37 @@ func TestLexErrorMessage(t *testing.T) {
 	}
 	if te.Code == "" {
 		t.Error("TabnasError.Code should be set")
+	}
+}
+
+// Lex.Next returns the raw token stream, IGNORE tokens included, as
+// TypeScript's lex.next does; the parser skips them in its own fetch.
+// This port used to skip them inside Next, so a plugin driving the lexer
+// directly had to filter in one runtime and must not in the other (#152).
+func TestLexNextReturnsIgnoredTokens(t *testing.T) {
+	j := Make()
+	lex := NewLex("a b", j.Config())
+	var names []string
+	for i := 0; i < 8; i++ {
+		tkn := lex.Next()
+		names = append(names, tkn.Name)
+		if tkn.Tin == TinZZ {
+			break
+		}
+	}
+	want := []string{"#TX", "#SP", "#TX", "#ZZ"}
+	if strings.Join(names, " ") != strings.Join(want, " ") {
+		t.Fatalf("Next returned %v, want the raw stream %v", names, want)
+	}
+
+	// The parser still consumes only grammar-significant tokens.
+	a := "a"
+	p := Make(Options{Rule: &RuleOptions{Start: "top"}, Fixed: &FixedOptions{Token: map[string]*string{"#A": &a}}})
+	p.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{p.Token("#A")}, {p.Token("#A")}}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	if _, err := p.Parse("a a"); err != nil {
+		t.Fatalf("the parser no longer skips the IGNORE set: %v", err)
 	}
 }

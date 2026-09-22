@@ -316,7 +316,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 			if lex.pnt.SI < len(lex.Src) {
 				lex.end = nil
 			}
-			t := lex.Next(rule)
+			t := lex.next(rule)
 			if t == nil {
 				return NoToken
 			}

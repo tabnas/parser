@@ -57,10 +57,17 @@ class TabnasError(Exception):
 
 @dataclass(frozen=True)
 class Verdict:
-    """The result of checking one input against a grammar."""
+    """The result of checking one input against a grammar.
+
+    ``value`` is the parse result when the input was accepted (``None``
+    when it was rejected, or when the result was not JSON-representable).
+    Key order inside it is the engine's insertion order and is not part
+    of the contract.
+    """
 
     accept: bool
     error: Optional[dict] = field(default=None)
+    value: Any = field(default=None)
 
     def __bool__(self) -> bool:
         return self.accept
@@ -182,7 +189,8 @@ class Grammar:
             self._handle, src, len(src)))
         if not res.get("ok"):
             raise TabnasError(res.get("error", {}).get("message", "parse failed"))
-        return Verdict(accept=bool(res.get("accept")), error=res.get("error"))
+        return Verdict(accept=bool(res.get("accept")), error=res.get("error"),
+                       value=res.get("value"))
 
     def accepts(self, src: Any) -> bool:
         """True when src is in this grammar's language."""
