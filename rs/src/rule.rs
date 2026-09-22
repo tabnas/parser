@@ -1248,6 +1248,11 @@ pub struct Rule {
     /// copied all of it on the next write to any field. Nothing reads
     /// this through a snapshot: every use in the engine and in the
     /// plugin repos is `rule.child_node` on a live rule.
+    ///
+    /// `Undefined` when the child shared this rule's node cell, so that
+    /// this field is never a second handle on this rule's own
+    /// accumulator (#195); [`Rule::child_value`] answers from the node
+    /// in that case.
     pub child_node: Value,
     pub(crate) skip_befores: bool,
     pub(crate) child_node_is_self: bool,
@@ -1638,7 +1643,44 @@ impl Rule {
 
     pub(crate) fn accept_child_node(&mut self, child: &Rule) {
         self.child_node_is_self = Rc::ptr_eq(&self.node, &child.node);
-        self.child_node = child.node.borrow().clone();
+        // A child that shared this rule's node cell wrote into this
+        // rule's own container, so the value it hands back IS this
+        // rule's node. Holding a clone of it here would be a second
+        // `Arc` handle on the accumulator this rule is about to write
+        // into again, and `Arc::make_mut` then copies the whole
+        // container once per element: one rule with N elements cost
+        // O(N^2), 46 seconds for 800 fields where TypeScript took a
+        // tenth of a second (#195). The field stays `Undefined` in that
+        // case and `child_value()` answers from the node instead, which
+        // is what TypeScript's `rule.child.node` (the same object as
+        // `rule.node` then) gives.
+        self.child_node = if self.child_node_is_self {
+            Value::Undefined
+        } else {
+            child.node.borrow().clone()
+        };
+    }
+
+    /// The completed child's value, as TypeScript's `rule.child.node`
+    /// reads: `child_node` when the child had a node of its own, and
+    /// this rule's own node when the child shared this rule's cell (see
+    /// [`Rule::accept_child_node`]). Read this rather than `child_node`
+    /// wherever the shared case must be seen as a value.
+    pub fn child_value(&self) -> Value {
+        if self.child_node_is_self {
+            self.node.borrow().clone()
+        } else {
+            self.child_node.clone()
+        }
+    }
+
+    /// Whether [`Rule::child_value`] is defined.
+    pub fn has_child_value(&self) -> bool {
+        if self.child_node_is_self {
+            !self.node.borrow().is_undefined()
+        } else {
+            !self.child_node.is_undefined()
+        }
     }
 
     /// Let go of `child_node` while this rule sits on the parse stack, in
