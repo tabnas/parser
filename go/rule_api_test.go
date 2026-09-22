@@ -647,3 +647,86 @@ func TestConditionParityWithTS(t *testing.T) {
 		}
 	}
 }
+
+// Every plain condition value ValidateAlt accepts must actually BUILD a
+// condition.
+//
+// condProblems accepts int, int64, float64, string and bool as "$eq
+// shorthand, as in the TS port", while NormAlt's switch built a condition for
+// `int` alone. The other four validated clean and produced no condition at
+// all, so the alternate matched unconditionally -- silently, since the
+// validator had already said the spec was fine.
+//
+// It is the serialized door that has none of the accepted types but `int`:
+// encoding/json decodes every number as float64 and every string as string,
+// so EVERY declarative condition in a grammar loaded through
+// GrammarSpecFromJSON or GrammarText was a no-op. TypeScript and Rust honour
+// them, which makes it a parity defect and not only a Go one: the same
+// serialized grammar chose different alternates in Go.
+func TestNormAltBuildsEveryPlainConditionValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		cd    map[string]any
+		match bool
+	}{
+		{"float64 eq", map[string]any{"d": float64(0)}, true},
+		{"float64 ne", map[string]any{"d": float64(3)}, false},
+		{"string eq", map[string]any{"name": "top"}, true},
+		{"string ne", map[string]any{"name": "nope"}, false},
+		{"int64 eq", map[string]any{"d": int64(0)}, true},
+		{"int64 ne", map[string]any{"d": int64(9)}, false},
+		{"bool ne", map[string]any{"node": true}, false},
+	}
+	for _, kase := range cases {
+		alt := &AltSpec{CD: kase.cd}
+		if err := NormAlt(alt); err != nil {
+			t.Fatalf("%s: NormAlt: %v", kase.name, err)
+		}
+		if alt.C == nil {
+			t.Fatalf("%s: NormAlt accepted %v and built no condition, so the "+
+				"alternate matches everything", kase.name, kase.cd)
+		}
+		rule := &Rule{Name: "top"}
+		if got := alt.C(rule, nil); got != kase.match {
+			t.Errorf("%s: condition %v gave %v, want %v", kase.name, kase.cd, got, kase.match)
+		}
+	}
+
+	// And a value neither list accepts is now an error rather than a
+	// silently dropped condition, so the two lists cannot drift apart again.
+	unusable := &AltSpec{CD: map[string]any{"d": []int{1}}}
+	err := NormAlt(unusable)
+	if err == nil {
+		t.Fatal("an unusable condition value must fail the grammar, not vanish")
+	}
+
+	// The refusal is reported twice, by two functions, and they must
+	// describe the same accepted set. ValidateAlt said "want int or CondOp"
+	// long after NormAlt had started accepting four more plain types, so a
+	// spec checked by an editor was told to write the one type the
+	// serialized door cannot even carry (encoding/json emits float64 and
+	// string, never int). Messages are not the contract; a message that
+	// sends the reader the wrong way is still a defect.
+	problems := ValidateAlt(&AltSpec{CD: map[string]any{"d": []int{1}}})
+	if len(problems) != 1 {
+		t.Fatalf("ValidateAlt on an unusable condition value: got %d problems, want 1: %v",
+			len(problems), problems)
+	}
+	for _, want := range []string{"a plain value or CondOp", "[]int"} {
+		if !strings.Contains(problems[0], want) {
+			t.Errorf("ValidateAlt problem %q does not mention %q", problems[0], want)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("NormAlt error %q does not mention %q", err.Error(), want)
+		}
+	}
+
+	// Every type NormAlt builds a condition for must also validate clean,
+	// or a generator is told its grammar is bad and the engine then loads
+	// it, which is the same drift running the other way.
+	for _, plain := range []any{int(0), int64(0), float64(0), "top", true} {
+		if problems := ValidateAlt(&AltSpec{CD: map[string]any{"d": plain}}); len(problems) != 0 {
+			t.Errorf("ValidateAlt rejects %T, which NormAlt accepts: %v", plain, problems)
+		}
+	}
+}

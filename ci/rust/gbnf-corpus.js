@@ -19,8 +19,7 @@ const TABNAS_ROOT = Path.resolve(process.env.TABNAS_ROOT ||
 const GBNF_ROOT = Path.join(TABNAS_ROOT, 'gbnf')
 const CORPUS_TEST = Path.join(GBNF_ROOT, 'ts', 'test', 'corpus.test.js')
 const CORPUS_DIR = Path.join(GBNF_ROOT, 'test', 'corpus')
-const RUST_RUNNER = Path.join(PARSER_ROOT, 'rs', 'target', 'debug',
-  process.platform === 'win32' ? 'spec_runner.exe' : 'spec_runner')
+const RUST_RUNNER = require('./target-dir').binary('spec_runner')
 
 for (const path of [CORPUS_TEST, CORPUS_DIR, RUST_RUNNER]) {
   if (!Fs.existsSync(path)) {

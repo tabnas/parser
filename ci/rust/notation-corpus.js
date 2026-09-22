@@ -14,8 +14,7 @@ const ChildProcess = require('node:child_process')
 const PARSER_ROOT = Path.resolve(__dirname, '..', '..')
 const TABNAS_ROOT = Path.resolve(process.env.TABNAS_ROOT ||
   Path.join(PARSER_ROOT, '..'))
-const RUST_RUNNER = Path.join(PARSER_ROOT, 'rs', 'target', 'debug',
-  process.platform === 'win32' ? 'spec_runner.exe' : 'spec_runner')
+const RUST_RUNNER = require('./target-dir').binary('spec_runner')
 
 const paths = {
   parser: Path.join(PARSER_ROOT, 'ts', 'dist', 'tabnas'),
