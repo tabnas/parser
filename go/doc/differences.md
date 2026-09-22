@@ -580,7 +580,7 @@ parse error. Token consumption behavior is aligned.
 
 ### Ender Characters and Ender Sequences
 
-Aligned, after a repair to this port's lexer model (#202).
+Aligned.
 
 `options.ender` has two forms and they are read differently. A STRING is
 its characters, one ender each; an ARRAY entry is ONE ender, so an entry
@@ -845,10 +845,10 @@ Structs with exported fields (the `Options` tree) merge field by field
 in Go, and plain objects/arrays merge key by key in TS. `undefined`/zero
 on the overlay side loses in both.
 
-Three classes of the typed overlay used to REPLACE where TS merges, and
-now merge as TS does (the ruling of #151):
+Three classes of the typed overlay merge as TS does, rather than
+replacing:
 
-| class | fields | both runtimes now |
+| class | fields | both runtimes |
 |---|---|---|
 | slices | `Ender`, `Result.Fail`, `Parse.Recover.SyncGroups`/`SyncTokens`, `Match.TokenOrder` | index-wise: an overlay index wins, positions beyond it keep the base |
 | maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
@@ -1162,7 +1162,7 @@ How the value combines with the built-in set differs:
 | Area | TypeScript | Go |
 |---|---|---|
 | Type | `{ [name: string]: (string \| null \| undefined \| typeof SKIP)[] \| typeof SKIP \| undefined }` | `map[string][]string` |
-| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` keeps the tail and yields `[#ST, #NR, #ST, #VL]` | index-wise as well, since #151: `{"KEY": {"#ST"}}` yields `[#ST, #NR, #ST, #VL]`, the same shape |
+| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` keeps the tail and yields `[#ST, #NR, #ST, #VL]` | index-wise as well: `{"KEY": {"#ST"}}` yields `[#ST, #NR, #ST, #VL]`, the same shape |
 | Clear one position | `null` at that index | `""` at that index (an empty name is skipped) |
 | Empty a set, keeping the name | clear every position: `['#ST', null, null, null]` narrows to one, `[null, null, null, null]` empties it | the same: `{"#ST", "", "", ""}` narrows to one |
 | `[]` / `{}` as the whole value | **not** an empty set: an array overlays index-wise, so overlaying nothing leaves every default standing | the same |
@@ -1173,10 +1173,8 @@ The last two rows are an API-shape difference and not a parity one: `SKIP`
 and a JSON `null` are values a document can carry and Go's typed map
 cannot, while a `nil` slice is a value Go's map can carry and a document
 cannot. The one place both runtimes read the SAME input is the serialized
-door, and there all three runtimes now answer alike: TypeScript, Go and
-Rust each refuse a null whole value. They did not before: it was a fault
-in TypeScript, a silent no-op in Go and a deletion in Rust, for one JSON
-grammar.
+door, and there all three runtimes answer alike: TypeScript, Go and Rust
+each refuse a null whole value.
 
 Both runtimes late-bind token-set references in rule alternates, so an
 override applies to alternates that were declared before it. In Go the

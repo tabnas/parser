@@ -84,6 +84,44 @@ Named groups of tokens, used by grammars and by `tn.tokenSet(name)`.
 | `VAL` | `#TX`, `#NR`, `#ST`, `#VL` |
 | `KEY` | `#TX`, `#NR`, `#ST`, `#VL` |
 
+```ts
+tokenSet?: {
+  [name: string]:
+  | (string | null | undefined | typeof SKIP)[]
+  | typeof SKIP
+  | undefined
+}
+```
+
+An array **overlays** the set already installed, index by index. It does
+not replace it: each member overwrites the position it sits at, and every
+position past the array's length keeps what was there. So a short array
+narrows nothing.
+
+| Value for `KEY` | Result |
+|---|---|
+| `['#ST']` | `#ST`, `#NR`, `#ST`, `#VL`: one position overwritten, the tail kept |
+| `['#ST', null, null, null]` | `#ST`, the tail cleared position by position |
+| `[null, null, null, null]` | empty, with the name still declared |
+| `[]` | `#TX`, `#NR`, `#ST`, `#VL`: overlaying nothing changes nothing |
+| `SKIP` or `undefined` | unchanged |
+| `null` | a load fault: `options.tokenSet.KEY: expected array, got object` |
+| `7`, `'#ST'`, `{}` | a load fault naming the leaf and the shape it got |
+
+`null` therefore means two different things by position. As a **member**
+it clears the position it sits at. As the **whole value** it is refused,
+because there is no set it could name: to leave a name alone pass `SKIP`
+or `undefined`, and to empty one clear every position.
+
+A name the engine does not declare is yours, and the same rules apply.
+There is no default behind it, so its array installs as written, and
+`SKIP` or `undefined` leaves it **uninstalled** rather than installing it
+empty.
+
+Both doors validate: `new Tabnas(opts)` and `tn.options(opts)` accept and
+refuse the same values, and so does a `tokenSet` carried in a serialized
+grammar.
+
 ## `space`
 
 | Field | Type | Default | Description |
