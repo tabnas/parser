@@ -118,9 +118,20 @@ There is no default behind it, so its array installs as written, and
 `SKIP` or `undefined` leaves it **uninstalled** rather than installing it
 empty.
 
-Both doors validate: `new Tabnas(opts)` and `tn.options(opts)` accept and
-refuse the same values, and so does a `tokenSet` carried in a serialized
-grammar.
+Three names are **reserved** and refused: `__proto__`, `constructor` and
+`prototype`. The option merge will not carry them, because merging a key
+that reaches the prototype chain is prototype pollution, so a set under
+one of those names could not be installed and is a load fault rather than
+a silent absence. Every other inherited name, `toString` and `valueOf`
+among them, is an ordinary set name.
+
+`tokenSet` itself is the map, not a set. `SKIP` or `undefined` for the
+whole option means "not supplied"; `null` is a load fault, reported as
+`options.tokenSet: expected object, got null`.
+
+Both doors validate, and so does a `tokenSet` carried in a serialized
+grammar: `new Tabnas(opts)`, `tn.options(opts)` and a `GrammarSpec`
+accept and refuse the same values, in all three runtimes.
 
 ## `space`
 

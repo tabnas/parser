@@ -31,6 +31,25 @@ func TestOptionsFromMapNamesAnIllTypedLeaf(t *testing.T) {
 		// the `["#SP",null,null]` case elsewhere in this file covers it.
 		{`{"options":{"tokenSet":{"KEY":null}}}`, "options.tokenSet.KEY: expected array, got null"},
 		{`{"options":{"tokenSet":{"CUSTOM":null}}}`, "options.tokenSet.CUSTOM: expected array, got null"},
+		// A null CONTAINER, as distinct from a null name. It used to load
+		// here as a no-op while TypeScript's constructor replaced the map
+		// and built NO sets at all -- one document, two answers on one
+		// runtime and a third here.
+		{`{"options":{"tokenSet":null}}`, "options.tokenSet: expected object, got null"},
+		// The three names TypeScript's deep merge refuses, because merging
+		// one reaches the prototype chain. Go has no such hazard, but the
+		// code is the contract: a grammar naming a set `constructor` must
+		// not load here and fault there.
+		{`{"options":{"tokenSet":{"constructor":["#TX"]}}}`,
+			"options.tokenSet.constructor: \"constructor\" is a reserved name"},
+		{`{"options":{"tokenSet":{"__proto__":["#TX"]}}}`,
+			"options.tokenSet.__proto__: \"__proto__\" is a reserved name"},
+		{`{"options":{"tokenSet":{"prototype":["#TX"]}}}`,
+			"options.tokenSet.prototype: \"prototype\" is a reserved name"},
+		// Every OTHER inherited name is an ordinary set name, and the rule
+		// is the three deep() skips rather than "anything on the prototype".
+		{`{"options":{"comment":{"def":{"constructor":{"line":true}}}}}`,
+			"options.comment.def.constructor: \"constructor\" is a reserved name"},
 	} {
 		gs, err := GrammarSpecFromJSON([]byte(c.spec))
 		if err != nil {
@@ -103,6 +122,7 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 		"tokenSet":{"IGNORE":["#SP",null,null]},
 		"comment":{"def":{"hash":null,"slash":false}},
 		"value":{"def":{"yes":{"val":1},"no":false}},
+		"tokenSet":{"toString":["#TX"],"valueOf":["#NR"]},
 		"fixed":{"token":{"#CA":null,"#X":"x"}},
 		"errmsg":{"suffix":"because"},
 		"ender":":",

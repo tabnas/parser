@@ -103,13 +103,41 @@ func optionsField(t reflect.Type, key string) (reflect.StructField, bool) {
 	return t.FieldByName(strings.ToUpper(key[:1]) + key[1:])
 }
 
+// The maps whose keys the CALLER chooses, where an explicit null
+// container is a fault rather than "not supplied". Only options.tokenSet
+// today, and for the reason its per-name null is one: there is no map a
+// null could name, and the canonical runtime's two doors answered
+// differently for it -- the constructor replaced the map and built no
+// sets at all, `options()` kept all three.
+var nullContainerFault = map[string]bool{
+	"options.tokenSet": true,
+}
+
+// Names TypeScript cannot carry in a caller-keyed map, because its deep
+// merge refuses them: merging `__proto__`, `constructor` or `prototype`
+// reaches the prototype chain, which is prototype pollution. Go has no
+// such hazard and could take them, but the CODE is the contract across
+// runtimes -- a grammar naming a token set `constructor` would load here
+// and fault there -- so it is refused in both, and no grammar author has
+// to find that out from a bug report.
+var reservedMapKeys = map[string]bool{
+	"__proto__":   true,
+	"constructor": true,
+	"prototype":   true,
+}
+
 func validateStruct(t reflect.Type, m map[string]any, path string, errs *[]string) {
 	for key, val := range m {
 		f, ok := optionsField(t, key)
 		if !ok || !f.IsExported() {
 			continue
 		}
-		validateLeaf(f.Type, val, path+"."+key, errs)
+		at := path + "." + key
+		if val == nil && nullContainerFault[at] {
+			bad(errs, at, "object", val)
+			continue
+		}
+		validateLeaf(f.Type, val, at, errs)
 	}
 }
 
@@ -240,6 +268,17 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 			return
 		}
 		for name, entry := range sub {
+			// Reserved, and refused rather than taken: see
+			// reservedMapKeys. Every caller-keyed map, not only
+			// tokenSet, because the canonical runtime refuses them in
+			// all of them.
+			if reservedMapKeys[name] {
+				*errs = append(*errs, fmt.Sprintf(
+					"%s.%s: %q is a reserved name and cannot be a %s entry "+
+						"(it would reach the prototype chain)",
+					path, name, name, path[strings.LastIndex(path, ".")+1:]))
+				continue
+			}
 			// A false entry removes a definition, as null does — the
 			// general form of an optionWidenings entry, covering every
 			// definition map (value.def, comment.def, lex.match,

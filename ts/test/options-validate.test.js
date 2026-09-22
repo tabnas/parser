@@ -382,11 +382,14 @@ describe('options-validate absent token sets', () => {
   // which is the exact failure this suite exists to stop, surviving for
   // one class of name. The validator cannot catch it: it sees the SKIP the
   // caller wrote, and the function only exists after the merge.
+  // Shared by the two cases below: inherited names that are ORDINARY set
+  // names, as distinct from the three `deep()` refuses to merge.
+  const PROTO = [
+    'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+  ]
+
   it('does not crash on a name inherited from Object.prototype', () => {
-    const PROTO = [
-      'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
-    ]
-    for (const name of [...PROTO, 'constructor']) {
+    for (const name of PROTO) {
       for (const members of [SKIP, undefined]) {
         const cfg = new Tabnas({ tokenSet: { [name]: members } }).internal().config
         // hasOwn, not `in`: every one of these names IS on the prototype
@@ -409,16 +412,68 @@ describe('options-validate absent token sets', () => {
       assert.equal(cfg.tokenSetTins[name][cfg.t.TX], true, name + ' tin lookup')
     }
 
-    // `constructor` is the one exception, and it is recorded rather than
-    // repaired here. `deep()` merges an array over whatever `base[k]`
-    // returns, and for this name that is the `Object` function, which
-    // takes the index assignments and comes back a function. The guard
-    // in configure() then drops it. Repairing it means making `deep()`
-    // read the base as an OWN property, which is the merge every option
-    // in the engine goes through, and belongs in a change of its own.
-    // Dropped, not crashing, is the safe direction.
-    const ctor = new Tabnas({ tokenSet: { constructor: ['#TX'] } }).internal().config
-    assert.equal(Object.hasOwn(ctor.tokenSet, 'constructor'), false)
+  })
+
+  // RESERVED, not dropped. `deep()` refuses to merge `__proto__`,
+  // `constructor` and `prototype` on purpose -- merging them reaches the
+  // prototype chain, which is prototype pollution -- and the cost used to
+  // be that a set under one of those names vanished without a word, while
+  // the option reference says an undeclared name installs as written. The
+  // door says so now, on every spelling and every map with caller-chosen
+  // keys.
+  it('refuses the three names deep() will not merge', () => {
+    const re = /reserved name/
+    for (const name of ['__proto__', 'constructor', 'prototype']) {
+      // Through JSON, because that is the only way `__proto__` becomes an
+      // OWN key: `{__proto__: v}` in a literal is a prototype assignment.
+      const opts = JSON.parse(`{"tokenSet":{${JSON.stringify(name)}:["#TX"]}}`)
+      assert.equal(Object.hasOwn(opts.tokenSet, name), true, name + ' is an own key')
+      assert.throws(() => new Tabnas(opts), re, 'constructor ' + name)
+      assert.throws(() => new Tabnas({}).options(opts), re, 'options() ' + name)
+    }
+
+    // Every other inherited name is an ordinary set and still installs --
+    // the refusal is the three `deep()` skips, not "anything on the
+    // prototype". The table that decides this is null-prototype for
+    // exactly the reason this whole suite exists: keyed by caller-chosen
+    // names, a plain object answers `toString` with the inherited method.
+    for (const name of PROTO) {
+      const cfg = new Tabnas({ tokenSet: { [name]: ['#TX'] } }).internal().config
+      assert.equal(Object.hasOwn(cfg.tokenSet, name), true, name + ' still installs')
+    }
+
+    // The same rule on another caller-keyed map.
+    assert.throws(
+      () => new Tabnas(JSON.parse('{"comment":{"def":{"constructor":{"line":true}}}}')),
+      re,
+      'comment.def.constructor',
+    )
+
+    // And Object.prototype is untouched by any of it.
+    assert.equal(undefined, {}.line)
+  })
+
+  // A null CONTAINER. The constructor let `deep()` replace the whole map
+  // and built NO sets at all, while `options()` kept all three, so one
+  // input had two answers depending on the door. Refused on both now, for
+  // the reason a null NAME is: there is no map a null could name.
+  it('refuses a null tokenSet container on both doors', () => {
+    const re = /options\.tokenSet: expected object, got null/
+    assert.throws(() => new Tabnas({ tokenSet: null }), re, 'constructor')
+    assert.throws(() => new Tabnas({}).options({ tokenSet: null }), re, 'options()')
+    assert.throws(
+      () => new Tabnas(JSON.parse('{"tokenSet":null}')),
+      re,
+      'serialized',
+    )
+
+    // SKIP and undefined are still the two spellings of "not supplied",
+    // and a null DEFINITION map is still an ordinary "none of these".
+    for (const whole of [SKIP, undefined]) {
+      const cfg = new Tabnas({ tokenSet: whole }).internal().config
+      assert.deepEqual(Object.keys(cfg.tokenSet), ['IGNORE', 'VAL', 'KEY'], String(whole))
+    }
+    assert.doesNotThrow(() => new Tabnas({ comment: { def: null } }), 'comment.def: null')
   })
 
   // `undefined` is the third spelling of "keep what the base holds", and

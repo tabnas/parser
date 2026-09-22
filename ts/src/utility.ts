@@ -1345,12 +1345,36 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     if (widened(at, val)) continue
     const entry = DYNAMIC_MAPS[at]
     if (null != entry) {
-      if (null == val || SKIP === val) continue
+      if (undefined === val || SKIP === val) continue
+      // A null CONTAINER, for the maps that declare it a fault. Skipping
+      // every null here meant `{tokenSet: null}` reached neither door's
+      // check: the constructor let `deep()` replace the map wholesale and
+      // built NO sets at all, while `options()` kept all three, so the
+      // two doors answered differently for one input. It is refused now,
+      // for the same reason a null NAME is: there is no map a null could
+      // name, and wiping every set is not what a caller writing it meant.
+      if (null === val) {
+        if (NULL_CONTAINER_FAULT[at]) bad(at, 'object', val)
+        continue
+      }
       if (S.object !== typeof val || Array.isArray(val)) {
         bad(at, 'object', val)
       }
       for (const name of Object.keys(val)) {
         const nat = at + '.' + name
+        // RESERVED, and refused rather than dropped. `deep()` skips
+        // `__proto__`, `constructor` and `prototype` on purpose: merging
+        // them reaches the prototype chain, which is prototype pollution.
+        // The cost was that an entry under one of those names vanished
+        // in silence, while the option reference says a name the engine
+        // does not declare installs as written. Saying so at the door is
+        // the honest half of that guard.
+        if (RESERVED_MAP_KEYS[name]) {
+          throw new Error(
+            `Tabnas: ${nat}: \`${name}\` is a reserved name and cannot be a ` +
+            `${at.slice(at.lastIndexOf('.') + 1)} entry (it would reach the prototype chain)`,
+          )
+        }
         if (widened(nat, val[name])) continue
         entry(val[name], nat)
       }
@@ -1385,9 +1409,12 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
 }
 
 function bad(at: string, want: string, val: any): never {
+  // `typeof null` is "object", which reads as though an object were
+  // supplied. Name what the document carried.
   const got = S.function === typeof val
     ? 'a function reference'
-    : Array.isArray(val) ? 'array' : typeof val
+    : null === val ? 'null'
+      : Array.isArray(val) ? 'array' : typeof val
   throw new Error(
     `Tabnas: ${at}: expected ${want}, got ${got}` +
     (S.function === typeof val
@@ -1395,6 +1422,33 @@ function bad(at: string, want: string, val: any): never {
       : ''),
   )
 }
+
+// The dynamic maps where an explicit null CONTAINER is a load fault
+// rather than "not supplied". Only `options.tokenSet` today: its names
+// are the caller's and a null there deletes every set on one door and
+// nothing on the other. The definition maps are deliberately absent --
+// `{comment: {def: null}}` means "no comment definitions", which is a
+// thing a caller can want and both doors already agree on.
+const NULL_CONTAINER_FAULT: { [path: string]: boolean } =
+  Object.assign(Object.create(null), { 'options.tokenSet': true })
+
+// The names `deep()` refuses to merge, for the prototype-pollution
+// reason given where it refuses them. Keep the two lists in step.
+//
+// NULL-PROTOTYPE, and the first draft of this table was not: it is keyed
+// by CALLER-CHOSEN names, so `RESERVED_MAP_KEYS['toString']` answered
+// with the inherited method, which is truthy, and a set legitimately
+// named `toString` was refused as reserved. That is the same defect this
+// pull request fixes twice over, arriving in the fix for it.
+const RESERVED_MAP_KEYS: { [name: string]: boolean } = Object.create(null)
+// Assigned, not written as a literal. `{__proto__: true}` in an object
+// literal is a PROTOTYPE assignment, not a key -- it is ignored for a
+// non-object and the table came out without the entry, so the one name
+// of the three that arrives from real JSON went unrefused. On a
+// null-prototype object this is an ordinary own key.
+RESERVED_MAP_KEYS['__proto__'] = true
+RESERVED_MAP_KEYS['constructor'] = true
+RESERVED_MAP_KEYS['prototype'] = true
 
 type DynamicEntry = (val: any, at: string) => void
 

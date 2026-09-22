@@ -18,6 +18,15 @@ use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::fmt;
 
+/// Names a caller-keyed option map cannot carry, because the canonical
+/// TypeScript runtime refuses them: its deep merge skips `__proto__`,
+/// `constructor` and `prototype`, since merging one of those reaches the
+/// prototype chain and is prototype pollution. This port has no such
+/// hazard and could take them, but the code is the contract across
+/// runtimes, so a grammar that names a token set `constructor` fails
+/// here too rather than loading here and faulting there.
+const RESERVED_MAP_KEYS: [&str; 3] = ["__proto__", "constructor", "prototype"];
+
 #[derive(Clone)]
 struct AltRefs {
     conditions: HashMap<String, AltCondition>,
@@ -2045,6 +2054,19 @@ fn apply_options(
     }
     if let Some(token_sets) = map.get("tokenSet").or_else(|| map.get("token_set")) {
         for (name, members) in object(token_sets, "options.tokenSet")? {
+            // Reserved, and refused. Rust has no prototype chain and
+            // could carry these names happily, but the canonical runtime
+            // cannot: its deep merge skips `__proto__`, `constructor`
+            // and `prototype` because merging them is prototype
+            // pollution. The CODE is the contract across runtimes, so a
+            // grammar naming a token set `constructor` must not load
+            // here and fault there.
+            if RESERVED_MAP_KEYS.contains(&name.as_str()) {
+                return Err(GrammarError(format!(
+                    "Grammar: options.tokenSet.{name}: `{name}` is a reserved name \
+                     and cannot be a tokenSet entry (it would reach the prototype chain)"
+                )));
+            }
             // A null whole value falls through to the array check below
             // and is a load error, as it is in TypeScript and Go. It
             // used to REMOVE the named set here, which made the same

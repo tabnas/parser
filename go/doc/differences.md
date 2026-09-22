@@ -1167,7 +1167,10 @@ How the value combines with the built-in set differs:
 | Empty a set, keeping the name | clear every position: `['#ST', null, null, null]` narrows to one, `[null, null, null, null]` empties it | the same: `{"#ST", "", "", ""}` narrows to one |
 | `[]` / `{}` as the whole value | **not** an empty set: an array overlays index-wise, so overlaying nothing leaves every default standing | the same |
 | Whole value "leave this name alone" | `undefined` or `SKIP`; a name with no default behind it is then dropped rather than installed empty | no spelling: Go has no sentinel here, and an absent map key is the only way to say it |
-| Whole value `null` | a load fault on every door: `options.tokenSet.KEY: expected array, got object` | a load fault on the **serialized** door, `options.tokenSet.KEY: expected array, got null`. The typed door has no such value: `map[string][]string{"KEY": nil}` is an empty slice, not a null, and installs a present, empty set |
+| Whole value `null` | a load fault on every door: `options.tokenSet.KEY: expected array, got null` | a load fault on the **serialized** door, `options.tokenSet.KEY: expected array, got null`. The typed door has no such value: `map[string][]string{"KEY": nil}` is an empty slice, not a null, and installs a present, empty set |
+
+| A reserved name (`__proto__`, `constructor`, `prototype`) | a load fault: the deep merge will not carry a key that reaches the prototype chain | the same, though Go has no such hazard: the code is the contract, so a grammar naming a set `constructor` must not load here and fault there |
+| `tokenSet` itself `null` | a load fault, `options.tokenSet: expected object, got null` | the same |
 
 The last two rows are an API-shape difference and not a parity one: `SKIP`
 and a JSON `null` are values a document can carry and Go's typed map
