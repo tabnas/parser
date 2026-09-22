@@ -50,6 +50,10 @@
 [Ff]nref
 [Bb]uiltin
 [Bb]uiltins
+[Vv]arint
+[Vv]arints
+[Uu]ngated
+[Pp]arsable
 
 # --- General computing terms the dictionary lacks ----------------------
 [Rr]untime
@@ -80,6 +84,7 @@ peerDependencies
 
 # --- More computing terms -----------------------------------------------
 [Ss]ubstring
+[Ss]ubstrings
 [Ss]uperset
 [Mm]ultiline
 [Tt]ruthy
@@ -104,6 +109,9 @@ peerDependencies
 [Uu]til
 [Ii]nlined
 [Ii]nlines
+[Tt]ranscode
+[Tt]ranscoded
+[Tt]ranscoding
 [Ll]ibc
 [Gg]libc
 toolchain
