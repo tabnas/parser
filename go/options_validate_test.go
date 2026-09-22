@@ -279,6 +279,24 @@ func TestMapToOptionsDropsARefusedEntry(t *testing.T) {
 	if opts.Fixed == nil || opts.Fixed.Token["#Q"] == nil {
 		t.Error("fixed.token.#Q was dropped with the refused entry")
 	}
+	// AND the caller's own data is untouched. The converter stores an
+	// opaque `any` -- a value.def entry's Val -- by reference, and a Go
+	// map is a reference type, so a prune that walked into one deleted
+	// the key from the CALLER'S map. A reserved name in opaque data is
+	// DATA, not an option-map entry.
+	inner := map[string]any{"constructor": 1, "keep": 2}
+	MapToOptions(map[string]any{
+		"value": map[string]any{"def": map[string]any{
+			"mine": map[string]any{"val": inner},
+		}},
+	})
+	if _, ok := inner["constructor"]; !ok {
+		t.Error("MapToOptions deleted a key from the caller's own opaque map")
+	}
+	if len(inner) != 2 {
+		t.Errorf("the caller's opaque map was modified: %v", inner)
+	}
+
 	// And the checked door still reports what the legacy one swallows.
 	if _, err := OptionsFromMap(map[string]any{
 		"tokenSet": map[string]any{"constructor": []any{"#TX"}},

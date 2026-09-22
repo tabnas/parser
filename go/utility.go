@@ -1676,11 +1676,25 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 // following pointers.
 //
 // The names are refused everywhere rather than per map, because the
-// engine declares no option under one of them: deleting one can only
-// remove an entry validateOptionsMap has already reported.
+// engine declares no option DECLARED under one of them: deleting one can
+// only remove an entry validateOptionsMap has already reported.
+//
+// The walk stops at an `any`, and that is load-bearing rather than
+// tidiness. An `any` holds the caller's OPAQUE DATA -- a value.def
+// entry's `Val`, an errmsg suffix -- which the converter stores by
+// reference rather than copying. A Go map is a reference type, so
+// deleting a key from one reached that way deletes it from the CALLER'S
+// map: `{"value":{"def":{"mine":{"val":{"constructor":1,"keep":2}}}}}`
+// came back as `{"keep":2}` in the caller's own object. A reserved name
+// there is DATA and not an option-map entry, and OptionsFromMap must not
+// mutate what it was handed.
+//
+// Every map the door refuses a reserved name in is a TYPED field, so
+// none of them is reached through an `any` and none is missed by
+// stopping.
 func pruneReservedNames(v reflect.Value) {
 	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface:
+	case reflect.Pointer:
 		if !v.IsNil() {
 			pruneReservedNames(v.Elem())
 		}

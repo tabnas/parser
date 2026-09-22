@@ -85,13 +85,20 @@ Named groups of tokens, used by grammars and by `tn.tokenSet(name)`.
 | `KEY` | `#TX`, `#NR`, `#ST`, `#VL` |
 
 ```ts
-tokenSet?: {
+tokenSet?:
+| {
   [name: string]:
   | (string | null | undefined | typeof SKIP)[]
   | typeof SKIP
   | undefined
 }
+| typeof SKIP
+| undefined
 ```
+
+The outer union is the whole map, and it is the declaration rather than a
+summary of it: `SKIP` and `undefined` mean "not supplied" one level up,
+exactly as they do for a named set.
 
 An array **overlays** the set already installed, index by index. It does
 not replace it: each member overwrites the position it sits at, and every
