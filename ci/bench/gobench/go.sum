@@ -1,0 +1,8 @@
+github.com/tabnas/debug/go v0.3.6 h1:WhVagcUtyk7lF4B30ZS9RhmRyHVupuCrJQEg7qOZCPI=
+github.com/tabnas/debug/go v0.3.6/go.mod h1:taF7ArNW4PNRp/BTNBXvKUoEckXLW6KUHNCZ6i9nV7o=
+github.com/tabnas/json/go v0.5.8 h1:OKXpYhylldqgI89X5+TkoERHNmSxsEq+kZaqGddLBhE=
+github.com/tabnas/json/go v0.5.8/go.mod h1:DvDuHB7JgZZS3Eydu1luDrgR7XuDzA1d/l4GrmK/lGo=
+github.com/tabnas/jsonic/go v0.6.7 h1:yHlZUbTA03ECr2gR1DK3Il3IfzxmfAP6xkgg42vd2rk=
+github.com/tabnas/jsonic/go v0.6.7/go.mod h1:hDdYa7eNqQcfvQUFXTRaJorJjreFAE2wEBmQTRgvtjk=
+github.com/tabnas/support/go v0.3.4 h1:c4+byVeX5sRXJN/KBEOSfpCu5i59o6MWetVHM5MtqOA=
+github.com/tabnas/support/go v0.3.4/go.mod h1:q+EGPO8fRFQAYDwRHFH4lafD5l5W/NCdY8vhN9IJOkY=

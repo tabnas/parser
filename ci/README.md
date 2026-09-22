@@ -425,6 +425,13 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 - `fleet.yml` — the downstream regression gate: a small required arm on
   every PR, the whole fleet nightly and on demand. See `fleet/` above for
   what it catches and why it is separate from `gate.yml`.
+- `deps.yml` — the dependency-source gate (`tools/dep-gate.cjs`) and its
+  own suite, on every push and pull request. One runner, node only, no
+  path filter: the files it judges are every manifest, lockfile, `go.mod`,
+  `Cargo.toml`, `.npmrc`, symlink and archive in the tree, so a path list
+  would have to be complete to be safe. `make deps` runs the same check
+  locally, and `make test` already carries it — this is the arm that
+  catches a branch nobody ran it on.
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
 - `rust.yml` — formatting, build, tests, strict Clippy, and the two
   TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
