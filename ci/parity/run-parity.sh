@@ -38,6 +38,11 @@ rm -rf "$GOWORK_DIR"
 if [ "$GRAMMAR" = json ]; then
   echo "=== build parity_tokdump ==="
   cargo build --quiet --manifest-path "$PARSER_ROOT/rs/Cargo.toml" --bin parity_tokdump
+  # Ask cargo where it wrote it. `CARGO_TARGET_DIR`, or a `[build] target-dir`
+  # in an applicable cargo config, moves the directory away from rs/target,
+  # and hardcoding that path made this gate die with "No such file or
+  # directory" on a build that had just succeeded.
+  RS_TOKDUMP="$(node "$DIR/../rust/target-dir.js" parity_tokdump)"
 fi
 
 # Extract input columns from the TSV fixtures (skip header). Unescape mode
@@ -80,7 +85,7 @@ console.log(`extracted ${n} inputs (${mode})`)
 node "$DIR/tokdump.js" "$GRAMMAR" "$WORK" > "$WORK/ts.tok"
 "$WORK/gotokdump" "$GRAMMAR" "$WORK" > "$WORK/go.tok"
 if [ "$GRAMMAR" = json ]; then
-  "$PARSER_ROOT/rs/target/debug/parity_tokdump" "$GRAMMAR" "$WORK" > "$WORK/rs.tok"
+  "$RS_TOKDUMP" "$GRAMMAR" "$WORK" > "$WORK/rs.tok"
 fi
 
 total=$(grep -c '^== ' "$WORK/ts.tok")
