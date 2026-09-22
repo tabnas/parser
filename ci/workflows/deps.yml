@@ -1,0 +1,46 @@
+# PROPOSED workflow -- lives in ci/workflows/ for review; move to
+# .github/workflows/deps.yml to activate. Session credentials cannot
+# write .github/workflows/* (admin DECISIONS.md ADR-8), so it is staged
+# here like the rest of this folder.
+#
+# The dependency-source gate. A committed dependency must name a published
+# package or a GitHub reference; local wiring is undone before the commit.
+#
+# Separate from ci.yml because it is neither a platform check nor a port
+# check: one runner, one job, no matrix, no toolchain but node. It runs on
+# EVERY push and pull request with no path filter, deliberately -- the
+# files it judges are every npm manifest, every lockfile, every go.mod and
+# Cargo.toml, .npmrc, and every committed symlink or archive in the tree,
+# and a path list would have to be complete to be safe. A new module
+# directory carrying a `replace` to a sibling is exactly the case a stale
+# path list would wave through.
+name: deps
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      # The gate reads `git ls-files`, so it needs a real checkout rather
+      # than a snapshot -- but only this commit's index, so depth 1 is
+      # enough.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+        with:
+          node-version: '24.x'
+
+      # Its own suite first: a gate that cannot fail is not a gate, and a
+      # green tree says nothing about whether the check still works.
+      - name: Gate self-test
+        run: make deps-test
+
+      - name: Dependency sources
+        run: make deps
