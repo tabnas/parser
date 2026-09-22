@@ -1,60 +1,142 @@
-# Callback-contract spec: round-4 refutation, open items
+# Callback-contract spec: round-4 open items, applied
 
-The spec is `rust-callback-contract-spec.md` (revision 5). Round 4 is the last automated
-cycle that was run. BOTH refuters opened with 'the design survives': soundness
-could not construct a callback that fails to compile, panics or sees stale
-state, and parity could not find a behaviour the migration table cannot
-re-express. Everything below is editorial precision, not a design defect.
+The spec is [`rust-callback-contract-spec.md`](rust-callback-contract-spec.md).
+Round 4 was the last automated refutation cycle. Both refuters opened with
+"the design survives": soundness could not construct a callback that fails to
+compile, panics or sees stale state, and parity could not find a behaviour the
+migration table cannot re-express. The twelve items they left were editorial
+precision, not design defects.
 
-Required-change counts by round: r1 18, r2 13, r3 8, r4 12. The r4 rise is the
-new material revision 5 added drawing its own scrutiny, not a regression.
+Required-change counts by round: r1 18, r2 13, r3 8, r4 12. The r4 rise was
+the new material revision 5 added drawing its own scrutiny, not a regression.
 
-## Open after round 4
+**All twelve were applied to the spec on 2026-09-22**, on branch
+`claude/parser-rs-review`. Each was re-checked against the working tree first,
+because the line numbers the items cite had themselves drifted: they match no
+committed state of `rs/src/parser.rs`, and the file has moved 350 to 580 lines
+since they were written. Every `rs/src/parser.rs:N` citation in the spec was
+re-derived at the same time and verified to name the construct its sentence
+describes; the spec's new header records what that pass did and did not cover.
 
-1. §3.3, `attempt_recover` — rename the new `pending: &mut Option<Box<Rule>>` parameter (e.g. `unrun: &mut Option<Box<Rule>>`) and update every reference to it in the `!pop_until_valid` arm, the `accepts_close` arm, the forced-pop loop, `clear_unrun_link`'s call sites, the `Self::forced_next(..)` call, the `[T5]` attribute table row and §0.2 item 9 / §0.4 R5. WHY: `/home/user/parser/rs/src/parser.rs:657` already declares `let mut pending: std::collections::VecDeque<Token>` in the same function body; it is moved at :763 but stays in scope through :768-796, so the specified `pending.is_some()` / `pending.take()` / `pending.as_deref()` bind to the VecDeque and do not compile (E0599, E0382).
+No Rust engine code was written for the design this spec describes. The design
+remains behind Gate G of
+[`rust-port-implementation-plan.md`](rust-port-implementation-plan.md) and
+§8 remains un-run, as the spec's own header requires.
 
-2. §10 item (3), third bullet, and §0.2 item 3 — record that on the `!pop_until_valid` arm (`/home/user/parser/rs/src/parser.rs:767-772`) and in the forced-pop loop (:784-796), a failed PUSH leaves the abandoned rule with `child_rule == None` as well as a cleared `next_rule`, so `child.*` (e.g. `parent.child.child.name`) resolves to nothing on it. Delete or restrict §0.2 item 3's sentence "Item (3) shrinks to the **replace** case". WHY: §3.3's push arm replaces `parser.rs:2450` (`current_rule.child_rule = Some(child.snapshot())`) with `child_rule = None`, and neither of those two recovery arms restores it — today the push-time snapshot is still there and resolves, and TypeScript's `rule.child` (ts/src/rules.ts:665, left intact by `bad()`/`attemptRecover` at :1183-1193) names the unrun rule. §0.2 item 3's narrowing was written before [T4] restricted [P2]'s retention to the `accepts_close` arm and was never revisited.
+## What was applied
 
-3. §6 test 6 — add an assertion to the third and fourth cases that `child.*` on the abandoned rule (reachable as `rule.child().unwrap()` on the resuming rule, then `.child()`) is `None` after recovery, so the loss in the previous item is pinned rather than silent. WHY: the existing assertions cover only `next_rule == NextRule::NoRule` and `next_rule_name`, which is exactly the half that IS recorded.
+1. **§3.3, `attempt_recover`'s new parameter — applied, with a different
+   name.** The parameter is `unrun_rule: &mut Option<Box<Rule>>`, not the
+   `unrun` the item suggested. `pending` was unusable as the item says:
+   `attempt_recover` declares `let mut pending: std::collections::VecDeque<Token>`
+   at `parser.rs:1013`, moved out at `:1122` but in scope through `:1126-1160`,
+   which is the exact span the rewritten arms occupy. `unrun` was not free
+   either — the `accepts_close` arm and the forced-pop loop each already bind
+   `let unrun = ..` as a `bool`, which the item did not notice. Renamed at the
+   signature, in all three arms, at the `clear_unrun_link` and
+   `Self::forced_next(..)` call sites, in the `[Q1]` comment and in the `[T5]`
+   table row.
 
-4. §10 (the `next`-argument paragraph), §0.2 item 13 and §6 test 13 — remove `bc` from the list of phases this release changes, and remove `ac` from the list of phases where the change is observable. Restate as: the copy moves for `bo` and for the `NextOf::Current` case of `ao`; `NextOf::Pending` and `NextOf::Parent` move but are unobservable (test 13's own `ao`-push / `ac`-pop row already says so); and `bc` has no `next` at all. Drop test 13's `bc` binding or state explicitly that its only assertion is the vacuous `next.is_none()`. WHY: `/home/user/parser/rs/src/parser.rs:1540` is `let next = is_open.then(|| current_rule.snapshot());`, inside the one before-phase block that serves both `bo` and `bc` (the `is_open` selection is at :1523-1539), so `next` is `None` for every before-close phase before and after this PR — nothing is materialised and no test can distinguish `main` from the branch there.
+2. **§10 item (3) third bullet and §0.2 item 3 — applied.** The third bullet
+   now records that a failed PUSH on the `!pop_until_valid` arm and in the
+   forced-pop loop leaves the abandoned rule with `child_rule == None` as well
+   as a cleared `next_rule`, so `parent.child.child.*` resolves to nothing
+   where today's push-time snapshot (`parser.rs:2988`) resolves and
+   TypeScript's `rule.child` names the unrun rule. §0.2 item 3's "Item (3)
+   shrinks to the **replace** case" is restricted to the `accepts_close` arm.
 
-5. §8, Stage A item A2 — correct the `done.parent` recipe: it is `context.rs[len-2]` on the push arm (after `parser.rs:2486` `rs.last()` IS the completed rule) and the resumed parent, i.e. `current_rule`, on the pop arm (after `parser.rs:2598` `rs.last()` is the grandparent); `context.rs.last()` is right only for the replace and self arms. WHY: as written, stage A ships a `RuleDone::parent` that contradicts §2's doc and §3.3 on two of four arms, and test 3 — which A2 says lands at stage A — asserts exactly those two.
+3. **§6 test 6 — applied.** The third and fourth cases now assert
+   `rule.child().unwrap().child().is_none()` on the resuming rule, so the
+   `child_rule` half of that loss is pinned rather than silent.
 
-6. §8, Stage A item A2 — carve test 3's `[P3]` link assertions out of stage A the way test 1's address-identity and `pending()` assertions are already carved out. WHY: `ptr::eq(done.next.unwrap().prev_rule.as_deref().unwrap(), rule)` and `ptr::eq(done.parent.unwrap().child_rule.as_deref().unwrap(), rule)` do not type-check while `prev_rule`/`child_rule` are `Option<Rc<RuleSnapshot>>` (A2 keeps the `Rc<RuleSnapshot>` links) — `as_deref()` yields `&RuleSnapshot`, not `&Rule`. Only test 3's `[U2]` root-result assertion and the stack-shape assertions can land at A2.
+4. **§10's `next`-argument paragraph — applied.** `bc` is out of the list of
+   phases this release changes and `ac` is out of the list where the change is
+   observable. The paragraph now states the mechanism: `parser.rs:1989` is
+   `let next = is_open.then(|| current_rule.snapshot());` inside the one
+   before-phase block that serves both `bo` and `bc` (selection at
+   `:1957-1961`, bindings at `:1966-1982`), so `next` is `None` for every
+   before-close phase before and after.
 
-7. §10 item (3) and §0.4 R5 (the `!pop_until_valid` / forced-pop bullet) — change "reported once as `done.next` and dropped" to record that the unrun rule is reported on the forced-close event of the rule that failed AND again on the error-pass event, which is what `Self::forced_next` plus `done_next` arm 1 now produce. WHY: [V3] added the first of those two reports in revision 5 and these two places still describe the revision-4 behaviour; R5/R8 are ratification items and the maintainer is being shown the wrong event count.
+5. **§8 Stage A item A2, the `done.parent` recipe — applied.** `context.rs.last()`
+   is named as correct for the replace and self arms only: on a push, after
+   `rs.push(current_rule)` (`parser.rs:3037`), `rs.last()` IS the completed
+   rule and the grandparent is `rs[len-2]`; on a pop, after `rs.pop()`
+   (`parser.rs:3165`), `rs.last()` is the grandparent and the resumed parent
+   is `current_rule`.
 
-8. §3.3, the `[T5]`/`[U3]` attribute table, `recover_after_actions` row — delete "it could now be dropped" / "an `#[allow]` that is no longer needed" and state that at 9 arguments the attribute is still required. WHY: counted from `/home/user/parser/rs/src/parser.rs:849-860` the function is 10 arguments today and 9 after `−stack`; clippy's `too_many_arguments` threshold is 7 and fires above it (the same table's `attempt_recover` row depends on that), so removing the `#[allow]` at :848 would fail `cargo clippy --all-targets --all-features -- -D warnings`.
+6. **§8 Stage A item A2, test 3's `[P3]` assertions — applied.** Carved out of
+   stage A the way test 1's address-identity and `pending()` assertions
+   already were, with the reason: `as_deref()` on an `Option<Rc<RuleSnapshot>>`
+   yields `&RuleSnapshot`, not `&Rule`, so those two `ptr::eq` calls cannot
+   type-check while A2 keeps the `Rc` links. Test 3's `[U2]` root-result and
+   stack-shape assertions still land at A2.
 
-9. §6 test 7 (spec lines 1274-1279): six rows are grouped under `child` **close** pass and belong to the `child3` close pass. On `child`'s close pass `child.prev_rule` is None (child was pushed, never replaced — parser.rs:2536 is the only writer of prev_rule), so `prev.prev.next.name`, `prev.parent.name`, `prev.prev.child.name` and `prev.prev.child.parent.name` resolve to nothing in TS, Go and Rust alike; and `child.next` at that moment is `leaf` (TS rules.ts:720 at the push; Rust parser.rs:2603 at leaf's pop), not `child3`, so `next.name == child3` / `next.state == c` are wrong there too. All six are exactly right for the `child3` close pass: prev=child2, prev.prev=child, child.next=child2, child.child=leaf, leaf.parent=child, and child3.next=child3 from its own open pass (:2541), frozen at state `o` because :2541 precedes :2567 — which is also what row 1278's own annotation '(`child3.next = child3` from the open pass, :720)' says. Move the six rows back into the `child3` close-pass group, or re-derive them for `child`'s close pass and state the correct (empty) values. This matters because §6 requires the same rows to be written into `ts/test/rule-links.fixture.json` as the TS column's evidence, and because R7 asks the maintainer to ratify this table.
+7. **§10 item (3) and §0.4 R5, the event count — applied.** Both now say the
+   unrun rule is reported **twice** on the forced-pop path: once on the forced
+   close of the rule that failed, through `Self::forced_next(..)` **[V3]**,
+   and again on the error-pass event through `done_next` arm 1. §0.2 item 9
+   carries the same correction.
 
-10. §6 test 7 (spec lines 1284, 1285, 1288): three 'Rust today' cells claim no value where today's engine resolves one, on `top`'s close pass. (a) line 1284 `child.next.name` reads '*(none: tail's tag is `Parent` → `top`, i.e. `top`)*', asserting both none and `top`; today it is `top` — `top.child_rule` is child3's snapshot (parser.rs:2602) whose `next_rule` is the top snapshot stored at :2572, followed by `resolve_snapshot_path` at :3523. (b) line 1285 `child.next.next.name` is not *(none)*: that top snapshot was taken at :2572, before the pop at :2598 relinked top, so it still carries the push-time `child` snapshot in `next_rule` (:2451) and the path yields `child`. (c) line 1288 `next.next.name` is not *(none)*: `top.next_rule` is child3's snapshot (:2603) whose `next_rule` is that same top snapshot, so the path yields `top`. Replace the three cells with `top`, `child`, `top`. As written the table shows these paths going from nothing to something, when they go from the wrong rule to the right one — the stronger form of the routing/parse-result change §10's restated opening **[V4]** and R7 are about. (Line 1286 `child.next.next.next.name` = *(none)* is correct: the push-time child snapshot has `next_rule: None`.)
+8. **§3.3's `[T5]`/`[U3]` table, `recover_after_actions` row — applied.** "It
+   could now be dropped" is gone. Counted from `parser.rs:1215-1226` the
+   function takes 10 arguments and 9 after `−stack`, clippy's threshold is 7,
+   so the `#[allow]` at `:1214` is still required and dropping it would fail
+   `cargo clippy --all-targets --all-features -- -D warnings`.
 
-11. §0.2 item 13 (line 91), §10's `next`-argument paragraph (line 1485), §6 test 13 (line ~1302) and §8 B1: the claim that the `next`-materialisation timing moves 'in all four phases, `bo`/`bc` as well as `ao`/`ac`' is false for `bc`. parser.rs:1516-1521 sets `before_enabled = if is_open { rule.bo } else { rule.bc }`, so the `bc` phase always runs with `is_open == false`, and :1540's `is_open.then(|| current_rule.snapshot())` — like the spec's own replacement `if is_open { Self::materialise_next(..) } else { None }` — yields `None` in `bc` both before and after this PR. There is no copy to move and nothing a `bc` state action can observe (TS agrees: `let next = is_open ? rule : ctx.NORULE`). Restrict the claim to the two phases where `next` is the rule itself — `bo` (always `NextOf::Current`) and `ao` of an open pass with no route — and say explicitly that `bc`'s `next` is unconditionally `None` and `ac`'s (`NextOf::Parent`) moves unobservably. Line 1485's enumeration 'running *before* a state action in `bo`/`ao`/`bc`/`ac` order now changes what that state action sees in `next`' must drop `bc`. Test 13's 'One grammar, four phases: in each of `bo`, `ao`, `bc`, `ac`' must become three phases with an assertable case (its own bullets already cover only `bo`/`ao`/`ac`), or state that the `bc` binding exists only to assert `next.is_none()`.
+9. **§6 test 7, the six orphaned rows — applied.** `prev.prev.next.name`,
+   `prev.parent.name`, `prev.prev.child.name`, `prev.prev.child.parent.name`,
+   `next.name` and `next.state` are back under the `child3` close-pass group,
+   where they are right; under `child`'s close pass they resolved to nothing
+   in all three ports. The `next.state` row's Rust annotation now cites the
+   current lines (`parser.rs:3106` precedes the state change at `:3133`).
 
-12. Citation, five sites (spec lines 61, 950, 1308, 1405, 1485): `let next = is_open ? rule : ctx.NORULE` is **ts/src/rules.ts:538**, not :535. The adjacent citations in the same sentences (:564 for `befores[bI].call(this, rule, ctx, next, bout)`, :577 for `alt.h`) are correct, so the error is isolated to this one line and is repeated verbatim in the §0.1c U1 row, the §3.3 `:1540` bullet, test 13, the §7 migration table and the §10 release note — i.e. in the release-note text a plugin author will follow. Same class as the [S7] and [U3] required changes of earlier rounds.
+10. **§6 test 7, the three understated "Rust today" cells — applied, and the
+    whole group is now measured rather than derived.** `child.next.name` is
+    `top`, `child.next.next.name` is `child`, `next.next.name` is `top`. All
+    eight paths of the `top` close-pass group were run against this tree, in
+    all three runtimes, by installing the test-7 grammar with the path under
+    test as an ordered set of `c` alternates. TypeScript and Go answer
+    `child`, `child2`, `child3`, `top`, `child`, `child2`, `leaf`, `child`;
+    Rust answers `child3`, `top`, `child`, *(none)*, `child3`, `top`,
+    *(none)*, *(none)*. The table and the spec's new note record exactly that.
 
-## Refuter reasons
+11. **§0.2 item 13, §10, §6 test 13 and §8 B1, the `bc` claim — applied.**
+    Test 13 is now "three phases with an assertable case", with `bc`'s binding
+    stated as asserting only `next.is_none()`. The `:1540`/`:257` citations in
+    its `bo`/`ao` bullet are now `parser.rs:1989`/`:601`.
+
+12. **The `rules.ts:535` citation — applied.** `let next = is_open ? rule : ctx.NORULE`
+    is `ts/src/rules.ts:538`. Corrected at all five sites. The adjacent
+    citations in the same sentences (`:564`, `:577`, `:665`, `:713`, `:720`,
+    `:728`, `:1183-1193`, `:1197-1201`) were re-checked and are correct.
+
+## What applying them turned up
+
+- **Go's declarative conditions were a no-op through the serialized door.**
+  Item 10's "TS / Go" column could not be measured until this was repaired:
+  Go's probe returned the first alternate for all eight paths, because
+  `NormAlt` built a condition for `int` alone while `condProblems` accepted
+  `int, int64, float64, string, bool`, and `encoding/json` produces none of
+  them but the last two. Fixed in `go/rule.go` with a `default` arm that
+  refuses a value neither list accepts, and pinned by
+  `TestNormAltBuildsEveryPlainConditionValue`.
+
+- **§8 item A3 has already landed.** `ci/rust/run.sh` now runs
+  `cargo test --doc --locked`, which A3 schedules for stage A. It was added
+  independently: `cargo test --all-targets` excludes doctests, so the crate's
+  README examples ran in no gate at all.
+
+## Refuter reasons, as written in round 4
+
+Kept verbatim for the record. Where a claim here was superseded by what
+applying it showed, the numbered item above says so.
 
 ### soundness (refuted=True)
 
-The design survives the soundness lens: I could not build a callback that fails to compile where it should be allowed, that panics, or that sees stale state through a hole the spec has not already closed. Disjointness of `rule` and `context` holds on every path I traced (parse loop, the 19 former publish sites, `attempt_recover`'s lexer loop, the forced-pop loop, the standalone lexer at lexer.rs:625-643, `resolve_val` via rule.rs:1441/:1449 and builtins.rs:180); `Value` (value.rs:96-111) really cannot host an `Rc<RefCell<Value>>`, so the Box/tag graph is acyclic; the `pending` protocol cannot leak (`recover_after_actions`, parser.rs:860-874, returns `Ok(false)` only when `result` is `Ok`, so the `expect` in the push/replace arms is safe, and `context` is a local of `parse_inner`, parser.rs:1350, dropped on every error exit); and the five verified copy sites plus the two link-caused ones genuinely become field stores, an 8-byte Box move and a 1-byte tag once `data` is inline. [U4]'s holder re-derivation is correct: at :2484/:2536/:2602 the transition's own `deref_mut` has already detached the record the incoming current rule carries, so `context.rule` from :1428 is the only surviving holder for :1743/:1745/:2540.
+The design survives the soundness lens: I could not build a callback that fails to compile where it should be allowed, that panics, or that sees stale state through a hole the spec has not already closed. Disjointness of `rule` and `context` holds on every path I traced; `Value` really cannot host an `Rc<RefCell<Value>>`, so the Box/tag graph is acyclic; the `pending` protocol cannot leak; and the five verified copy sites plus the two link-caused ones genuinely become field stores, an 8-byte Box move and a 1-byte tag once `data` is inline. [U4]'s holder re-derivation is correct: at the push, replace and pop transitions the transition's own `deref_mut` has already detached the record the incoming current rule carries, so `context.rule` is the only surviving holder.
 
-But six concrete things are wrong, and two of them are behaviour, not prose.
-
-(1) COMPILE BREAK. §3.3 adds `pending: &mut Option<Box<Rule>>` to `attempt_recover`, and the rewritten arms call `pending.is_some()`, `pending.take()`, `pending.as_deref()` at the sites that replace parser.rs:767-772 and :784-796. `attempt_recover` already has a body-local `let mut pending: std::collections::VecDeque<Token>` at parser.rs:657. It is moved out at :763 (`context.t.extend(pending)`) but the binding is still in scope at :768-796, so every `pending.*` in the specified code resolves to the VecDeque, not the parameter: E0599 (`VecDeque` has no `is_some`/`take`/`as_deref`) and E0382 on the moved value. The parameter must be named something else (`unrun`), and §3.3, §0.2 item 9, §0.4 R5 and the `[T5]` table row all name it `pending`.
-
-(2) UNRECORDED BEHAVIOUR LOSS. §3.3's push arm replaces parser.rs:2450 (`current_rule.child_rule = Some(child.snapshot())`) with `current_rule.child_rule = None`. On the `accepts_close` arm [P2] restores it with the unrun child. On the other two arms it is never restored: §3.3's `!pop_until_valid` code stores the ABANDONED rule into the resuming rule's `child_rule` and drops the unrun one, and the forced-pop loop does the same. So after a failed PUSH after-action recovered on those two arms, the abandoned rule's `child_rule` is `None` and `Rule::child()` is `None`, i.e. `parent.child.child.*` resolves to nothing — where today parser.rs:2450 leaves the push-time snapshot in place and it resolves, and where TypeScript's `rule.child` (rules.ts:665, never cleared, left intact by `bad()` at :1183-1193) names the unrun rule. §10 item (3)'s third bullet records only `next_rule`/`next.*`/`next_rule_name`, and §0.2 item 3 still states flatly that S10's `child.*` point "shrinks to the **replace** case" — which [T4] made false for two of the three arms without reopening it. Test 6's third and fourth cases assert `next_rule`/`next_rule_name` on the abandoned rule but nothing about `child.*`.
-
-(3) §10's `next`-ARGUMENT PARAGRAPH IS WRONG FOR `bc` (and for `ac`). [U1] widens the "when the copy is taken" change to "all four phases, `bo`/`bc` as well as `ao`/`ac`", §0.2 item 13 says the [S8] paragraph "now names `bo`/`bc`", and §6 test 13 specifies a `ContextAction`+`StateAction` pair "in each of `bo`, `ao`, `bc`, `ac`" with the state action asserting on `next`. But parser.rs:1540 is `let next = is_open.then(|| current_rule.snapshot());`, inside the single before-phase block that serves BOTH `bo` and `bc` (the `is_open` selection is at :1523-1539). For every before-CLOSE phase `next` is `None`, before and after this PR. Nothing is materialised, nothing moves, and no assertion on a `bc` state action's `next` can distinguish `main` from the branch. The same sentence also lists `ac` among the phases where the change "is observable", contradicting test 13's own `ac` row, which requires `next` (`NextOf::Parent`) to be UNCHANGED. Only `bo` and the `NextOf::Current` case of `ao` move observably.
-
-(4) §8 STAGE A's `done.parent` RECIPE IS WRONG ON TWO ARMS. A2 says `RuleDone<'a>`'s `next`/`parent` land at stage A and "the arms pass them from the loop locals they already hold (`Some(&child)` / `Some(&next)` before the move, `context.rs.last()` for the parent)". `context.rs.last()` is the correct parent only for the replace and self arms. On a push, after `rs.push(current_rule)` (parser.rs:2486) `rs.last()` IS the completed rule, and §2/§3.3 require the grandparent (`rs[len-2]`). On a pop, after `rs.pop()` (parser.rs:2598) `rs.last()` is the GRANDparent, and §2/§3.3 require the resumed parent, which is `current_rule`. A2 also says test 3 is "added" at stage A with no carve-out, but test 3's [P3] assertions (`ptr::eq(done.next.unwrap().prev_rule.as_deref().unwrap(), rule)`, `ptr::eq(done.parent.unwrap().child_rule.as_deref().unwrap(), rule)`) cannot type-check while those fields are `Option<Rc<RuleSnapshot>>` — `as_deref()` yields `&RuleSnapshot`, not `&Rule`. Stage A is meant to be green; as written it is not.
-
-(5) [V3] MAKES THE UNRUN RULE REPORTED TWICE, AND TWO OTHER SECTIONS STILL SAY "ONCE". On the forced-pop path `Self::forced_next(&**current_rule, context.ancestors(), pending.as_deref())` returns the pending rule for the event on the rule that failed, and `recover_error_pass`'s `done_next` arm 1 then reports the same rule again one call later. That is correct against TypeScript (both events read the live `rule.next`), but §10 item (3) ("reported once as `done.next` on the error-pass ruleDone and then dropped") and §0.4 R5's `!pop_until_valid`/forced-pop bullet ("The unrun rule is reported once as `done.next` and dropped") now describe something the spec's own code does not do. The maintainer ratifying R5/R8 is being shown the wrong event count.
-
-(6) THE `[T5]`/`[U3]` TABLE STILL CONTAINS A FALSE ARITHMETIC CLAIM. Its `recover_after_actions` row says "9 (−stack) | keeps the one at :848; **it could now be dropped**, but leave it — removing an `#[allow]` that is no longer needed is noise". Counted from parser.rs:849-860 the function takes `&self, result, state, alt, src, current_rule, stack, context, lexer, mode` = 10, and 9 after `−stack`. clippy's threshold is 7 and the lint fires above it (the same table's own `attempt_recover` row relies on that), so at 9 arguments the `#[allow]` is still REQUIRED; dropping it would fail `cargo clippy -- -D warnings`. The action the row prescribes is right, its stated reason is wrong, and this is the third round in a row that this table has carried an error.
+But six concrete things are wrong, and two of them are behaviour, not prose: the `pending` compile break (item 1), the unrecorded `child_rule` loss on two recovery arms (item 2), the `bc`/`ac` claim in §10's `next`-argument paragraph (items 4 and 11), stage A's `done.parent` recipe and test 3's carve-out (items 5 and 6), the event count [V3] changed (item 7), and the `recover_after_actions` argument arithmetic (item 8).
 
 ### parity (refuted=True)
 
-The design survives this lens intact: I re-derived ctx.rule/ctx.rs/rule.child/parent/prev/next against ts/src/parser.ts:244,258,267,285 and ts/src/rules.ts:538,564,577,662,665-666,692-693,713,720,728,1199-1212 and go/rule.go:1259-1266,1292-1293,1313-1314,1329,1332-1339, and every substantive parity claim held — the ruleDone post-transition stack (R3), the after-action stack order (R4), head-of-chain child/next (R7), the done.next/done.parent resolution order (R8), the V1/V2/V3 corrections, error.rule_stack byte-identity, and both plugin readers. But four concrete things are wrong, and two of them sit in the one artefact the spec designates as the per-port parity contract (§6 test 7, ratification item R7, and the source of ts/test/rule-links.fixture.json). Six rows of that table are attributed to the wrong evaluation point — they are child3-close-pass rows that the [T2] insertion orphaned into the `child` close-pass group, where they resolve to nothing in all three ports — and three of its "Rust today" cells state an absence where today's engine produces a rule, which understates the routing change §10/[V4] rests on. An implementer building the TS fixture from this table writes the wrong fixture.
+The design survives this lens intact: I re-derived `ctx.rule`/`ctx.rs`/`rule.child`/`parent`/`prev`/`next` against the TypeScript and Go sources, and every substantive parity claim held — the ruleDone post-transition stack (R3), the after-action stack order (R4), head-of-chain child/next (R7), the `done.next`/`done.parent` resolution order (R8), the V1/V2/V3 corrections, `error.rule_stack` byte-identity, and both plugin readers. But four concrete things are wrong, and two of them sit in the one artefact the spec designates as the per-port parity contract (§6 test 7, ratification item R7, and the source of `ts/test/rule-links.fixture.json`): six rows attributed to the wrong evaluation point (item 9) and three "Rust today" cells stating an absence where the engine produces a rule (item 10). An implementer building the TS fixture from that table writes the wrong fixture.
