@@ -11,8 +11,12 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
 
 const { Tabnas } = require('..')
+const { validateOptions, WIDENINGS } = require('../dist/utility')
+const { defaults } = require('../dist/defaults')
 
 describe('options-validate', () => {
   it('names an ill-typed leaf on every door', () => {
@@ -65,12 +69,171 @@ describe('options-validate', () => {
       value: { def: { yes: { val: 1 }, no: false } },
       fixed: { token: { '#CA': null, '#X': 'x' } },
       errmsg: { suffix: 'because' },
-      lex: { emptyResult: [] },
+      lex: { emptyResult: [], match: { number: false } },
       number: { exclude: /^0/ },
       match: { token: { '#A': /^a/ } },
       string: { escape: { v: null } },
+      ender: ':',
       plugin: { anything: { goes: true } },
       csv: { field: { separator: '|' } },
     }))
   })
+
+  // #143's validator was stricter than the readers it was meant to
+  // describe, and 0.11.0 shipped that: a string `ender` is documented,
+  // read and split into characters by configure(), and the validator
+  // refused it, so every fresh install of the published chain threw at
+  // module load (@tabnas/yaml passes `ender: ':'`).
+  it('accepts a string ender, and splits it exactly as the array form', () => {
+    assert.doesNotThrow(() => new Tabnas({ ender: ':' }))
+    assert.doesNotThrow(() => new Tabnas().options({ ender: ':' }))
+    assert.doesNotThrow(() => new Tabnas().grammar({ options: { ender: ':' } }))
+
+    // The string is split per character, so it is the array form.
+    const src = (o) => new Tabnas(o).internal().config.re.ender.source
+    assert.equal(src({ ender: ':' }), src({ ender: [':'] }))
+    assert.equal(src({ ender: ';|' }), src({ ender: [';', '|'] }))
+
+    // And the characters really are enders: a two-char string contributes
+    // both, which is what a single array entry ';|' would NOT do.
+    assert.match(src({ ender: ';|' }), /\|;\|\\\|/)
+  })
+
+  // A matcher set to false is dropped, exactly as null drops it. Go's
+  // door already accepted this; only TypeScript refused it.
+  it('accepts false for a lex matcher, as null already was', () => {
+    const matchers = (o) =>
+      new Tabnas(o).internal().config.lex.match.map((m) => m.matcher)
+    assert.ok(matchers({}).includes('number'))
+    for (const off of [false, null]) {
+      assert.doesNotThrow(() => new Tabnas({ lex: { match: { number: off } } }))
+      assert.deepEqual(
+        matchers({ lex: { match: { number: off } } }),
+        matchers({ lex: { match: { number: null } } }),
+      )
+      assert.ok(!matchers({ lex: { match: { number: off } } }).includes('number'))
+    }
+  })
+
+  // The regression test for the CLASS, not the instance: every widening
+  // the table declares must be accepted by the validator AND survive the
+  // reader, on every door. A widening declared but not read, or read but
+  // not declared, fails here.
+  it('the validator accepts what the readers accept', () => {
+    const SAMPLES = {
+      'options.ender': [':', ';|'],
+      'options.lex.match.*': [false],
+      'options.rewind.history': [false],
+      'options.errmsg.suffix': ['because', () => 'because'],
+    }
+    // Every declared widening carries a sample, and vice versa.
+    assert.deepEqual(Object.keys(SAMPLES).sort(), Object.keys(WIDENINGS).sort())
+
+    for (const [path, samples] of Object.entries(SAMPLES)) {
+      for (const sample of samples) {
+        // The table itself agrees this is a widening of that leaf.
+        const at = path.endsWith('.*') ? path.slice(0, -1) + 'number' : path
+        assert.doesNotThrow(
+          () => validateOptions(optsFor(at, sample), defaults),
+          at + ' = ' + String(sample) + ' must validate',
+        )
+        // ... and the reader takes it, on every door.
+        const opts = optsFor(at, sample)
+        assert.doesNotThrow(() => new Tabnas(opts), at + ' via constructor')
+        assert.doesNotThrow(() => new Tabnas().options(opts), at + ' via options()')
+      }
+    }
+
+    // A widening is narrow, not a blanket pass: the door stays typed at
+    // the same leaves, and at the map a widened entry lives in.
+    for (const [opts, re] of [
+      [{ ender: 7 }, /options\.ender: expected array, got number/],
+      [{ ender: { a: 1 } }, /options\.ender: expected array, got object/],
+      [{ lex: { match: { number: true } } }, /options\.lex\.match\.number: expected object/],
+      [{ lex: { match: { number: 'off' } } }, /options\.lex\.match\.number: expected object/],
+      // the MAP is not widened, only an entry of it
+      [{ lex: { match: false } }, /options\.lex\.match: expected object, got boolean/],
+      [{ rewind: { history: 'lots' } }, /options\.rewind\.history: expected number/],
+      // and the values a reader only fails to crash on stay refused
+      [{ string: { escape: { n: false } } }, /options\.string\.escape\.n: expected string/],
+      [{ result: { fail: 'x' } }, /options\.result\.fail: expected array/],
+    ]) {
+      assert.throws(() => new Tabnas(opts), re, JSON.stringify(opts))
+    }
+  })
+
+  // The other half of the contract, and the half that would have caught
+  // #143 before it shipped: a reader that TYPE-TESTS an option value
+  // accepts more than one shape there, so that option must be declared
+  // in WIDENINGS. Source-level on purpose — the divergence is between
+  // the reader's text and the table, and nothing else can see it.
+  it('every option a reader type-tests is declared as a widening', () => {
+    const declared = new Set(
+      Object.keys(WIDENINGS).map((p) => p.replace(/^options\./, '').replace(/\.\*$/, '')),
+    )
+    const found = new Set()
+    for (const file of ['utility.ts', 'lexer.ts']) {
+      const src = readFileSync(join(__dirname, '..', 'src', file), 'utf8')
+      for (const m of src.matchAll(/typeof\s+opts[.?]+([A-Za-z0-9_.?]+)/g)) {
+        found.add(m[1].replace(/\?/g, ''))
+      }
+      for (const m of src.matchAll(/Array\.isArray\(\s*opts[.?]+([A-Za-z0-9_.?]+)\s*\)/g)) {
+        found.add(m[1].replace(/\?/g, ''))
+      }
+    }
+    // The readers do type-test something — a silent zero here would make
+    // this test vacuous.
+    assert.ok(0 < found.size, 'found no reader type tests at all')
+    for (const path of found) {
+      assert.ok(
+        declared.has(path),
+        'options.' + path + ' is type-tested by a reader but not declared in ' +
+        'WIDENINGS: the validator will refuse what the reader accepts',
+      )
+    }
+  })
+  // Parser's CI clones `bnf debug abnf` and builds them against this
+  // engine, so the jsonic/yaml/json5/toml/... grammars — the packages a
+  // fresh install of the published chain actually loads — have NO
+  // coverage here, and that is what let #143 out: the validator refused
+  // an overlay that @tabnas/yaml has always passed, and nothing in this
+  // repo loads yaml.
+  //
+  // A lane that installs the published grammars cannot run here (they
+  // depend on this engine, so npm resolves a NESTED published copy and
+  // the lane would not exercise the local build without committed local
+  // wiring). What is hermetic is the OVERLAY each one passes, recorded
+  // from the published package, driven through every door. A check hook
+  // stands in as a bare function: the door validates shapes, not bodies.
+  it('accepts the overlays the published grammars pass', () => {
+    const hook = () => undefined
+    const OVERLAYS = {
+      // @tabnas/yaml 0.5.7, yaml.js: tabnas.options({...})
+      '@tabnas/yaml': {
+        fixed: { token: { '#CL': null } },
+        ender: ':',
+        string: { chars: '' },
+        number: { check: hook },
+        text: { check: hook },
+      },
+      // @tabnas/jsonic 0.6.7, jsonic.js: one namespace per plugin.
+      '@tabnas/jsonic': { plugin: { yaml: { safe: true } } },
+    }
+    for (const [pkg, opts] of Object.entries(OVERLAYS)) {
+      assert.doesNotThrow(() => new Tabnas(opts), pkg + ' via constructor')
+      assert.doesNotThrow(() => new Tabnas().options(opts), pkg + ' via options()')
+    }
+  })
 })
+
+// Build an options object with `val` at a dotted path.
+function optsFor(at, val) {
+  const parts = at.replace(/^options\./, '').split('.')
+  const out = {}
+  let node = out
+  for (let i = 0; i < parts.length - 1; i++) {
+    node = node[parts[i]] = {}
+  }
+  node[parts[parts.length - 1]] = val
+  return out
+}

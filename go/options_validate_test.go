@@ -98,6 +98,8 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 		"value":{"def":{"yes":{"val":1},"no":false}},
 		"fixed":{"token":{"#CA":null,"#X":"x"}},
 		"errmsg":{"suffix":"because"},
+		"ender":":",
+		"lex":{"match":{"number":false}},
 		"lex":{"emptyResult":[]},
 		"match":{"token":{"#A":"@/^a/"}},
 		"string":{"escape":{"v":null}},
@@ -108,5 +110,85 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 	}
 	if err := Make().Grammar(gs); err != nil {
 		t.Fatalf("documented idioms refused: %v", err)
+	}
+}
+
+// #143's validator was stricter than the readers it described, and
+// 0.11.0 shipped that in every runtime: a string `ender` is read by
+// OptionsFromMap (and passed by @tabnas/yaml), and the door refused it.
+func TestOptionsFromMapAcceptsAStringEnder(t *testing.T) {
+	opts, err := OptionsFromMap(map[string]any{"ender": ";|"})
+	if err != nil {
+		t.Fatalf("string ender refused: %v", err)
+	}
+	if len(opts.Ender) != 1 || opts.Ender[0] != ";|" {
+		t.Fatalf("string ender read as %v, want [;|]", opts.Ender)
+	}
+	// Both characters end text, which is what the string form means.
+	j := Make(opts)
+	chars := j.Config().EnderChars
+	for _, r := range []rune{';', '|'} {
+		if !chars[r] {
+			t.Errorf("ender char %q missing from %v", r, chars)
+		}
+	}
+	// And through the serialized door, as a grammar carries it.
+	gs, err := GrammarSpecFromJSON([]byte(`{"options":{"ender":":"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Make().Grammar(gs); err != nil {
+		t.Fatalf("string ender refused through the grammar door: %v", err)
+	}
+}
+
+// The regression test for the class: every declared widening is accepted,
+// and the table is the only place a widening is declared.
+func TestOptionWideningsAreAccepted(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		val  any
+	}{
+		{"options.ender", ";"},
+		{"options.rewind.history", false},
+		// The general definition-map rule, stated in optionWidenings'
+		// comment rather than as an entry.
+		{"options.lex.match.number", false},
+		{"options.comment.def.hash", false},
+	} {
+		var errs []string
+		validateLeafAt(c.path, c.val, &errs)
+		if len(errs) > 0 {
+			t.Errorf("%s = %v: refused: %v", c.path, c.val, errs)
+		}
+	}
+	// A widening is not a blanket pass: the same leaves still refuse a
+	// shape no reader takes.
+	for _, c := range []struct {
+		path string
+		val  any
+	}{
+		{"options.ender", 7.0},
+		{"options.rewind.history", true},
+		{"options.lex.match.number", "off"},
+	} {
+		var errs []string
+		validateLeafAt(c.path, c.val, &errs)
+		if len(errs) == 0 {
+			t.Errorf("%s = %v: accepted, but no reader takes it", c.path, c.val)
+		}
+	}
+}
+
+// validateLeafAt drives validateOptionsMap through the nested map that
+// `path` names, so a case reads as the leaf it is about.
+func validateLeafAt(path string, val any, errs *[]string) {
+	parts := strings.Split(strings.TrimPrefix(path, "options."), ".")
+	var node any = val
+	for i := len(parts) - 1; i >= 0; i-- {
+		node = map[string]any{parts[i]: node}
+	}
+	if err := validateOptionsMap(node.(map[string]any)); err != nil {
+		*errs = append(*errs, err.Error())
 	}
 }

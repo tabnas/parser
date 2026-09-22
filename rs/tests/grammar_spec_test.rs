@@ -794,6 +794,31 @@ fn serialized_value_definitions_and_enders_reach_the_runtime() {
         .is_err());
 }
 
+// A string ender is its characters, on this door as on the others.
+// Rust's door already TOOK a string where TypeScript's and Go's
+// validators refused it and broke every fresh install of the published
+// chain (#143, 0.11.0); what it did with a multi-character one diverged,
+// keeping it whole where TypeScript splits it.
+#[test]
+fn a_string_ender_is_its_characters() {
+    let mut parser = Tabnas::new();
+    parser.grammar_json(r#"{"options":{"ender":":"}}"#).unwrap();
+    assert_eq!(parser.options.ender, [":"]);
+
+    // Each character is its own ender, as `split('')` gives in TypeScript
+    // — not one two-character ender.
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(r#"{"options":{"ender":";|"}}"#)
+        .unwrap();
+    assert_eq!(parser.options.ender, [";", "|"]);
+
+    // Still typed: a shape no reader takes is refused.
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"ender":7}}"#)
+        .is_err());
+}
+
 #[test]
 fn grammar_settings_append_groups_without_mutating_the_source_spec() {
     let grammar = GrammarSpec::from_json(

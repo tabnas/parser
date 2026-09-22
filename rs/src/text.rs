@@ -24,7 +24,8 @@
 //!
 //! This is the only place that reads bytes back as UTF-8 without
 //! checking them, so it is the only place that has to be right about
-//! it: `Inline` is written whole from a `&str` and nowhere else.
+//! it: `Inline` is written whole from a `&str` by `new`, or left empty
+//! by `Default`, and nowhere else.
 
 use std::sync::Arc;
 
@@ -59,10 +60,11 @@ impl InlineText {
 
     pub(crate) fn as_str(&self) -> &str {
         match self {
-            // SAFETY: `bytes[..len]` is only ever written by `new`,
-            // which copies it whole out of a `&str`, so it is valid
-            // UTF-8. `len` cannot exceed the buffer: `new` takes this
-            // arm only when it does not.
+            // SAFETY: both constructors of this arm leave
+            // `bytes[..len]` valid UTF-8 — `new` copies it whole out of
+            // a `&str`, `Default` writes none and sets `len` 0. `len`
+            // cannot exceed the buffer: `new` takes this arm only when
+            // it does not, and `Default` is 0.
             InlineText::Inline { len, bytes } => unsafe {
                 std::str::from_utf8_unchecked(&bytes[..*len as usize])
             },
