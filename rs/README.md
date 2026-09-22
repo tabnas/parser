@@ -221,3 +221,16 @@ cargo clippy --all-targets --all-features -- -D warnings
 The crate declares Rust 1.85 as its minimum supported toolchain. From the
 repository root, `./ci/rust/run.sh` also runs the shared cross-runtime and
 compiler-consumer parity gates.
+
+### Formal verification (experiment, not a gate)
+
+`rs/verus/` holds standalone [Verus](https://github.com/verus-lang/verus)
+copies of two pieces of `src/`, with specifications and machine-checked
+proofs: the `InlineText` length invariant behind the crate's only
+`unsafe` block, and the lexer's scalar-index span arithmetic.
+
+Nothing there is compiled by the crate. Verus pins its own Rust
+toolchain, which is not the 1.85 above, so no gate runs it and it is not
+a build dependency. Run it by hand with `VERUS=/path/to/verus
+rs/verus/run.sh`. `doc/rust-verus-experiment.md` records what verified,
+what did not, and why the crate was not adopted onto Verus.
