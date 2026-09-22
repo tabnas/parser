@@ -154,3 +154,20 @@ aici
 tagann
 chun
 suaimhnis
+
+# Words the gated pages have used since before this file did. The prose
+# gate was red on main with these eight errors -- four in
+# go/doc/differences.md and four in rs/README.md -- from the day it was
+# promoted, so nothing here is a new usage.
+#
+#   parser's, recurse, validators  ordinary technical English that the
+#                                  Google package's dictionary lacks
+#   refcounted                     the Rust port's own term for Rc/Arc
+#                                  sharing, used in rs/README.md
+#   Verus                          the verification tool named in
+#                                  rs/README.md and doc/rust-verus-experiment.md
+parser's
+recurse
+validators
+refcounted
+Verus

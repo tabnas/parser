@@ -1,16 +1,15 @@
 module gotokdump
 
-go 1.24
+go 1.24.7
 
 require (
-	github.com/tabnas/json/go v0.0.0
-	github.com/tabnas/jsonic/go v0.0.0
-	github.com/tabnas/parser/go v0.0.0
+	github.com/tabnas/json/go v0.5.8
+	github.com/tabnas/jsonic/go v0.6.7
+	github.com/tabnas/parser/go v0.10.0
 )
 
-// Sibling-checkout layout (same as CI).
+// The engine under test is this repository's own module, so it is replaced by
+// path and travels with the checkout. The two grammars come from the proxy at
+// their published versions; run-parity.sh still resolves them from sibling
+// checkouts when it builds this module inside its temporary go.work.
 replace github.com/tabnas/parser/go => ../../../go
-
-replace github.com/tabnas/json/go => ../../../../json/go
-
-replace github.com/tabnas/jsonic/go => ../../../../jsonic/go
