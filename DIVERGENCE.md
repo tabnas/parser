@@ -297,6 +297,23 @@ fixed or quietly dropped.
   fleet grammar working, since all four declaration sites pair a config
   with its action on the same alternate.
 
+- **The serialized options door was untyped.** An ill-typed leaf in a
+  spec's `options` (`line.chars: {}`, `tokenSet.VAL: "str"`,
+  `string.escapeChar: []`) crashed TypeScript with a raw `TypeError`
+  from inside `configure()` and was dropped in silence by Go, and a
+  FuncRef resolved in ANY slot, so `@node$` could land in `rule.start`
+  (#143). Ruled, per the D4 proposal on #130: an ill-typed leaf is a
+  load fault naming the leaf, in every runtime, on every door (the
+  constructor, `options()`, and a serialized grammar), and a function
+  reference resolves only in a declared code slot; in a data slot it is
+  the same fault. TypeScript validates the overlay against the shape of
+  its defaults before merging; Go validates the map against `Options` by
+  reflection inside `OptionsFromMap`; Rust, whose door already refused
+  ill-typed leaves, now refuses a resolvable reference in a data slot
+  and applies the `@@` escape door-wide. Pinned by
+  `ts/test/options-validate.test.js`, `go/options_validate_test.go` and
+  `rs/tests/grammar_spec_test.rs` (`a_reference_in_a_data_slot_is_a_load_fault`).
+
 - **The options overlay: slices, definition maps and `tokenSet`.** On
   Go's typed options path, a slice (`ender`, `result.fail`, the
   recovery sync lists, `match.tokenOrder`), a map of definitions

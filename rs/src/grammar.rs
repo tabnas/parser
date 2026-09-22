@@ -53,6 +53,42 @@ struct AltRefs {
     map_merges: HashMap<String, MapMerge>,
 }
 
+impl AltRefs {
+    /// Whether `name` is a registered reference of any kind.
+    fn knows(&self, name: &str) -> bool {
+        self.conditions.contains_key(name)
+            || self.match_conditions.contains_key(name)
+            || self.lexer_conditions.contains_key(name)
+            || self.lexer_match_conditions.contains_key(name)
+            || self.modifiers.contains_key(name)
+            || self.match_modifiers.contains_key(name)
+            || self.errors.contains_key(name)
+            || self.match_errors.contains_key(name)
+            || self.pushes.contains_key(name)
+            || self.match_pushes.contains_key(name)
+            || self.replaces.contains_key(name)
+            || self.match_replaces.contains_key(name)
+            || self.backtracks.contains_key(name)
+            || self.match_backtracks.contains_key(name)
+            || self.match_tokens.contains_key(name)
+            || self.value_transforms.contains_key(name)
+            || self.text_modifiers.contains_key(name)
+            || self.lex_checks.contains_key(name)
+            || self.comment_suffixes.contains_key(name)
+            || self.match_values.contains_key(name)
+            || self.parse_prepares.contains_key(name)
+            || self.budget_checks.contains_key(name)
+            || self.lex_matches.contains_key(name)
+            || self.imperative_lex_matches.contains_key(name)
+            || self.lex_match_factories.contains_key(name)
+            || self.error_suffixes.contains_key(name)
+            || self.config_modifiers.contains_key(name)
+            || self.parser_starts.contains_key(name)
+            || self.parser_starts_with_instance.contains_key(name)
+            || self.parser_starts_with_context.contains_key(name)
+    }
+}
+
 impl From<&Tabnas> for AltRefs {
     fn from(tabnas: &Tabnas) -> Self {
         Self {
@@ -965,11 +1001,91 @@ fn resolve_value_producer(
     }
 }
 
+/// Whether an options path is one the door reads as CODE: the slots a
+/// function reference may resolve into. Everything else holds data.
+fn is_code_slot(path: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "options.parser.start",
+        "options.map.merge",
+        "options.number.exclude",
+        "options.parse.budget.onCheck",
+        "options.errmsg.suffix",
+    ];
+    if EXACT.contains(&path) {
+        return true;
+    }
+    path.ends_with(".check")
+        || path.starts_with("options.match.token.")
+        || path.starts_with("options.match.value.")
+        || path.starts_with("options.lex.match.")
+        || path.starts_with("options.parse.prepare.")
+        || path.starts_with("options.config.modify.")
+        || path.starts_with("options.text.modify")
+        || (path.starts_with("options.value.def.") && path.ends_with(".val"))
+        || (path.starts_with("options.comment.def.") && path.ends_with(".suffix"))
+}
+
+/// A `@name` string that names a function reference, in a slot that
+/// holds data, is a load fault in every runtime (#143). As in the
+/// TypeScript door, a string is a reference only when it RESOLVES: a
+/// builtin's name or a registered one. An unresolvable `@x` stays the
+/// literal it always was (a fixed token bound to `@`, say), `@@x` is the
+/// spelled escape for the literal `@x`, and `@/…/` and `@~/…/` are
+/// serialized regexes, which their own readers decode. The escape is
+/// applied here, so every data reader sees the literal.
+fn typed_data_refs(
+    value: &JsonValue,
+    path: &str,
+    refs: &AltRefs,
+) -> Result<JsonValue, GrammarError> {
+    match value {
+        JsonValue::String(text) => {
+            if is_code_slot(path) {
+                return Ok(value.clone());
+            }
+            if let Some(literal) = text.strip_prefix("@@") {
+                return Ok(JsonValue::String(format!("@{literal}")));
+            }
+            let is_regex = text.starts_with("@/") || text.starts_with("@~/");
+            if !is_regex && (is_builtin_action(text) || refs.knows(text)) {
+                return Err(GrammarError(format!(
+                    "Grammar: {path}: a function reference is not allowed in a data slot \
+                     (got {text:?}; spell a literal at sign as @@)"
+                )));
+            }
+            Ok(value.clone())
+        }
+        JsonValue::Object(entries) => {
+            let mut out = Map::with_capacity(entries.len());
+            for (key, entry) in entries {
+                out.insert(
+                    key.clone(),
+                    typed_data_refs(entry, &format!("{path}.{key}"), refs)?,
+                );
+            }
+            Ok(JsonValue::Object(out))
+        }
+        JsonValue::Array(items) => Ok(JsonValue::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| typed_data_refs(item, &format!("{path}[{index}]"), refs))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        _ => Ok(value.clone()),
+    }
+}
+
 fn apply_options(
     options: &mut crate::Options,
     map: &Map<String, JsonValue>,
     refs: &AltRefs,
 ) -> Result<(), GrammarError> {
+    let typed = typed_data_refs(&JsonValue::Object(map.clone()), "options", refs)?;
+    let JsonValue::Object(typed) = typed else {
+        unreachable!("an object maps to an object");
+    };
+    let map = &typed;
     if let Some(tag) = map.get("tag").and_then(JsonValue::as_str) {
         options.tag = tag.into();
     }

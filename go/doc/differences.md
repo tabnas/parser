@@ -550,7 +550,12 @@ what makes them unportable rather than unread.
 
 `MapToOptions` keeps its signature and delegates to `OptionsFromMap`,
 which also returns an error for an entry it cannot carry: a serialized
-regex that RE2 cannot compile is the one such entry today. Prefer
+regex that RE2 cannot compile, an ill-typed leaf (`line.chars: {}`,
+`tokenSet.VAL: "str"`), or a function reference resolved into a slot
+that holds data. The door is typed against `Options` by reflection
+before any field is read, so a mistake is named rather than dropped,
+which is also what TypeScript now does against the shape of its
+defaults; Rust's door was strict already. Prefer
 `OptionsFromMap` wherever there is an error to return. Unmarshalling
 JSON straight into `Options` is still not a substitute: it rejects a
 fractional `rule.maxmul` rather than truncating it (see "Rule-Iteration

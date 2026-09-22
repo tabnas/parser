@@ -974,6 +974,13 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 	fail := func(format string, args ...any) {
 		errs = append(errs, fmt.Sprintf(format, args...))
 	}
+	// Type the door first (#143): an ill-typed leaf is reported, never
+	// dropped, and a function reference outside a declared code slot is
+	// one such leaf. The reads below then only see values of the right
+	// shape, or nothing.
+	if err := validateOptionsMap(m); err != nil {
+		fail("%s", strings.TrimPrefix(err.Error(), "tabnas: options: "))
+	}
 
 	if v, ok := m["tag"].(string); ok {
 		opts.Tag = v

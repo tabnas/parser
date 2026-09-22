@@ -710,7 +710,7 @@ fn serialized_builtin_lexer_switches_reach_the_runtime() {
     let mut custom_space = Tabnas::new();
     custom_space
         .grammar_json(
-            r##"{"clear":true,"options":{"rule":{"start":"top"},"space":{"chars":"_"},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#SP"}]}}}"##,
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"space":{"chars":"_"},"tokenSet":{"IGNORE":[null,null,null]}},"rule":{"top":{"open":[{"s":"#SP"}]}}}"##,
         )
         .unwrap();
     assert!(custom_space.parse("_").is_ok());
@@ -718,7 +718,7 @@ fn serialized_builtin_lexer_switches_reach_the_runtime() {
     let mut custom_line = Tabnas::new();
     custom_line
         .grammar_json(
-            r##"{"clear":true,"options":{"rule":{"start":"top"},"line":{"chars":";","rowChars":";","single":true},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#LN"}]}}}"##,
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"line":{"chars":";","rowChars":";","single":true},"tokenSet":{"IGNORE":[null,null,null]}},"rule":{"top":{"open":[{"s":"#LN"}]}}}"##,
         )
         .unwrap();
     assert_eq!(custom_line.options.line.chars, ";");
@@ -758,7 +758,7 @@ fn serialized_comment_definitions_reach_the_runtime() {
     let mut parser = Tabnas::new();
     parser
         .grammar_json(
-            r##"{"clear":true,"options":{"rule":{"start":"top"},"comment":{"def":{"hash":null,"semi":{"line":true,"start":";","lex":true,"suffix":["!!","!"],"eatline":false}}},"tokenSet":{"IGNORE":[]}},"rule":{"top":{"open":[{"s":"#CM"}]}}}"##,
+            r##"{"clear":true,"options":{"rule":{"start":"top"},"comment":{"def":{"hash":null,"semi":{"line":true,"start":";","lex":true,"suffix":["!!","!"],"eatline":false}}},"tokenSet":{"IGNORE":[null,null,null]}},"rule":{"top":{"open":[{"s":"#CM"}]}}}"##,
         )
         .unwrap();
     assert!(!parser.options.comment.definitions.contains_key("hash"));
@@ -883,4 +883,23 @@ fn an_excluded_group_is_disabled_even_when_it_is_also_included() {
         ["@plain"],
         "exclude overrides include for a group named by both lists"
     );
+}
+
+// A `@name` string in a slot that holds data is a function reference
+// where only data is declared: a load fault in every runtime (#143). The
+// serialized escape `@@x` is the literal `@x`, as the TypeScript and Go
+// doors read it.
+#[test]
+fn a_reference_in_a_data_slot_is_a_load_fault() {
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"line":{"chars":"@node$"}}}"#)
+        .is_err());
+    assert!(Tabnas::new()
+        .grammar_json(r#"{"options":{"rule":{"start":"@value$"}}}"#)
+        .is_err());
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(r#"{"options":{"space":{"chars":"@@"}}}"#)
+        .unwrap();
+    assert_eq!(parser.options.space.chars, "@");
 }

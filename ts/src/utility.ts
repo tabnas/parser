@@ -1226,6 +1226,133 @@ function getpath(root: any, path: string | string[]): any {
 }
 
 
+// Validate an options overlay against the shape of the defaults before it
+// is merged. The serialized options door (`grammar()`) and the in-process
+// doors (`new Tabnas(o)`, `tn.options(o)`) all pass through here, so an
+// ill-typed leaf is a load fault with a plain Error naming the leaf, in
+// every runtime, rather than a raw TypeError from deep inside configure()
+// in this one and a silent drop in Go (#143). The defaults are the schema:
+// a leaf whose default is a string takes a string, and so on; null means
+// "remove" or "default" at every leaf and is always allowed. A function in
+// a slot whose default is data is a resolved FuncRef in a data slot, and
+// is the same fault, which is what restricts refs to declared code slots.
+// Keys the defaults do not declare are a plugin's own and are not checked.
+//
+// The dynamic-key maps (a token set, a comment definition, a keyword) are
+// validated per entry against the shape their defaults show, spelled out
+// below because the entry names are the caller's.
+// validateOptions({rule:{start:1}}, defaults) // => throws 'options.rule.start: expected string, got number'
+function validateOptions(opts: any, dflt: any, path = 'options'): void {
+  if (null == opts || S.object !== typeof opts || Array.isArray(opts)) return
+  for (const key of Object.keys(opts)) {
+    const val = opts[key]
+    const d = dflt?.[key]
+    const at = path + '.' + key
+    const entry = DYNAMIC_MAPS[at]
+    if (null != entry) {
+      if (null == val || SKIP === val) continue
+      if (S.object !== typeof val || Array.isArray(val)) {
+        bad(at, 'object', val)
+      }
+      for (const name of Object.keys(val)) {
+        entry(val[name], at + '.' + name)
+      }
+      continue
+    }
+    if (undefined === d || null === d || undefined === val || null === val || SKIP === val) {
+      // No default to compare against (a plugin's own key, or a leaf
+      // whose default is unset), or a null that means "default".
+      continue
+    }
+    if (S.function === typeof d) {
+      if (S.function !== typeof val) bad(at, 'function', val)
+      continue
+    }
+    if (Array.isArray(d)) {
+      if (!Array.isArray(val)) bad(at, 'array', val)
+      continue
+    }
+    if (S.object === typeof d) {
+      if (d instanceof RegExp) continue
+      if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
+      validateOptions(val, d, at)
+      continue
+    }
+    // A primitive default: the same primitive, with the exceptions the
+    // documented option contracts carry.
+    const want = typeof d
+    if (want !== typeof val) {
+      if ('options.rewind.history' === at && false === val) continue
+      if ('options.errmsg.suffix' === at && (S.string === typeof val || S.function === typeof val)) continue
+      bad(at, want, val)
+    }
+  }
+}
+
+function bad(at: string, want: string, val: any): never {
+  const got = S.function === typeof val
+    ? 'a function reference'
+    : Array.isArray(val) ? 'array' : typeof val
+  throw new Error(
+    `Tabnas: ${at}: expected ${want}, got ${got}` +
+    (S.function === typeof val
+      ? ' (a function reference is only allowed in a declared code slot)'
+      : ''),
+  )
+}
+
+type DynamicEntry = (val: any, at: string) => void
+
+const oneOf = (types: string[], allowNull = true): DynamicEntry => (val, at) => {
+  if (null == val && allowNull) return
+  const t = val instanceof RegExp ? 'regexp' : Array.isArray(val) ? 'array' : typeof val
+  if (!types.includes(t)) bad(at, types.join(' or '), val)
+}
+
+// Per-entry shapes of the maps whose keys the caller chooses.
+const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
+  'options.fixed.token': oneOf(['string']),
+  'options.match.token': oneOf(['regexp', 'function', 'string']),
+  'options.match.value': oneOf(['regexp', 'function', 'object']),
+  'options.tokenSet': (val, at) => {
+    if (null == val) return
+    if (!Array.isArray(val)) bad(at, 'array', val)
+    for (let i = 0; i < val.length; i++) {
+      if (null != val[i] && S.string !== typeof val[i]) bad(at + '[' + i + ']', 'string', val[i])
+    }
+  },
+  'options.comment.def': (val, at) => {
+    if (null == val || false === val) return
+    if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
+    validateOptions(val, COMMENT_DEF_SHAPE, at)
+  },
+  'options.value.def': (val, at) => {
+    if (null == val || false === val) return
+    if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
+    if (undefined !== val.consume && null !== val.consume && 'boolean' !== typeof val.consume) {
+      bad(at + '.consume', 'boolean', val.consume)
+    }
+  },
+  'options.string.escape': oneOf(['string']),
+  'options.string.replace': oneOf(['string']),
+  'options.error': oneOf(['string']),
+  'options.hint': oneOf(['string']),
+  'options.parse.prepare': oneOf(['function']),
+  'options.config.modify': oneOf(['function']),
+  'options.lex.match': (val, at) => {
+    if (null == val) return
+    if (S.object !== typeof val || Array.isArray(val)) bad(at, 'object', val)
+    if (null != val.order && 'number' !== typeof val.order) bad(at + '.order', 'number', val.order)
+    if (null != val.make && S.function !== typeof val.make) bad(at + '.make', 'function', val.make)
+  },
+  'options.plugin': () => {},
+}
+
+// The shape one comment definition takes; `suffix` is a string, an
+// array of strings, or a function, so it is left unchecked here.
+const COMMENT_DEF_SHAPE = { line: true, start: '#', end: '*/', lex: true, eatline: false }
+
+
 // Recursively resolve FuncRef strings in an options object to actual functions,
 // and `@/pattern/flags` strings to RegExp instances.
 // resolveFuncRefs({r:'@/a/i'}) // => {r: /a/i};  resolveFuncRefs('@@x') // => '@x'
@@ -1365,6 +1492,7 @@ export {
   findTokenSet,
   modlist,
   resolveFuncRefs,
+  validateOptions,
   isMatcherToken,
   MATCHER_TOKEN_NAMES,
 }
