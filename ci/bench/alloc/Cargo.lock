@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas"
-version = "0.9.7"
+version = "0.11.1"
 dependencies = [
  "indexmap",
  "regex",
