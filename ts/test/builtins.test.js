@@ -105,7 +105,7 @@ describe('builtins', () => {
       // `rule.child` is linked in the push arm (rules.ts:665) and never
       // relinked, so a child that replaces itself leaves the parent on the
       // first instance of the chain. That is the fact @fold$ above exists to
-      // work around, and it is contract: Go links the same way (rule.go:1266)
+      // work around, and it is contract: Go links the same way (rule.go:1280)
       // and the Rust port carries the pushed rule's node cell to reproduce it
       // (rs/tests/child_link_chain_test.rs). Without a fold, the later links
       // of the chain are simply not captured.

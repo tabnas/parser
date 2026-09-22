@@ -3,7 +3,7 @@
 //! `rule.child` is linked at the PUSH and never relinked.
 //!
 //! TypeScript sets `rule.child` in the push arm (`ts/src/rules.ts:665`) and
-//! nowhere else; Go does the same (`go/rule.go:1266`). A child that REPLACES
+//! nowhere else; Go does the same (`go/rule.go:1280`). A child that REPLACES
 //! itself therefore leaves its parent looking at the first instance of the
 //! chain, and a capture on the parent's close merges that instance's node.
 //! `@fold$` exists precisely because of this, and says so in its doc comment.

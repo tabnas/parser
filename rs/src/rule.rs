@@ -1260,7 +1260,7 @@ pub struct Rule {
     /// `node` field ended on.
     ///
     /// TypeScript links `rule.child` at the push (`ts/src/rules.ts:665`)
-    /// and never relinks it; Go does the same (`go/rule.go:1266`). A child
+    /// and never relinks it; Go does the same (`go/rule.go:1280`). A child
     /// that REPLACES itself therefore leaves the parent reading the first
     /// instance of the chain, which is why `@fold$` exists at all (see its
     /// doc comment in `ts/src/builtins.ts`). These two fields are how the
@@ -1751,7 +1751,7 @@ impl Rule {
     /// replacement chain happened to pop. TypeScript assigns `rule.child`
     /// and `rule.next` once, in the push arm (`ts/src/rules.ts:665`,
     /// `:720`), and relinks neither when a descendant pops; Go does the
-    /// same (`go/rule.go:1279`, `:1342`). The chain's later links are
+    /// same (`go/rule.go:1280`, `:1343`). The chain's later links are
     /// separate rule objects there, so the parent goes on reading the
     /// first. Here that rule has been dropped, so [`Rule::freeze_child`]
     /// captured it at its replace and this call leaves that capture alone.

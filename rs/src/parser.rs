@@ -3092,7 +3092,7 @@ impl Parser {
                     // The rule being replaced stops existing here. If it is
                     // the one its parent PUSHED, the parent's `child` link
                     // stays on it -- TypeScript never relinks `rule.child`
-                    // (rules.ts:665) and neither does Go (rule.go:1279) --
+                    // (rules.ts:665) and neither does Go (rule.go:1280) --
                     // so freeze the node cell and the record it ended on
                     // before it goes.
                     if let Some(parent) = stack.last_mut() {

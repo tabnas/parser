@@ -1261,7 +1261,7 @@ func TestBuiltinFoldTailRepeat(t *testing.T) {
 
 // A child that REPLACES itself leaves its parent's `child` link on the
 // first instance of the chain: `r.Child` is written in the push arm
-// (rule.go:1266) and nowhere else, exactly as TypeScript does it
+// (rule.go:1280) and nowhere else, exactly as TypeScript does it
 // (ts/src/rules.ts:665). That is the fact TestBuiltinFoldTailRepeat above
 // works around; without a fold, the later links are simply not captured.
 // Pinned here because it is cross-runtime contract, not a Go detail: the
