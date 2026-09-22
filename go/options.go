@@ -522,10 +522,41 @@ func (j *Tabnas) SetPluginOptions(name string, opts map[string]any) {
 // Make is safe for concurrent use: any number of goroutines may construct
 // parsers simultaneously. (Each *Tabnas instance is itself NOT safe for
 // concurrent Parse calls — one instance per goroutine, or serialize.)
+// DefaultOptions returns the options every instance starts from: the
+// TS-visible defaults of the fields whose overlays MERGE rather than
+// replace. TS keeps its whole default tree in options and deep-merges a
+// caller's options onto it, so `tokenSet: {IGNORE: ["#SP"]}` keeps the
+// other two entries and `comment: {def: {hash: {start: "%"}}}` keeps
+// the hash definition's other fields and the other definitions. This
+// port kept those defaults in the config and read a caller's field as
+// a wholesale replacement, which is the class B, C and D split of #151.
+// Carrying them here lets the same deep merge produce the same result.
+// Scalar defaults stay in buildConfig, where a zero value already means
+// "unset".
+func DefaultOptions() Options {
+	return Options{
+		TokenSet: map[string][]string{
+			"IGNORE": {"#SP", "#LN", "#CM"},
+			"VAL":    {"#TX", "#NR", "#ST", "#VL"},
+			"KEY":    {"#TX", "#NR", "#ST", "#VL"},
+		},
+		Comment: &CommentOptions{Def: map[string]*CommentDef{
+			"hash":  {Line: true, Start: "#"},
+			"slash": {Line: true, Start: "//"},
+			"multi": {Line: false, Start: "/*", End: "*/"},
+		}},
+		Value: &ValueOptions{Def: map[string]*ValueDef{
+			"true":  {Val: true},
+			"false": {Val: false},
+			"null":  {Val: nil},
+		}},
+	}
+}
+
 func Make(opts ...Options) *Tabnas {
-	var o Options
+	o := DefaultOptions()
 	if len(opts) > 0 {
-		o = opts[0]
+		o = Deep(o, opts[0]).(Options)
 	}
 
 	// An unset tag defaults to "-", matching the TS default

@@ -164,6 +164,13 @@ func deepMerge(base, over any) any {
 		return result
 	}
 
+	// Any other slice kind, both sides the same type: index-wise, as TS
+	// deep() merges arrays. Every index the overlay reaches wins, the
+	// positions beyond its length keep the base (#151).
+	if merged, ok := deepMergeSlices(base, over); ok {
+		return merged
+	}
+
 	// Struct handling via reflection — matches TS deep() on plain objects.
 	if merged, ok := deepMergeStruct(base, over); ok {
 		return merged
@@ -271,17 +278,38 @@ func deepMergeStruct(base, over any) (any, bool) {
 				result.Field(i).Set(of)
 			}
 		case reflect.Map:
-			// Merge map entries: base first, then over overwrites.
+			// Merge map entries, and RECURSE into an entry both sides
+			// carry, as TS deep() does for `comment.def`, `value.def`
+			// and `match.value`: an overlay `{hash: {start: "%"}}` keeps
+			// the default hash definition's other fields, and keeps the
+			// other definitions. A nil overlay entry is the delete
+			// marker and replaces (#151).
 			merged := reflect.MakeMap(bf.Type())
 			for _, k := range bf.MapKeys() {
 				merged.SetMapIndex(k, bf.MapIndex(k))
 			}
 			for _, k := range of.MapKeys() {
-				merged.SetMapIndex(k, of.MapIndex(k))
+				ov := of.MapIndex(k)
+				bv := bf.MapIndex(k)
+				if !bv.IsValid() || isNilValue(ov) {
+					merged.SetMapIndex(k, ov)
+					continue
+				}
+				m := deepMerge(bv.Interface(), ov.Interface())
+				if m == nil {
+					merged.SetMapIndex(k, reflect.Zero(bf.Type().Elem()))
+				} else {
+					merged.SetMapIndex(k, reflect.ValueOf(m))
+				}
 			}
 			result.Field(i).Set(merged)
+		case reflect.Slice:
+			// Index-wise, as TS deep() merges arrays: `tokenSet.IGNORE:
+			// ["#SP"]` keeps the default set's other two entries (#151).
+			merged, _ := deepMergeSlices(bf.Interface(), of.Interface())
+			result.Field(i).Set(reflect.ValueOf(merged))
 		default:
-			// String, slice, func, etc.: over wins.
+			// String, func, etc.: over wins.
 			result.Field(i).Set(of)
 		}
 	}
@@ -303,6 +331,55 @@ func hasExportedField(t reflect.Type) bool {
 		if t.Field(i).IsExported() {
 			return true
 		}
+	}
+	return false
+}
+
+// deepMergeSlices merges two slices of one type index by index, the way
+// TS deep() merges arrays and the []any branch of deepMerge already did:
+// every index the overlay reaches wins (its element merged onto the
+// base element when both are containers), and the positions beyond the
+// overlay's length keep the base. Go cannot spell TS's `undefined`
+// inside a typed slice, so there is no "keep this index" element: an
+// empty string in a []string is a present value and wins, which is what
+// makes it the serialized `null` marker for tokenSet (a name that
+// removes its position). Returns (nil, false) when the two are not
+// slices of the same type.
+func deepMergeSlices(base, over any) (any, bool) {
+	bv, ov := reflect.ValueOf(base), reflect.ValueOf(over)
+	if bv.Kind() != reflect.Slice || ov.Kind() != reflect.Slice || bv.Type() != ov.Type() {
+		return nil, false
+	}
+	if bv.IsNil() {
+		return deepClone(over), true
+	}
+	n := bv.Len()
+	if ov.Len() > n {
+		n = ov.Len()
+	}
+	result := reflect.MakeSlice(bv.Type(), n, n)
+	for i := 0; i < n; i++ {
+		switch {
+		case i < bv.Len() && i < ov.Len():
+			m := deepMerge(bv.Index(i).Interface(), ov.Index(i).Interface())
+			if m != nil {
+				result.Index(i).Set(reflect.ValueOf(m))
+			}
+		case i < ov.Len():
+			result.Index(i).Set(cloneElem(ov.Index(i), map[uintptr]any{}))
+		default:
+			result.Index(i).Set(cloneElem(bv.Index(i), map[uintptr]any{}))
+		}
+	}
+	return result.Interface(), true
+}
+
+// isNilValue reports a nil pointer, interface, map, slice or func held
+// in a reflect.Value: the delete marker in an options map.
+func isNilValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return v.IsNil()
 	}
 	return false
 }
@@ -1392,16 +1469,19 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		}
 	}
 
-	// tokenSet
+	// tokenSet. Positions are kept: the merge is index-wise onto the
+	// default set, so a JSON `null` at a position (which removes it in
+	// TS) becomes the "" marker here, and a shorter array keeps the
+	// default set's tail, as it does in TS (#151).
 	if ts, ok := m["tokenSet"].(map[string]any); ok {
 		opts.TokenSet = make(map[string][]string, len(ts))
 		for name, v := range ts {
 			switch arr := v.(type) {
 			case []any:
-				var names []string
-				for _, item := range arr {
+				names := make([]string, len(arr))
+				for i, item := range arr {
 					if s, ok := item.(string); ok {
-						names = append(names, s)
+						names[i] = s
 					}
 				}
 				opts.TokenSet[name] = names

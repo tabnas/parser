@@ -379,19 +379,26 @@ func IsMatcherToken(name string) bool {
 // Called from BOTH Make and SetOptions: `Make(opts)` and
 // `Make().SetOptions(opts)` must be equivalent for the same Options.
 func (j *Tabnas) applyTokenSets(opts *Options) {
-	if opts == nil || opts.TokenSet == nil {
+	j.applyTokenSetsNamed(opts, opts)
+}
+
+// applyTokenSetsNamed installs, from the merged options `from`, every
+// token set that `named` mentions. An empty name is the removed
+// position (the serialized `null`, see OptionsFromMap) and is skipped.
+func (j *Tabnas) applyTokenSetsNamed(from, named *Options) {
+	if from == nil || from.TokenSet == nil || named == nil || named.TokenSet == nil {
 		return
 	}
 	// Deterministic order: a set may reference another set by name, and
 	// map iteration order would otherwise make the outcome vary per run.
-	names := make([]string, 0, len(opts.TokenSet))
-	for setName := range opts.TokenSet {
+	names := make([]string, 0, len(named.TokenSet))
+	for setName := range named.TokenSet {
 		names = append(names, setName)
 	}
 	sort.Strings(names)
 	for _, setName := range names {
 		var tins []Tin
-		for _, name := range opts.TokenSet[setName] {
+		for _, name := range from.TokenSet[setName] {
 			if name == "" {
 				continue
 			}
@@ -947,7 +954,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	j.applyMatchTokens(&opts)
 
 	// Apply tokenSet: resolve token names and update per-instance sets.
-	j.applyTokenSets(&opts)
+	// Read from the MERGED options, for the sets this call names: the
+	// merge is index-wise onto the default set (#151), so the incoming
+	// slice alone is not the set. Sets this call does not name keep
+	// whatever SetTokenSet last gave them.
+	j.applyTokenSetsNamed(j.options, &opts)
 
 	// Re-alias the parser error fields to the rebuilt config maps.
 	// buildConfig resolved Error/Hint/ErrMsg from the merged options.

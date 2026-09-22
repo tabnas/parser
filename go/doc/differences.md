@@ -705,9 +705,33 @@ field and handed back a zero value (so `Deep(reA, reB)` produced a regexp
 matching the empty pattern). Both now let the overlay win, which is what
 `tn.make({number: {exclude: /new/}})` has always meant.
 
-Structs with exported fields (the `Options` tree) still merge field by
-field in Go, and plain objects/arrays still merge key by key in TS.
-`undefined`/zero on the overlay side still loses in both.
+Structs with exported fields (the `Options` tree) merge field by field
+in Go, and plain objects/arrays merge key by key in TS. `undefined`/zero
+on the overlay side loses in both.
+
+Three classes of the typed overlay used to REPLACE where TS merges, and
+now merge as TS does (the ruling of #151):
+
+| class | fields | both runtimes now |
+|---|---|---|
+| slices | `Ender`, `Result.Fail`, `Parse.Recover.SyncGroups`/`SyncTokens`, `Match.TokenOrder` | index-wise: an overlay index wins, positions beyond it keep the base |
+| maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
+| `TokenSet` | every set | index-wise onto the default set |
+
+For that to hold, an instance starts from `DefaultOptions()`, which
+carries the defaults those overlays merge onto (the three token sets,
+the three comment definitions, the three value keywords), exactly as
+`tn.options` carries them in TS. `Options()` reports them.
+
+Go cannot spell TS's `undefined` inside a typed slice, so there is no
+"keep this index" element: **an empty name in a `TokenSet` slice is the
+removed position**, which is what TS's `null` does, and a serialized
+`null` arrives as one. `{"KEY": {"#ST", "", "", ""}}` is therefore the
+replacement the TS fixture spells `['#ST', null, null, null]`, and a
+bare `{"KEY": {"#ST"}}` keeps the default set's other three entries. The
+strict-JSON fixtures in both runtimes are written that way. Pinned by
+`go/options_overlay_test.go` and `ts/test/options-overlay.test.js`,
+which drive the options pipeline rather than `Deep`.
 
 ## Go-Specific Features
 

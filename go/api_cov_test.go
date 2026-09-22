@@ -408,11 +408,13 @@ func TestDerivePluginErrorReturned(t *testing.T) {
 func TestSetOptionsTokenSet(t *testing.T) {
 	j := Make()
 	j.SetOptions(Options{TokenSet: map[string][]string{
-		"KEY": {"#ST", "", "#TX"}, // empty name skipped
+		// Index-wise onto the default [#TX #NR #ST #VL] (#151): an empty
+		// name removes its position, and the fourth position keeps #VL.
+		"KEY": {"#ST", "", "#TX"},
 	}})
 	keys := j.TokenSet("KEY")
-	if len(keys) != 2 {
-		t.Errorf("expected 2 tins in KEY set, got %v", keys)
+	if len(keys) != 3 {
+		t.Errorf("expected 3 tins in KEY set (#ST #TX #VL), got %v", keys)
 	}
 }
 

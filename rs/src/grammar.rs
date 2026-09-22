@@ -1932,11 +1932,21 @@ fn apply_options(
             let members = members.as_array().ok_or_else(|| {
                 GrammarError(format!("Grammar: options.tokenSet.{name} must be an array"))
             })?;
-            let mut tins = Vec::with_capacity(members.len());
+            // Index-wise onto the set already installed, as TypeScript's
+            // deep merge treats the array (#151): a `null` removes that
+            // position, and a shorter array keeps the tail of the set it
+            // overlays. A wholesale replacement is spelled with explicit
+            // nulls, which is how the TS grammars spell it.
+            let key = name.trim_start_matches('#').to_string();
+            let existing = options.token_set.get(&key).cloned().unwrap_or_default();
+            let mut tins = Vec::with_capacity(members.len().max(existing.len()));
             for member in members {
+                if member.is_null() {
+                    continue;
+                }
                 let member = member.as_str().ok_or_else(|| {
                     GrammarError(format!(
-                        "Grammar: options.tokenSet.{name} entries must be strings"
+                        "Grammar: options.tokenSet.{name} entries must be strings or null"
                     ))
                 })?;
                 let tin = options
@@ -1944,9 +1954,8 @@ fn apply_options(
                     .unwrap_or_else(|| options.register_token(member));
                 tins.push(tin);
             }
-            options
-                .token_set
-                .insert(name.trim_start_matches('#').to_string(), tins);
+            tins.extend(existing.iter().skip(members.len()).copied());
+            options.token_set.insert(key, tins);
         }
     }
 

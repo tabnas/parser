@@ -297,6 +297,26 @@ fixed or quietly dropped.
   fleet grammar working, since all four declaration sites pair a config
   with its action on the same alternate.
 
+- **The options overlay: slices, definition maps and `tokenSet`.** On
+  Go's typed options path, a slice (`ender`, `result.fail`, the
+  recovery sync lists, `match.tokenOrder`), a map of definitions
+  (`comment.def`, `value.def`, `match.value`) and `tokenSet` each
+  REPLACED the default, where TypeScript merges index-wise, recurses
+  into the entry, and merges the set index-wise (#151). Invisible to
+  any fixture that drove `deep`/`Deep` directly, where the two agree;
+  measured on the options pipeline as `css` and `zon` carrying dead
+  `tokenSet` declarations whose Go twins worked as a replace, and three
+  Go fleet packages carrying workarounds naming the engine merge. Ruled
+  as TypeScript's semantics for all three, and Go moves: its instances
+  now start from `DefaultOptions()` so the overlays have the same base
+  to merge onto, an empty name in a `TokenSet` slice is the removed
+  position TypeScript spells `null`, and the strict-JSON fixture spells
+  its `KEY` replacement with explicit removals in both runtimes. Rust's
+  serialized `tokenSet` door replaced too and now merges index-wise.
+  Pinned by `go/options_overlay_test.go`,
+  `ts/test/options-overlay.test.js` and
+  `rs/tests/options_overlay_test.rs`, which drive the options pipeline.
+
 - **The order of a matched alternate's hooks, and when `consumed` is
   read.** Two both-silent splits ruled before a third runtime
   transcribed one side. TypeScript ran the alternate's error hook `e`
