@@ -2,12 +2,10 @@
 
 'use strict'
 
-// A committed dependency must name a PUBLISHED package or a GitHub reference.
-// Local wiring -- file:, link:, a sibling path, a packed archive, a go replace
-// -- is how a change gets tested before its dependency is released, and it is
-// correct right up to the commit. This gate is what stops it arriving in one.
-//
-// Only what git TRACKS is judged, so local wiring stays legal until staged.
+// Contents come from the git INDEX (`git show :path`), never the working tree:
+// the rule the gate enforces changes state at staging, so reading the file on
+// disk would both fail unstaged wiring and miss a staged violation the working
+// copy has since had reverted.
 
 const Fs = require('node:fs')
 const Path = require('node:path')
@@ -28,9 +26,21 @@ const SPEC_SECTIONS = [
   'overrides',
 ]
 
-const ARCHIVE_RE = /\.(tgz|tar\.gz|zip)(\?|#|$)/i
-const GITHUB_HOST_RE = /(^|[@/.])github\.com([:/]|$)/i
-const DEFAULT_REGISTRY_RE = /^https?:\/\/registry\.npmjs\.org\//i
+const ARCHIVE_RE =
+  /\.(tgz|tbz2?|txz|tzst|zip|tar|tar\.(gz|bz2|xz|zst))(\?|#|$)/i
+
+const NPM_REGISTRY_HOST = 'registry.npmjs.org'
+const GITHUB_GIT_HOSTS = new Set(['github.com', 'www.github.com', 'codeload.github.com'])
+
+const MANIFEST_BASES = new Set([
+  'package.json',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'go.mod',
+  'Cargo.toml',
+  '.npmrc',
+  '.gitmodules',
+])
 
 const ALLOWED = new Set(['registry', 'github'])
 
@@ -58,17 +68,34 @@ const WHY = {
     'a committed lockfile resolves this from a path or a link',
   'lockfile-foreign-registry':
     'a committed lockfile resolves this from a registry other than npmjs.org',
+  'unchecked-lockfile':
+    'a committed lockfile in a format this gate cannot read, so its sources are unjudged',
   'go-external-path-replace':
     'a committed go.mod redirects a module to a path OUTSIDE this repository, '
     + 'so it resolves only where that sibling happens to be checked out',
+  'go-absolute-path-replace':
+    'a committed go.mod redirects a module to an ABSOLUTE path, which names one machine',
+  'go-untracked-path-replace':
+    'a committed go.mod redirects a module to a path inside this repository that '
+    + 'git does not track, so a fresh checkout will not contain it',
   'go-module-replace':
     'a committed go.mod redirects a module to another module',
   'go-workspace':
-    'a committed go.work resolves modules from sibling directories',
+    'a committed go.work resolves a module from outside this repository',
   'cargo-external-path-dep':
     'a Cargo.toml takes a dependency by a path outside this repository',
+  'cargo-absolute-path-dep':
+    'a Cargo.toml takes a dependency by an ABSOLUTE path, which names one machine',
+  'cargo-non-github-git-dep':
+    'a Cargo.toml takes a git dependency from a host other than github.com',
+  'submodule-local-url':
+    'a committed submodule resolves from a filesystem path',
+  'submodule-non-github-url':
+    'a committed submodule resolves from a host other than github.com',
   'escaping-symlink':
     'a committed symlink points outside this repository or into node_modules',
+  'absolute-symlink':
+    'a committed symlink names an ABSOLUTE path, which resolves only on one machine',
   'committed-archive':
     'a packed archive is committed',
   'foreign-registry':
@@ -77,6 +104,8 @@ const WHY = {
     'an allowlist entry matches nothing, so it is describing a state that has gone',
   'unreasoned-allow':
     'an allowlist entry carries no reason',
+  unreadable:
+    'this gate could not read or parse the file',
 }
 
 
@@ -91,9 +120,46 @@ function readConfig(path) {
 }
 
 
+// A path is machine-specific the moment it is absolute, whatever it currently
+// happens to resolve to: `~`, a POSIX root, a Windows drive, a UNC share. The
+// Windows forms are recognised on every platform, because the gate usually runs
+// on a different one from the machine that wrote the file.
+function absoluteish(p) {
+  return /^(~[\\/]?$|~[\\/]|[\\/]{2}|[\\/]|[A-Za-z]:[\\/])/.test(p)
+}
+
+
+function localish(p) {
+  return absoluteish(p) || /^\.{1,2}[\\/]/.test(p)
+}
+
+
+// The host, not a substring of the whole spec: `https://evil.example/github.com/o/r`
+// has `github.com` in its PATH and is not a GitHub reference.
+function hostOf(spec) {
+  const s = String(spec || '')
+  if (!/:\/\//.test(s)) {
+    // scp-style, `user@host:owner/repo.git`, which git accepts and npm passes on.
+    const m = /^[^@\s/]*@([^:\s/]+):/.exec(s)
+    return m ? m[1].toLowerCase() : null
+  }
+  try {
+    return new URL(s.replace(/^git\+/i, '')).hostname.toLowerCase()
+  }
+  catch {
+    return null
+  }
+}
+
+
+function githubHost(host) {
+  return null != host && GITHUB_GIT_HOSTS.has(host)
+}
+
+
 // npm accepts a dependency spec in a dozen shapes. The order here is the order
-// npm itself disambiguates them in: an explicit protocol beats a shorthand,
-// and `owner/repo` is only GitHub once every other reading is excluded.
+// npm itself disambiguates them in: an explicit protocol beats a shorthand, and
+// `owner/repo` is only GitHub once every other reading is excluded.
 function classify(spec) {
   if (null != spec && 'object' === typeof spec) return { source: 'nested', detail: '' }
 
@@ -110,6 +176,9 @@ function classify(spec) {
   if (/^workspace:/i.test(s)) return { source: 'workspace', detail: s }
   if (/^catalog:/i.test(s)) return { source: 'catalog', detail: s }
 
+  // `git+file:` is a git dependency on a directory: local, whatever the scheme.
+  if (/^git\+file:/i.test(s)) return { source: 'file', detail: s }
+
   // An alias still resolves from the registry.
   if (/^npm:/i.test(s)) return { source: 'registry', detail: s }
 
@@ -117,14 +186,21 @@ function classify(spec) {
   if (/^(gitlab|bitbucket|gist):/i.test(s)) return { source: 'git-other', detail: s }
 
   if (/^(git\+ssh|git\+https?|git|ssh|https?):\/\//i.test(s)) {
-    if (GITHUB_HOST_RE.test(s)) return { source: 'github', detail: s }
+    if (githubHost(hostOf(s))) return { source: 'github', detail: s }
     if (/^https?:\/\//i.test(s) && ARCHIVE_RE.test(s)) {
       return { source: 'archive', detail: s }
     }
     return { source: 'git-other', detail: s }
   }
 
-  if (/^(\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:[\\/])/.test(s)) {
+  // scp-style git, which has no scheme at all.
+  if (/^[^@\s/]+@[^:\s/]+:/.test(s)) {
+    return githubHost(hostOf(s))
+      ? { source: 'github', detail: s }
+      : { source: 'git-other', detail: s }
+  }
+
+  if (localish(s)) {
     return { source: ARCHIVE_RE.test(s) ? 'archive' : 'path', detail: s }
   }
 
@@ -135,6 +211,10 @@ function classify(spec) {
   }
 
   if (ARCHIVE_RE.test(s)) return { source: 'archive', detail: s }
+
+  // No version range contains a slash, so anything left that does is a path npm
+  // will save as `file:` -- `vendor/packages/foo` and the like.
+  if (s.includes('/')) return { source: 'path', detail: s }
 
   return { source: 'registry', detail: s }
 }
@@ -191,6 +271,25 @@ function checkManifest(file, json, config, seen) {
 }
 
 
+function resolutionFinding(res) {
+  if ('string' !== typeof res || '' === res) return null
+  if (/^(file:|link:|portal:|git\+file:)/i.test(res) || localish(res)) {
+    return 'lockfile-local-resolution'
+  }
+  if (/^[^@\s/]+@[^:\s/]+:/.test(res) && !githubHost(hostOf(res))) {
+    return 'lockfile-foreign-registry'
+  }
+  if (/:\/\//.test(res)) {
+    const host = hostOf(res)
+    if (null == host) return null
+    if (NPM_REGISTRY_HOST === host) return null
+    if (githubHost(host)) return null
+    return 'lockfile-foreign-registry'
+  }
+  return null
+}
+
+
 // A clean package.json over a lockfile that records a file: resolution still
 // installs from that path, so the lockfile is checked on its own terms.
 function checkLockfile(file, json, config, seen) {
@@ -207,28 +306,19 @@ function checkLockfile(file, json, config, seen) {
   for (const [where, node] of Object.entries(json.packages || {})) {
     if (null == node || 'object' !== typeof node) continue
     if (true === node.link) add('lockfile-local-resolution', where || '(root)', 'link: true')
-    const res = node.resolved
-    if ('string' === typeof res && '' !== res) {
-      if (/^(file:|link:|\.{1,2}[\\/]|[\\/])/i.test(res)) {
-        add('lockfile-local-resolution', where || '(root)', res)
-      }
-      else if (/^https?:\/\//i.test(res) && !DEFAULT_REGISTRY_RE.test(res) &&
-               !GITHUB_HOST_RE.test(res)) {
-        add('lockfile-foreign-registry', where || '(root)', res)
-      }
-    }
+    const rule = resolutionFinding(node.resolved)
+    if (rule) add(rule, where || '(root)', node.resolved)
   }
 
-  // Lockfile v1 keeps the same information under a different shape.
+  // Lockfile v1 keeps the same information under a different shape, and gets
+  // the same judgement rather than a laxer one.
   const walkV1 = (node, prefix) => {
     for (const [name, dep] of Object.entries(node || {})) {
       if (null == dep || 'object' !== typeof dep) continue
       const where = prefix ? prefix + ' > ' + name : name
       for (const field of ['resolved', 'version']) {
-        const v = dep[field]
-        if ('string' === typeof v && /^(file:|link:)/i.test(v)) {
-          add('lockfile-local-resolution', where, v)
-        }
+        const rule = resolutionFinding(dep[field])
+        if (rule) add(rule, where, dep[field])
       }
       walkV1(dep.dependencies, where)
     }
@@ -239,7 +329,55 @@ function checkLockfile(file, json, config, seen) {
 }
 
 
-function checkGoMod(file, text, config, root, seen) {
+// yarn and pnpm lockfiles are read as text rather than parsed: the gate reports
+// the forbidden markers it can see, so one of them cannot be a silent bypass.
+function checkTextLockfile(file, text, config, seen) {
+  const findings = []
+  const allow = config.allow || {}
+  const lines = text.split(/\r?\n/)
+
+  const add = (rule, where, spec) => {
+    const key = file + ':lock:' + where
+    if (seen) seen.add(key)
+    if (Object.prototype.hasOwnProperty.call(allow, key)) return
+    findings.push({ rule, file, where, spec, key })
+  }
+
+  lines.forEach((raw, i) => {
+    const line = raw.trim()
+    if ('' === line || '#' === line[0]) return
+    const local = /(^|[\s"':@,{[])(file|link|portal|git\+file):/i.exec(line)
+    if (local) { add('lockfile-local-resolution', 'line ' + (i + 1), line.slice(0, 160)); return }
+    const url = /\b[a-z+]+:\/\/\S+/i.exec(line)
+    if (url) {
+      const host = hostOf(url[0])
+      if (null != host && NPM_REGISTRY_HOST !== host && !githubHost(host)) {
+        add('lockfile-foreign-registry', 'line ' + (i + 1), line.slice(0, 160))
+      }
+    }
+  })
+
+  return findings
+}
+
+
+// Go quotes a replacement target only when it has to; strip the quotes before
+// asking whether it is a path, or a valid `=> "./dir with spaces"` reads as a
+// module name.
+function unquoteGo(tok) {
+  if (2 <= tok.length && '"' === tok[0] && '"' === tok[tok.length - 1]) {
+    try { return JSON.parse(tok) } catch { return tok.slice(1, -1) }
+  }
+  return tok
+}
+
+
+function insideRepo(abs, root) {
+  return abs === root || abs.startsWith(root + Path.sep)
+}
+
+
+function checkGoMod(file, text, config, root, seen, trackedPaths) {
   const findings = []
   const allow = config.allow || {}
   const REPO_ROOT = root || REPO
@@ -254,23 +392,34 @@ function checkGoMod(file, text, config, root, seen) {
   }
 
   // A replace pointing INSIDE this repository is how a helper module in the
-  // tree uses the module beside it, and it travels with the checkout. One
-  // pointing outside needs a sibling that may not be there.
+  // tree uses the module beside it, and it travels with the checkout -- but
+  // only if git tracks what it points at.
   const dir = Path.dirname(Path.join(REPO_ROOT, file))
+  const relOf = (abs) => Path.relative(REPO_ROOT, abs).split(Path.sep).join('/')
+  const tracksUnder = (abs) => {
+    if (!trackedPaths) return true
+    const prefix = '' === relOf(abs) ? '' : relOf(abs) + '/'
+    for (const p of trackedPaths) if ('' === prefix || p.startsWith(prefix)) return true
+    return false
+  }
 
   const one = (body) => {
-    const m = /^(\S+)(?:\s+\S+)?\s*=>\s*(\S+)(?:\s+(\S+))?/.exec(body.trim())
+    const m = /^("(?:[^"\\]|\\.)*"|\S+)(?:\s+\S+)?\s*=>\s*("(?:[^"\\]|\\.)*"|\S+)(?:\s+(\S+))?/
+      .exec(body.trim())
     if (!m) return
-    const target = m[2]
+    const from = unquoteGo(m[1])
+    const target = unquoteGo(m[2])
 
-    if (/^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])/.test(target)) {
+    if (absoluteish(target)) { add('go-absolute-path-replace', from, body.trim()); return }
+
+    if (/^\.{1,2}[\\/]/.test(target)) {
       const abs = Path.resolve(dir, target)
-      if (abs === REPO_ROOT || abs.startsWith(REPO_ROOT + Path.sep)) return
-      add('go-external-path-replace', m[1], body.trim())
+      if (!insideRepo(abs, REPO_ROOT)) { add('go-external-path-replace', from, body.trim()); return }
+      if (!tracksUnder(abs)) { add('go-untracked-path-replace', from, body.trim()); return }
       return
     }
 
-    add('go-module-replace', m[1], body.trim())
+    add('go-module-replace', from, body.trim())
   }
 
   for (const raw of lines) {
@@ -289,23 +438,130 @@ function checkGoMod(file, text, config, root, seen) {
 }
 
 
-function checkCargoToml(file, text, config, root, seen) {
+// A go.work whose every member lives in this repository travels with the
+// checkout, so the file name alone is not the finding -- the paths are.
+function checkGoWork(file, text, config, root, seen) {
   const findings = []
   const allow = config.allow || {}
   const REPO_ROOT = root || REPO
   const dir = Path.dirname(Path.join(REPO_ROOT, file))
 
-  const re = /path\s*=\s*"([^"]+)"/g
-  let m
-  while (null !== (m = re.exec(text))) {
-    const rel = m[1]
-    const abs = Path.resolve(dir, rel)
-    if (abs === REPO_ROOT || abs.startsWith(REPO_ROOT + Path.sep)) continue
-
-    const key = file + ':cargo-path:' + rel
+  const add = (where, spec) => {
+    const key = file + ':go-workspace:' + where
     if (seen) seen.add(key)
-    if (Object.prototype.hasOwnProperty.call(allow, key)) continue
-    findings.push({ rule: 'cargo-external-path-dep', file, where: rel, spec: m[0], key })
+    if (Object.prototype.hasOwnProperty.call(allow, key)) return
+    findings.push({ rule: 'go-workspace', file, where, spec, key })
+  }
+
+  const targets = []
+  let inUse = false
+  let inReplace = false
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/\/\/.*$/, '').trim()
+    if ('' === line) continue
+    if (/^use\s*\($/.test(line)) { inUse = true; continue }
+    if (/^replace\s*\($/.test(line)) { inReplace = true; continue }
+    if ((inUse || inReplace) && ')' === line) { inUse = false; inReplace = false; continue }
+    if (inUse) { targets.push(unquoteGo(line)); continue }
+    if (inReplace) {
+      const m = /=>\s*("(?:[^"\\]|\\.)*"|\S+)/.exec(line)
+      if (m) targets.push(unquoteGo(m[1]))
+      continue
+    }
+    const use = /^use\s+("(?:[^"\\]|\\.)*"|\S+)/.exec(line)
+    if (use) { targets.push(unquoteGo(use[1])); continue }
+    const rep = /^replace\s+.*=>\s*("(?:[^"\\]|\\.)*"|\S+)/.exec(line)
+    if (rep) targets.push(unquoteGo(rep[1]))
+  }
+
+  for (const target of targets) {
+    if (absoluteish(target)) { add(target, 'use ' + target); continue }
+    if (!/^\.{1,2}[\\/]/.test(target)) continue
+    if (!insideRepo(Path.resolve(dir, target), REPO_ROOT)) add(target, 'use ' + target)
+  }
+
+  return findings
+}
+
+
+const CARGO_DEP_SECTION_RE =
+  /^\[\s*(?:workspace\s*\.\s*)?(?:target\s*\.\s*(?:"[^"]*"|'[^']*'|[^.\]]+)\s*\.\s*)?(?:dev-|build-)?dependencies(?:\s*\.\s*[^\]]+)?\s*\]$/
+
+// Only dependency tables, and never a commented-out line: a `path` key in
+// `[package]` or behind a `#` is not a dependency.
+function checkCargoToml(file, text, config, root, seen) {
+  const findings = []
+  const allow = config.allow || {}
+  const REPO_ROOT = root || REPO
+  const dir = Path.dirname(Path.join(REPO_ROOT, file))
+  let inDeps = false
+
+  const add = (rule, where, spec) => {
+    const key = file + ':cargo:' + where
+    if (seen) seen.add(key)
+    if (Object.prototype.hasOwnProperty.call(allow, key)) return
+    findings.push({ rule, file, where, spec, key })
+  }
+
+  const str = (raw) => {
+    const m = /^"((?:[^"\\]|\\.)*)"|^'([^']*)'/.exec(raw)
+    if (!m) return null
+    return undefined === m[1] ? m[2] : m[1].replace(/\\(.)/g, '$1')
+  }
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)#.*$/, '').trim()
+    if ('' === line) continue
+    if ('[' === line[0]) { inDeps = CARGO_DEP_SECTION_RE.test(line); continue }
+    if (!inDeps) continue
+
+    const pathRe = /\bpath\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
+    let m
+    while (null !== (m = pathRe.exec(line))) {
+      const rel = str(m[1])
+      if (null == rel) continue
+      if (absoluteish(rel)) { add('cargo-absolute-path-dep', rel, m[0]); continue }
+      if (insideRepo(Path.resolve(dir, rel), REPO_ROOT)) continue
+      add('cargo-external-path-dep', rel, m[0])
+    }
+
+    const gitRe = /\bgit\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
+    while (null !== (m = gitRe.exec(line))) {
+      const url = str(m[1])
+      if (null == url) continue
+      if (githubHost(hostOf(url))) continue
+      add('cargo-non-github-git-dep', url, m[0])
+    }
+  }
+
+  return findings
+}
+
+
+function checkGitmodules(file, text, config, seen) {
+  const findings = []
+  const allow = config.allow || {}
+
+  const add = (rule, where, spec) => {
+    const key = file + ':submodule:' + where
+    if (seen) seen.add(key)
+    if (Object.prototype.hasOwnProperty.call(allow, key)) return
+    findings.push({ rule, file, where, spec, key })
+  }
+
+  let name = ''
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)[;#].*$/, '').trim()
+    if ('' === line) continue
+    const sec = /^\[submodule\s+"?([^"\]]+)"?\]$/.exec(line)
+    if (sec) { name = sec[1]; continue }
+    const m = /^url\s*=\s*(.+)$/.exec(line)
+    if (!m) continue
+    const url = m[1].trim().replace(/^["']|["']$/g, '')
+    const where = name || url
+    if (/^file:/i.test(url) || localish(url)) { add('submodule-local-url', where, url); continue }
+    if (!githubHost(hostOf(url))) add('submodule-non-github-url', where, url)
   }
 
   return findings
@@ -328,12 +584,20 @@ function tracked(root) {
 }
 
 
+function indexBlob(root, rel) {
+  return Child.execFileSync('git', ['-C', root, 'show', ':' + rel], {
+    encoding: 'utf8', maxBuffer: 1 << 28,
+  })
+}
+
+
 function checkAll(config, root) {
   const cfg = config || readConfig(CONFIG_PATH)
   const REPO_ROOT = root || REPO
-  const skip = new Set(cfg.skipPaths || [])
   const findings = []
   const seenKeys = new Set()
+  const allow = cfg.allow || {}
+  const has = (key) => Object.prototype.hasOwnProperty.call(allow, key)
 
   const record = (list) => {
     for (const f of list) {
@@ -343,28 +607,82 @@ function checkAll(config, root) {
   }
 
   // Record every key the allowlist COULD have matched, so a stale entry is
-  // detectable whether or not it is currently suppressing anything.
+  // detectable -- but only where the condition it excuses is actually present.
   const offer = (key) => seenKeys.add(key)
 
-  for (const { mode, path: rel } of tracked(REPO_ROOT)) {
-    if (skip.has(rel)) continue
-    const abs = Path.join(REPO_ROOT, rel)
+  const rows = tracked(REPO_ROOT)
+  const trackedPaths = new Set(rows.map((r) => r.path))
+  const modeOf = new Map(rows.map((r) => [r.path, r.mode]))
+
+  const judge = (rel, base, text) => {
+    if ('package.json' === base) return checkManifest(rel, JSON.parse(text), cfg, seenKeys)
+    if ('package-lock.json' === base || 'npm-shrinkwrap.json' === base) {
+      return checkLockfile(rel, JSON.parse(text), cfg, seenKeys)
+    }
+    if ('go.mod' === base) return checkGoMod(rel, text, cfg, REPO_ROOT, seenKeys, trackedPaths)
+    if ('Cargo.toml' === base) return checkCargoToml(rel, text, cfg, REPO_ROOT, seenKeys)
+    if ('.gitmodules' === base) return checkGitmodules(rel, text, cfg, seenKeys)
+    if ('yarn.lock' === base || 'pnpm-lock.yaml' === base) {
+      return checkTextLockfile(rel, text, cfg, seenKeys)
+    }
+    if ('.npmrc' === base) return checkNpmrc(rel, text, cfg, seenKeys)
+    return []
+  }
+
+  function checkNpmrc(rel, text, conf, seen) {
+    const out = []
+    for (const line of text.split(/\r?\n/)) {
+      const m = /^\s*(?:(@?[^;#\s:]*):)?registry\s*=\s*(.+?)\s*$/.exec(line)
+      if (!m) continue
+      const scope = m[1] || ''
+      const value = m[2].replace(/^["']|["']$/g, '')
+      if (NPM_REGISTRY_HOST === hostOf(value)) continue
+      const key = rel + ':registry:' + (scope || '(default)')
+      if (seen) seen.add(key)
+      if (has(key)) continue
+      out.push({
+        rule: 'foreign-registry', file: rel, where: 'registry ' + (scope || '(default)'),
+        spec: value, key,
+      })
+    }
+    return out
+  }
+
+  for (const { mode, path: rel } of rows) {
     const base = Path.basename(rel)
 
     if ('120000' === mode) {
       let target = ''
-      try { target = Fs.readlinkSync(abs) }
+      try { target = indexBlob(REPO_ROOT, rel).trim() }
       catch { target = '' }
-      const abstarget = Path.resolve(Path.dirname(abs), target)
-      const escapes = !(abstarget === REPO_ROOT || abstarget.startsWith(REPO_ROOT + Path.sep))
-      const intoModules = /(^|[\\/])node_modules([\\/]|$)/.test(target)
       const key = rel + ':symlink'
-      offer(key)
-      if ((escapes || intoModules) &&
-          !Object.prototype.hasOwnProperty.call(cfg.allow || {}, key)) {
-        findings.push({
-          rule: 'escaping-symlink', file: rel, where: 'symlink', spec: '-> ' + target, key,
-        })
+      const abstarget = Path.resolve(Path.dirname(Path.join(REPO_ROOT, rel)), target)
+      const escapes = !insideRepo(abstarget, REPO_ROOT)
+      const intoModules = /(^|[\\/])node_modules([\\/]|$)/.test(target)
+
+      if (absoluteish(target)) {
+        offer(key)
+        if (!has(key)) {
+          findings.push({ rule: 'absolute-symlink', file: rel, where: 'symlink', spec: '-> ' + target, key })
+        }
+        continue
+      }
+      if (escapes || intoModules) {
+        offer(key)
+        if (!has(key)) {
+          findings.push({ rule: 'escaping-symlink', file: rel, where: 'symlink', spec: '-> ' + target, key })
+        }
+        continue
+      }
+
+      // An in-repo link is fine, and its TARGET is still a dependency source if
+      // the link is named like a manifest: npm reads through it.
+      if (!MANIFEST_BASES.has(base) && 'yarn.lock' !== base && 'pnpm-lock.yaml' !== base) continue
+      const targetRel = Path.relative(REPO_ROOT, abstarget).split(Path.sep).join('/')
+      if (!trackedPaths.has(targetRel)) continue
+      try { record(judge(rel, base, indexBlob(REPO_ROOT, targetRel))) }
+      catch (err) {
+        findings.push({ rule: 'unreadable', file: rel, where: 'parse', spec: err.message, key: null })
       }
       continue
     }
@@ -372,51 +690,26 @@ function checkAll(config, root) {
     if (ARCHIVE_RE.test(rel)) {
       const key = rel + ':archive'
       offer(key)
-      if (!Object.prototype.hasOwnProperty.call(cfg.allow || {}, key)) {
+      if (!has(key)) {
         findings.push({ rule: 'committed-archive', file: rel, where: 'file', spec: base, key })
       }
       continue
     }
 
-    if ('go.work' === base || 'go.work.sum' === base) {
-      const key = rel + ':go-workspace'
+    if ('bun.lockb' === base) {
+      const key = rel + ':lockfile'
       offer(key)
-      if (!Object.prototype.hasOwnProperty.call(cfg.allow || {}, key)) {
-        findings.push({ rule: 'go-workspace', file: rel, where: 'file', spec: base, key })
+      if (!has(key)) {
+        findings.push({ rule: 'unchecked-lockfile', file: rel, where: 'file', spec: base, key })
       }
       continue
     }
 
-    let text = null
-    const read = () => {
-      if (null === text) text = Fs.readFileSync(abs, 'utf8')
-      return text
-    }
-
     try {
-      if ('package.json' === base) {
-        record(checkManifest(rel, JSON.parse(read()), cfg, seenKeys))
-      }
-      else if ('package-lock.json' === base || 'npm-shrinkwrap.json' === base) {
-        record(checkLockfile(rel, JSON.parse(read()), cfg, seenKeys))
-      }
-      else if ('go.mod' === base) {
-        record(checkGoMod(rel, read(), cfg, REPO_ROOT, seenKeys))
-      }
-      else if ('Cargo.toml' === base) {
-        record(checkCargoToml(rel, read(), cfg, REPO_ROOT, seenKeys))
-      }
-      else if ('.npmrc' === base) {
-        for (const line of read().split(/\r?\n/)) {
-          const m = /^\s*(?:[^;#\s]*:)?registry\s*=\s*(\S+)/.exec(line)
-          if (!m) continue
-          if (DEFAULT_REGISTRY_RE.test(m[1])) continue
-          const key = rel + ':registry'
-          offer(key)
-          if (!Object.prototype.hasOwnProperty.call(cfg.allow || {}, key)) {
-            findings.push({ rule: 'foreign-registry', file: rel, where: 'registry', spec: m[1], key })
-          }
-        }
+      if ('go.work' === base) record(checkGoWork(rel, indexBlob(REPO_ROOT, rel), cfg, REPO_ROOT, seenKeys))
+      else if ('go.work.sum' === base) continue
+      else if (MANIFEST_BASES.has(base) || 'yarn.lock' === base || 'pnpm-lock.yaml' === base) {
+        record(judge(rel, base, indexBlob(REPO_ROOT, rel)))
       }
     }
     catch (err) {
@@ -427,7 +720,7 @@ function checkAll(config, root) {
   }
 
   // An allowlist is a liability once it outlives what it excused.
-  for (const [key, reason] of Object.entries(cfg.allow || {})) {
+  for (const [key, reason] of Object.entries(allow)) {
     if ('string' !== typeof reason || '' === reason.trim()) {
       findings.push({ rule: 'unreasoned-allow', file: 'tools/dep-gate.json', where: key, spec: '', key: null })
     }
@@ -468,10 +761,14 @@ if (require.main === module) {
 
 module.exports = {
   classify,
+  hostOf,
   checkManifest,
   checkLockfile,
+  checkTextLockfile,
   checkGoMod,
+  checkGoWork,
   checkCargoToml,
+  checkGitmodules,
   checkAll,
   report,
   REPO,
