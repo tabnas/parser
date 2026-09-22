@@ -215,7 +215,9 @@ which is why both of these are written down rather than configured.
 ```sh
 cargo build --all-targets
 cargo test --all-targets
+cargo test --doc
 cargo clippy --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
 The crate declares Rust 1.85 as its minimum supported toolchain. From the

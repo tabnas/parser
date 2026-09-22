@@ -138,6 +138,7 @@ From `rs/`:
 ```bash
 cargo build --all-targets
 cargo test --all-targets
+cargo test --doc   # --all-targets does NOT include doctests
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
