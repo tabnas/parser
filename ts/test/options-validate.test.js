@@ -371,4 +371,69 @@ describe('options-validate absent token sets', () => {
     const notEmptied = new Tabnas({ tokenSet: { KEY: [] } }).internal().config.tokenSet
     assert.equal(notEmptied.KEY.length, 4, 'an empty array emptied the set')
   })
+
+  // `deep()` reads the base as `base[k]`, which walks the prototype chain,
+  // so a name Object.prototype also carries merged the inherited METHOD in
+  // as an own property whenever the overlay said "keep the base". The
+  // reduce below then called `.filter()` on a function:
+  //
+  //   TypeError: members.filter is not a function
+  //
+  // which is the exact failure this suite exists to stop, surviving for
+  // one class of name. The validator cannot catch it: it sees the SKIP the
+  // caller wrote, and the function only exists after the merge.
+  it('does not crash on a name inherited from Object.prototype', () => {
+    const PROTO = [
+      'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+    ]
+    for (const name of [...PROTO, 'constructor']) {
+      for (const members of [SKIP, undefined]) {
+        const cfg = new Tabnas({ tokenSet: { [name]: members } }).internal().config
+        // hasOwn, not `in`: every one of these names IS on the prototype
+        // of any plain object, so `in` answers true whatever the config
+        // holds -- which is the same prototype-chain read that made the
+        // engine crash here in the first place.
+        assert.equal(
+          Object.hasOwn(cfg.tokenSet, name),
+          false,
+          name + ' = ' + String(members) + ' reached the config',
+        )
+      }
+    }
+
+    // An array under such a name is an ordinary set and still installs.
+    for (const name of PROTO) {
+      const cfg = new Tabnas({ tokenSet: { [name]: ['#TX'] } }).internal().config
+      assert.equal(Object.hasOwn(cfg.tokenSet, name), true, name + ' as a real set')
+      assert.equal(cfg.tokenSet[name].length, 1, name + ' set size')
+      assert.equal(cfg.tokenSetTins[name][cfg.t.TX], true, name + ' tin lookup')
+    }
+
+    // `constructor` is the one exception, and it is recorded rather than
+    // repaired here. `deep()` merges an array over whatever `base[k]`
+    // returns, and for this name that is the `Object` function, which
+    // takes the index assignments and comes back a function. The guard
+    // in configure() then drops it. Repairing it means making `deep()`
+    // read the base as an OWN property, which is the merge every option
+    // in the engine goes through, and belongs in a change of its own.
+    // Dropped, not crashing, is the safe direction.
+    const ctor = new Tabnas({ tokenSet: { constructor: ['#TX'] } }).internal().config
+    assert.equal(Object.hasOwn(ctor.tokenSet, 'constructor'), false)
+  })
+
+  // `undefined` is the third spelling of "keep what the base holds", and
+  // it reads identically to SKIP at both levels. It matters for the TYPE
+  // as much as the runtime: `tokenSet?:` makes the property optional and
+  // says nothing about the index signature's values, so `undefined` has
+  // to appear in both unions for a strict caller to write what these
+  // assertions prove the engine accepts.
+  it('treats an undefined member as SKIP does', () => {
+    const base = new Tabnas({}).internal().config.tokenSet.KEY
+    const withUndef = new Tabnas({ tokenSet: { KEY: [null, undefined, null, null] } })
+      .internal().config.tokenSet.KEY
+    const withSkip = new Tabnas({ tokenSet: { KEY: [null, SKIP, null, null] } })
+      .internal().config.tokenSet.KEY
+    assert.deepEqual(withUndef, [base[1]], 'undefined did not preserve position 1')
+    assert.deepEqual(withUndef, withSkip, 'undefined and SKIP disagree')
+  })
 })

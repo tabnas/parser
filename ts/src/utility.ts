@@ -231,11 +231,21 @@ function configure(
   // `{KEY: [null, null, null, null]}` gives a present, zero-length set.
   // `{KEY: []}` does NOT: an array overlays index-wise, so overlaying
   // nothing leaves all four defaults in place.
+  //
+  // The non-array test is the third way a name can arrive with nothing
+  // behind it, and it is not a caller mistake — the validator has
+  // already refused those. `deep()` reads the base as `base[k]`, which
+  // walks the PROTOTYPE CHAIN, so a name that Object.prototype also
+  // carries merges the inherited method in as an own property whenever
+  // the overlay says "keep the base": `{tokenSet: {toString: SKIP}}`
+  // reached `.filter()` holding a function and raised the same raw
+  // TypeError this guard exists to stop. `valueOf`, `hasOwnProperty` and
+  // the rest behave identically.
   const tokenSet = opts.tokenSet
     ? Object.keys(opts.tokenSet).reduce(
       (a: any, n: string) => {
         const members = (opts.tokenSet as any)[n]
-        if (null == members || SKIP === members) {
+        if (null == members || SKIP === members || !Array.isArray(members)) {
           return a
         }
         a[n] = members
@@ -247,7 +257,16 @@ function configure(
     )
     : {}
 
-  cfg.tokenSet = cfg.tokenSet || {}
+  // Null-prototype, because the CALLER chooses these keys. Over a plain
+  // object, `cfg.tokenSet[name]` answers with an inherited method for
+  // `toString`, `valueOf`, `constructor` and the rest, and every read
+  // below is a truthiness test: the install branch took the "already
+  // present" path and died on `fn.length = 0`, and `findTokenSet` handed
+  // a function back to `Rule.parse` as though it were a set of tins. A
+  // set genuinely named `toString` is legal and now behaves like any
+  // other. The same reasoning applies to the tin lookup keyed by the
+  // same names; its inner maps are keyed by tin, so they stay plain.
+  cfg.tokenSet = cfg.tokenSet || Object.create(null)
   entries(tokenSet).map((entry: any[]) => {
     let name = entry[0]
     let tinset = entry[1]
@@ -267,7 +286,7 @@ function configure(
       en[1].map((tin: number) => (a[en[0]][tin] = true)),
       a
     ),
-    {},
+    Object.create(null),
   )
 
   // The IGNORE tokenSet is special and should always exist, even if empty.
