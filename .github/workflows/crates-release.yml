@@ -94,8 +94,9 @@ jobs:
       id-token: write   # OIDC -> crates.io; the only credential this job holds
     steps:
       # A dispatch is not tied to the default branch: the ref is a
-      # parameter. Under a call, these are the caller's event and ref,
-      # and release.yml has already refused anything but main.
+      # parameter. Under a call, these are the caller's event and ref:
+      # release.yml refuses a dispatch from anything but main, and its
+      # ts/v* push path (admin/publish.sh) runs at the pushed tag.
       - name: Refuse a dispatch from anywhere but main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: |
