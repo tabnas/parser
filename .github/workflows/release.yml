@@ -58,6 +58,17 @@
 # failed C build unpublishes nothing: it leaves a draft Release for a
 # clib-release.yml dispatch (darwin_only: false) to finish.
 #
+# CRATES.IO (ADR-21, staged). Where the repository has a Rust crate,
+# the crates job hands the same release tag to crates-release.yml, which
+# publishes rs/ to crates.io from that tag over OIDC trusted publishing.
+# It is inert until a maintainer sets the TABNAS_CRATES variable to 'on',
+# which happens once the crate exists and its trusted publisher names
+# THIS file. crates.io matches the top-level workflow (the OIDC
+# workflow_ref), not the called one, so renaming release.yml breaks
+# crates.io as it breaks npm. No job needs the crates job, so a failed
+# crates publish blocks nothing and unpublishes nothing. Re-run that job
+# to repair it.
+#
 # Actions are pinned to full commit SHAs with the corresponding release
 # as a trailing comment, on the lowest major whose `runs.using` is
 # node24 (ADR-16).
@@ -243,5 +254,17 @@ jobs:
     permissions:
       contents: write   # GITHUB_TOKEN -> the Release and its assets
     uses: ./.github/workflows/clib-release.yml
+    with:
+      tag: ${{ needs.publish-npm.outputs.clib-tag }}
+
+  # crates.io (ADR-21, staged; see the header). Two switches: this `if`
+  # and the called job's own, both on the TABNAS_CRATES variable.
+  crates:
+    needs: publish-npm
+    if: ${{ vars.TABNAS_CRATES == 'on' && needs.publish-npm.outputs.clib-tag != '' }}
+    permissions:
+      contents: read    # the tagged source
+      id-token: write   # OIDC -> crates.io (a called job gets no more than this)
+    uses: ./.github/workflows/crates-release.yml
     with:
       tag: ${{ needs.publish-npm.outputs.clib-tag }}

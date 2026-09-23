@@ -1,0 +1,428 @@
+# Target: tabnas/parser -> .github/workflows/crates-release.yml
+#
+# crates.io publishing for this repository's Rust crate, rs/ (admin
+# ADR-21).
+#
+# STAGED AND INERT. The job runs only when the configuration variable
+# TABNAS_CRATES is 'on', at repository or organisation level. release.yml
+# checks the same variable before it calls this file. A maintainer sets
+# it only after the crate exists on crates.io and its trusted publisher
+# is configured. Until then every call and every dispatch skips the job,
+# so promoting this file changes nothing.
+#
+# TWO ENTRY POINTS:
+#   workflow_call      the normal path. release.yml calls this once the
+#                      release tag is on the remote. No job needs this
+#                      one, so a failure here blocks nothing and
+#                      unpublishes nothing: npm, the Go module and the
+#                      GitHub Release are already out.
+#   workflow_dispatch  repair or backfill, for an existing release tag.
+#                      It is accepted only from main. It authenticates
+#                      only if the crate has a SECOND trusted publisher
+#                      that names crates-release.yml (see below).
+#                      Otherwise, re-run the failed crates job of the
+#                      original release run.
+#
+# THE TRUSTED PUBLISHER NAMES release.yml, NOT THIS FILE. crates.io
+# matches the OIDC token's workflow_ref claim. In a called workflow that
+# claim names the CALLER. crates.io never reads job_workflow_ref, the
+# claim that names this file. So the normal path authenticates as
+# release.yml, and renaming release.yml breaks crates.io publishing
+# exactly as it breaks npm.
+#
+# PUBLISHED FROM THE TAG, never from main, so the crate is built from
+# the commit that npm and the Go proxy serve. rs/Cargo.toml's version
+# must equal ts/package.json's, and the tag must be ts/v or go/v of that
+# version. The kind is read at the workflow's own ref, not at the tag, so
+# a tag cut before .tabnas-kind existed can still be backfilled.
+#
+# THE COMMITTED MANIFEST STAYS PATH-ONLY. Sibling tabnas crates are
+# consumed as `path = "../../<repo>/rs"`, so no repository's CI turns red
+# on the day the engine's minor version moves. This job rewrites each
+# such dependency into a requirement on that crate's newest stable,
+# non-yanked version on crates.io. It first checks that the dependency
+# shares an owner with this crate, and refuses a name that someone else
+# owns rather than depending on it. Path-only dev-dependencies are
+# dropped, as cargo drops them. The job summary records every rewrite,
+# and `cargo publish` then verify-builds the crate against exactly those
+# versions, the ones a consumer gets.
+#
+# FAILS OPEN on a version already on crates.io: it posts a notice and
+# skips. FAILS CLOSED on everything else: a crate that does not exist yet
+# (the first publish is manual, RFC 3691), a version mismatch, or a
+# registry answer it cannot read. crates.io versions are immutable, and a
+# wrong one can only be yanked.
+#
+# Actions are pinned to full commit SHAs with the corresponding release
+# as a trailing comment, on the lowest major whose `runs.using` is
+# node24 (ADR-16). The org actions policy admits only GitHub-owned and
+# verified-creator actions, and a refused action fails the whole run at
+# startup, whatever its job's `if` says. rust-lang/crates-io-auth-action
+# is admitted, proved by a probe run (tabnas/semver, 2026-09-23, run
+# 35899284590): the action downloaded and ran, failing only at the token
+# exchange for want of a trusted publisher, and a skipped job calling a
+# workflow that uses it did not fail the run at startup.
+name: crates-release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "release tag, e.g. go/v1.2.3"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing release tag, e.g. go/v1.2.3 (ts/v1.2.3 where there is no Go module)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  crates:
+    # The switch (ADR-21). If the variable is unset or not 'on', the job
+    # is skipped.
+    if: vars.TABNAS_CRATES == 'on'
+    runs-on: ubuntu-latest
+    # crates.io's trusted-publishing token expires after 30 minutes.
+    timeout-minutes: 30
+    permissions:
+      contents: read    # the tagged source
+      id-token: write   # OIDC -> crates.io; the only credential this job holds
+    steps:
+      # A dispatch is not tied to the default branch: the ref is a
+      # parameter. Under a call, these are the caller's event and ref:
+      # release.yml refuses a dispatch from anything but main, and its
+      # ts/v* push path (admin/publish.sh) runs at the pushed tag.
+      - name: Refuse a dispatch from anywhere but main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::crates-release must be dispatched from main (got $GITHUB_REF)"
+          exit 1
+
+      # The workflow's OWN ref: main on a dispatch, the release commit on
+      # a call. The kind is read from this checkout, not from the tag.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+
+      # ADR-20: only a COMPONENT or a TOOL publishes. The repository's kind
+      # is committed in .tabnas-kind (COMPONENT, TOOL, CONTENT or ADMIN), so
+      # this workflow refuses to run in a repository that does not publish.
+      - name: Refuse unless this repository publishes (COMPONENT or TOOL)
+        run: |
+          K="$(tr -d '[:space:]' < .tabnas-kind 2>/dev/null || true)"
+          case "$K" in
+            COMPONENT|TOOL) echo "kind: $K" ;;
+            *) echo "::error::.tabnas-kind is '${K:-missing}', and only a COMPONENT or a TOOL publishes (admin ADR-20)"; exit 1 ;;
+          esac
+
+      - name: Refuse anything but a release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            ts/v[0-9]*|go/v[0-9]*) echo "tag: $TAG" ;;
+            *) echo "::error::'$TAG' is not a release tag (ts/v<version> or go/v<version>)"; exit 1 ;;
+          esac
+
+      # The source that ships is the release tag, never main. It is
+      # checked out as refs/tags/ so that a branch with the same name
+      # cannot stand in for the tag. It goes in a directory of its own,
+      # beside the checkout above.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: rel
+          persist-credentials: false
+
+      - name: Read the crate and the release version at the tag
+        id: v
+        working-directory: rel
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ -f rs/Cargo.toml ] || { echo "::error::$TAG has no rs/Cargo.toml, so there is no crate to publish"; exit 1; }
+          # Each value is shell-quoted by shlex, so eval only assigns. The
+          # assignment comes first, so a failed read stops the step (-e).
+          VARS="$(python3 - <<'PY'
+          import json, shlex, tomllib
+          p = tomllib.load(open("rs/Cargo.toml", "rb")).get("package", {})
+          pub = p.get("publish", True)
+          if isinstance(pub, list):
+              pub = "crates-io" in pub
+          for k, v in {
+              "NAME": p.get("name", ""),
+              "C": p.get("version", ""),
+              "RV": p.get("rust-version", ""),
+              "PUB": "true" if pub else "false",
+              "V": json.load(open("ts/package.json"))["version"],
+          }.items():
+              print(f"{k}={shlex.quote(str(v))}")
+          PY
+          )"
+          eval "$VARS"
+          echo "crate $NAME $C (rust-version ${RV:-none}); release $V; tag $TAG"
+          if [ -z "$NAME" ] || [ "$C" != "$V" ]; then
+            echo "::error::rs/Cargo.toml says ${NAME:-<no name>} ${C:-<no version>}, ts/package.json says $V; they must be equal"
+            exit 1
+          fi
+          if [ "$TAG" != "ts/v$V" ] && [ "$TAG" != "go/v$V" ]; then
+            echo "::error::$TAG is neither ts/v$V nor go/v$V, the tags of the version it contains"
+            exit 1
+          fi
+          [ -n "$RV" ] || { echo "::error::rs/Cargo.toml declares no rust-version, so there is no toolchain to publish with"; exit 1; }
+          LOCK=false
+          if git ls-files --error-unmatch rs/Cargo.lock >/dev/null 2>&1; then LOCK=true; fi
+          {
+            echo "name=$NAME"
+            echo "version=$V"
+            echo "rust=$RV"
+            echo "lock=$LOCK"
+            echo "publishable=$PUB"
+          } >> "$GITHUB_OUTPUT"
+
+      # The REGISTRY decides whether there is anything left to do.
+      # crates.io's data-access policy asks for a User-Agent that names
+      # the caller and for no more than one request a second.
+      - name: Decide whether this version still has to be published
+        id: decide
+        env:
+          NAME: ${{ steps.v.outputs.name }}
+          V: ${{ steps.v.outputs.version }}
+          PUBLISHABLE: ${{ steps.v.outputs.publishable }}
+        run: |
+          if [ "$PUBLISHABLE" != true ]; then
+            echo "::notice::rs/Cargo.toml does not publish to crates.io (package.publish); nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          UA="tabnas-release (+https://github.com/$GITHUB_REPOSITORY)"
+          code() { curl -sS -o /dev/null -w '%{http_code}' -A "$UA" "https://crates.io/api/v1/crates/$1"; }
+          C="$(code "$NAME")"
+          case "$C" in
+            200) ;;
+            404) echo "::error::$NAME is not on crates.io. Its first publish is manual (a maintainer, with a scoped token); only then can its trusted publisher be configured. See admin ADR-21."
+                 exit 1 ;;
+            *)   echo "::error::crates.io answered $C for $NAME; refusing to guess"
+                 exit 1 ;;
+          esac
+          sleep 1
+          C="$(code "$NAME/$V")"
+          case "$C" in
+            200) echo "::notice::$NAME $V is already on crates.io; nothing to publish"
+                 echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "will publish $NAME $V"
+                 echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "::error::crates.io answered $C for $NAME $V; refusing to guess"
+                 exit 1 ;;
+          esac
+
+      # Resolve sibling tabnas crates from crates.io, not from sibling
+      # checkouts. A checkout would have to exist for every dependency,
+      # including dev-only and transitive ones, at a version that meets
+      # the requirement. The verification build would also compile
+      # against it rather than against what a consumer gets.
+      - name: Rewrite path dependencies as crates.io requirements
+        id: manifest
+        if: steps.decide.outputs.publish == 'true'
+        working-directory: rel/rs
+        env:
+          NAME: ${{ steps.v.outputs.name }}
+        run: |
+          python3 - Cargo.toml "$NAME" <<'PY'
+          # Rewrite rs/Cargo.toml so it resolves from crates.io alone (ADR-21).
+          # Each path dependency on a sibling tabnas crate becomes a requirement
+          # on that crate's newest stable, non-yanked crates.io version.
+          # Path-only dev-dependencies are dropped, as cargo drops them. It fails
+          # closed on anything it does not recognise: a path to a crate that is
+          # not a tabnas crate, a dependency crates.io does not have, one that
+          # shares no owner with this crate, or a path left after the rewrite.
+          import json, os, re, sys, time, tomllib, urllib.error, urllib.request
+
+          MANIFEST, ME = sys.argv[1], sys.argv[2]
+          API = os.environ.get("CRATES_API", "https://crates.io/api/v1")
+          UA = "tabnas-release (+https://github.com/%s)" % os.environ.get("GITHUB_REPOSITORY", "tabnas")
+          KINDS = ("dependencies", "dev-dependencies", "build-dependencies")
+          last = [0.0]
+          seen = {}
+
+          def fail(msg):
+              print(f"::error::{MANIFEST}: {msg}")
+              sys.exit(1)
+
+          def get(path):
+              # crates.io's data-access policy: at most one request a second.
+              time.sleep(max(0.0, 1.0 - (time.monotonic() - last[0])))
+              last[0] = time.monotonic()
+              req = urllib.request.Request(API + path, headers={"User-Agent": UA, "Accept": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.load(r)
+              except urllib.error.HTTPError as e:
+                  if e.code == 404:
+                      return None
+                  fail(f"crates.io answered {e.code} for {path}; refusing to guess")
+              except urllib.error.URLError as e:
+                  fail(f"crates.io is unreachable for {path} ({e.reason}); refusing to guess")
+
+          def owners(name):
+              if name not in seen:
+                  j = get(f"/crates/{name}/owners")
+                  seen[name] = None if j is None else {u["login"] for u in j["users"]}
+              return seen[name]
+
+          def trusted():
+              # This crate's owners. Only a maintainer's manual first publish
+              # has none yet (this workflow refuses a crate that does not
+              # exist), and there the engine crate, `tabnas`, stands in.
+              mine = owners(ME)
+              if mine is None:
+                  mine = owners("tabnas")
+                  if mine is None:
+                      fail(f"neither {ME} nor tabnas is on crates.io, so no owner can vouch for a dependency")
+              return mine
+
+          def newest(name):
+              j = get(f"/crates/{name}")
+              if j is None:
+                  fail(f"{name} is not on crates.io; it must be published first (ADR-21 tier order)")
+              v = j["crate"].get("max_stable_version")
+              if not v:
+                  fail(f"{name} has no stable, non-yanked version on crates.io")
+              if not (owners(name) or set()) & trusted():
+                  fail(f"{name} on crates.io shares no owner with {ME}; refusing to depend on it")
+              return v
+
+          def lit(v):
+              if isinstance(v, bool):
+                  return "true" if v else "false"
+              if isinstance(v, (int, str)):
+                  return json.dumps(v)
+              if isinstance(v, list):
+                  return "[" + ", ".join(lit(x) for x in v) + "]"
+              fail(f"cannot write {v!r} back into an inline table")
+
+          HEAD = re.compile(r"^\s*\[\[?\s*(.+?)\s*\]\]?\s*(#.*)?$")
+          DEP = re.compile(r"^(\s*)([A-Za-z0-9_-]+)\s*=\s*(\{.*\})\s*(#.*)?$")
+          src = open(MANIFEST).read()
+          out, notes, sec = [], [], ""
+          for line in src.split("\n"):
+              h = HEAD.match(line)
+              if h:
+                  sec = h.group(1)
+                  out.append(line)
+                  continue
+              kind = sec.rsplit(".", 1)[-1].replace("_", "-")
+              d = DEP.match(line)
+              if not (d and kind in KINDS):
+                  out.append(line)
+                  continue
+              key = d.group(2)
+              try:
+                  spec = tomllib.loads("x = " + d.group(3))["x"]
+              except tomllib.TOMLDecodeError:
+                  fail(f"[{sec}] {key}: cannot read the inline table")
+              if "path" not in spec:
+                  out.append(line)
+                  continue
+              was = spec.pop("path")
+              if "version" in spec:
+                  notes.append(f"[{sec}] {key}: path {was} dropped, version {spec['version']} kept")
+              elif kind == "dev-dependencies":
+                  notes.append(f"[{sec}] {key}: path-only dev-dependency on {was} dropped")
+                  continue
+              else:
+                  name = spec.get("package", key)
+                  if not re.fullmatch(r"tabnas(-[a-z0-9]+)*", name):
+                      fail(f"[{sec}] {key} is a path dependency on {name}, which is not a tabnas crate; it is never resolved from crates.io by name")
+                  spec = {"version": newest(name), **spec}
+                  notes.append(f"[{sec}] {key}: path {was} -> version {spec['version']}")
+              body = ", ".join(f"{k} = {lit(v)}" for k, v in spec.items())
+              out.append(f"{d.group(1)}{key} = {{ {body} }}" + (f" {d.group(4)}" if d.group(4) else ""))
+
+          new = "\n".join(out)
+          doc = tomllib.loads(new)
+          tables = [("", doc)] + [(f"target.{t}.", v) for t, v in doc.get("target", {}).items()]
+          for where, tbl in tables:
+              for k in KINDS + ("dev_dependencies", "build_dependencies"):
+                  for n, s in (tbl.get(k) or {}).items():
+                      if isinstance(s, dict) and "path" in s:
+                          fail(f"[{where}{k}] {n} still names a path; only single-line inline tables are rewritten")
+
+          changed = new != src
+          if changed:
+              open(MANIFEST, "w").write(new)
+          print("\n".join(notes) or "no path dependencies: the manifest publishes as committed")
+          if os.environ.get("GITHUB_OUTPUT"):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"changed={'true' if changed else 'false'}\n")
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(f"### {ME}: dependencies as published\n\n")
+                  f.write("".join(f"- `{n}`\n" for n in notes) or "- none rewritten\n")
+          PY
+
+      # rustup, as rust.yml does, NOT dtolnay/rust-toolchain: the actions
+      # policy refuses that one before any job starts. The toolchain is the
+      # crate's own rust-version, read at the tag, and `default` makes it
+      # the one cargo runs. Publishing runs no rustfmt or clippy.
+      - name: Set up Rust (the crate's rust-version)
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          RV: ${{ steps.v.outputs.rust }}
+        run: |
+          rustup toolchain install "$RV" --profile minimal
+          rustup default "$RV"
+
+      # Trusted publishing: GitHub mints an OIDC token, and crates.io
+      # exchanges it for a token that expires after 30 minutes. That token
+      # is limited to crates whose trusted publisher names this repository
+      # and release.yml. The action's post step revokes it when the job
+      # ends, and no secret is stored anywhere.
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18  # v1.0.5
+        id: auth
+        if: steps.decide.outputs.publish == 'true'
+
+      # --locked only where nothing was rewritten and a lockfile is
+      # committed. There, a stale rs/Cargo.lock fails the publish rather
+      # than being rewritten into the crate. A rewritten manifest has to
+      # re-resolve, and it leaves the tree dirty. The MSRV-aware resolver
+      # fallback keeps a newly resolved dependency within rust-version
+      # (cargo 1.84 and later; older cargo ignores the setting).
+      - name: Publish to crates.io
+        if: steps.decide.outputs.publish == 'true'
+        working-directory: rel/rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+          REWRITTEN: ${{ steps.manifest.outputs.changed }}
+          LOCK: ${{ steps.v.outputs.lock }}
+        run: |
+          if [ "$REWRITTEN" = false ] && [ "$LOCK" = true ]; then
+            cargo publish --locked
+          else
+            cargo publish --allow-dirty
+          fi
+
+      - name: Confirm crates.io serves the version
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          NAME: ${{ steps.v.outputs.name }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          UA="tabnas-release (+https://github.com/$GITHUB_REPOSITORY)"
+          C=none
+          for _ in 1 2 3 4 5 6; do
+            C="$(curl -sS -o /dev/null -w '%{http_code}' -A "$UA" "https://crates.io/api/v1/crates/$NAME/$V" || true)"
+            if [ "$C" = 200 ]; then
+              echo "crates.io serves $NAME $V"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::crates.io does not report $NAME $V after publishing (last answer $C)"
+          exit 1
