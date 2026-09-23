@@ -440,16 +440,25 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
 - `rust.yml` — formatting, build, tests, strict Clippy, and the two
   TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
-- `release.yml` — **a replacement for a workflow that is already live**,
-  not a new one, so promoting it overwrites `.github/workflows/release.yml`.
-  Diff the two before promoting. It adds crates.io publishing over OIDC
-  trusted publishing, alongside the npm publish that is already there.
+- `release-crates-io.yml.disabled` — **the release workflow with crates.io
+  publishing, staged and disabled.** It is a replacement for the live
+  `.github/workflows/release.yml`, not a new workflow: it adds crates.io
+  publishing over OIDC trusted publishing, alongside the npm publish and
+  Go tag the live file already does.
 
-  **Promote it only after `tabnas` exists on crates.io.** RFC 3691 lets a
+  **The bulk promotion of 2026-09-22 made it live too early**, while
+  `tabnas` did not exist on crates.io, and the live file was restored to
+  its npm + Go form (the same content as admin's
+  `rollout/workflows/parser__release.yml`). No release ran in between. Its
+  name does not end in `.yml` so that a `workflows/*.yml` promotion cannot
+  pick it up again.
+
+  **Enable it only after `tabnas` exists on crates.io.** RFC 3691 lets a
   trusted publisher be configured only after an initial manual publish, so
   the first release goes out over a scoped token from a maintainer's
   machine; until then the auth step has nothing to authenticate against
-  and fails the whole release. Setup order:
+  and fails the release after npm has published and before anything is
+  tagged. Setup order:
 
   1. From the release commit on `main`: `cd rs && cargo publish --locked`,
      with a crates.io token scoped to publish-new.
@@ -457,10 +466,16 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
      publisher: owner `tabnas`, repository `parser`, workflow file
      `release.yml`, environment blank (or a `release` environment, if one
      is added here to gate the job behind a reviewer).
-  3. Promote this file.
+  3. Diff this file against the live `.github/workflows/release.yml`,
+     carry over anything the live file has gained, and copy it over as
+     `release.yml`.
   4. Revoke the token from step 1.
 
   As with npm, the config names a single workflow FILENAME, which is why
   the crates steps live in `release.yml` rather than a workflow of their
   own: renaming the file breaks publishing on both registries until the
   registry-side entries are updated to match.
+
+  `rust-lang/crates-io-auth-action` is a Marketplace action from a
+  verified creator, which the org's actions policy admits when it is
+  SHA-pinned, as it is here; no run has proved that yet.
