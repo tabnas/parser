@@ -353,7 +353,7 @@ note "${#NAMES[@]} checkout(s)"
 # unbuilt rather than wrong.
 if [ "$RUNTIME" != "go" ]; then
   step "build the engine"
-  ( cd "$PARSER_ROOT/ts" && npx tsc --build src test ) || {
+  ( cd "$PARSER_ROOT/ts" && npx tsc --build src && npx tsc --build test ) || {
     echo "run-fleet: the engine's own TS build failed — fix that first" >&2; exit 2; }
   [ -f "$PARSER_ROOT/ts/dist/tabnas.js" ] || {
     echo "run-fleet: the engine built but $PARSER_ROOT/ts/dist/tabnas.js is absent" >&2; exit 2; }

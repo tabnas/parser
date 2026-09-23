@@ -54,8 +54,8 @@
 # wrong one can only be yanked.
 #
 # Actions are pinned to full commit SHAs with the corresponding release
-# as a trailing comment, on the lowest major whose `runs.using` is
-# node24 (ADR-16). The org actions policy admits only GitHub-owned and
+# as a trailing comment, at the action's latest release
+# (ADR-16). The org actions policy admits only GitHub-owned and
 # verified-creator actions, and a refused action fails the whole run at
 # startup, whatever its job's `if` says. rust-lang/crates-io-auth-action
 # is admitted, proved by a probe run (tabnas/semver, 2026-09-23, run
@@ -105,7 +105,7 @@ jobs:
 
       # The workflow's OWN ref: main on a dispatch, the release commit on
       # a call. The kind is read from this checkout, not from the tag.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -133,7 +133,7 @@ jobs:
       # checked out as refs/tags/ so that a branch with the same name
       # cannot stand in for the tag. It goes in a directory of its own,
       # beside the checkout above.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
           path: rel

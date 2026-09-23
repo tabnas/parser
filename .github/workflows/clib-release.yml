@@ -1,7 +1,7 @@
 # Stamped by admin tasks/adopt-clib.sh (ADR-12); staged to
 # ci/clib-release.yml and promoted to .github/workflows/ per ADR-8.
 #
-# tabnas-clib-template: v3
+# tabnas-clib-template: v4
 #
 # The GitHub Release and the C artifacts for libtabnasparser (ADR-19).
 #
