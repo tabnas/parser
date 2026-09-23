@@ -1,5 +1,4 @@
-# PROPOSED workflow — lives in ci/workflows/ for review; move to
-# .github/workflows/bench.yml to activate.
+# Promoted from ci/workflows/ per ADR-8; this is the live workflow.
 #
 # Advisory benchmark run: numbers from shared CI runners are noisy, so
 # this NEVER gates a merge — it records the fixture-matrix results as a

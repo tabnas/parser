@@ -1,7 +1,4 @@
-# PROPOSED workflow — lives in ci/workflows/ for review; move to
-# .github/workflows/fleet.yml to activate. Session credentials cannot
-# write .github/workflows/* (admin DECISIONS.md ADR-8), so promotion is a
-# maintainer step via tabnas/admin rollout/apply-ci-folders.sh.
+# Promoted from ci/workflows/ per ADR-8; this is the live workflow.
 #
 # What it closes: nothing in CI today runs a downstream grammar's own
 # suite against the engine under test. build.yml clones four repos and
