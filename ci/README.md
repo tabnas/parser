@@ -440,42 +440,25 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 - `bench.yml` — weekly + manual benchmark run, artifact-only.
 - `rust.yml` — formatting, build, tests, strict Clippy, and the two
   TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
-- `release-crates-io.yml.disabled` — **the release workflow with crates.io
-  publishing, staged and disabled.** It is a replacement for the live
-  `.github/workflows/release.yml`, not a new workflow: it adds crates.io
-  publishing over OIDC trusted publishing, alongside the npm publish and
-  Go tag the live file already does.
+- crates.io publishing is **no longer staged here**. The disabled copy of
+  `release.yml` that used to sit in this folder is gone. Promoting it
+  meant hand-merging a second `release.yml` against the live one, and the
+  bulk promotion of 2026-09-22 made it live too early. What replaces it is
+  already in `.github/workflows/` and inert: `crates-release.yml`, which
+  `release.yml`'s `crates` job calls with the release tag. Both skip
+  unless the repository or organisation variable `TABNAS_CRATES` is `on`
+  (admin ADR-21, proposed).
 
-  **The bulk promotion of 2026-09-22 made it live too early**, while
-  `tabnas` did not exist on crates.io, and the live file was restored to
-  its npm + Go form (the same content as admin's
-  `rollout/workflows/parser__release.yml`). No release ran in between. Its
-  name does not end in `.yml` so that a `workflows/*.yml` promotion cannot
-  pick it up again.
+  The trusted publisher on crates.io still names `release.yml`. crates.io
+  matches the token's `workflow_ref`, which names the calling workflow, so
+  renaming `release.yml` breaks crates.io publishing exactly as it breaks
+  npm.
 
-  **Enable it only after `tabnas` exists on crates.io.** RFC 3691 lets a
-  trusted publisher be configured only after an initial manual publish, so
-  the first release goes out over a scoped token from a maintainer's
-  machine; until then the auth step has nothing to authenticate against
-  and fails the release after npm has published and before anything is
-  tagged. Setup order:
+  Admin's `docs/crates-maintainer-steps.md` lists the steps that come
+  before the switch: the first manual publish of `tabnas` (RFC 3691 allows
+  a trusted publisher only on a crate that exists), its trusted publisher,
+  and then the other crates in dependency order.
 
-  1. From the release commit on `main`: `cd rs && cargo publish --locked`,
-     with a crates.io token scoped to publish-new.
-  2. On `crates.io/crates/tabnas/settings`, add a GitHub Actions trusted
-     publisher: owner `tabnas`, repository `parser`, workflow file
-     `release.yml`, environment blank (or a `release` environment, if one
-     is added here to gate the job behind a reviewer).
-  3. Diff this file against the live `.github/workflows/release.yml`,
-     carry over anything the live file has gained, and copy it over as
-     `release.yml`.
-  4. Revoke the token from step 1.
-
-  As with npm, the config names a single workflow FILENAME, which is why
-  the crates steps live in `release.yml` rather than a workflow of their
-  own: renaming the file breaks publishing on both registries until the
-  registry-side entries are updated to match.
-
-  `rust-lang/crates-io-auth-action` is a Marketplace action from a
-  verified creator, which the org's actions policy admits when it is
-  SHA-pinned, as it is here; no run has proved that yet.
+  The org actions policy admits `rust-lang/crates-io-auth-action`. A probe
+  run on 2026-09-23 downloaded and ran it, and a skipped job that uses it
+  did not fail its run at startup.
