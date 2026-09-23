@@ -70,8 +70,8 @@
 # to repair it.
 #
 # Actions are pinned to full commit SHAs with the corresponding release
-# as a trailing comment, on the lowest major whose `runs.using` is
-# node24 (ADR-16).
+# as a trailing comment, at the action's latest release
+# (ADR-16).
 
 name: release
 
@@ -98,7 +98,7 @@ jobs:
     outputs:
       clib-tag: ${{ steps.clib.outputs.tag }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0   # tags, for the already-released guard
 
@@ -113,7 +113,7 @@ jobs:
             *) echo "::error::.tabnas-kind is '${K:-missing}', and only a COMPONENT or a TOOL publishes (admin ADR-20)"; exit 1 ;;
           esac
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org

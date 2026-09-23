@@ -1,4 +1,4 @@
-# pkg-config for libtabnasparser (tabnas-clib-template: v3)
+# pkg-config for libtabnasparser (tabnas-clib-template: v4)
 # Install alongside the built library; substitute @PREFIX@ at install.
 # Libs links the CANONICAL basename (libtabnasparser.so/.dylib). Release
 # artifacts carry a target suffix; installing means copying (or

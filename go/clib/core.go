@@ -2,7 +2,7 @@
 
 // core.go — the library's behaviour, in plain Go.
 //
-// tabnas-clib-template: v3 (stamped by admin tasks/adopt-clib.sh
+// tabnas-clib-template: v4 (stamped by admin tasks/adopt-clib.sh
 // from tasks/clib-template/; edit the template and re-stamp, not this
 // file — admin's verify gate fails on a stale stamp).
 //
@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	templateVersion = "v3"
+	templateVersion = "v4"
 	libName         = "libtabnasparser"
 	formatName      = "parser"
 	valueOut        = true

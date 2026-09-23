@@ -3,9 +3,9 @@ module gotokdump
 go 1.24.7
 
 require (
-	github.com/tabnas/json/go v0.5.8
-	github.com/tabnas/jsonic/go v0.6.7
-	github.com/tabnas/parser/go v0.10.0
+	github.com/tabnas/json/go v0.5.9
+	github.com/tabnas/jsonic/go v0.7.0
+	github.com/tabnas/parser/go v0.12.1
 )
 
 // The engine under test is this repository's own module, so it is replaced by

@@ -2,7 +2,7 @@
 
 //go:build !cgo
 
-// tabnas-clib-template: v3
+// tabnas-clib-template: v4
 //
 // tabnas_c.go carries this package's main(), but importing "C" gives it
 // an implicit cgo build constraint — so a CGO_ENABLED=0 `go build ./...`
