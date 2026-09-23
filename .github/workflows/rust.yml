@@ -47,6 +47,10 @@ jobs:
         git clone --depth 1 https://github.com/tabnas/abnf.git abnf
         git clone --depth 1 https://github.com/tabnas/ebnf.git ebnf
         git clone --depth 1 https://github.com/tabnas/gbnf.git gbnf
+        # Not a grammar producer: ci/parity/run-parity.sh builds gotokdump
+        # in a Go workspace that includes ../jsonic/go, so without this
+        # clone the parity step dies at `go work init`.
+        git clone --depth 1 https://github.com/tabnas/jsonic.git jsonic
     - name: Install TypeScript dependencies
       shell: bash
       run: |
@@ -63,6 +67,9 @@ jobs:
       shell: bash
       run: |
         . parser/ci/lib/wire.sh
+        # json/ts is what ci/parity/tokdump.js requires, so it must be
+        # built, and against the working-tree engine like the rest.
+        link_ts_dep json/ts parser "$PWD/parser/ts"
         link_ts_dep bnf/ts parser "$PWD/parser/ts"
         link_ts_dep abnf/ts parser "$PWD/parser/ts"
         link_ts_dep abnf/ts bnf "$PWD/bnf/ts"
@@ -71,6 +78,7 @@ jobs:
         link_ts_dep gbnf/ts parser "$PWD/parser/ts"
         link_ts_dep gbnf/ts bnf "$PWD/bnf/ts"
         ( cd parser/ts && npm run build )
+        ( cd json/ts && npm run build )
         ( cd bnf/ts && npm run build )
         ( cd abnf/ts && npm run build )
         ( cd ebnf/ts && npm run build )
