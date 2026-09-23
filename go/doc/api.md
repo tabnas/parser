@@ -553,6 +553,14 @@ func boolp(b bool) *bool { return &b }
 tabnas.Options{Comment: &tabnas.CommentOptions{Lex: boolp(false)}}
 ```
 
+### `Bool(b bool) *bool`
+
+The package exports that helper for the `*bool` fields, so
+`tabnas.Bool(false)` works wherever `boolp(false)` does, with nothing to
+define. The fields are pointers so that an explicit `false` survives the
+options overlay, which keeps the base wherever an overlay field is zero.
+`CommentDef.Line` is one of them: see [options](options.md#commentdef).
+
 ## Grammar validation
 
 Pure functions that check a grammar held as **data**. A `*GrammarSpec` from

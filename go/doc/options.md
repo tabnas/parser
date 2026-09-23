@@ -18,6 +18,9 @@ func boolp(b bool) *bool { return &b }
 func intp(i int) *int    { return &i }
 ```
 
+For the `*bool` fields the package exports the same helper as
+`tabnas.Bool`, so `tabnas.Bool(false)` needs no definition of its own.
+
 ## `Fixed`
 
 Controls fixed structural tokens (`{`, `}`, `[`, `]`, `:`, `,`).

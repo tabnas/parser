@@ -820,12 +820,13 @@ func (j *Tabnas) Options() Options {
 	return Options{}
 }
 
-// boolPtr is a helper to create a *bool.
+// boolPtr is the package's older, unexported spelling of Bool, kept so
+// its existing call sites need no edit. It delegates, so the two cannot
+// drift apart.
 func boolPtr(b bool) *bool {
-	return &b
+	return Bool(b)
 }
 
-// boolVal returns the value of a *bool, or the default if nil.
 // Bool returns a pointer to b, for the option fields that are *bool.
 //
 // Those fields are pointers so that an explicit `false` survives the
@@ -839,6 +840,7 @@ func Bool(b bool) *bool {
 	return &b
 }
 
+// boolVal returns the value of a *bool, or the default if nil.
 func boolVal(p *bool, def bool) bool {
 	if p != nil {
 		return *p
