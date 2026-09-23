@@ -1,14 +1,11 @@
-# PROPOSED workflow — lives in ci/workflows/ for review; move to
-# .github/workflows/gate.yml to activate.
+# Promoted from ci/workflows/ per ADR-8; this is the live gate.
 #
-# Closes the engine conformance gate: today build.yml runs only this
-# repo's own suites (~50 strict-JSON TSV rows reach the engine's
-# fixtures), clones json/debug/abnf/railroad but never runs their tests,
-# and does not clone jsonic at all. This workflow runs the DOWNSTREAM
-# json + jsonic suites (both runtimes) against the engine under test —
+# The engine conformance gate. This repo's own fixtures are strict JSON
+# only; this workflow also runs the DOWNSTREAM json + jsonic suites
+# (both runtimes) against the engine under test —
 # ~2,300 shared TSV rows plus ~1,500 unit tests, including the
-# error-code parity contract — plus the fixture-corpus sync check and
-# the cross-runtime token-stream parity check.
+# error-code parity contract — plus the fixture-corpus sync check, the
+# cross-runtime token-stream parity check and a generated value diff.
 #
 # Note: cloning downstreams at main couples engine PRs to downstream
 # health. If a broken downstream main starts blocking engine work, pin
@@ -43,19 +40,31 @@ jobs:
       shell: bash
       run: |
         set -e
-        for dep in debug json jsonic; do
+        # json + jsonic: the suites under test. debug: jsonic's api, custom
+        # and debug tests require @tabnas/debug. bnf + abnf: this repo's
+        # README doc-examples require @tabnas/abnf, resolved from the
+        # sibling checkout (ts/test/doc-examples.test.js), and abnf needs
+        # bnf. run-gate.sh links each of them to these working trees and
+        # builds them in ci.yml's build-order (parser bnf debug abnf).
+        for dep in bnf debug abnf json jsonic; do
           git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
         done
     - name: Install TS toolchains
       shell: bash
       run: |
         set -e
-        for pkg in parser debug json jsonic; do
+        for pkg in parser bnf debug abnf json jsonic; do
           ( cd "$pkg/ts" && npm i )
         done
     - name: Run gate (all suites, both runtimes, fixture sync)
+      id: gate
       shell: bash
       run: parser/ci/gate/run-gate.sh "$GITHUB_WORKSPACE"
+
+    # The checks below are independent of the suites above, so each one
+    # runs whenever the gate step itself ran (it builds what they read),
+    # pass or fail. Chained on success instead, one red downstream test
+    # hid all three, and a broken corpus path in one of them went unseen.
 
     # The jsonic corpus lives in the jsonic repo — pass it explicitly.
     # Omitting it defaults to this repo's test/spec, which since the
@@ -63,13 +72,16 @@ jobs:
     # fixtures: the relaxed inputs that actually drive the jsonic lexer
     # would silently stop being exercised.
     - name: Token-stream parity (jsonic grammar over jsonic fixtures)
+      if: ${{ !cancelled() && steps.gate.outcome != 'skipped' }}
       shell: bash
       run: parser/ci/parity/run-parity.sh jsonic "$GITHUB_WORKSPACE/jsonic/test/spec"
 
     - name: Token-stream parity (json grammar over json fixtures)
+      if: ${{ !cancelled() && steps.gate.outcome != 'skipped' }}
       shell: bash
-      run: parser/ci/parity/run-parity.sh json "$GITHUB_WORKSPACE/json/ts/test/spec"
+      run: parser/ci/parity/run-parity.sh json "$GITHUB_WORKSPACE/json/test/spec"
 
     - name: Cross-runtime value diff (generated corpus)
+      if: ${{ !cancelled() && steps.gate.outcome != 'skipped' }}
       shell: bash
       run: parser/ci/fuzz/run-diff.sh 500

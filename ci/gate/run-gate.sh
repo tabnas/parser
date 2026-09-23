@@ -10,6 +10,10 @@
 #   <root>/parser   (this repo)
 #   <root>/json
 #   <root>/jsonic
+# and, when present, wired and built too (CI clones all three):
+#   <root>/debug    (jsonic's api/custom/debug tests require it)
+#   <root>/bnf      (abnf needs it)
+#   <root>/abnf     (this repo's README doc-examples require it)
 #
 # Usage: ci/gate/run-gate.sh [root-dir]
 #   default root: the parent of this repo.
@@ -39,7 +43,19 @@ link_ts_dep "$ROOT/jsonic/ts" json "$ROOT/json/ts"
 # the sibling exists (CI clones it — see workflows/gate.yml). Without
 # it those three test files fail with MODULE_NOT_FOUND.
 if [ -d "$ROOT/debug/ts" ]; then
+  link_ts_dep "$ROOT/debug/ts" parser "$PARSER_ROOT/ts"
   link_ts_dep "$ROOT/jsonic/ts" debug "$ROOT/debug/ts"
+fi
+# This repo's README doc-examples require @tabnas/abnf, which
+# ts/test/doc-examples.test.js resolves from the sibling <root>/abnf/ts,
+# and abnf requires @tabnas/bnf. Each is wired to the engine under test,
+# so the examples cannot load a second, published engine through them.
+if [ -d "$ROOT/bnf/ts" ]; then
+  link_ts_dep "$ROOT/bnf/ts" parser "$PARSER_ROOT/ts"
+fi
+if [ -d "$ROOT/abnf/ts" ]; then
+  link_ts_dep "$ROOT/abnf/ts" parser "$PARSER_ROOT/ts"
+  link_ts_dep "$ROOT/abnf/ts" bnf "$ROOT/bnf/ts"
 fi
 
 # --- Go wiring: hermetic go.work over the sibling modules ---
@@ -64,6 +80,11 @@ run() { # run <name> <dir> <cmd...>
 
 step "build TS (engine first, then downstreams)"
 ( cd "$PARSER_ROOT/ts" && npx tsc --build src test )
+# A linked sibling is its WORKING TREE, which has no dist/ until built:
+# the same order as ci.yml's build-order (parser bnf debug abnf).
+for sib in bnf debug abnf; do
+  if [ -d "$ROOT/$sib/ts" ]; then ( cd "$ROOT/$sib/ts" && npx tsc --build src ); fi
+done
 ( cd "$ROOT/json/ts" && npx tsc --build src )
 ( cd "$ROOT/jsonic/ts" && npx tsc --build src )
 

@@ -414,14 +414,19 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
   main can block engine PRs; pin refs or mark non-required if that
   bites).
 
-  **Not promoted**, so the fuzz diff has never run in CI. That is a second,
-  independent reason it caught none of the audit's items: even had the
-  pools been able to emit them, nothing was running the comparison. Both
-  reasons had to be true for the silence to hold, and fixing either one
-  alone would not have broken it.
+  **Live since 2026-09-22.** Before then it was not promoted, so the fuzz
+  diff never ran in CI. That was a second, independent reason it caught
+  none of the audit's items: even had the pools been able to emit them,
+  nothing was running the comparison. Both reasons had to be true for the
+  silence to hold, and fixing either one alone would not have broken it.
 
-  **Promote it only after the Phase 1 escape repairs land** (`#123`), or it
-  opens red — see the status note above.
+  It clones `bnf debug abnf json jsonic`, not only the two suites it runs:
+  jsonic's api, custom and debug tests require `@tabnas/debug`, and this
+  repo's README doc-examples require `@tabnas/abnf`, which requires
+  `@tabnas/bnf`. `gate/run-gate.sh` links each one to its working tree
+  and builds it in `ci.yml`'s build-order. The parity and fuzz steps run
+  whenever the gate step ran, pass or fail, so a red downstream test
+  cannot hide them.
 - `fleet.yml` — the downstream regression gate: a small required arm on
   every PR, the whole fleet nightly and on demand. See `fleet/` above for
   what it catches and why it is separate from `gate.yml`.
