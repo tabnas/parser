@@ -1,5 +1,4 @@
-# PROPOSED workflow — lives in ci/workflows/ for review; move to
-# .github/workflows/rust.yml to activate, per ADR-8.
+# Promoted from ci/workflows/ per ADR-8; this is the live gate.
 name: rust
 
 on:
@@ -51,7 +50,10 @@ jobs:
     - name: Install TypeScript dependencies
       shell: bash
       run: |
-        ( cd parser/ts && npm ci )
+        # `npm ci` only where the repo tracks a lockfile, which is json
+        # alone: parser's ts/.gitignore ignores package-lock.json, so
+        # `npm ci` in parser/ts exits with EUSAGE on every runner.
+        ( cd parser/ts && npm install )
         ( cd json/ts && npm ci )
         ( cd bnf/ts && npm install )
         ( cd abnf/ts && npm install )
