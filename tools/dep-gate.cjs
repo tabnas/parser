@@ -487,10 +487,143 @@ function checkGoWork(file, text, config, root, seen) {
 }
 
 
-// `[patch.*]` and `[replace]` redirect a dependency as surely as a `path` key in
-// `[dependencies]` does, so they are dependency tables for this gate's purposes.
-const CARGO_DEP_SECTION_RE =
-  /^\[\s*(?:workspace\s*\.\s*)?(?:(?:target\s*\.\s*(?:"[^"]*"|'[^']*'|[^.\]]+)\s*\.\s*)?(?:dev-|build-)?dependencies(?:\s*\.\s*[^\]]+)?|patch(?:\s*\.\s*[^\]]+)?|replace)\s*\]$/
+// TOML basic-string escapes. A quoted KEY may carry them, and Cargo reads the
+// decoded form: `"dependenc\u0069es"` is the dependencies table.
+const TOML_ESCAPE = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' }
+
+function tomlUnescape(s) {
+  return String(s).replace(
+    /\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|.)/g,
+    (all, esc) => {
+      const head = esc[0]
+      if ('u' === head || 'U' === head) {
+        const code = parseInt(esc.slice(1), 16)
+        return Number.isFinite(code) ? String.fromCodePoint(code) : all
+      }
+      return Object.prototype.hasOwnProperty.call(TOML_ESCAPE, esc) ? TOML_ESCAPE[esc] : all
+    })
+}
+
+
+// A TOML key path, split on the dots that are not inside a quoted segment, so
+// `patch."https://github.com/o/r"` is two segments rather than five. A
+// basic-quoted segment is DECODED; a literal-quoted one takes no escapes.
+function tomlKeyPath(s) {
+  const segs = []
+  let cur = ''
+  let quote = null
+
+  const flush = () => { segs.push(cur.trim()); cur = '' }
+
+  for (const ch of String(s)) {
+    if (null != quote) {
+      if (ch === quote) { quote = null } else { cur += ch }
+      continue
+    }
+    if ('"' === ch) { quote = ch; cur += '\u0000'; continue }
+    if ("'" === ch) { quote = ch; continue }
+    if ('.' === ch) { flush(); continue }
+    cur += ch
+  }
+  flush()
+
+  return segs
+    .map((seg) => seg.startsWith('\u0000') ? tomlUnescape(seg.slice(1)) : seg)
+    .filter((seg) => '' !== seg)
+}
+
+
+// One LOGICAL assignment per entry: a comment stripped outside strings, and an
+// inline table or array continued until its brackets balance. Cargo accepts
+// `dep = {` with its fields on the lines below, so a physical-line reader sees
+// each field as its own assignment and the dependency name nowhere near it.
+function tomlLogicalLines(text) {
+  const out = []
+  let buf = ''
+  let depth = 0
+
+  for (const raw of text.split(/\r?\n/)) {
+    let line = ''
+    let quote = null
+    let open = 0
+
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i]
+      if (null != quote) {
+        line += ch
+        if ('"' === quote && '\\' === ch && i + 1 < raw.length) { line += raw[++i]; continue }
+        if (ch === quote) quote = null
+        continue
+      }
+      if ('#' === ch) break
+      if ('"' === ch || "'" === ch) { quote = ch; line += ch; continue }
+      if ('{' === ch || '[' === ch) open += 1
+      if ('}' === ch || ']' === ch) open -= 1
+      line += ch
+    }
+
+    line = line.trim()
+    if ('' === line && 0 === depth) continue
+
+    // A table header is balanced on its own line and never continues.
+    if (0 === depth && '[' === line[0]) { out.push(line); continue }
+
+    buf = '' === buf ? line : buf + ' ' + line
+    depth += open
+    if (0 < depth) continue
+
+    depth = 0
+    if ('' !== buf) out.push(buf)
+    buf = ''
+  }
+
+  if ('' !== buf) out.push(buf)
+
+  return out
+}
+
+
+// How many segments the table DESIGNATOR occupies, or -1 for a table that is
+// not a dependency table. The COUNT, not the leaf name, tells a field from a
+// dependency name: `dependencies.dep.path` is a field, while `[dependencies]`
+// plus `path = "1.0"` is a crate called `path`.
+function cargoDepDesignator(segs) {
+  let i = 0
+  if ('workspace' === segs[i]) i += 1
+  if ('target' === segs[i]) i += 2
+
+  const head = segs[i]
+
+  // A patch table is keyed by REGISTRY first, so its designator takes one more
+  // segment than the others before any dependency name appears.
+  if ('patch' === head) return i + 2
+  if ('replace' === head) return i + 1
+
+  if ('dependencies' === head
+    || 'dev-dependencies' === head
+    || 'build-dependencies' === head) return i + 1
+
+  return -1
+}
+
+
+function isCargoDepPath(segs) {
+  return -1 !== cargoDepDesignator(segs)
+}
+
+
+// The first `=` that is not inside a quoted segment; -1 when the line has none.
+function tomlAssignAt(line) {
+  let quote = null
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (null != quote) { if (ch === quote) quote = null; continue }
+    if ('"' === ch || "'" === ch) { quote = ch; continue }
+    if ('=' === ch) return i
+  }
+  return -1
+}
+
 
 // Only dependency tables, and never a commented-out line: a `path` key in
 // `[package]` or behind a `#` is not a dependency.
@@ -514,29 +647,65 @@ function checkCargoToml(file, text, config, root, seen) {
     return undefined === m[1] ? m[2] : m[1].replace(/\\(.)/g, '$1')
   }
 
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)#.*$/, '').trim()
-    if ('' === line) continue
-    if ('[' === line[0]) { inDeps = CARGO_DEP_SECTION_RE.test(line); continue }
-    if (!inDeps) continue
+  const judgePath = (rel, spec) => {
+    if (null == rel) return
+    if (absoluteish(rel)) { add('cargo-absolute-path-dep', rel, spec); return }
+    if (insideRepo(Path.resolve(dir, rel), REPO_ROOT)) return
+    add('cargo-external-path-dep', rel, spec)
+  }
 
+  const judgeGit = (url, spec) => {
+    if (null == url) return
+    if (githubHost(hostOf(url))) return
+    add('cargo-non-github-git-dep', url, spec)
+  }
+
+  const scanInline = (line) => {
     const pathRe = /\bpath\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
     let m
-    while (null !== (m = pathRe.exec(line))) {
-      const rel = str(m[1])
-      if (null == rel) continue
-      if (absoluteish(rel)) { add('cargo-absolute-path-dep', rel, m[0]); continue }
-      if (insideRepo(Path.resolve(dir, rel), REPO_ROOT)) continue
-      add('cargo-external-path-dep', rel, m[0])
-    }
+    while (null !== (m = pathRe.exec(line))) judgePath(str(m[1]), m[0])
 
     const gitRe = /\bgit\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g
-    while (null !== (m = gitRe.exec(line))) {
-      const url = str(m[1])
-      if (null == url) continue
-      if (githubHost(hostOf(url))) continue
-      add('cargo-non-github-git-dep', url, m[0])
+    while (null !== (m = gitRe.exec(line))) judgeGit(str(m[1]), m[0])
+  }
+
+  let section = []
+
+  for (const line of tomlLogicalLines(text)) {
+    if ('[' === line[0]) {
+      section = tomlKeyPath(line.replace(/^\[+/, '').replace(/\]+$/, ''))
+      inDeps = isCargoDepPath(section)
+      continue
     }
+
+    const eq = tomlAssignAt(line)
+    if (-1 === eq) continue
+
+    const full = section.concat(tomlKeyPath(line.slice(0, eq)))
+    const last = full[full.length - 1]
+
+    // The leaf is a FIELD only where a dependency name already sits between it
+    // and the designator; `path` and `git` are legal dependency NAMES too.
+    const prefix = full.slice(0, -1)
+    const designator = cargoDepDesignator(prefix)
+    const leafIsField = ('path' === last || 'git' === last)
+      && -1 !== designator && prefix.length > designator
+
+    if (leafIsField) {
+      const value = line.slice(eq + 1).trim()
+      const parsed = str(value)
+      if (null != parsed) {
+        if ('path' === last) judgePath(parsed, last + ' = ' + value)
+        else judgeGit(parsed, last + ' = ' + value)
+        continue
+      }
+      // Not a string, so not the field it looked like; fall through and read
+      // the value as an inline table.
+    }
+
+    // Otherwise the field is inside the VALUE: the key here is a dependency
+    // name, so scanning the whole line would read it as a field.
+    if (inDeps || isCargoDepPath(full)) scanInline(line.slice(eq + 1))
   }
 
   return findings
@@ -602,7 +771,6 @@ function checkAll(config, root) {
 
   const rows = tracked(REPO_ROOT)
   const trackedPaths = new Set(rows.map((r) => r.path))
-  const modeOf = new Map(rows.map((r) => [r.path, r.mode]))
 
   const cfg = config || readConfig(REPO_ROOT, trackedPaths)
   const allow = cfg.allow || {}
@@ -773,6 +941,8 @@ module.exports = {
   checkGoMod,
   checkGoWork,
   checkCargoToml,
+  tomlKeyPath,
+  tomlLogicalLines,
   checkGitmodules,
   checkAll,
   report,
