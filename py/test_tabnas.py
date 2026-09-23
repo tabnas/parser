@@ -12,6 +12,7 @@ binding bug — which is the property that makes a third language
 trustworthy at all.
 """
 
+import json
 import os
 import unittest
 
@@ -49,7 +50,17 @@ def load_grammar():
 
 class TestSurface(unittest.TestCase):
     def test_version(self):
-        self.assertRegex(tabnas.version(), r"^\d+\.\d+\.\d+")
+        # The ABI template revision, not the engine version: the uniform
+        # version document carries no engine version (see version()).
+        self.assertRegex(tabnas.version(), r"^v\d+$")
+
+    def test_version_document_names_the_engine_library(self):
+        lib = tabnas.load()
+        doc = tabnas._call(lib, lib.tabnas_version())
+        self.assertEqual(
+            {k: doc.get(k) for k in ("ok", "lib", "format", "template")},
+            {"ok": True, "lib": "libtabnasparser", "format": "parser",
+             "template": tabnas.version()})
 
     def test_value_crosses_the_boundary(self):
         with load_grammar() as g:
@@ -72,9 +83,24 @@ class TestSurface(unittest.TestCase):
             self.assertIn("message", v.error)
             self.assertNotIn("\n", v.error["message"])
 
+    def test_rejection_carries_the_structured_diagnostic(self):
+        # The whole diagnostic crosses, not just code and message; and it
+        # is where the engine version now reaches a caller (version()
+        # reports the ABI template instead).
+        with load_grammar() as g:
+            e = g.check('{"a":1,}').error
+        self.assertEqual(e["code"], "unexpected")
+        self.assertEqual((e["row"], e["col"]), (1, 8))
+        self.assertEqual(e["token"]["src"], "}")
+        self.assertRegex(e["version"], r"^\d+\.\d+\.\d+")
+
     def test_call_errors_do_raise(self):
         with self.assertRaises(tabnas.TabnasError):
             tabnas.Grammar("{not a spec")
+        # Loads clean in the engine but installs no start rule, so it
+        # would accept every input; the library refuses it instead.
+        with self.assertRaises(tabnas.TabnasError):
+            tabnas.Grammar({})
         g = load_grammar()
         g.close()
         with self.assertRaises(tabnas.TabnasError):
@@ -149,9 +175,9 @@ class TestSharedFixtures(unittest.TestCase):
     """The engine's own strict-JSON fixtures, driven through Python.
 
     Each .tsv row is `input <TAB> expected`, where an expected value of
-    ERROR:<code> means the input must be rejected. Only the accept /
-    reject direction is asserted here — the value the engine builds is
-    the other runtimes' business, and this binding does not expose it.
+    ERROR:<code> means the input must be rejected with that code, and
+    anything else is the JSON the engine must build. Values compare as
+    Python objects, so key order (out of contract, ADR-15) is ignored.
     """
 
     def _rows(self, name):
@@ -168,22 +194,41 @@ class TestSharedFixtures(unittest.TestCase):
                 src, expected = line.split("\t", 1)
                 yield n, _unescape(src), expected
 
-    def test_include_json(self):
+    def _check(self, name):
         checked = 0
         with load_grammar() as g:
-            for n, src, expected in self._rows("include-json.tsv"):
-                want_reject = expected.startswith("ERROR:")
-                got = g.accepts(src)
+            for n, src, expected in self._rows(name):
+                v = g.check(src)
 
                 # BOTH directions, or this proves nothing: a binding that
                 # rejected every input would satisfy the reject rows alone
                 # and pass a test advertised as conformance.
-                if want_reject and got:
-                    self.fail(f"line {n}: {src!r} was accepted, expected {expected}")
-                if not want_reject and not got:
-                    self.fail(f"line {n}: {src!r} was rejected, expected accept")
+                if expected.startswith("ERROR:"):
+                    if v.accept:
+                        self.fail(f"{name}:{n}: {src!r} was accepted, "
+                                  f"expected {expected}")
+                    self.assertEqual(v.error["code"], expected[6:],
+                                     f"{name}:{n}: {src!r}")
+                else:
+                    if not v.accept:
+                        self.fail(f"{name}:{n}: {src!r} was rejected: "
+                                  f"{v.error}")
+                    self.assertEqual(v.value, json.loads(expected),
+                                     f"{name}:{n}: {src!r}")
                 checked += 1
-        self.assertGreater(checked, 0, "no fixture rows were checked")
+        self.assertGreater(checked, 0, f"no {name} rows were checked")
+
+    def test_include_json(self):
+        self._check("include-json.tsv")
+
+    def test_include_json_errors(self):
+        self._check("include-json-errors.tsv")
+
+    def test_include_json_utf8(self):
+        self._check("include-json-utf8.tsv")
+
+    def test_include_json_utf8_errors(self):
+        self._check("include-json-utf8-errors.tsv")
 
 
 if __name__ == "__main__":

@@ -48,11 +48,13 @@ Concretely:
 **Recommendation: ship a Rust FFI binding over `go/clib` (option B) now;
 gate a serialized-spec-only Rust engine (option C) on a named downstream
 consumer; reject the full port (option A).** Be honest about B's ceiling:
-the C ABI returns accept/reject plus an error code and a one-line message,
-and nothing else — no structured diagnostic, no continuations, no
-recovery, no subscribers, and no grammar with custom actions. Declarative
-options *do* cross: a serialized spec's top-level `options` object is
-carried into `OptionsMap` (`go/grammarspec.go:35-37`) and applied via
+the C ABI returns accept/reject, the parsed value and the structured
+diagnostic, and nothing else — no continuations, no recovery, no
+subscribers, and no grammar with custom actions. (When this report was
+written it returned only an error code and a one-line message; the value
+crosses since #117 and the diagnostic since clib template v3, see §7.)
+Declarative options *do* cross: a serialized spec's top-level `options`
+object is carried into `OptionsMap` (`go/grammarspec.go:35-37`) and applied via
 `MapToOptions`/`SetOptions` (`go/grammarspec.go:237-242`). What is
 unavailable is the function-valued surface, not options as such.
 That is a real limit, and it is the comparison a port has to beat.
@@ -550,7 +552,8 @@ orthogonal axes.** A compiled probe runs
 Go converts plugin faults into a reserved `internal` error code at nine
 `recover()` sites, declares the guarantee in
 `go/doc/differences.md:474-489`, fuzzes it (`go/fuzz_test.go`), and has
-leaked it into the C ABI (`go/clib/core.go:121-125`, consumed by `py/`).
+leaked it into the C ABI (`isInternal` in `go/clib/core.go`: an
+`internal` error is a failed call, `ok:false`; consumed by `py/`).
 
 Rust's `catch_unwind` requires `UnwindSafe` (a `&mut Ctx` is not, forcing
 `AssertUnwindSafe`), still runs the default panic hook, and — measured —
@@ -1113,38 +1116,36 @@ maintained at the same cadence.
 
 | | **A — Full Rust port** | **B — Rust FFI binding over `go/clib`** | **C — Serialized-spec-only Rust engine** | **D — Wasm** |
 |---|---|---|---|---|
-| **Delivered capability** | Everything: plugins, custom matchers, subscribers, options, recovery, continuations, structured diagnostics, `no_std`/wasm targets, native speed | Accept/reject on precompiled function-free specs, plus an error `code` and a one-line message. Nothing else crosses the boundary. | The full engine minus code-valued extension points: all 16 `$`-builtins, declarative conditions, serialized regex terminals, options, diagnostics, recovery. The whole BNF/ABNF/GBNF front-end closure works. | Same as B, in a sandbox |
-| **Cost** | ~28-33k lines, **7-10 engineer-months**. The `json` parity leg needs no ported Rust grammar package — `ts/test/json-builder.fixture.json` is a function-free serialized spec (its only refs are the builtins `@object$ @array$ @key$ @setval$ @push$ @reset$ @value$`) that a Rust tokdump can load exactly as `go/clib` does; the relaxed `jsonic` leg has no such artifact and remains unbudgeted | **~1 week for the wrapper; distribution is the real work.** A working binding is ~94 lines over `libtabnas`, and `py/` (206 + 184 lines, one commit `94c2cf1`) is the precedent for the *binding* — but explicitly **not** for shipping: `py/README.md:42-45` says it is "not packaged as a wheel yet", requires the user to build the library, and still needs a `cibuildwheel` matrix "and a macOS runner because darwin cannot be cross-compiled with zig". A usable crates.io crate needs prebuilt libraries per target or a documented Go/C build-time dependency in its `build.rs`. Budget the wrapper in days and the artifact matrix separately | ~10-14k lines, **~4-6 engineer-months**. Cuts Go's 255 exported items to ~70 but only ~10% of the implementation — the lexer, rule engine, config resolution, error rendering and deep-merge all survive | Days, on top of B's work |
+| **Delivered capability** | Everything: plugins, custom matchers, subscribers, options, recovery, continuations, structured diagnostics, `no_std`/wasm targets, native speed | Accept/reject on precompiled function-free specs, plus an error `code` and a one-line message (now also the parsed value, since #117, and the structured diagnostic, since clib template v3). Nothing else crosses the boundary. | The full engine minus code-valued extension points: all 16 `$`-builtins, declarative conditions, serialized regex terminals, options, diagnostics, recovery. The whole BNF/ABNF/GBNF front-end closure works. | Same as B, in a sandbox |
+| **Cost** | ~28-33k lines, **7-10 engineer-months**. The `json` parity leg needs no ported Rust grammar package — `ts/test/json-builder.fixture.json` is a function-free serialized spec (its only refs are the builtins `@object$ @array$ @key$ @setval$ @push$ @reset$ @value$`) that a Rust tokdump can load exactly as `go/clib` does; the relaxed `jsonic` leg has no such artifact and remains unbudgeted | **~1 week for the wrapper; distribution is the real work.** A working binding is ~94 lines over `libtabnas` (now `libtabnasparser`), and `py/` (206 + 184 lines, one commit `94c2cf1`) is the precedent for the *binding* — but explicitly **not** for shipping: `py/README.md:61-66` says it is "not packaged as a wheel yet", requires the user to build the library, and still needs a `cibuildwheel` matrix "and a macOS runner because darwin cannot be cross-compiled with zig". A usable crates.io crate needs prebuilt libraries per target or a documented Go/C build-time dependency in its `build.rs`. Budget the wrapper in days and the artifact matrix separately | ~10-14k lines, **~4-6 engineer-months**. Cuts Go's 255 exported items to ~70 but only ~10% of the implementation — the lexer, rule engine, config resolution, error rendering and deep-merge all survive | Days, on top of B's work |
 | **Measured evidence** | Baselines: ts/src 9,846, go non-test 13,936 (1.42x), go tests 14,342 | 55 shared rows pass accept/reject; 2.72 MB/s vs ~3.1 MB/s in-process Go (~15% overhead); `-buildmode=c-archive` links statically into a 3.6 MB self-contained Rust binary with only libc/libgcc dynamic | A function-free serialized strict-JSON spec (`number.exclude` as `"@/^00/"`) passes include-json 34/34, include-json-utf8 12/12, include-json-errors 4/4, include-json-utf8-errors 5/5 and diagnostic **10/10 with full value and structured-diagnostic comparison**. `probe-grammar` and `eager-literal` fixtures — real BNF-compiler output with probe dispatch, regex terminals and eager matchers — parse with zero closures | `GOOS=wasip1`/`GOOS=js go build ./...` compile the engine; **`go/clib` fails, because cgo is unavailable under wasm**. A `//go:wasmexport` reactor builds at 4.7 MB |
-| **Failure modes** | Plugin API is a redesign, not a port; every downstream grammar rewritten by hand. Inherits every blocker in §3. Forces `DIVERGENCE.md`, the registry and the honesty gate to three runtimes. Triples the adjudication load on a bus-factor-1 maintainer | Go runtime in every consumer binary; no `no_std`; no wasm; darwin needs a native build host; the `os.fork` hazard `py/README.md:38-40` documents; two format clibs cannot be statically linked into one binary. **And the capability ceiling above is the real limit** | Still needs the string/number/regex adjudications (§4). The 175 utility fixture rows exercise `deep`/`modlist`/`str`/`strinject` — exported *utility* APIs a trimmed surface may not retain, so "passes all 254 rows" is asserted, not measured. Still cannot join `ci/parity`/`ci/fuzz` without the `json` port | Drags a multi-MB wasm runtime into the Rust binary, marshals through linear memory, keeps the Go GC, and gives up the native-speed argument that was the point |
+| **Failure modes** | Plugin API is a redesign, not a port; every downstream grammar rewritten by hand. Inherits every blocker in §3. Forces `DIVERGENCE.md`, the registry and the honesty gate to three runtimes. Triples the adjudication load on a bus-factor-1 maintainer | Go runtime in every consumer binary; no `no_std`; no wasm; darwin needs a native build host; the `os.fork` hazard `py/README.md:57-59` documents; two format clibs cannot be statically linked into one binary. **And the capability ceiling above is the real limit** | Still needs the string/number/regex adjudications (§4). The 175 utility fixture rows exercise `deep`/`modlist`/`str`/`strinject` — exported *utility* APIs a trimmed surface may not retain, so "passes all 254 rows" is asserted, not measured. Still cannot join `ci/parity`/`ci/fuzz` without the `json` port | Drags a multi-MB wasm runtime into the Rust binary, marshals through linear memory, keeps the Go GC, and gives up the native-speed argument that was the point |
 
-Two clib defects worth fixing regardless, both cheap:
+Two clib defects this report flagged, both since resolved:
 
-1. `go/clib/core.go:115` is literally `_, err := g.tn.Parse(src)` — the
-   parse result is discarded — even though the canonical ADR-12 header at
-   `go/clib/include/tabnas.h:17-18` specifies that accepted input returns
+1. `go/clib/core.go:115` was literally `_, err := g.tn.Parse(src)` — the
+   parse result was discarded — even though the canonical ADR-12 header
+   (`go/clib/include/tabnas.h`) specifies that accepted input returns
    `{"ok":true,"accept":true}` *plus* a `"value"` field where the parse
-   result is JSON-representable. Adding it is a few lines and lifts the
-   validation-only limit for free. (`*OrderedMap` already carries an
-   insertion-order `MarshalJSON`, `go/orderedmap.go:99-110`.) Caveat: it
-   creates a new, currently-unpinned cross-runtime surface, since TS's
+   result is JSON-representable. **Resolved** (#117, kept by clib
+   template v3): accepted input carries `value`, marshalled by
+   `*OrderedMap` in insertion order (`go/orderedmap.go`). The caveat
+   stands: key order is out of contract (ADR-15), since TS's
    `JSON.stringify` orders integer-like keys first.
-2. The version document shape diverges from the header — **but this one is
-   not a free rename.**
-   `go/clib/core.go:57-59` returns `{"ok":true,"version":…}` where
-   `tabnas.h:35` specifies `{"ok":true,"lib":…,"format":…,"template":…}`,
-   and the artifact manifest's `lib` pattern (`^libtabnas[a-z0-9]+$`) does
-   not admit the bare `libtabnas` name. Applying the header's shape
-   literally **removes** the `version` member, and `py/tabnas.py:141`
-   reads exactly that key — `_call(lib, lib.tabnas_version())["version"]`
-   — so every `tabnas.version()` call would raise `KeyError`. Either keep
-   `version` alongside the header's fields in the grammar-agnostic
-   library, or land the Python change in the same commit. Not an isolated
-   cheap fix. (The `tabnas_grammar_json` vs
-   `tabnas_grammar` symbol difference is **not** a defect: the header
-   describes the per-format libraries, and `go/clib` is deliberately
-   grammar-agnostic because this repo ships no grammar, so it needs a
-   spec-taking entry point the per-format template has no slot for.)
+2. The version document diverged from the header: `{"ok":true,
+   "version":…}` where `tabnas.h` specifies `{"ok":true,"lib":…,
+   "format":…,"template":…}`, and the artifact manifest's `lib` pattern
+   (`^libtabnas[a-z0-9]+$`) did not admit the bare `libtabnas` name. This
+   report warned it was **not a free rename**, because `py/tabnas.py` read
+   the `version` key. **Resolved** by adopting clib template v3, with the
+   Python change in the same commit: the library is `libtabnasparser`,
+   the version document has the header's shape (`format` is `parser`),
+   and `tabnas.version()` now returns its `template` marker. The engine
+   version no longer crosses in the version document; a rejection's
+   structured diagnostic still carries it as `version`. The spec-taking
+   entry point is the uniform `tabnas_grammar`, whose argument this one
+   library defines as a serialized spec, rather than a separate
+   `tabnas_grammar_json`.
 
 ### 7.1 On demand
 
@@ -1223,19 +1224,21 @@ sandboxing story.**
 ### 8.1 Immediately (~1 week): the Rust crate over `go/clib`
 
 Ship it exactly as `py/` is shipped. It adds **zero** version locations
-(read the version from the library, as `py/tabnas.py:138-142` does), zero
+(read the version from the library, as `py/tabnas.py` did until clib
+template v3; the version document now names the ABI template, and the
+engine version is the `go/v…` tag the library was built from), zero
 `DIVERGENCE.md` columns, zero registry sections, zero release artifacts in
 this repo, and zero parity obligations — while giving Rust callers a real
 Rust API. `go/clib/README.md` states the design intent outright: the C ABI
-exists "so languages with no tabnas port can still use it", and
-`tabnas.h:24-26` notes that C, C++, Zig, Swift, Nim and D need no binding
+exists "so languages with no tabnas port can parse and validate", and
+`tabnas.h:24-25` notes that C, C++, Zig, Swift, Nim and D need no binding
 layer at all. Rust and Python are precisely the two languages that need a
 thin one. This is the architecture executing as designed, not a
 workaround.
 
-Before it lands, fix the two clib items in §7, and **document B's ceiling
-honestly**: accept/reject plus a code and a one-line message; no
-structured diagnostic, continuations, recovery or subscribers;
+The two clib items in §7 are fixed. **Document B's ceiling
+honestly**: accept/reject, the parsed value and the structured
+diagnostic; no continuations, recovery or subscribers;
 serialized function-free specs only. Declarative options do pass
 (`go/grammarspec.go:35-37`, `:237-242`) — it is the function-valued hooks
 that do not. If a Rust consumer needs the LSP-shaped

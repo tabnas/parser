@@ -1,6 +1,6 @@
 /* tabnas.h — the uniform C ABI of the per-format tabnas clibs (ADR-12).
  *
- * tabnas-clib-template: v1
+ * tabnas-clib-template: v3
  *
  * Every per-format library (libtabnasjson, libtabnastoml, …) exports
  * exactly these five symbols; the format is fixed at build time by
@@ -36,7 +36,9 @@ extern "C" {
 char *tabnas_version(void);
 
 /* Build a parser; returns {"ok":true,"handle":N} or a failure document.
- * opts_json is an options JSON document — RESERVED; pass (NULL, 0). */
+ * opts_json is an options JSON document — RESERVED, pass (NULL, 0),
+ * unless the library documents it. (libtabnasparser, the engine, has
+ * no grammar of its own: it takes a serialized GrammarSpec here.) */
 char *tabnas_grammar(const char *opts_json, int opts_len);
 
 /* Parse src against the library's format. */

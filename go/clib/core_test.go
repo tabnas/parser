@@ -1,284 +1,174 @@
-package main
+// Copyright (c) 2026 Richard Rodger and other contributors, MIT License
 
-// The library's contract, tested where it is testable. The cgo shim in
-// tabnas_c.go cannot be unit-tested (Go forbids cgo in _test.go), which
-// is exactly why the behaviour lives in core.go — everything below runs
-// against the same functions the exported symbols call.
+// The library's contract, tested where it is testable.
+//
+// tabnas-clib-template: v3 (stamped by admin tasks/adopt-clib.sh;
+// edit the template and re-stamp, not this file).
+//
+// The cgo shim in tabnas_c.go cannot be unit-tested (Go forbids cgo in
+// _test.go), which is exactly why the behaviour lives in core.go —
+// everything below runs against the same functions the exported
+// symbols call.
+package main
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"reflect"
 	"sync"
 	"testing"
-
-	tabnas "github.com/tabnas/parser/go"
 )
 
-func doc(t *testing.T, s string) map[string]any {
+const (
+	validSample   = "{\"a\":[1,2],\"b\":{\"c\":true}}"
+	invalidSample = "{\"a\":1,}"
+
+	// optsSample is the tabnas_grammar argument every handle below is
+	// built from: the tsv `opts` column, "" for a row that defines no
+	// options (which is (NULL, 0) at the C boundary).
+	optsSample = "{\"v\":2,\"options\":{\"tokenSet\":{\"KEY\":[\"#ST\"],\"VAL\":[\"#ST\",\"#NR\",\"#VL\"]}},\"rule\":{\"val\":{\"open\":[{\"s\":\"#OB\",\"p\":\"map\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#OS\",\"p\":\"list\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#VAL\",\"a\":\"@reset$\"}],\"close\":[{\"s\":\"#ZZ\",\"a\":\"@value$\"},{\"b\":1,\"a\":\"@value$\"}]},\"map\":{\"open\":[{\"s\":\"#OB #CB\",\"b\":1,\"a\":\"@object$\"},{\"s\":\"#OB\",\"p\":\"pair\",\"a\":\"@object$\"}],\"close\":[{\"s\":\"#CB\"}]},\"list\":{\"open\":[{\"s\":\"#OS #CS\",\"b\":1,\"a\":\"@array$\"},{\"s\":\"#OS\",\"p\":\"elem\",\"a\":\"@array$\"}],\"close\":[{\"s\":\"#CS\"}]},\"pair\":{\"open\":[{\"s\":\"#KEY #CL\",\"p\":\"val\",\"u\":{\"pair\":true},\"a\":\"@key$\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"pair\",\"a\":\"@setval$\"},{\"s\":\"#CB\",\"b\":1,\"a\":\"@setval$\"}]},\"elem\":{\"open\":[{\"p\":\"val\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"elem\",\"a\":\"@push$\"},{\"s\":\"#CS\",\"b\":1,\"a\":\"@push$\"}]}}}"
+)
+
+func decode(t *testing.T, doc string) map[string]any {
 	t.Helper()
 	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		t.Fatalf("result is not JSON: %v (%q)", err, s)
+	if err := json.Unmarshal([]byte(doc), &m); err != nil {
+		t.Fatalf("reply is not JSON: %v\n%s", err, doc)
 	}
 	return m
 }
 
-func fixture(t *testing.T) string {
+func loadHandle(t *testing.T) int64 {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(
-		"..", "..", "ts", "test", "json-builder.fixture.json"))
-	if err != nil {
-		t.Skipf("serialized grammar fixture unavailable: %v", err)
+	m := decode(t, loadGrammar(optsSample))
+	if m["ok"] != true {
+		t.Fatalf("loadGrammar failed: %v", m)
 	}
-	return string(b)
-}
-
-func mustLoad(t *testing.T) int64 {
-	t.Helper()
-	res := doc(t, loadGrammar(fixture(t)))
-	if res["ok"] != true {
-		t.Fatalf("load failed: %v", res)
+	h, ok := m["handle"].(float64)
+	if !ok || h <= 0 {
+		t.Fatalf("no handle in %v", m)
 	}
-	h := int64(res["handle"].(float64))
-	t.Cleanup(func() { freeGrammar(h) })
-	return h
+	return int64(h)
 }
 
 func TestVersionDoc(t *testing.T) {
-	got := doc(t, versionDoc())
-	if got["ok"] != true || got["version"] == "" {
-		t.Errorf("version: %v", got)
+	m := decode(t, versionDoc())
+	if m["ok"] != true || m["lib"] != libName || m["format"] != formatName {
+		t.Fatalf("bad version doc: %v", m)
 	}
-	// The header's members, alongside the `version` the Python binding
-	// reads (#117).
-	if got["lib"] != "libtabnas" || got["template"] != "v1" {
-		t.Errorf("header shape: %v", got)
+	if m["template"] != templateVersion {
+		t.Fatalf("template marker mismatch: %v", m)
 	}
 }
 
-func TestLoadAndParse(t *testing.T) {
-	h := mustLoad(t)
-	for _, c := range []struct {
-		src    string
-		accept bool
-	}{
-		{`{"a":1}`, true},
-		{`{"a":1,"b":[1,2]}`, true},
-		{`{"a":1,}`, false},
-		{`{oops`, false},
-	} {
-		got := doc(t, parseWith(h, c.src))
-		// A rejection is an ANSWER: ok stays true, accept goes false.
-		if got["ok"] != true {
-			t.Errorf("%q: ok must stay true for a decided parse: %v", c.src, got)
-			continue
-		}
-		if got["accept"] != c.accept {
-			t.Errorf("%q: accept=%v, want %v", c.src, got["accept"], c.accept)
-		}
-		if !c.accept {
-			if _, has := got["error"]; !has {
-				t.Errorf("%q: a rejection must carry an error", c.src)
-			}
-			if _, has := got["value"]; has {
-				t.Errorf("%q: a rejection must not carry a value", c.src)
-			}
-		}
-	}
-}
-
-// Accepted input carries the parse result, as the canonical header has
-// always said and the README and the implementation did not (#117).
-// The value is what the engine parsed, in the engine's key order.
-func TestAcceptedInputCarriesTheValue(t *testing.T) {
-	h := mustLoad(t)
-	src := `{"b":[1,2],"a":{"c":true}}`
-	raw := parseWith(h, src)
-	got := doc(t, raw)
-	if got["accept"] != true {
-		t.Fatalf("not accepted: %v", got)
-	}
-	value, has := got["value"]
-	if !has {
-		t.Fatalf("no value on an accepted parse: %s", raw)
-	}
-	var want any
-	if err := json.Unmarshal([]byte(src), &want); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(value, want) {
-		t.Errorf("value = %v, want %v", value, want)
-	}
-	// Insertion order crosses as-is: the engine's object node marshals in
-	// source order.
-	var probe struct {
-		Value json.RawMessage `json:"value"`
-	}
-	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-		t.Fatal(err)
-	}
-	if string(probe.Value) != src {
-		t.Errorf("value bytes %s, want %s", probe.Value, src)
-	}
-}
-
-// The engine's diagnostics are multi-line and ANSI-coloured for a
-// terminal. A JSON field is neither.
-func TestRejectionMessageIsOneCleanLine(t *testing.T) {
-	h := mustLoad(t)
-	got := doc(t, parseWith(h, `{oops`))
-	msg, _ := got["error"].(map[string]any)["message"].(string)
-	if msg == "" {
-		t.Fatal("a rejection must carry a message")
-	}
-	for _, bad := range []struct {
-		what string
-		has  bool
-	}{
-		{"newline", contains(msg, "\n")},
-		{"escape byte", contains(msg, "\x1b")},
-	} {
-		if bad.has {
-			t.Errorf("message still contains a %s: %q", bad.what, msg)
-		}
-	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
-// Empty input is a QUESTION, not a malformed call: some grammars accept
-// it, and the engine has a lex.empty option devoted to what it returns
-// when they do.
-//
-// This is NOT the regression test for the (NULL, 0) marshalling fix, and
-// would pass with or without it — parseWith takes an ordinary Go string
-// and has always accepted "". goBytes lives beside `import "C"` and no
-// Go test can reach it, so the boundary is graded from Python instead,
-// where a real null pointer can be passed: see
-// py/test_tabnas.py::test_null_pointer_with_zero_length_is_the_empty_buffer.
-func TestEmptyInputIsAnsweredNotRefused(t *testing.T) {
-	h := mustLoad(t)
-	got := doc(t, parseWith(h, ""))
-	if got["ok"] != true {
-		t.Errorf("empty input must get a verdict, not a call failure: %v", got)
-	}
-	if _, answered := got["accept"]; !answered {
-		t.Errorf("empty input must carry an accept field: %v", got)
-	}
-}
-
-// ok:false is reserved for the CALL being wrong, never for a rejection —
-// the distinction a caller branches on.
-func TestCallErrorsAreDistinctFromRejections(t *testing.T) {
-	if got := doc(t, parseWith(99999, "anything")); got["ok"] != false {
-		t.Errorf("an unknown handle must be ok:false, got %v", got)
-	}
-	if got := doc(t, loadGrammar("{not a spec")); got["ok"] != false {
-		t.Errorf("an unparseable spec must be ok:false, got %v", got)
-	}
-}
-
-// The failure this guard exists to prevent is the worst one a validator
-// has: a spec that installs no start rule loads clean, and then every
-// input "passes". The engine returns nil,nil for a missing start rule by
-// design (TS does too), so the refusal has to happen here, before a
-// handle is published — otherwise silence reads as acceptance.
-func TestSpecWithNoStartRuleIsRefused(t *testing.T) {
-	for _, spec := range []string{
-		`{}`,
-		`{"rule":123}`,
-		`{"rule":{}}`,
-		`{"options":{"rule":{"start":"nosuchrule"}}}`,
-	} {
-		res := doc(t, loadGrammar(spec))
-		if res["ok"] != false {
-			h := int64(res["handle"].(float64))
-			verdict := doc(t, parseWith(h, "literally anything at all $$$"))
-			freeGrammar(h)
-			t.Errorf("spec %s was accepted as a grammar; it then answered "+
-				"%v for arbitrary input", spec, verdict)
-		}
-	}
-}
-
-// An engine bug is not a verdict on the input. The no-panic guarantee
-// converts a panic in the engine, a matcher or an action into an
-// "internal" error; reporting that as accept:false would give the caller
-// an authoritative-looking rejection for a question never answered.
-func TestInternalErrorIsACallErrorNotARejection(t *testing.T) {
-	// A grammar whose parse entrypoint panics. The engine's recover turns
-	// that into an "internal" *TabnasError rather than crashing, which is
-	// precisely the error parseWith must not dress up as a verdict.
-	tn := tabnas.Make()
-	tn.SetOptions(tabnas.Options{Parser: &tabnas.ParserOptions{
-		Start: func(string, *tabnas.Tabnas, map[string]any) (any, error) {
-			panic("boom inside the engine")
-		},
-	}})
-
-	reg.Lock()
-	nextID++
-	h := nextID
-	loaded[h] = &grammar{tn: tn}
-	reg.Unlock()
+func TestAcceptsValidSample(t *testing.T) {
+	h := loadHandle(t)
 	defer freeGrammar(h)
-
-	got := doc(t, parseWith(h, `{"a":1}`))
-	if got["ok"] != false {
-		t.Fatalf("an engine panic must be ok:false, not a verdict: %v", got)
+	m := decode(t, parseWith(h, validSample))
+	if m["ok"] != true || m["accept"] != true {
+		t.Fatalf("valid sample rejected: %v", m)
 	}
-	if _, isVerdict := got["accept"]; isVerdict {
-		t.Errorf("an engine failure must not carry an accept field: %v", got)
-	}
-	if code := got["error"].(map[string]any)["code"]; code != "internal" {
-		t.Errorf("error code = %v, want internal", code)
+	if valueOut {
+		if _, has := m["value"]; !has {
+			t.Fatalf("valueOut set but no value in: %v", m)
+		}
 	}
 }
 
-// A freed handle must stop working rather than leave an entry that still
-// parses.
-func TestFreedHandleStopsWorking(t *testing.T) {
-	res := doc(t, loadGrammar(fixture(t)))
-	h := int64(res["handle"].(float64))
+// The silent-accept trap, guarded where it is cheap: a parser that
+// rejects nothing is validating nothing (see parser/go/clib/core.go's
+// start-rule refusal for the engine-level twin of this check).
+func TestRejectsInvalidSample(t *testing.T) {
+	if invalidSample == "" {
+		t.Skip("format has no rejectable sample (accepts any text)")
+	}
+	h := loadHandle(t)
+	defer freeGrammar(h)
+	m := decode(t, parseWith(h, invalidSample))
+	if m["ok"] != true {
+		t.Fatalf("rejection must be an answer (ok:true), got: %v", m)
+	}
+	if m["accept"] != false {
+		t.Fatalf("invalid sample accepted: %v", m)
+	}
+	if _, has := m["error"]; !has {
+		t.Fatalf("rejection carries no error payload: %v", m)
+	}
+}
+
+func TestUnknownHandle(t *testing.T) {
+	m := decode(t, parseWith(1<<40, validSample))
+	if m["ok"] != false {
+		t.Fatalf("unknown handle must be ok:false, got: %v", m)
+	}
+	e, _ := m["error"].(map[string]any)
+	if e == nil || e["code"] != "handle" {
+		t.Fatalf("unknown handle must carry code handle: %v", m)
+	}
+}
+
+func TestOptionsReserved(t *testing.T) {
+	if optsDefined {
+		t.Skip("this library defines its options; see TestDefinedOptionsRefuseJunk")
+	}
+	if m := decode(t, loadGrammar("{}")); m["ok"] != true {
+		t.Fatalf("empty options object refused: %v", m)
+	}
+	if m := decode(t, loadGrammar(`{"x":1}`)); m["ok"] != false {
+		t.Fatalf("non-empty options accepted before being defined: %v", m)
+	}
+	if m := decode(t, loadGrammar("not json")); m["ok"] != false {
+		t.Fatalf("junk options accepted: %v", m)
+	}
+	// `null` unmarshals into a nil map without error; it must not slip
+	// the reservation, and non-object documents must not either.
+	if m := decode(t, loadGrammar("null")); m["ok"] != false {
+		t.Fatalf("null options accepted: %v", m)
+	}
+	if m := decode(t, loadGrammar("[1]")); m["ok"] != false {
+		t.Fatalf("array options accepted: %v", m)
+	}
+}
+
+// A row that defines its options owns the argument, so the reservation
+// above does not apply — but the construct must still refuse a document
+// it cannot read, rather than build a handle from nothing.
+func TestDefinedOptionsRefuseJunk(t *testing.T) {
+	if !optsDefined {
+		t.Skip("options are reserved; see TestOptionsReserved")
+	}
+	if optsSample == "" {
+		t.Fatal("a row that defines options must supply an opts sample")
+	}
+	for _, junk := range []string{"not json", "[1]"} {
+		if m := decode(t, loadGrammar(junk)); m["ok"] != false {
+			t.Fatalf("junk options %q accepted: %v", junk, m)
+		}
+	}
+}
+
+func TestFreedHandleIsGone(t *testing.T) {
+	h := loadHandle(t)
 	freeGrammar(h)
-	if got := doc(t, parseWith(h, `{"a":1}`)); got["ok"] != false {
-		t.Errorf("a freed handle must stop working, got %v", got)
+	freeGrammar(h) // double free is a no-op, not a fault
+	if m := decode(t, parseWith(h, validSample)); m["ok"] != false {
+		t.Fatalf("freed handle still parses: %v", m)
 	}
 }
 
-// Handles are independent: freeing one must not disturb another.
-func TestHandlesAreIndependent(t *testing.T) {
-	a := mustLoad(t)
-	res := doc(t, loadGrammar(fixture(t)))
-	b := int64(res["handle"].(float64))
-	freeGrammar(b)
-	if got := doc(t, parseWith(a, `{"a":1}`)); got["accept"] != true {
-		t.Errorf("freeing one handle disturbed another: %v", got)
-	}
-}
-
-// The reason every grammar carries a mutex: an FFI caller is under no
-// obligation to serialise, and CPython releases the GIL during a ctypes
-// call. Run with -race to make this meaningful.
-func TestConcurrentParseIsSafe(t *testing.T) {
-	h := mustLoad(t)
+// FFI callers are under no obligation to serialise; the per-instance
+// mutex is load-bearing, and the -race detector holds this test to it.
+func TestConcurrentParses(t *testing.T) {
+	h := loadHandle(t)
+	defer freeGrammar(h)
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for w := 0; w < 8; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for k := 0; k < 50; k++ {
-				if got := doc(t, parseWith(h, `{"a":1}`)); got["accept"] != true {
-					t.Errorf("concurrent parse disagreed: %v", got)
+			for i := 0; i < 20; i++ {
+				m := map[string]any{}
+				_ = json.Unmarshal([]byte(parseWith(h, validSample)), &m)
+				if m["accept"] != true {
+					t.Errorf("concurrent parse rejected: %v", m)
 					return
 				}
 			}

@@ -913,11 +913,13 @@ already structurally a `GrammarSpec` there, so `tn.grammar(JSON.parse(s))`
 just works.
 
 It is exported rather than left a test helper because it is the only way
-a caller outside Go reaches the engine, which is what `go/clib` (the
-C-ABI shared library) is built on. That library exists so languages
-with no tabnas port can use the engine (Python via `ctypes` is the
-motivating case); it stays grammar-agnostic, taking a serialized spec
-and answering whether input parses. See [`../clib/README.md`](../clib/README.md).
+a caller outside Go reaches the engine, which is what `go/clib`
+(`libtabnasparser`, the C-ABI shared library) is built on. That library
+exists so languages with no tabnas port can use the engine (Python via
+`ctypes` is the motivating case); it stays grammar-agnostic, taking a
+serialized spec as the `tabnas_grammar` argument of the uniform C ABI
+and answering whether input parses, and with what value. See
+[`../clib/README.md`](../clib/README.md).
 
 One trap it removes: passing the whole serialized document as
 `GrammarSpec{OptionsMap: …}` looks right and `Grammar()` returns no

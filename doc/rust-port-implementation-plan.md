@@ -93,7 +93,7 @@ Done since the series was measured — do **not** re-plan these:
 | The nine-PR queue (`§3.2 risks` step 1) | "merge serially, then tag; cap WIP at one" | **Done** — 0 open PRs on `parser`; #123–#135, #145–#147 merged; v0.8.11 released with unified TS+Go versions. Stop-condition 4 is clear. |
 | `rule.maxmul` plumbing (part of #130's surface) | dropped by `MapToOptions` | **Plumbed and pinned** (`TestMaxMulSurvivesTheOptionsMap`); the *rest* of #130's leaf set is still open, now joined by #142/#143/#144. |
 | Lexer-tier fixtures | "one fixture in eleven touches the lexer" | Now **three**: `lex-string-control.tsv` plus `lex-text-line-terminator.tsv` and `lex-text-quote.tsv`, all grammar-free, driven from `ts/test/lex.test.js` — the Rust lexer's day-one parity surface grew while nobody was looking. |
-| M1, the Rust FFI crate (`§5.2 strategy`) | "~1 week for the wrapper" | **Built and verified**: `admin/staging/bindings/rust/tabnas-clib` — generic loader for the per-format clibs under the uniform ADR-12 ABI, returning the parsed value as JSON; `cargo test` conformance + shared-handle threading green against a built `libtabnasjson`. Awaiting maintainer repo seeding (`seed-repos.sh --apply`, org-admin gated). What it does **not** cover: `parser`'s own grammar-agnostic `go/clib`, whose `core.go:115` still discards the parse value (#117 open). |
+| M1, the Rust FFI crate (`§5.2 strategy`) | "~1 week for the wrapper" | **Built and verified**: `admin/staging/bindings/rust/tabnas-clib` — generic loader for the per-format clibs under the uniform ADR-12 ABI, returning the parsed value as JSON; `cargo test` conformance + shared-handle threading green against a built `libtabnasjson`. Awaiting maintainer repo seeding (`seed-repos.sh --apply`, org-admin gated). What it does **not** cover: `parser`'s own grammar-agnostic `go/clib`, whose `core.go:115` still discards the parse value (#117 open). *Since closed:* #117 returns the value, and clib template v3 moved that library onto the uniform ABI as `libtabnasparser`, whose `tabnas_grammar` argument is the serialized spec. |
 
 Still outstanding, exactly as the series says (Phase 2 is built from
 these): #120 and #122 **ruled but unimplemented** (`ts/src/builtins.ts`
@@ -599,7 +599,10 @@ mutation question ruled per D3's Config-mutability decision.
 `parser`'s grammar-agnostic `go/clib/core.go:115` (the `*OrderedMap`
 marshal exists; the key-order surface it creates is now covered by
 ADR-15), keeping the `version` key `py/tabnas.py:141` reads
-(`§7 feasibility`'s paired-change warning).
+(`§7 feasibility`'s paired-change warning). **Done**: #117 landed the
+value; clib template v3 then gave the version document the header's
+shape and migrated `py/tabnas.py` in the same commit, the paired change
+§7 asked for (`tabnas.version()` now returns the `template` marker).
 
 ### Phase 3 — Ship the FFI lane and the demand test
 
@@ -612,14 +615,15 @@ ADR-15), keeping the `version` key `py/tabnas.py:141` reads
    abnf CLI default-output defect (`§5.3 risks`: `JSON.stringify`
    silently dropping function values on the path with neither guard;
    one build to verify, two small fixes, one round-trip fixture).
-3. Write down B's ceiling as shipped (structured diagnostics,
-   continuations, recovery, subscribers and custom actions do not cross;
-   values now do).
+3. Write down B's ceiling as shipped (continuations, recovery,
+   subscribers and custom actions do not cross; values do, and so does
+   the structured diagnostic since clib template v3).
 
 This phase is the demand experiment `§Summary risks` demands: it serves
 the named first user with ~500 lines instead of ~10–14k. What it cannot
-serve — wasm, no-Go-runtime, in-process embedding, the structured
-diagnostic — is exactly Gate G's condition 1.
+serve — wasm, no-Go-runtime, in-process embedding (the structured
+diagnostic, first listed here, crosses since clib template v3) — is
+exactly Gate G's condition 1.
 
 ### Gate G — before any Rust engine code
 
@@ -629,7 +633,7 @@ commits after `abfed2c`, when A1 closed #120:
 
 | # | Condition | Status |
 |---|---|---|
-| 1 | A named consumer `libtabnas` + a serialized spec provably cannot serve (wasm / no-Go-runtime / in-Rust authoring — the third reopens the plugin question and must say so) | **Open** — Phase 3 is the experiment; the LSP design names the C ABI, not Rust, for its engine access |
+| 1 | A named consumer `libtabnasparser` + a serialized spec provably cannot serve (wasm / no-Go-runtime / in-Rust authoring — the third reopens the plugin question and must say so) | **Open** — Phase 3 is the experiment; the LSP design names the C ABI, not Rust, for its engine access |
 | 2 | The differential-tier entry cost paid or waived in writing (`json` leg free via `json-core`; the relaxed `jsonic` leg has no function-free artifact — waive it explicitly or produce one) | **Open** |
 | 3 | The two-runtime machinery generalised (Phase 2g) | **Not started** — `nonParity`/`goOnly` verified still binary |
 | 4 | The unpinned surface **landed**: ~~#120-as-D1~~ ✅ (A1, both runtimes, `202664d` — Phase 2a steps 2–3), #122, the `p`/`r`-channel fixture, M0.2 orderings, the propagation fixture (Phase 2a step 4), #130's exhaustiveness test (blocked on D4). (`pos` ✅, regex dialect ✅, key order ✅ via ADR-15 — already done, §1.3 here) | **Partial** — one of six landed; the verdict does not move until the rest do |

@@ -1,0 +1,136 @@
+# Stamped by admin tasks/adopt-clib.sh (ADR-12); staged to
+# ci/clib-release.yml and promoted to .github/workflows/ per ADR-8.
+#
+# tabnas-clib-template: v3
+#
+# The GitHub Release and the C artifacts for libtabnasparser (ADR-19).
+#
+# A RELEASE IS npm + Go + C. release.yml calls this workflow once the
+# go/v tag is on the remote, so every publish also produces a GitHub
+# Release on that tag carrying the shared libraries and manifest.json.
+# It has to be a CALL, not an event: a Release created with GITHUB_TOKEN
+# starts no workflow run, so "create the Release, then build on
+# release: published" would build nothing, silently.
+#
+# THE RELEASE STAYS A DRAFT UNTIL ITS ARTIFACTS ARE ON IT. Loaders read
+# manifest.json from the Release, so a public Release without one is a
+# broken download rather than an empty one. A missing Release is created
+# as a draft, the shared two-lane build (portable gates, darwin
+# best-effort — ADR-12 clause 5) attaches to it, and only then is it
+# published. A failed build leaves the draft for a re-dispatch to finish.
+#
+# THREE ENTRY POINTS:
+#   workflow_call       release.yml, after tagging — the normal path.
+#   release: published  a Release a maintainer published by hand. It is
+#                       already public, so the artifacts attach to it as
+#                       it stands.
+#   workflow_dispatch   repair or backfill. darwin_only=false runs the
+#                       whole path for an existing tag, creating the
+#                       Release if it is missing; darwin_only=true
+#                       late-attaches darwin artifacts to a Release that
+#                       already has the rest, once a macOS builder is
+#                       available.
+name: clib-release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "release tag, e.g. go/v1.2.3"
+        required: true
+        type: string
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag, e.g. go/v1.2.3 (its GitHub Release is created if missing)"
+        required: true
+        type: string
+      darwin_only:
+        description: "late-attach darwin artifacts only (false: build, attach and publish everything)"
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  # inputs.darwin_only exists only on a dispatch; under a call or a
+  # release event it is null, so both take the full path.
+  release:
+    if: ${{ !inputs.darwin_only }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ensure.outputs.tag }}
+    steps:
+      - name: Ensure a GitHub Release exists for the tag
+        id: ensure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG exists"
+          else
+            V="${TAG#*v}"
+            NOTES="$(printf '%s\n' \
+              "- npm: [\`@tabnas/parser@$V\`](https://www.npmjs.com/package/@tabnas/parser/v/$V)" \
+              "- Go: \`github.com/tabnas/parser/go@v$V\`" \
+              "- C: \`libtabnasparser\` per target, attached below; \`manifest.json\` records which targets are present.")"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "$TAG" --notes "$NOTES" --generate-notes
+            echo "created draft Release $TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  artifacts:
+    needs: release
+    uses: tabnas/.github/.github/workflows/clib-release.yml@main
+    with:
+      lib: libtabnasparser
+      tag: ${{ needs.release.outputs.tag }}
+
+  publish:
+    needs: [release, artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the Release now that its artifacts are attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          # build.sh leaves unsuffixed libtabnasparser.so / .dylib copies beside the
+          # target artifacts, and the shared assemble step uploads them. No
+          # manifest names them, so each is an unlabelled second copy of one
+          # architecture. Remove exactly those names, and headers, and never
+          # anything else a maintainer may have attached.
+          for A in $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+            case "$A" in
+              libtabnasparser.so|libtabnasparser.dylib|libtabnasparser.dll|*.h)
+                gh release delete-asset "$TAG" "$A" --repo "$GITHUB_REPOSITORY" --yes
+                echo "removed $A (not a manifest target)" ;;
+            esac
+          done
+          HAS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq 'any(.assets[]; .name == "manifest.json")')"
+          [ "$HAS" = true ] || { echo "::error::$TAG has no manifest.json — leaving it unpublished"; exit 1; }
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+            # "Latest" only for the highest version on this tag line, so a
+            # backfill or late repair of an older tag does not displace it.
+            HIGHEST="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/${TAG%%/v*}/v" --paginate \
+              --jq '.[].ref' | sed 's#^refs/tags/##' | sort -V | tail -1)"
+            LATEST=true
+            [ "$HIGHEST" = "$TAG" ] || LATEST=false
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$LATEST"
+            echo "published Release $TAG"
+          else
+            echo "Release $TAG is already published"
+          fi
+
+  dispatch-darwin:
+    if: ${{ inputs.darwin_only }}
+    uses: tabnas/.github/.github/workflows/clib-darwin-attach.yml@main
+    with:
+      lib: libtabnasparser
+      tag: ${{ inputs.tag }}
