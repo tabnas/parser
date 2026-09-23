@@ -79,7 +79,7 @@ run() { # run <name> <dir> <cmd...>
 }
 
 step "build TS (engine first, then downstreams)"
-( cd "$PARSER_ROOT/ts" && npx tsc --build src test )
+( cd "$PARSER_ROOT/ts" && npx tsc --build src && npx tsc --build test )
 # A linked sibling is its WORKING TREE, which has no dist/ until built:
 # the same order as ci.yml's build-order (parser bnf debug abnf).
 for sib in bnf debug abnf; do

@@ -154,7 +154,7 @@ From `ts/` (see `ts/Makefile`, or the repo-root [`Makefile`](Makefile)
 for combined targets):
 
 ```bash
-npm install && npm run build   # tsc --build src test
+npm install && npm run build   # tsc --build src && tsc --build test
 npm test                       # node --test, includes shared fixtures
 node --test --experimental-test-coverage test/**/*.test.js
 ```

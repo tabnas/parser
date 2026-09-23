@@ -26,7 +26,7 @@ the lenient-JSON grammar ships built into the [Go port](../go/).
 
 ```bash
 npm install
-npm run build        # tsc --build src test (emits dist/ and dist-test/)
+npm run build        # tsc --build src && tsc --build test (emits dist/ and dist-test/)
 npm test             # node --test test/**/*.test.js
 TEST_PATTERN=name npm run test-some
 node --test --experimental-test-coverage test/**/*.test.js
