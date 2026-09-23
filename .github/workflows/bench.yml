@@ -36,8 +36,15 @@ jobs:
     # `@stable` is what ci/workflows/rust.yml uses; the version is echoed
     # into the results below so that when it does move, the artifact says
     # so instead of leaving the step change invisible.
+    # rustup, NOT dtolnay/rust-toolchain: these repos allow only
+    # GitHub-owned and verified-creator actions, so that action is refused
+    # before any job starts. The runners ship rustup; `stable` here is the
+    # same moving target the comment above describes, and it is still
+    # echoed into the results.
     - name: Set up Rust
-      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable @ 2026-09-22
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup default stable
     - name: Clone downstream repos
       shell: bash
       run: |

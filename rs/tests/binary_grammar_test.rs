@@ -71,7 +71,11 @@ fn unlatin1(text: &str) -> Vec<u8> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 fn varint(mut n: usize) -> Vec<u8> {
@@ -267,7 +271,7 @@ fn make_binary_grammar_with(on_data: PayloadHandler) -> Tabnas {
             let low = chars.next()? as u32;
             Some(MatchTokenResult::new(
                 remaining.chars().take(2).collect::<String>(),
-                Value::Number(f64::from(high << 8 | low)),
+                Value::Number(f64::from((high << 8) | low)),
             ))
         })),
     );
@@ -724,7 +728,7 @@ fn make_bitfield_grammar() -> Tabnas {
             }
             let avail = 8 - bit;
             let take = avail.min(need);
-            value = value << take | (bytes[index] >> (avail - take)) & ((1 << take) - 1);
+            value = (value << take) | ((bytes[index] >> (avail - take)) & ((1 << take) - 1));
             bit += take;
             need -= take;
             if 8 == bit {
