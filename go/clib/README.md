@@ -1,111 +1,80 @@
-# libtabnas — the C ABI
+# libtabnasparser — the parser parser as a C ABI
 
-The engine as a C shared library, so languages with no tabnas port can
-still use it. Python via `ctypes` is the motivating case (see
-[`../../py/`](../../py/)), but the surface is plain C and works from
-anything with an FFI.
+<!-- tabnas-clib-template: v3 — stamped by admin tasks/adopt-clib.sh;
+     edit the template and re-stamp, not this file. -->
+
+The parser format parser as a C shared library, so languages with no
+tabnas port can parse and validate parser input. This is one of the
+per-format tabnas clibs sharing the **uniform ABI** decided by ADR-12:
+every such library exports the same five symbols, and which library you
+load decides which format you parse — so one generic binding per
+language covers the whole fleet. Two format clibs consequently cannot
+be statically linked into one binary; load them dynamically.
 
 ```sh
-./build.sh            # host
+./build.sh            # host, into ./dist
 ZIG=/path/to/zig ./build.sh all
 ```
-
-## What it does and does not do
-
-It is **grammar-agnostic**, because this repo ships no grammar. A caller
-supplies a *serialized GrammarSpec* — the pure-data form a front-end
-compiler emits — and the library parses input against it:
-
-```
-GBNF text ──@tabnas/gbnf──▶ GrammarSpec ──serialize──▶ JSON
-                                                        │
-                                          libtabnas ◀───┘  parse input
-```
-
-Compile the grammar wherever a front-end lives; run it anywhere. There
-is deliberately **no text-form loader**: `GrammarText` needs a registered
-text parser and a grammar-free engine ships none, so a text entry point
-would be dead here.
-
-Accepted input comes back with its parse result as `value`, as the
-canonical header (`include/tabnas.h`) has always specified: the
-grammar-agnostic library is a parser, not only an acceptance oracle. Key
-order inside `value` is the engine's insertion order and is out of
-contract (ADR-15, recorded in the repository's `DIVERGENCE.md`); a
-consumer that needs a particular order sorts.
 
 ## The contract
 
 | Function | Returns |
 |---|---|
-| `tabnas_version()` | `{"ok":true,"version":"…","lib":"libtabnas","template":"v1"}` (the header's members, plus `version`; no `format`, since this library is grammar-agnostic) |
-| `tabnas_grammar_json(spec, len)` | `{"ok":true,"handle":N}` (in place of the per-format template's `tabnas_grammar`, which has no slot for a spec) |
-| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true,"value":…}` or `{"ok":true,"accept":false,"error":{…}}`; `value` is omitted only when the result is not JSON-representable |
+| `tabnas_version()` | `{"ok":true,"lib":"libtabnasparser","format":"parser","template":"v3"}` |
+| `tabnas_grammar(opts, len)` | `{"ok":true,"handle":N}` — opts reserved, pass `(NULL, 0)`, unless the format notes below define them |
+| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true[,"value":…]}` or `{"ok":true,"accept":false,"error":{…}}` |
 | `tabnas_grammar_free(handle)` | — |
 | `tabnas_free(str)` | — |
 
-Four rules, each load-bearing:
+The rules every tabnas clib shares, each load-bearing:
 
 1. **Every call returns JSON.** A C ABI has one return value and no
-   exceptions. Rather than out-params or a thread-local error slot, each
-   entry point returns a document, so a binding in any language is
-   *call, decode* and the error contract is identical everywhere.
-2. **A rejection is an answer, not a failure.** Input outside the
-   grammar's language returns `ok:true, accept:false`. `ok:false` is
-   reserved for the call itself being wrong — an unknown handle, an
-   unparseable spec — so a caller can tell "your input is not in the
-   language" from "you called me wrong" without reading messages.
-3. **Lengths are explicit.** Grammar and source arguments take a byte
-   length and are *not* read as NUL-terminated C strings. Parser input is
-   arbitrary bytes and may legitimately contain a zero byte; truncating
-   there would answer a question the caller did not ask.
-
-   A **NULL pointer is the empty buffer when — and only when — the
-   length is zero**, which is how C conveys one:
-
-   | call | result |
-   |---|---|
-   | `(NULL, 0)` | the empty buffer; a normal verdict follows |
-   | `(NULL, n)`, `n > 0` | `ok:false`, code `usage` |
-   | `(ptr, n)`, `n < 0` | `ok:false`, code `usage` |
-
-   `(NULL, 0)` is a question, not a mistake: a grammar may accept empty
-   input, and `lex.empty` decides what it returns when one does. A
-   pointer and a length that disagree cannot be honoured, so they are
-   refused rather than guessed at.
-4. **The caller owns what it is given.** Every `char*` returned must be
-   released with `tabnas_free` (it is `malloc`'d, so that is `free(3)` —
-   do not use another allocator's). Every handle must be released with
+   exceptions; each entry point returns a document, so a binding in any
+   language is *call, decode* and the error contract is identical
+   everywhere.
+2. **Three outcomes, not two.** A broken call is `ok:false` with a
+   code; input outside the language is `ok:true, accept:false`; an
+   accepted input is `ok:true, accept:true` — plus `value` where the
+   parse result is JSON-representable.
+3. **A rejection is an answer, not a failure.**
+4. **Lengths are explicit.** Buffers are not read as NUL-terminated C
+   strings; input may legitimately contain a zero byte.
+5. **The caller owns what it is given.** Every `char*` must be released
+   with `tabnas_free` (malloc'd — `free(3)`); every handle with
    `tabnas_grammar_free`.
 
 Handles are safe to use from several threads: each carries a mutex,
-because a `*Tabnas` is not safe for concurrent `Parse` and an FFI caller
-is under no obligation to serialise — CPython, for one, releases the GIL
-for the duration of a `ctypes` call.
+because the underlying engine is not safe for concurrent Parse and an
+FFI caller is under no obligation to serialise.
 
-## Cross-compiling
+The grammar is installed **natively** — compiled in-process, not
+serialized and reloaded. Lexing configuration is part of the accepted
+language, and format plugins keep format-specific behaviour as
+closures, which cannot cross a data boundary; see
+`admin/notes/2026-08-16-clib-ffi-strategy.md` for the full account.
 
-cgo needs a C toolchain per target, which normally forces a matrix of
-native CI runners. `zig cc` is a cross compiler for all of them, so one
-Linux box produces Linux and Windows artifacts:
+## Consuming without a binding
 
-| target | how |
-|---|---|
-| `linux/amd64`, `linux/arm64` | zig, cross |
-| `windows/amd64` | zig, cross |
-| `darwin/*` | **native macOS host only** |
+C, C++, Zig, Swift, Nim and D consume `include/tabnas.h` directly — no
+binding layer exists or is needed. Zig example:
 
-macOS is the exception: linking needs Apple's SDK (`CoreFoundation`,
-`libresolv`), which zig cannot redistribute. `build.sh all` skips darwin
-unless it is already running on it.
+```zig
+const c = @cImport(@cInclude("tabnas.h"));
+// link against libtabnasparser; every call returns a JSON []u8 to free with
+// c.tabnas_free.
+```
+
+## Format notes
+
+The engine ships no grammar, so this is the one library whose `tabnas_grammar` argument is DEFINED rather than reserved: pass a serialized GrammarSpec (`{"options":…,"rule":…,"v":N}`, the pure-data form a front-end compiler emits), which is loaded with `GrammarSpecFromJSON`. The version document's `format` is therefore `parser`, not a language — the language is whatever spec you load. A spec that is not a JSON object, or that installs no start rule (`rule.start`, default `val`), is refused with code `grammar`, so `(NULL, 0)` and `{}` are refused too: a validator that accepted every input would be worse than none. Only engine builtins can run — consumer-defined actions cannot cross the ABI (ADR-12 clause 3). An engine-internal failure (a recovered panic, code `internal`) is a failed call (`ok:false`), never a rejection. Key order inside `value` is out of contract (ADR-15).
 
 ## Layout
 
-- `core.go` — the behaviour, in plain Go.
-- `tabnas_c.go` — the cgo shim: `(pointer, length)` in, `malloc`'d
-  string out, nothing else.
-- `core_test.go` — the contract.
-
-The split is not decoration. Go does not support cgo in `_test.go`
-files, so anything beside `import "C"` is unreachable from a test;
-keeping the behaviour in `core.go` is what makes it testable.
+- `core.go` — the behaviour, in plain Go (testable).
+- `tabnas_c.go` — the cgo shim: `(pointer, length)` in, malloc'd string
+  out, nothing else. (Go forbids cgo in `_test.go`, which is why the
+  behaviour lives in `core.go`.)
+- `core_test.go` — the contract: accept/reject samples, unknown-handle,
+  reserved options, double-free, concurrency under `-race`.
+- `include/tabnas.h`, `tabnas.pc.in` — the header and pkg-config file
+  for C-header-native consumers.

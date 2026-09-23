@@ -1,9 +1,11 @@
 """tabnas — the parsing engine, via its C ABI.
 
-The engine is written in Go and exposed as a C shared library
-(``go/clib``); this module is a ctypes binding over it. Nothing here
-reimplements the engine, so what Python accepts is exactly what every
-other tabnas runtime accepts.
+The engine is written in Go and exposed as a C shared library,
+``libtabnasparser`` (``go/clib``), which exports the uniform tabnas C
+ABI: ``tabnas_version``, ``tabnas_grammar``, ``tabnas_parse``,
+``tabnas_grammar_free`` and ``tabnas_free``. This module is a ctypes
+binding over it. Nothing here reimplements the engine, so what Python
+accepts is exactly what every other tabnas runtime accepts.
 
 The engine ships no grammar, and neither does this module. Supply a
 *serialized GrammarSpec* — the pure-data form a front-end compiler
@@ -21,6 +23,7 @@ then run it anywhere::
 
     verdict = grammar.check('{"a": 1,}')
     verdict.accept                  # False
+    verdict.error["code"]           # "unexpected"
     verdict.error["message"]        # why
 
 Build the library first::
@@ -48,7 +51,8 @@ __all__ = ["Grammar", "Verdict", "TabnasError", "load", "version"]
 
 
 class TabnasError(Exception):
-    """The call itself was wrong — a bad spec, a released grammar.
+    """The call itself failed — a bad spec, a released grammar, or an
+    engine-internal fault (error code ``internal``).
 
     NOT raised when input fails to parse: that is an answer, not an
     error. See :class:`Verdict`.
@@ -63,6 +67,12 @@ class Verdict:
     when it was rejected, or when the result was not JSON-representable).
     Key order inside it is the engine's insertion order and is not part
     of the contract.
+
+    ``error`` is the engine's structured diagnostic when the input was
+    rejected: ``code``, ``message``, ``row``, ``col``, ``pos``, ``rule``,
+    ``token``, ``version`` and the rest of
+    ``schema/diagnostic.schema.json``. Only ``code`` is contractual
+    across runtimes.
     """
 
     accept: bool
@@ -83,16 +93,16 @@ def _default_lib_path() -> str:
         platform.system(), "linux")
     here = os.path.dirname(os.path.abspath(__file__))
     for candidate in (
-        os.path.join(here, f"libtabnas{ext}"),
+        os.path.join(here, f"libtabnasparser{ext}"),
         os.path.join(here, "..", "go", "clib", "dist",
-                     f"libtabnas-{goos}-{arch}{ext}"),
+                     f"libtabnasparser-{goos}-{arch}{ext}"),
     ):
         if os.path.exists(candidate):
             return candidate
     raise TabnasError(
-        "cannot find the tabnas shared library. Build it with "
-        "`cd go/clib && ./build.sh`, then set TABNAS_LIB to the result "
-        "or pass path= to tabnas.load()."
+        "cannot find libtabnasparser, the tabnas shared library. Build "
+        "it with `cd go/clib && ./build.sh`, then set TABNAS_LIB to the "
+        "result or pass path= to tabnas.load()."
     )
 
 
@@ -119,8 +129,8 @@ def load(path: Optional[str] = None):
     # have to hand to tabnas_free.
     lib.tabnas_version.restype = ctypes.c_void_p
     lib.tabnas_version.argtypes = []
-    lib.tabnas_grammar_json.restype = ctypes.c_void_p
-    lib.tabnas_grammar_json.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    lib.tabnas_grammar.restype = ctypes.c_void_p
+    lib.tabnas_grammar.argtypes = [ctypes.c_char_p, ctypes.c_int]
     lib.tabnas_parse.restype = ctypes.c_void_p
     lib.tabnas_parse.argtypes = [ctypes.c_longlong, ctypes.c_char_p,
                                  ctypes.c_int]
@@ -144,17 +154,33 @@ def _call(lib, ptr) -> dict:
 
 
 def version() -> str:
-    """The engine version behind the loaded library."""
+    """The C ABI template revision the loaded library was built from.
+
+    This is the ``template`` member of the library's version document
+    (``{"ok":true,"lib":"libtabnasparser","format":"parser",
+    "template":"v3"}``), e.g. ``"v3"``: it names the revision of the
+    uniform C contract the library implements, which is what a binding
+    has to agree with.
+
+    It is NOT the engine version, which the version document no longer
+    carries. The engine version is the ``go/v<version>`` release tag the
+    library was built from (the ``tag`` in the release's
+    ``manifest.json``), and every rejection reports it in
+    ``Verdict.error["version"]``.
+    """
     lib = load()
-    return _call(lib, lib.tabnas_version())["version"]
+    return _call(lib, lib.tabnas_version())["template"]
 
 
 class Grammar:
     """A loaded grammar, ready to check inputs against.
 
     ``spec`` is a serialized GrammarSpec: a dict, or the JSON text of
-    one. Use as a context manager, or call :meth:`close`, to release the
-    underlying handle deterministically.
+    one. A spec that is not a JSON object, or that installs no start
+    rule (``rule.start``, default ``val``), raises :class:`TabnasError`:
+    a grammar that accepted every input would validate nothing. Use as a
+    context manager, or call :meth:`close`, to release the underlying
+    handle deterministically.
     """
 
     def __init__(self, spec: Any, *, path: Optional[str] = None):
@@ -166,7 +192,7 @@ class Grammar:
         if not isinstance(spec, (bytes, bytearray)):
             raise TypeError("spec must be a dict, str or bytes")
 
-        res = _call(self._lib, self._lib.tabnas_grammar_json(
+        res = _call(self._lib, self._lib.tabnas_grammar(
             bytes(spec), len(spec)))
         if not res.get("ok"):
             raise TabnasError(res.get("error", {}).get("message", "load failed"))

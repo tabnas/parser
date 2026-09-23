@@ -1,0 +1,15 @@
+# pkg-config for libtabnasparser (tabnas-clib-template: v3)
+# Install alongside the built library; substitute @PREFIX@ at install.
+# Libs links the CANONICAL basename (libtabnasparser.so/.dylib). Release
+# artifacts carry a target suffix; installing means copying (or
+# symlinking, as build.sh does for the host build in dist/) the artifact
+# to the canonical name in ${libdir}.
+prefix=@PREFIX@
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libtabnasparser
+Description: parser parser (libtabnasparser) — uniform tabnas C ABI (ADR-12)
+Version: @VERSION@
+Libs: -L${libdir} -ltabnasparser
+Cflags: -I${includedir}

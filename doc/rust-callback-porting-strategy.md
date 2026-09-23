@@ -17,8 +17,8 @@ adjudicate the closed tier before porting it.** Concretely: settle four
 unpinned cross-runtime questions in TypeScript and Go first (§5.1 here, days
 of work); ship the Rust FFI crate over `go/clib` — the feasibility
 report's option B — as the first artifact; gate a serialized-spec Rust
-engine (option C) on a named consumer that `libtabnas` provably cannot
-serve; and treat the imperative plugin API as a decision separate
+engine (option C) on a named consumer that `libtabnasparser` provably
+cannot serve; and treat the imperative plugin API as a decision separate
 from all of these, and most likely a permanent no.
 
 **The finding from the precedent survey is that this is the normal
@@ -733,14 +733,14 @@ substrate. S1 is listed in order to be rejected.
 Two notes the table cannot carry.
 
 **On S6's ceiling.** The honest limit is not speed. `go/clib`'s C ABI
-returns accept/reject plus a code and a one-line message; an
-`AltAction` needs `r.node`, `r.child.node`, `r.parent.node`, `r.o[i]`,
-`ctx.t`, `ctx.v` and `ctx.rewind`, and exposing those means versioning
-the whole `Rule`/`Context` object graph across a boundary — which is
+returns accept/reject, the parsed value and the structured diagnostic;
+an `AltAction` needs `r.node`, `r.child.node`, `r.parent.node`,
+`r.o[i]`, `ctx.t`, `ctx.v` and `ctx.rewind`, and exposing those means
+versioning the whole `Rule`/`Context` object graph across a boundary — which is
 the plugin-API redesign this document exists to avoid, plus a boundary.
-Fixing `go/clib/core.go:115` so accepted input returns `"value"` (as
-`go/clib/include/tabnas.h:17-18` already specifies) lifts B from
-validation-only, and is worth doing regardless.
+Returning `"value"` for accepted input (as `go/clib/include/tabnas.h`
+specifies) lifted B from validation-only: done in #117, and kept, with
+the full diagnostic added, by clib template v3.
 
 **On S3's payload.** The blocker recorded here is discharged: #120
 names the config source, so `enum Act` is designable now. What replaces
@@ -1042,17 +1042,21 @@ Scope: fix `go/clib/core.go:115` to return `"value"` for accepted
 input, and pin the key-order surface with a fixture in the same commit.
 Do **not** rename the version document in isolation —
 `py/tabnas.py:141` reads the `version` key that
-`go/clib/include/tabnas.h:35` would remove. Budget the artifact matrix
-separately from the ~94-line wrapper: `go/clib/build.sh` cross-compiles
-Linux and Windows via zig, and darwin needs a macOS host, which is the
-same wall `py/README.md:42-45` records as unclimbed.
+`go/clib/include/tabnas.h:35` would remove. (Both done since: #117
+returns `value`, with key order ruled out of contract by ADR-15; clib
+template v3 adopted the header's version document together with the
+Python change, and `tabnas.version()` now returns its `template`
+marker.) Budget the artifact matrix separately from the ~94-line
+wrapper: `go/clib/build.sh` cross-compiles Linux and Windows via zig,
+and darwin needs a macOS host, which is the same wall
+`py/README.md:61-66` records as unclimbed.
 
 ### 5.3 Decision gate before M2
 
 Five conditions, checkable, in order. All five, not a majority.
 
-1. **A named consumer that `libtabnas` plus a serialized spec provably
-   cannot serve.** In practice only three qualify: a **wasm** target
+1. **A named consumer that `libtabnasparser` plus a serialized spec
+   provably cannot serve.** In practice only three qualify: a **wasm** target
    (`go/clib` cannot build for wasm at all — cgo is unavailable — and
    this is the one gap S6 can never close), a **no-Go-runtime**
    constraint, or **in-Rust grammar authoring**. The third reintroduces

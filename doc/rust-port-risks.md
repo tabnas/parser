@@ -37,13 +37,15 @@ and the hard structural questions have answers. The likely failure mode
 is that it is built correctly into a niche that is already occupied. The
 incumbent is measurable: `go/clib` is 287 non-test lines
 (`go/clib/core.go` 183 + `go/clib/tabnas_c.go` 104) and `py/tabnas.py` is
-206 lines of `ctypes` over it, and `py/README.md:26-30` advertises
+206 lines of `ctypes` over it, and `py/README.md:34-37` advertises
 exactly v0.1's stated audience — "supply a serialized GrammarSpec — the
 pure-data form a front-end compiler emits (`@tabnas/gbnf` for llama.cpp
 GBNF, `@tabnas/abnf` for RFC 5234 ABNF)". So the question is not "does a
 consumer exist"; it is whether v0.1's three genuine differentiators over
 that incumbent — a parsed value tree, the 15-field structured diagnostic,
-and no cgo — justify 15-18k non-test lines against roughly 500. That is
+and no cgo — justify 15-18k non-test lines against roughly 500. (The
+incumbent now returns the value tree too, since #117, and the structured
+diagnostic since clib template v3, which leaves only no cgo; see §5.2.) That is
 answerable this week, and it is the single most decision-relevant
 sentence either of the earlier documents could have contained. Neither
 contains it.
@@ -1240,8 +1242,13 @@ cheaper claim than "unverifiable".
   (commit `a3f286b`) and in no tag and no registry. npm allows a 72-hour
   unpublish; crates.io versions are permanent and a yank does not free the
   number. **Version the crate independently from 0.1.0 and have it report
-  the engine version it implements** — `py/tabnas.py:138-142` is the
-  working precedent and adds zero version locations.
+  the engine version it implements** — `py/tabnas.py:138-142` was the
+  working precedent, adding zero version locations. (Since clib
+  template v3 the version document carries `lib`/`format`/`template`
+  and no engine version, and `tabnas.version()` returns the template
+  marker; the engine version still crosses as a rejection
+  diagnostic's `version`, and is the `go/v…` tag the library was built
+  from.)
 - **The crate name.** `cargo search tabnas` returns nothing here while
   `cargo search serde` returns results, so the registry lookup works and
   the name appears unclaimed. (The crates.io HTTP API returns **403** from
@@ -1472,7 +1479,11 @@ lines of `ctypes` over it; a Rust FFI binding over the same C ABI is the
 same ~200 lines. What clib does **not** return is measurable —
 `go/clib/core.go:133-140` emits `{"ok": true, "accept": false, "error":
 {"code", "message"}}` and nothing else: no parsed value, no row, no
-column, no `pos`, no structured diagnostic.
+column, no `pos`, no structured diagnostic. (That was so when this was
+written. `libtabnasparser` now returns the parsed value on accept, since
+#117, and the whole structured diagnostic on reject, row, column and
+`pos` included, since clib template v3; so of the three differentiators
+below only no cgo / no Go runtime still holds.)
 
 So the decision is a margin, not a vacancy. v0.1's three genuine
 differentiators over an existing ~500-line incumbent are the parsed value
