@@ -99,7 +99,7 @@ func TestCovCommentEatLine(t *testing.T) {
 	j := Make(Options{
 		Rule: &RuleOptions{Start: "top"},
 		Comment: &CommentOptions{Lex: &yes, Def: map[string]*CommentDef{
-			"hash": {Line: true, Start: "#", Lex: &yes, EatLine: &yes},
+			"hash": {Line: Bool(true), Start: "#", Lex: &yes, EatLine: &yes},
 		}},
 	})
 	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
@@ -122,7 +122,7 @@ func TestCovCommentSuffixFn(t *testing.T) {
 		return nil
 	}
 	j := makeJSON(Options{Comment: &CommentOptions{Lex: &yes, Def: map[string]*CommentDef{
-		"hash": {Line: true, Start: "#", Lex: &yes, Suffix: LexMatcher(stop)},
+		"hash": {Line: Bool(true), Start: "#", Lex: &yes, Suffix: LexMatcher(stop)},
 	}}})
 	out, err := j.Parse(`[1,# note ##2]`)
 	if err != nil {
@@ -614,7 +614,7 @@ func TestCovCommentBlock(t *testing.T) {
 	// Block comment with a suffix terminator.
 	yes := true
 	js := makeJSON(Options{Comment: &CommentOptions{Lex: &yes, Def: map[string]*CommentDef{
-		"blk": {Line: false, Start: "/*", End: "*/", Lex: &yes, Suffix: "!!"},
+		"blk": {Line: Bool(false), Start: "/*", End: "*/", Lex: &yes, Suffix: "!!"},
 	}}})
 	if out, err := js.Parse(`[1,/* x !!2]`); err == nil {
 		// Suffix terminates the block early; the remainder may or may not

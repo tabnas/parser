@@ -24,6 +24,39 @@ func TestOptionsFromMapNamesAnIllTypedLeaf(t *testing.T) {
 		{`{"options":{"comment":{"def":{"hash":{"line":"yes"}}}}}`, "options.comment.def.hash.line: expected boolean"},
 		{`{"options":{"rewind":{"history":true}}}`, "options.rewind.history"},
 		{`{"options":{"tokenSet":{"IGNORE":["#SP",7]}}}`, "options.tokenSet.IGNORE[1]: expected string"},
+		// A null WHOLE VALUE. It used to load here and leave the set
+		// untouched, while the same document was a fault in TypeScript
+		// and a deletion in Rust -- three answers for one JSON grammar.
+		// A null MEMBER is unaffected and still clears its position;
+		// the `["#SP",null,null]` case elsewhere in this file covers it.
+		{`{"options":{"tokenSet":{"KEY":null}}}`, "options.tokenSet.KEY: expected array, got null"},
+		{`{"options":{"tokenSet":{"CUSTOM":null}}}`, "options.tokenSet.CUSTOM: expected array, got null"},
+		// A null CONTAINER, as distinct from a null name. It used to load
+		// here as a no-op while TypeScript's constructor replaced the map
+		// and built NO sets at all -- one document, two answers on one
+		// runtime and a third here.
+		{`{"options":{"tokenSet":null}}`, "options.tokenSet: expected object, got null"},
+		// The three names TypeScript's deep merge refuses, because merging
+		// one reaches the prototype chain. Go has no such hazard, but the
+		// code is the contract: a grammar naming a set `constructor` must
+		// not load here and fault there.
+		{`{"options":{"tokenSet":{"constructor":["#TX"]}}}`,
+			"options.tokenSet.constructor: \"constructor\" is a reserved name"},
+		{`{"options":{"tokenSet":{"__proto__":["#TX"]}}}`,
+			"options.tokenSet.__proto__: \"__proto__\" is a reserved name"},
+		{`{"options":{"tokenSet":{"prototype":["#TX"]}}}`,
+			"options.tokenSet.prototype: \"prototype\" is a reserved name"},
+		// Every OTHER inherited name is an ordinary set name, and the rule
+		// is the three deep() skips rather than "anything on the prototype".
+		{`{"options":{"comment":{"def":{"constructor":{"line":true}}}}}`,
+			"options.comment.def.constructor: \"constructor\" is a reserved name"},
+		// `options.plugin` is the one caller-keyed map this port's
+		// Options does not hold -- TypeScript keeps a plugin's namespace
+		// in its options and this port keeps it on the engine -- so the
+		// reflective walk cannot reach it and it used to load here while
+		// faulting there.
+		{`{"options":{"plugin":{"prototype":{"a":1}}}}`,
+			"options.plugin.prototype: \"prototype\" is a reserved name"},
 	} {
 		gs, err := GrammarSpecFromJSON([]byte(c.spec))
 		if err != nil {
@@ -96,6 +129,7 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 		"tokenSet":{"IGNORE":["#SP",null,null]},
 		"comment":{"def":{"hash":null,"slash":false}},
 		"value":{"def":{"yes":{"val":1},"no":false}},
+		"tokenSet":{"toString":["#TX"],"valueOf":["#NR"]},
 		"fixed":{"token":{"#CA":null,"#X":"x"}},
 		"errmsg":{"suffix":"because"},
 		"ender":":",
@@ -210,5 +244,63 @@ func validateLeafAt(path string, val any, errs *[]string) {
 	}
 	if err := validateOptionsMap(node.(map[string]any)); err != nil {
 		*errs = append(*errs, err.Error())
+	}
+}
+
+// MapToOptions is the legacy door: it calls OptionsFromMap and DISCARDS
+// the error, and is documented to skip an entry it cannot carry. A
+// reserved name was reported by the validator and converted anyway, so
+// the one door that cannot report a refusal was also the one that
+// installed it.
+func TestMapToOptionsDropsARefusedEntry(t *testing.T) {
+	opts := MapToOptions(map[string]any{
+		"tokenSet": map[string]any{"constructor": []any{"#TX"}, "MINE": []any{"#TX"}},
+		"comment":  map[string]any{"def": map[string]any{"prototype": map[string]any{"line": true}}},
+		"fixed":    map[string]any{"token": map[string]any{"__proto__": "x", "#Q": "q"}},
+	})
+	if _, ok := opts.TokenSet["constructor"]; ok {
+		t.Error("tokenSet.constructor was refused and carried")
+	}
+	if opts.Comment != nil && opts.Comment.Def != nil {
+		if _, ok := opts.Comment.Def["prototype"]; ok {
+			t.Error("comment.def.prototype was refused and carried")
+		}
+	}
+	if opts.Fixed != nil && opts.Fixed.Token != nil {
+		if _, ok := opts.Fixed.Token["__proto__"]; ok {
+			t.Error("fixed.token.__proto__ was refused and carried")
+		}
+	}
+	// The legitimate neighbours in the same maps are untouched: the prune
+	// removes the three names, not the map.
+	if len(opts.TokenSet["MINE"]) != 1 {
+		t.Errorf("tokenSet.MINE = %v, want one member", opts.TokenSet["MINE"])
+	}
+	if opts.Fixed == nil || opts.Fixed.Token["#Q"] == nil {
+		t.Error("fixed.token.#Q was dropped with the refused entry")
+	}
+	// AND the caller's own data is untouched. The converter stores an
+	// opaque `any` -- a value.def entry's Val -- by reference, and a Go
+	// map is a reference type, so a prune that walked into one deleted
+	// the key from the CALLER'S map. A reserved name in opaque data is
+	// DATA, not an option-map entry.
+	inner := map[string]any{"constructor": 1, "keep": 2}
+	MapToOptions(map[string]any{
+		"value": map[string]any{"def": map[string]any{
+			"mine": map[string]any{"val": inner},
+		}},
+	})
+	if _, ok := inner["constructor"]; !ok {
+		t.Error("MapToOptions deleted a key from the caller's own opaque map")
+	}
+	if len(inner) != 2 {
+		t.Errorf("the caller's opaque map was modified: %v", inner)
+	}
+
+	// And the checked door still reports what the legacy one swallows.
+	if _, err := OptionsFromMap(map[string]any{
+		"tokenSet": map[string]any{"constructor": []any{"#TX"}},
+	}); err == nil {
+		t.Error("OptionsFromMap accepted a reserved name")
 	}
 }

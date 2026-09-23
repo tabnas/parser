@@ -51,6 +51,37 @@ const entries = <T>(
 // assign({a:1},{b:2}) // => {a:1,b:2};  assign(null,{b:2}) // => {b:2}
 const assign = (x: any, ...r: any[]) => Object.assign(null == x ? {} : x, ...r)
 
+// Copy a map onto one of the DUAL-SHAPE members -- `options`, `token`,
+// `tokenSet`, `fixed` -- each of which is a function as well as a map.
+//
+// `Object.assign` cannot do it. A function's own `length` and `name` are
+// non-writable, and `caller` and `arguments` resolve to the poisoned
+// accessors on Function.prototype, so assigning any of those four names
+// throws a raw TypeError instead of installing the entry. All four are
+// reachable from ordinary input: `{tokenSet: {length: ['#TX']}}`, a
+// plugin option group named `length`, `{fixed: {token: {length: 'x'}}}`,
+// and `tn.token('#length')`, which mints the bare name as a key.
+//
+// Defining an own data property installs every one of them: `length` and
+// `name` are configurable, and `caller`/`arguments` are inherited rather
+// than own, so neither setter is reached.
+//
+// Null/undefined target uses a new {}, as `assign` does, since these
+// members are absent while an engine is still being built.
+// assigndual(f, {length: [1]}) // => f (with f.length === [1])
+const assigndual = (target: any, source: any) => {
+  const into = null == target ? {} : target
+  for (const key of keys(source)) {
+    defprop(into, key, {
+      value: source[key],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+  }
+  return into
+}
+
 // True if value is an array.
 // isarr([1]) // => true;  isarr({}) // => false
 const isarr = (x: any) => Array.isArray(x)
@@ -212,20 +243,61 @@ function configure(
     ((matcher.tin$ = +tin), matcher),
   ])
 
-  // Convert tokenSet tokens names to tins
+  // Convert tokenSet tokens names to tins.
+  //
+  // A name whose members are absent is dropped rather than carried through
+  // as a set with no members, because `.filter()` on the absent value is a
+  // raw TypeError. `deep()` assigns `base[k] = deep(base[k], over[k])`
+  // unconditionally, so an absent value still creates the own property that
+  // this reduce then walks.
+  //
+  // Only `undefined` and SKIP reach here: the validator refuses an explicit
+  // `null` whole value as a load fault. For both of those `deep()` keeps
+  // the base, so a name that HAS a default still holds its array and never
+  // reaches the guard. What the guard drops is a name with nothing behind
+  // it, which is what "leave this name as it was" means when there is
+  // nothing to leave.
+  //
+  // To empty a set while keeping the name, clear every position:
+  // `{KEY: [null, null, null, null]}` gives a present, zero-length set.
+  // `{KEY: []}` does NOT: an array overlays index-wise, so overlaying
+  // nothing leaves all four defaults in place.
+  //
+  // The non-array test is the third way a name can arrive with nothing
+  // behind it, and it is not a caller mistake — the validator has
+  // already refused those. `deep()` reads the base as `base[k]`, which
+  // walks the PROTOTYPE CHAIN, so a name that Object.prototype also
+  // carries merges the inherited method in as an own property whenever
+  // the overlay says "keep the base": `{tokenSet: {toString: SKIP}}`
+  // reached `.filter()` holding a function and raised the same raw
+  // TypeError this guard exists to stop. `valueOf`, `hasOwnProperty` and
+  // the rest behave identically.
   const tokenSet = opts.tokenSet
     ? Object.keys(opts.tokenSet).reduce(
-      (a: any, n: string) => (
-        (a[n] = (opts.tokenSet as any)[n]
+      (a: any, n: string) => {
+        const members = (opts.tokenSet as any)[n]
+        if (null == members || SKIP === members || !Array.isArray(members)) {
+          return a
+        }
+        a[n] = members
           .filter((x: any) => null != x)
-          .map((n: string) => t(n))),
-        a
-      ),
+          .map((n: string) => t(n))
+        return a
+      },
       {},
     )
     : {}
 
-  cfg.tokenSet = cfg.tokenSet || {}
+  // Null-prototype, because the CALLER chooses these keys. Over a plain
+  // object, `cfg.tokenSet[name]` answers with an inherited method for
+  // `toString`, `valueOf`, `constructor` and the rest, and every read
+  // below is a truthiness test: the install branch took the "already
+  // present" path and died on `fn.length = 0`, and `findTokenSet` handed
+  // a function back to `Rule.parse` as though it were a set of tins. A
+  // set genuinely named `toString` is legal and now behaves like any
+  // other. The same reasoning applies to the tin lookup keyed by the
+  // same names; its inner maps are keyed by tin, so they stay plain.
+  cfg.tokenSet = cfg.tokenSet || Object.create(null)
   entries(tokenSet).map((entry: any[]) => {
     let name = entry[0]
     let tinset = entry[1]
@@ -245,7 +317,7 @@ function configure(
       en[1].map((tin: number) => (a[en[0]][tin] = true)),
       a
     ),
-    {},
+    Object.create(null),
   )
 
   // The IGNORE tokenSet is special and should always exist, even if empty.
@@ -531,10 +603,10 @@ function configure(
   cfg.color.lo = optscolor.lo ?? cfg.color.lo ?? '\x1b[2m'
   cfg.color.line = optscolor.line ?? cfg.color.line ?? '\x1b[34m'
 
-  assign(tabnas.options, opts)
-  assign(tabnas.token, cfg.t)
-  assign(tabnas.tokenSet, cfg.tokenSet)
-  assign(tabnas.fixed, cfg.fixed.ref)
+  assigndual(tabnas.options, opts)
+  assigndual(tabnas.token, cfg.t)
+  assigndual(tabnas.tokenSet, cfg.tokenSet)
+  assigndual(tabnas.fixed, cfg.fixed.ref)
 
   return cfg
 }
@@ -558,7 +630,7 @@ function tokenize<
     tokenmap[(ref as string).substring(1)] = token
 
     if (null != tabnas) {
-      assign(tabnas.token, cfg.t)
+      assigndual(tabnas.token, cfg.t)
     }
   }
 
@@ -669,7 +741,33 @@ function deep(base?: any, ...rest: any): any {
         ) {
           continue
         }
-        base[k] = deep(base[k], over[k])
+        // Injecting into a FUNCTION is a declared behaviour of this
+        // merge, and the engine's dual-shape members (`options`,
+        // `token`, `tokenSet`, `fixed`) are functions. Four names have
+        // to be handled there and nowhere else: a function's own
+        // `length` and `name` are non-writable, so assigning them
+        // throws a raw TypeError, and `caller`/`arguments` resolve to
+        // the poisoned accessors on Function.prototype, so even READING
+        // the base throws. All four are reachable from ordinary input --
+        // `{length: 1}` as a plugin option group is the shortest.
+        // Reading the own property and defining rather than assigning
+        // is the same thing for every other key.
+        const prev = base_isf
+          ? Object.prototype.hasOwnProperty.call(base, k)
+            ? base[k]
+            : undefined
+          : base[k]
+        const merged = deep(prev, over[k])
+        if (base_isf) {
+          defprop(base, k, {
+            value: merged,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          })
+        } else {
+          base[k] = merged
+        }
       }
     } else {
       base =
@@ -1304,12 +1402,36 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     if (widened(at, val)) continue
     const entry = DYNAMIC_MAPS[at]
     if (null != entry) {
-      if (null == val || SKIP === val) continue
+      if (undefined === val || SKIP === val) continue
+      // A null CONTAINER, for the maps that declare it a fault. Skipping
+      // every null here meant `{tokenSet: null}` reached neither door's
+      // check: the constructor let `deep()` replace the map wholesale and
+      // built NO sets at all, while `options()` kept all three, so the
+      // two doors answered differently for one input. It is refused now,
+      // for the same reason a null NAME is: there is no map a null could
+      // name, and wiping every set is not what a caller writing it meant.
+      if (null === val) {
+        if (NULL_CONTAINER_FAULT.has(at)) bad(at, 'object', val)
+        continue
+      }
       if (S.object !== typeof val || Array.isArray(val)) {
         bad(at, 'object', val)
       }
       for (const name of Object.keys(val)) {
         const nat = at + '.' + name
+        // RESERVED, and refused rather than dropped. `deep()` skips
+        // `__proto__`, `constructor` and `prototype` on purpose: merging
+        // them reaches the prototype chain, which is prototype pollution.
+        // The cost was that an entry under one of those names vanished
+        // in silence, while the option reference says a name the engine
+        // does not declare installs as written. Saying so at the door is
+        // the honest half of that guard.
+        if (RESERVED_MAP_KEYS.has(name)) {
+          throw new Error(
+            `Tabnas: ${nat}: \`${name}\` is a reserved name and cannot be a ` +
+            `${at.slice(at.lastIndexOf('.') + 1)} entry (it would reach the prototype chain)`,
+          )
+        }
         if (widened(nat, val[name])) continue
         entry(val[name], nat)
       }
@@ -1344,9 +1466,12 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
 }
 
 function bad(at: string, want: string, val: any): never {
+  // `typeof null` is "object", which reads as though an object were
+  // supplied. Name what the document carried.
   const got = S.function === typeof val
     ? 'a function reference'
-    : Array.isArray(val) ? 'array' : typeof val
+    : null === val ? 'null'
+      : Array.isArray(val) ? 'array' : typeof val
   throw new Error(
     `Tabnas: ${at}: expected ${want}, got ${got}` +
     (S.function === typeof val
@@ -1354,6 +1479,27 @@ function bad(at: string, want: string, val: any): never {
       : ''),
   )
 }
+
+// The dynamic maps where an explicit null CONTAINER is a load fault
+// rather than "not supplied". Only `options.tokenSet` today: its names
+// are the caller's and a null there deletes every set on one door and
+// nothing on the other. The definition maps are deliberately absent --
+// `{comment: {def: null}}` means "no comment definitions", which is a
+// thing a caller can want and both doors already agree on.
+const NULL_CONTAINER_FAULT = new Set(['options.tokenSet'])
+
+// The names `deep()` refuses to merge, for the prototype-pollution
+// reason given where it refuses them. Keep the two lists in step.
+//
+// A SET, because this is a set of names and an object is not. Two drafts
+// of it as an object were bitten by the very hazard it guards: keyed by
+// caller-chosen names, `RESERVED['toString']` answered with the
+// inherited method and refused a set legitimately named `toString`; and
+// `{__proto__: true}` in a literal is a prototype assignment rather than
+// a key, so the table came out missing the one of the three that arrives
+// from real JSON. A Set has neither problem, and `has()` says what it
+// means to a reader and to a static analyser alike.
+const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
 type DynamicEntry = (val: any, at: string) => void
 
@@ -1374,8 +1520,16 @@ const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
   // these validators with a symbol in hand. Rejecting it made the sentinel
   // usable everywhere except the three places that have a validator of
   // their own, which is not a rule anyone would write down.
+  // A set's MEMBERS are where the sentinel is actually wanted: `@SKIP`
+  // preserves the default at that position and `null` clears it, which is
+  // what a grammar writes to narrow a built-in set. The whole VALUE takes
+  // only an array, or the two spellings of "not supplied": `undefined`,
+  // which JavaScript cannot tell from an absent key, and SKIP, which the
+  // generic walk accepts at every other level. An explicit `null` there is
+  // a load fault like any other non-array, rather than a silent way to
+  // delete a built-in set.
   'options.tokenSet': (val, at) => {
-    if (null == val || SKIP === val) return
+    if (undefined === val || SKIP === val) return
     if (!Array.isArray(val)) bad(at, 'array', val)
     for (let i = 0; i < val.length; i++) {
       if (null != val[i] && SKIP !== val[i] && S.string !== typeof val[i]) {
@@ -1409,6 +1563,47 @@ const DYNAMIC_MAPS: Record<string, DynamicEntry> = {
   },
   'options.plugin': () => {},
 }
+
+// Refuse the three names `deep()` will not merge, over the caller-keyed
+// maps DYNAMIC_MAPS declares, reading only OWN keys.
+//
+// The generic walk in `validateOptions` already refuses them on the
+// constructor and `options()` doors, where validation sees the caller's
+// own object. The GRAMMAR door does not reach it: it clones the spec
+// first, and the clone is `deep()`, whose prototype-pollution guard SKIPS
+// these three names -- so the entry was gone before validation looked and
+// the same document loaded in silence. One input with two answers
+// depending on the door, which is the defect this option's contract has
+// had twice before.
+//
+// Called on the caller's spec, BEFORE the clone. The list is
+// DYNAMIC_MAPS' own keys, so a map added there is covered here with
+// nothing to remember.
+function rejectReservedNames(options: any) {
+  if (null == options || S.object !== typeof options) return
+  for (const at of Object.keys(DYNAMIC_MAPS)) {
+    let node: any = options
+    const path = at.split('.').slice(1)
+    for (const segment of path) {
+      node =
+        null != node &&
+          S.object === typeof node &&
+          Object.prototype.hasOwnProperty.call(node, segment)
+          ? node[segment]
+          : undefined
+    }
+    if (null == node || S.object !== typeof node || Array.isArray(node)) continue
+    for (const name of Object.keys(node)) {
+      if (RESERVED_MAP_KEYS.has(name)) {
+        throw new Error(
+          `Tabnas: ${at}.${name}: \`${name}\` is a reserved name and cannot be a ` +
+          `${at.slice(at.lastIndexOf('.') + 1)} entry (it would reach the prototype chain)`,
+        )
+      }
+    }
+  }
+}
+
 
 // The shape one comment definition takes; `suffix` is a string, an
 // array of strings, or a function, so it is left unchecked here.
@@ -1555,6 +1750,7 @@ export {
   modlist,
   resolveFuncRefs,
   validateOptions,
+  rejectReservedNames,
   WIDENINGS,
   isMatcherToken,
   MATCHER_TOKEN_NAMES,

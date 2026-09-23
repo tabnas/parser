@@ -18,6 +18,9 @@ func boolp(b bool) *bool { return &b }
 func intp(i int) *int    { return &i }
 ```
 
+For the `*bool` fields the package exports the same helper as
+`tabnas.Bool`, so `tabnas.Bool(false)` needs no definition of its own.
+
 ## `Fixed`
 
 Controls fixed structural tokens (`{`, `}`, `[`, `]`, `:`, `,`).
@@ -83,21 +86,43 @@ Default definitions:
 
 ```go
 map[string]*CommentDef{
-    "hash":  {Line: true, Start: "#"},
-    "slash": {Line: true, Start: "//"},
-    "block": {Line: false, Start: "/*", End: "*/"},
+    "hash":  {Line: Bool(true), Start: "#"},
+    "slash": {Line: Bool(true), Start: "//"},
+    "block": {Line: Bool(false), Start: "/*", End: "*/"},
 }
 ```
+
+A definition supplied under an existing name is merged FIELD BY FIELD:
+the fields you set win, and the fields you leave out keep the default.
+So `{End: "@@"}` under `hash` keeps `#` and keeps it a line comment.
 
 ### `CommentDef`
 
 | Field | Type | Description |
 |---|---|---|
-| `Line` | `bool` | `true` for line comments, `false` for block |
+| `Line` | `*bool` | `true` for line comments, `false` or unset for block |
 | `Start` | `string` | Start marker |
 | `End` | `string` | End marker (block only) |
 | `Lex` | `*bool` | Enable this definition (default: true) |
 | `EatLine` | `*bool` | Consume trailing newline (default: false) |
+
+`Line` is a pointer for the same reason `Lex` and `EatLine` are: the
+merge above keeps the default wherever your field is the zero value, and
+a plain `bool` has no spelling for `false` that is distinguishable from
+"not supplied". Write it with `Bool`:
+
+```go
+// # becomes a BLOCK comment ending at @@; // and /* */ are untouched.
+tabnas.Make(tabnas.Options{Comment: &tabnas.CommentOptions{
+    Def: map[string]*tabnas.CommentDef{
+        "hash": {Line: tabnas.Bool(false), Start: "#", End: "@@"},
+    },
+}})
+```
+
+Unset means block, which is what an absent `line` means in the canonical
+runtime, so a definition under a NEW name needs `Line` only to make it a
+line comment.
 
 ## `String`
 

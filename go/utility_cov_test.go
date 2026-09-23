@@ -433,7 +433,7 @@ func TestMapToOptionsAllKeys(t *testing.T) {
 		t.Errorf("comment.def: %v", opts.Comment.Def)
 	}
 	slash := opts.Comment.Def["slash"]
-	if !slash.Line || slash.Start != "//" || slash.End != "\n" || !*slash.Lex || *slash.EatLine {
+	if !boolVal(slash.Line, false) || slash.Start != "//" || slash.End != "\n" || !*slash.Lex || *slash.EatLine {
 		t.Errorf("comment.def.slash: %+v", slash)
 	}
 	if sfx, ok := slash.Suffix.([]string); !ok || len(sfx) != 1 || sfx[0] != "!!" {

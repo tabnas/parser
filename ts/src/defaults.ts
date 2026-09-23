@@ -52,11 +52,21 @@ const defaults: TabnasOptions = {
   },
 
   // Token sets.
-  tokenSet: {
+  //
+  // NULL-PROTOTYPE, because the caller names these. `deep()` reads the
+  // base as `base[k]`, which walks the prototype chain, so over a plain
+  // object an overlay named `constructor` merged its array INTO the
+  // inherited `Object` function and came back a function, which
+  // `configure` then dropped -- a set the option reference says installs
+  // as written, silently absent. `toString`, `valueOf` and the rest took
+  // the same path and are fixed by the same change. The tin lookup and
+  // the installed map are null-prototype for this reason too
+  // (ts/src/utility.ts).
+  tokenSet: Object.assign(Object.create(null), {
     IGNORE: ['#SP', '#LN', '#CM'],
     VAL: ['#TX', '#NR', '#ST', '#VL'],
     KEY: ['#TX', '#NR', '#ST', '#VL'],
-  },
+  }),
 
   // Recognize space characters in the lexer.
   space: {

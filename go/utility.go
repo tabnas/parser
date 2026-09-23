@@ -1122,7 +1122,7 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 				}
 				cd := &CommentDef{}
 				if line, ok := dm["line"].(bool); ok {
-					cd.Line = line
+					cd.Line = &line
 				}
 				if start, ok := dm["start"].(string); ok {
 					cd.Start = start
@@ -1656,10 +1656,66 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		}
 	}
 
+	// An entry under a reserved name is REFUSED, and the reads above
+	// converted it anyway. validateOptionsMap reports it and this
+	// function returns the error with the partial value, which is its
+	// contract -- but MapToOptions discards the error and keeps the
+	// value, and is documented to SKIP an entry it cannot carry. Without
+	// this the one door that cannot report a refusal was also the one
+	// that installed it.
+	pruneReservedNames(reflect.ValueOf(&opts))
+
 	if len(errs) > 0 {
 		return opts, fmt.Errorf("tabnas: options: %s", strings.Join(errs, "; "))
 	}
 	return opts, nil
+}
+
+// pruneReservedNames deletes every entry under a reserved name from the
+// string-keyed maps of a converted Options, walking exported fields and
+// following pointers.
+//
+// The names are refused everywhere rather than per map, because the
+// engine declares no option DECLARED under one of them: deleting one can
+// only remove an entry validateOptionsMap has already reported.
+//
+// The walk stops at an `any`, and that is load-bearing rather than
+// tidiness. An `any` holds the caller's OPAQUE DATA -- a value.def
+// entry's `Val`, an errmsg suffix -- which the converter stores by
+// reference rather than copying. A Go map is a reference type, so
+// deleting a key from one reached that way deletes it from the CALLER'S
+// map: `{"value":{"def":{"mine":{"val":{"constructor":1,"keep":2}}}}}`
+// came back as `{"keep":2}` in the caller's own object. A reserved name
+// there is DATA and not an option-map entry, and OptionsFromMap must not
+// mutate what it was handed.
+//
+// Every map the door refuses a reserved name in is a TYPED field, so
+// none of them is reached through an `any` and none is missed by
+// stopping.
+func pruneReservedNames(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			pruneReservedNames(v.Elem())
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			if t.Field(i).IsExported() {
+				pruneReservedNames(v.Field(i))
+			}
+		}
+	case reflect.Map:
+		if v.IsNil() || v.Type().Key().Kind() != reflect.String {
+			return
+		}
+		for name := range reservedMapKeys {
+			v.SetMapIndex(reflect.ValueOf(name), reflect.Value{})
+		}
+		for _, key := range v.MapKeys() {
+			pruneReservedNames(v.MapIndex(key))
+		}
+	}
 }
 
 // lexCheckOf reads a LexCheck hook out of a resolved map value, in either

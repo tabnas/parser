@@ -95,7 +95,7 @@ func TestLexCommentSuffixString(t *testing.T) {
 	j := makeJSON(Options{Comment: &CommentOptions{
 		Lex: &yes,
 		Def: map[string]*CommentDef{
-			"hash": {Line: true, Start: "#", Lex: &yes, Suffix: "@@"},
+			"hash": {Line: Bool(true), Start: "#", Lex: &yes, Suffix: "@@"},
 		},
 	}})
 	out, err := j.Parse(`[1,# noise @@2]`)
@@ -113,7 +113,7 @@ func TestLexCommentSuffixMultiple(t *testing.T) {
 	j := makeJSON(Options{Comment: &CommentOptions{
 		Lex: &yes,
 		Def: map[string]*CommentDef{
-			"hash": {Line: true, Start: "#", Lex: &yes, Suffix: []string{"END", "STOP"}},
+			"hash": {Line: Bool(true), Start: "#", Lex: &yes, Suffix: []string{"END", "STOP"}},
 		},
 	}})
 	out, err := j.Parse(`[1,# noise STOP2]`)

@@ -580,7 +580,7 @@ parse error. Token consumption behavior is aligned.
 
 ### Ender Characters and Ender Sequences
 
-Aligned, after a repair to this port's lexer model (#202).
+Aligned.
 
 `options.ender` has two forms and they are read differently. A STRING is
 its characters, one ender each; an ARRAY entry is ONE ender, so an entry
@@ -845,10 +845,10 @@ Structs with exported fields (the `Options` tree) merge field by field
 in Go, and plain objects/arrays merge key by key in TS. `undefined`/zero
 on the overlay side loses in both.
 
-Three classes of the typed overlay used to REPLACE where TS merges, and
-now merge as TS does (the ruling of #151):
+Three classes of the typed overlay merge as TS does, rather than
+replacing:
 
-| class | fields | both runtimes now |
+| class | fields | both runtimes |
 |---|---|---|
 | slices | `Ender`, `Result.Fail`, `Parse.Recover.SyncGroups`/`SyncTokens`, `Match.TokenOrder` | index-wise: an overlay index wins, positions beyond it keep the base |
 | maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
@@ -858,6 +858,32 @@ For that to hold, an instance starts from `DefaultOptions()`, which
 carries the defaults those overlays merge onto (the three token sets,
 the three comment definitions, the three value keywords), exactly as
 `tn.options` carries them in TS. `Options()` reports them.
+
+Inside a definition the merge is field by field, and it keeps the base
+wherever the overlay's field is the ZERO value. That is right where zero
+means "not supplied" and wrong for a field with three states, so every
+such field on `CommentDef` is a `*bool` -- `Line` as well as `Lex` and
+`EatLine` -- and `Bool` is how a caller writes one:
+
+| spelling | `hash` becomes |
+|---|---|
+| `{Line: Bool(false), Start: "#", End: "@@"}` | a block comment `# ... @@` |
+| `{End: "@@"}` | still a line comment `#`, with an end marker it never reaches |
+| `{Start: "%%"}` under a NEW name | a block comment: unset `Line` is `false`, as an absent `line` is in TS |
+
+TypeScript needs no equivalent, because a property a caller omits is
+absent from the object and a property set to `false` is present with that
+value. Measured on built instances, the merged `hash` definition:
+
+```
+TS  default                             {line:true,  start:"#",             lex:true, eatline:false}
+TS  {line:false, start:'#', end:'@@'}   {line:false, start:"#", end:"@@", lex:true, eatline:false}
+TS  {end:'@@'}                          {line:true,  start:"#", end:"@@", lex:true, eatline:false}
+```
+
+The third row is the one that decides the design: TS falls back for
+fields the caller omits, so merging a supplied definition as a whole
+record would zero four fields TS demonstrably keeps.
 
 Go cannot spell TS's `undefined` inside a typed slice, so there is no
 "keep this index" element: **an empty name in a `TokenSet` slice is the
@@ -1161,9 +1187,23 @@ How the value combines with the built-in set differs:
 
 | Area | TypeScript | Go |
 |---|---|---|
-| Type | `{ [name: string]: (string \| null)[] }` | `map[string][]string` |
-| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` yields `[#ST, #NR, #ST, #VL]`; shortening a set needs explicit `null` padding (`['#ST', null, null, null]`) | replacement: `{"KEY": {"#ST"}}` yields `[#ST]`. Go's `Options` carries no `tokenSet` defaults to merge against (the defaults live in the config's `KeySet`/`ValSet`/`IgnoreSet`) |
-| "Drop this entry" marker | `null` | `""` (an empty name is skipped) |
+| Type | `{ [name: string]: (string \| null \| undefined \| typeof SKIP)[] \| typeof SKIP \| undefined }` | `map[string][]string` |
+| Combination with the default set | index-wise deep merge with `defaults.tokenSet`; so `{ KEY: ['#ST'] }` keeps the tail and yields `[#ST, #NR, #ST, #VL]` | index-wise as well: `{"KEY": {"#ST"}}` yields `[#ST, #NR, #ST, #VL]`, the same shape |
+| Clear one position | `null` at that index | `""` at that index (an empty name is skipped) |
+| Empty a set, keeping the name | clear every position: `['#ST', null, null, null]` narrows to one, `[null, null, null, null]` empties it | the same: `{"#ST", "", "", ""}` narrows to one |
+| `[]` / `{}` as the whole value | **not** an empty set: an array overlays index-wise, so overlaying nothing leaves every default standing | the same |
+| Whole value "leave this name alone" | `undefined` or `SKIP`; a name with no default behind it is then dropped rather than installed empty | no spelling: Go has no sentinel here, and an absent map key is the only way to say it |
+| Whole value `null` | a load fault on every door: `options.tokenSet.KEY: expected array, got null` | a load fault on the **serialized** door, `options.tokenSet.KEY: expected array, got null`. The typed door has no such value: `map[string][]string{"KEY": nil}` is an empty slice, not a null, and installs a present, empty set |
+
+| A reserved name (`__proto__`, `constructor`, `prototype`) | a load fault, in every option map whose keys the caller chooses rather than in `tokenSet` alone: the deep merge will not carry a key that reaches the prototype chain | the same, though Go has no such hazard: the code is the contract, so a grammar naming a set `constructor` must not load here and fault there. The one map this port does not hold on `Options` is `plugin`, whose namespace lives on the engine, and it is checked at the door beside the reflective walk |
+| `tokenSet` itself `null` | a load fault, `options.tokenSet: expected object, got null` | the same |
+
+The last two rows are an API-shape difference and not a parity one: `SKIP`
+and a JSON `null` are values a document can carry and Go's typed map
+cannot, while a `nil` slice is a value Go's map can carry and a document
+cannot. The one place both runtimes read the SAME input is the serialized
+door, and there all three runtimes answer alike: TypeScript, Go and Rust
+each refuse a null whole value.
 
 Both runtimes late-bind token-set references in rule alternates, so an
 override applies to alternates that were declared before it. In Go the

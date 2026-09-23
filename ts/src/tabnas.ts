@@ -70,6 +70,7 @@ import {
   regexp,
   resolveFuncRefs,
   validateOptions,
+  rejectReservedNames,
   srcfmt,
   str,
   tokenize,
@@ -673,6 +674,14 @@ class Tabnas {
     // `deep` is the right clone: it copies plain objects and arrays but
     // passes functions and class instances through by reference, so a spec
     // carrying real action functions or RegExps still works.
+    // BEFORE the clone. `deep()` skips `__proto__`, `constructor` and
+    // `prototype` as its prototype-pollution guard, so a spec carrying a
+    // caller-keyed entry under one of those names arrives at validation
+    // already stripped and loads without a word -- while the same options
+    // through the constructor or `options()` are a load fault. Refusing
+    // here is what makes the three doors answer alike.
+    rejectReservedNames(gs.options)
+
     gs = deep({}, gs)
 
     // Lex matchers are the one thing that must be de-shared rather than
