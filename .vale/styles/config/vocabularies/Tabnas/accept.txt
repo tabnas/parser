@@ -7,8 +7,8 @@
 #
 # CASE PAIRS ARE ONE ENTRY, WRITTEN AS A REGEX. Listing `Tabnas` and
 # `tabnas` as two plain lines does not accept both: Vale turns the pair
-# into a preference and reports "Did you really mean 'tabnas' instead of
-# 'Tabnas'". `[Tt]abnas` accepts the pair without ruling between them.
+# into a preference and reports "Use 'tabnas' instead of 'Tabnas'".
+# `[Tt]abnas` accepts the pair without ruling between them.
 #
 # AN ACRONYM PUTS ITS CAPITALS IN THE SAME ENTRY: `(?:[Jj]son|JSON)`.
 # Vale 3.9.2 and later enforce an entry's case through Vale.Terms, so

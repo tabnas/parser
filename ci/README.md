@@ -1,11 +1,12 @@
 # CI harnesses (staged for review)
 
-Everything in this folder is runnable locally today; nothing is wired
-into `.github/` yet. The proposed workflows live in `workflows/` —
-review them and move them to `.github/workflows/` to activate.
+Everything in this folder is runnable locally today. A workflow
+proposed here lives in `workflows/` until it is reviewed and moved to
+`.github/workflows/`, which is what activates it.
 
-`workflows/docs.yml` is the prose gate (Vale over the reader-facing
-pages, see `docs/STYLE-GUIDE.md`). It needs no sibling checkouts and no
+The prose gate (Vale over the reader-facing pages, see
+`docs/STYLE-GUIDE.md`) was staged here and has been promoted: it runs
+from `.github/workflows/docs.yml`. It needs no sibling checkouts and no
 secrets; `make prose` runs the same check locally.
 
 Layout assumption (the org-wide sibling-checkout convention): sibling
