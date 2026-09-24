@@ -1,0 +1,18 @@
+# Target: tabnas/parser -> .github/workflows/deps-gate.yml
+#
+# Calls the fleet deps gate: no committed dependency may name a local path.
+# See the reusable workflow for why this is npm-only.
+
+name: deps-gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  deps-gate:
+    uses: tabnas/.github/.github/workflows/deps-gate.yml@main
+    permissions:
+      contents: read
