@@ -68,7 +68,7 @@ jobs:
       # package is pinned by URL in .vale.ini for the same reason.
       - name: Install Vale
         env:
-          VALE_VERSION: '3.9.1'
+          VALE_VERSION: '3.22.0'
         run: |
           curl -sSfL -o vale.tar.gz \
             "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"

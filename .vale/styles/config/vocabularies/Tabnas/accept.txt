@@ -9,24 +9,33 @@
 # `tabnas` as two plain lines does not accept both: Vale turns the pair
 # into a preference and reports "Did you really mean 'tabnas' instead of
 # 'Tabnas'". `[Tt]abnas` accepts the pair without ruling between them.
+#
+# AN ACRONYM PUTS ITS CAPITALS IN THE SAME ENTRY: `(?:[Jj]son|JSON)`.
+# Vale 3.9.2 and later enforce an entry's case through Vale.Terms, so
+# `[Jj]son` alone reports every `JSON` as "Use '[Jj]son' instead of
+# 'JSON'", and a separate `JSON` line does not help: the `[Jj]son`
+# entry still claims the word.
+#
+# AN ENTRY MATCHES A WHOLE WORD. `[Ee]nder` accepts `ender` and not
+# `enders`, so a plural or a possessive is an entry of its own.
 
 # --- The engine and the grammars that sit on it ------------------------
 [Tt]abnas
 [Jj]sonic
-[Aa]bnf
-[Ee]bnf
-[Gg]bnf
-[Bb]nf
-[Jj]son
-[Jj]sonc
-[Jj]son5
-[Jj]sonl
-[Xx]ml
-[Tt]oml
-[Yy]aml
-[Zz]on
-[Cc]sv
-[Ii]ni
+(?:[Aa]bnf|ABNF)
+(?:[Ee]bnf|EBNF)
+(?:[Gg]bnf|GBNF)
+(?:[Bb]nf|BNF)
+(?:[Jj]son|JSON)
+(?:[Jj]sonc|JSONC)
+(?:[Jj]son5|JSON5)
+(?:[Jj]sonl|JSONL)
+(?:[Xx]ml|XML)
+(?:[Tt]oml|TOML)
+(?:[Yy]aml|YAML)
+(?:[Zz]on|ZON)
+(?:[Cc]sv|CSV)
+(?:[Ii]ni|INI)
 [Ee]xpr
 [Mm]ultisource
 [Vv]oxgig
@@ -43,10 +52,12 @@
 [Tt]okenise
 [Tt]okenising
 [Rr]elex
+[Uu]nrelex
 [Ll]ookahead
 [Ee]nder
-[Ff]uncref
-[Ff]uncrefs
+[Ee]nders
+(?:[Ff]uncref|FuncRef)
+(?:[Ff]uncrefs|FuncRefs)
 [Ff]nref
 [Bb]uiltin
 [Bb]uiltins
@@ -54,13 +65,17 @@
 [Vv]arints
 [Uu]ngated
 [Pp]arsable
+[Uu]nary
+[Cc]hainable
 
 # --- General computing terms the dictionary lacks ----------------------
 [Rr]untime
 [Rr]untimes
 [Bb]oolean
+[Bb]ooleans
 [Cc]onfig
 [Nn]amespace
+[Nn]amespaced
 [Nn]amespacing
 [Pp]luggable
 [Ii]ndexable
@@ -71,6 +86,8 @@
 [Uu]nexported
 [Dd]edup
 [Dd]edupe
+[Dd]edupes
+[Dd]eduped
 [Dd]edups
 [Cc]anonicalise
 [Ll]owercased
@@ -79,6 +96,7 @@ APIs
 [Aa]rgs
 [Ss]tdin
 [Rr]epo
+[Rr]epos
 [Ss]rc
 peerDependencies
 
@@ -86,16 +104,19 @@ peerDependencies
 [Ss]ubstring
 [Ss]ubstrings
 [Ss]uperset
+[Ss]upersets
 [Mm]ultiline
 [Tt]ruthy
 [Uu]ntrusted
 [Uu]ntyped
 [Uu]nexecuted
 [Uu]nbuildable
+[Uu]nportable
 [Uu]nprefixed
 [Tt]okenization
 [Uu]nmarshalling
 [Cc]ommutatively
+[Tt]ransactionally
 [Ss]tatefulness
 [Dd]estructure
 [Pp]ushback
@@ -122,6 +143,7 @@ toolchain
 # possessive of a word it otherwise accepts.
 another's
 diagnostic's
+lexer's
 TS
 TS's
 
@@ -154,6 +176,8 @@ aici
 tagann
 chun
 suaimhnis
+nach
+d'adhmad
 
 # Words the gated pages have used since before this file did. The prose
 # gate was red on main with these eight errors -- four in

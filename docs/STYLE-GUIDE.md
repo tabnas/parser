@@ -66,7 +66,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 1400 alerts across 21 files. Those
+a clean run over the gated set: 1688 alerts across 21 files. Those
 numbers were once asserted rather than measured, and the total in this
 sentence and the one in `.vale.ini` drifted apart by 750.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -372,12 +372,14 @@ notations" is. A rule demoted without that note reads later as an
 oversight, and gets re-promoted by somebody repeating the work.
 
 To accept a word the spelling gate does not know, add it to `accept.txt`
-in the same directory, one stem at a time. Never add a suffix pattern:
-`\w+ise` accepts `madeupise` too, and punches a hole through the gate the
-file exists to make usable. Write a case pair as one regular expression
-(`[Tt]abnas`), because two plain lines make Vale enforce one spelling
-over the other, and it will then report the directory `ts/` as a
-misspelling of `TS`.
+in the same directory, one word at a time. An entry matches a whole word,
+so `[Ee]nder` does not accept `enders`: a plural or a possessive is an
+entry of its own. Never add a suffix pattern: `\w+ise` accepts
+`madeupise` too, and punches a hole through the gate the file exists to
+make usable. Write a case pair as one regular expression (`[Tt]abnas`),
+and put an acronym's capitals in the same entry (`(?:[Jj]son|JSON)`),
+because two plain lines make Vale enforce one spelling over the other,
+and it will then report the directory `ts/` as a misspelling of `TS`.
 
 ## The fleet
 
