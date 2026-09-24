@@ -1,6 +1,6 @@
-# Stamped by admin tasks/adopt-clib.sh (ADR-12) to ci/clib-release.yml,
-# and promoted to .github/workflows/ by the restamp's own pull request or
-# by admin rollout/apply-ci-folders.sh (ADR-8, as amended 2026-09-24).
+# Stamped by admin tasks/adopt-clib.sh (ADR-12) straight into
+# .github/workflows/. A restamp lands in this repository's own reviewed
+# pull request (ADR-8, as amended 2026-09-24).
 #
 # tabnas-clib-template: v5
 #
