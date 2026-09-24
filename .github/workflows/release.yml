@@ -6,12 +6,12 @@
 # header records only what differs for parser.
 #
 # WHY THIS FILE EXISTS AT ALL. parser's release.yml was live-only —
-# never staged here — which is exactly the M9 gap: ADR-16's node24 sweep
-# ran over rollout/workflows/, so a workflow that was not in this
-# directory was never swept. The deployed file still pins
-# checkout@34e11487 # v4 and setup-node@49933ea5 # v4, both node20-
-# runtime majors. Staging it fixes the pins AND puts the file under the
-# applier, so the next fleet-wide change reaches it automatically.
+# never staged in admin rollout/workflows/ — which was exactly the M9
+# gap: ADR-16's node24 sweep ran over rollout/workflows/, so a workflow
+# that was not in that directory was never swept. The deployed file then
+# pinned checkout@34e11487 # v4 and setup-node@49933ea5 # v4, both
+# node20-runtime majors. Staging it fixed the pins AND put the file under
+# the applier, so the next fleet-wide change reaches it automatically.
 #
 # TWO TRIGGERS:
 #   workflow_dispatch  the normal path. Bump in a reviewed PR first;
@@ -58,10 +58,11 @@
 # failed C build unpublishes nothing: it leaves a draft Release for a
 # clib-release.yml dispatch (darwin_only: false) to finish.
 #
-# CRATES.IO (ADR-21, staged). Where the repository has a Rust crate,
-# the crates job hands the same release tag to crates-release.yml, which
-# publishes rs/ to crates.io from that tag over OIDC trusted publishing.
-# It is inert until a maintainer sets the TABNAS_CRATES variable to 'on',
+# CRATES.IO (ADR-21, deployed and inert). Where the repository has a
+# Rust crate, the crates job hands the same release tag to
+# crates-release.yml, which publishes rs/ to crates.io from that tag over
+# OIDC trusted publishing. Both files are live, and both jobs are inert
+# until a maintainer sets the TABNAS_CRATES variable to 'on',
 # which happens once the crate exists and its trusted publisher names
 # THIS file. crates.io matches the top-level workflow (the OIDC
 # workflow_ref), not the called one, so renaming release.yml breaks
@@ -257,8 +258,8 @@ jobs:
     with:
       tag: ${{ needs.publish-npm.outputs.clib-tag }}
 
-  # crates.io (ADR-21, staged; see the header). Two switches: this `if`
-  # and the called job's own, both on the TABNAS_CRATES variable.
+  # crates.io (ADR-21, deployed and inert; see the header). Two switches:
+  # this `if` and the called job's own, both on the TABNAS_CRATES variable.
   crates:
     needs: publish-npm
     if: ${{ vars.TABNAS_CRATES == 'on' && needs.publish-npm.outputs.clib-tag != '' }}

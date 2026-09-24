@@ -3,12 +3,12 @@
 # crates.io publishing for this repository's Rust crate, rs/ (admin
 # ADR-21).
 #
-# STAGED AND INERT. The job runs only when the configuration variable
+# DEPLOYED AND INERT. The job runs only when the configuration variable
 # TABNAS_CRATES is 'on', at repository or organisation level. release.yml
 # checks the same variable before it calls this file. A maintainer sets
 # it only after the crate exists on crates.io and its trusted publisher
 # is configured. Until then every call and every dispatch skips the job,
-# so promoting this file changes nothing.
+# so this file, though live, changes nothing.
 #
 # TWO ENTRY POINTS:
 #   workflow_call      the normal path. release.yml calls this once the

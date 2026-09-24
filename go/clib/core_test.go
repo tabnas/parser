@@ -2,7 +2,7 @@
 
 // The library's contract, tested where it is testable.
 //
-// tabnas-clib-template: v4 (stamped by admin tasks/adopt-clib.sh;
+// tabnas-clib-template: v5 (stamped by admin tasks/adopt-clib.sh;
 // edit the template and re-stamp, not this file).
 //
 // The cgo shim in tabnas_c.go cannot be unit-tested (Go forbids cgo in

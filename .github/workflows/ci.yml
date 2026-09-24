@@ -1,6 +1,8 @@
-# Staged CI caller — org-standard replacement for .github/workflows/build.yml.
-# Promoted by a maintainer via tabnas/admin rollout/apply-ci-folders.sh
-# (session credentials cannot write .github/workflows/*; admin DECISIONS.md ADR-8).
+# CI caller — org-standard replacement for .github/workflows/build.yml.
+# Promoted by a maintainer via tabnas/admin rollout/apply-ci-folders.sh,
+# when session credentials could not write .github/workflows/*. Under
+# admin DECISIONS.md ADR-8 as amended (2026-09-24), a session edits this
+# file directly, in a reviewed pull request.
 name: ci
 
 on:

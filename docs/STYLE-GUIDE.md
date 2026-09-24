@@ -2,12 +2,12 @@
 
 How the tabnas documentation is written. Adapted from
 [aontu](https://github.com/aontu-lang/aontu)'s `docs/STYLE-GUIDE.md`,
-with tabnas's terminology, two-runtime file layout, and executable-example
+with tabnas's terminology, per-runtime file layout, and executable-example
 conventions. This guide is normative for the language-neutral pages under
-`doc/`, the per-runtime pages under `ts/doc/` and `go/doc/`, and the three
-package READMEs. It exists so that a page written next year sounds like a
-page written this year, and so that a reviewer can point at a rule instead
-of arguing taste.
+`doc/`, the per-runtime pages under `ts/doc/` and `go/doc/`, and the four
+READMEs (root, `ts/`, `go/`, `rs/`). It exists so that a page written
+next year sounds like a page written this year, and so that a reviewer
+can point at a rule instead of arguing taste.
 
 Three sources feed it, in a fixed priority order. The same order is
 encoded in `.vale.ini`, and every rule switched off there names the
@@ -42,8 +42,9 @@ drift from the other:
 
 The gated set is the reader-facing one: the language-neutral pages under
 `doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
-three package READMEs. The Rust-port series, the feasibility reports and
-the defect ledgers are working documents, and they are out.
+four READMEs (root, `ts/`, `go/`, `rs/`). The Rust-port series, the
+feasibility reports and the defect ledgers are working documents, and
+they are out.
 
 **Four checks live in the local gate rather than in Vale, and the reason
 is capability, not preference.**
@@ -66,7 +67,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 1688 alerts across 21 files. Those
+a clean run over the gated set: 1682 alerts across 21 files. Those
 numbers were once asserted rather than measured, and the total in this
 sentence and the one in `.vale.ini` drifted apart by 750.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -96,12 +97,16 @@ tutorial, used in a guide, specified in the reference, argued in the
 explanation) but the normative statement lives in the reference and
 everything else links to it.
 
-**The two runtimes carry the same set.** A page present under `ts/doc/`
-and missing under `go/doc/` is a gap, and `gated-docs.cjs` filters to
-what is on disk so the gap shows up as a missing gate rather than a
-crash. `go/doc/differences.md` is the deliberate exception: it exists
-only on the Go side, because its whole subject is where that port and
-the canonical TypeScript one diverge.
+**The two documented runtimes carry the same set.** This repository has
+three runtimes, but only TypeScript and Go have a `doc/` directory; the
+Rust port is documented by `rs/README.md`, which is gated with the other
+READMEs. A page present under `ts/doc/` and missing under `go/doc/` is a
+gap. `gated-docs.cjs` THROWS on a declared page that is not on disk, so a
+rename or a deletion fails the build rather than quietly shrinking what
+the gate covers. Two pages exist only on the Go side, deliberately:
+`go/doc/differences.md`, because its whole subject is where that port and
+the canonical TypeScript one diverge, and `go/doc/syntax.md`, the
+reference for how the Go runtime represents parsed values.
 
 ## The published set cites nothing internal
 
@@ -111,8 +116,8 @@ published:
 
 | Set | Files | Audience |
 |---|---|---|
-| Published | `doc/syntax.md`, `doc/architecture.md`, `doc/value-builtins.md`, `{ts,go}/doc/*.md`, the three READMEs | anyone using tabnas |
-| Internal | `AGENTS.md`, `DIVERGENCE.md`, `doc/rust-port-*.md`, `doc/engine-changes-for-portability.md`, the feasibility reports | contributors |
+| Published | `doc/syntax.md`, `doc/architecture.md`, `doc/value-builtins.md`, `{ts,go}/doc/*.md`, the four READMEs | anyone using tabnas |
+| Internal | `AGENTS.md`, `DIVERGENCE.md`, `doc/rust-*.md`, `doc/engine-changes-for-portability.md`, the feasibility reports | contributors |
 
 **A published page never cites an internal one.** Not as a link, not as a
 parenthetical, not as a bare token. A decision record argues a choice
@@ -133,8 +138,9 @@ The rule runs one way. Internal documents cite each other and cite the
 documentation freely. Only the direction out of the published set is
 closed. The **root `README.md`** is exempt, because it is the
 repository's front page and its job includes pointing at `AGENTS.md`.
-`ts/README.md` and `go/README.md` are not exempt: npm and pkg.go.dev
-render them to somebody who has the package and not the repository.
+`ts/README.md`, `go/README.md` and `rs/README.md` are not exempt: npm,
+pkg.go.dev and crates.io render them to somebody who has the package and
+not the repository.
 
 ## The voice
 
@@ -333,8 +339,9 @@ than being left to look executable.
   literally thrown).
 - **plugin**: a unit that adds rules, options or matchers. Not
   "extension", not "middleware".
-- **port**: the Go, Rust and Python implementations are ports of the
-  canonical TypeScript one. Not "version", which means a release.
+- **port**: the Go and Rust implementations are ports of the canonical
+  TypeScript one. Not "version", which means a release. `py/` is not a
+  port: it is a `ctypes` binding over the Go C library in `go/clib/`.
 - Spell error codes as they render: `[tabnas/unexpected]`.
 
 ## Per-kind templates
