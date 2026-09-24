@@ -1,11 +1,12 @@
-# CI harnesses (staged for review)
+# CI harnesses
 
-Everything in this folder is runnable locally today; nothing is wired
-into `.github/` yet. The proposed workflows live in `workflows/` —
-review them and move them to `.github/workflows/` to activate.
+Everything in this folder is runnable locally today. A workflow
+proposed here lives in `workflows/` until it is reviewed and moved to
+`.github/workflows/`, which is what activates it.
 
-`workflows/docs.yml` is the prose gate (Vale over the reader-facing
-pages, see `docs/STYLE-GUIDE.md`). It needs no sibling checkouts and no
+The prose gate (Vale over the reader-facing pages, see
+`docs/STYLE-GUIDE.md`) was staged here and has been promoted: it runs
+from `.github/workflows/docs.yml`. It needs no sibling checkouts and no
 secrets; `make prose` runs the same check locally.
 
 Layout assumption (the org-wide sibling-checkout convention): sibling
@@ -35,7 +36,7 @@ ci/fleet/run-fleet.sh --record-timings      # append to timings.tsv
 
 It is deliberately not part of `make test`: thirty clones and two
 toolchains is minutes, not seconds, and it reaches the network. Run it on
-demand, and in CI — `workflows/fleet.yml` is the staged workflow, a small
+demand, and in CI — `.github/workflows/fleet.yml` is the workflow, a small
 required arm on pull requests and the whole fleet nightly.
 
 **This gate is not speculative.** `@tabnas/parser` 0.9.1 shipped a
@@ -50,13 +51,6 @@ ts/v0.9.1 →  expr/ts FAIL   →  FLEET FAIL      (16 of expr's own tests)
 
 Sixteen failing tests in a published package, and every check in this
 repository was green. That is the hole.
-
-**Which means this gate is red on main today.** `expr/ts` fails against the
-working tree because the working tree is 0.9.1. That is the gate reporting
-correctly, not a harness bug — but promote `workflows/fleet.yml` as
-required only after the precedence fix lands, or promote it now as
-visible-but-not-required and let the red row be the reminder. `gate.yml`
-carries the same caveat for the same kind of reason.
 
 - `fleet.json` — the fleet. `base` is the grammar each one extends, used
   for build order only (jsonic cannot build before json); naming a package
@@ -127,10 +121,10 @@ came from is gone by the time anyone looks.
 `--record-timings` writes them down.** A timing record is a measurement
 somebody decided to take, not a side effect of pushing: an ordinary run
 leaves `timings.tsv` untouched, so the file stays a series of comparable
-runs rather than a log of every branch that happened to run the gate. The
-staged workflow follows the same rule — the nightly and PR arms record
-nothing, and `workflow_dispatch` carries a `record_timings` input,
-defaulting to false, for when a person is deliberately measuring.
+runs rather than a log of every branch that happened to run the gate.
+`.github/workflows/fleet.yml` follows the same rule — the nightly and PR
+arms record nothing, and `workflow_dispatch` carries a `record_timings`
+input, defaulting to false, for when a person is deliberately measuring.
 
 `seconds` covers the **suite only**. Clone, `npm install` and build are
 excluded: they are dominated by the network and by whatever npm had
@@ -215,7 +209,7 @@ built for, with the richest corpus) is not even cloned.
   performance claim; see below.
 
 Numbers are advisory: compare back-to-back runs on the same machine
-(the proposed bench.yml never gates; it uploads results as an
+(`.github/workflows/bench.yml` never gates; it uploads results as an
 artifact).
 
 ### Deciding whether a change is real: `ab-compare.sh`
@@ -313,10 +307,9 @@ Go, and Rust.
   census rather than copying cases into this repo; sibling `bnf`, `abnf`,
   `ebnf`, and `gbnf` checkouts must therefore be present (or located via
   `TABNAS_ROOT`).
-- `workflows/rust.yml` is its staged PR workflow. It tests the crate's declared
-  Rust 1.85 minimum and clones the strict-JSON and BNF-family compiler
-  dependencies needed by the parity gates. Promote it under ADR-8 to make the
-  existing local Rust gate required on pull requests.
+- `.github/workflows/rust.yml` is its PR workflow. It tests the crate's
+  declared Rust 1.85 minimum and clones the strict-JSON and BNF-family
+  compiler dependencies needed by the parity gates.
 
 This harness found three real engine divergences during bring-up, all
 fixed in the engine alongside it: TS lexed unquoted `__proto__` /
@@ -407,12 +400,16 @@ that to zero. A control belongs where a difference is the expected answer:
 the divergence register (ADR-14). Putting one in a gate whose contract is
 "these must agree" does not test the gate, it disables it.
 
-## workflows/ — proposed GitHub workflows
+## Workflows
 
-- `gate.yml` — run-gate + both parity suites + a 500-case fuzz diff on
-  push/PR. Note the coupling caveat in its header (downstream clones at
-  main can block engine PRs; pin refs or mark non-required if that
-  bites).
+The workflows this folder staged were promoted on 2026-09-22 and live in
+`.github/workflows/`, all but one: `deps.yml` is still proposed, in
+`workflows/`.
+
+- `gate.yml`, live in `.github/workflows/` — run-gate + both parity
+  suites + a 500-case fuzz diff on push/PR. Note the coupling caveat in
+  its header (downstream clones at main can block engine PRs; pin refs or
+  mark non-required if that bites).
 
   **Live since 2026-09-22.** Before then it was not promoted, so the fuzz
   diff never ran in CI. That was a second, independent reason it caught
@@ -427,19 +424,22 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
   and builds it in `ci.yml`'s build-order. The parity and fuzz steps run
   whenever the gate step ran, pass or fail, so a red downstream test
   cannot hide them.
-- `fleet.yml` — the downstream regression gate: a small required arm on
-  every PR, the whole fleet nightly and on demand. See `fleet/` above for
-  what it catches and why it is separate from `gate.yml`.
-- `deps.yml` — the dependency-source gate (`tools/dep-gate.cjs`) and its
-  own suite, on every push and pull request. One runner, node only, no
-  path filter: the files it judges are every manifest, lockfile, `go.mod`,
-  `Cargo.toml`, `.npmrc`, symlink and archive in the tree, so a path list
-  would have to be complete to be safe. `make deps` runs the same check
-  locally, and `make test` already carries it — this is the arm that
-  catches a branch nobody ran it on.
-- `bench.yml` — weekly + manual benchmark run, artifact-only.
-- `rust.yml` — formatting, build, tests, strict Clippy, and the two
-  TypeScript/Go/Rust shared-corpus token parity arms at the crate's MSRV.
+- `fleet.yml`, live in `.github/workflows/` — the downstream regression
+  gate: a small required arm on every PR, the whole fleet nightly and on
+  demand. See `fleet/` above for what it catches and why it is separate
+  from `gate.yml`.
+- `deps.yml`, proposed in `workflows/` — the dependency-source gate
+  (`tools/dep-gate.cjs`) and its own suite, on every push and pull
+  request. One runner, node only, no path filter: the files it judges are
+  every manifest, lockfile, `go.mod`, `Cargo.toml`, `.npmrc`, symlink and
+  archive in the tree, so a path list would have to be complete to be
+  safe. `make deps` runs the same check locally, and `make test` already
+  carries it — this is the arm that catches a branch nobody ran it on.
+- `bench.yml`, live in `.github/workflows/` — weekly + manual benchmark
+  run, artifact-only.
+- `rust.yml`, live in `.github/workflows/` — formatting, build, tests,
+  strict Clippy, and the two TypeScript/Go/Rust shared-corpus token parity
+  arms at the crate's MSRV.
 - crates.io publishing is **no longer staged here**. The disabled copy of
   `release.yml` that used to sit in this folder is gone. Promoting it
   meant hand-merging a second `release.yml` against the live one, and the

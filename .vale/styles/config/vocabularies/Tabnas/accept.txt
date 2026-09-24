@@ -7,29 +7,43 @@
 #
 # CASE PAIRS ARE ONE ENTRY, WRITTEN AS A REGEX. Listing `Tabnas` and
 # `tabnas` as two plain lines does not accept both: Vale turns the pair
-# into a preference and reports "Did you really mean 'tabnas' instead of
-# 'Tabnas'". `[Tt]abnas` accepts the pair without ruling between them.
+# into a preference and reports "Use 'tabnas' instead of 'Tabnas'".
+# `[Tt]abnas` accepts the pair without ruling between them.
+#
+# AN ACRONYM PUTS ITS CAPITALS IN THE SAME ENTRY: `(?:[Jj]son|JSON)`.
+# Vale 3.9.2 and later enforce an entry's case through Vale.Terms, so
+# `[Jj]son` alone reports every `JSON` as "Use '[Jj]son' instead of
+# 'JSON'", and a separate `JSON` line does not help: the `[Jj]son`
+# entry still claims the word.
+#
+# A NAME WITH ONE CORRECT CASE IS ONE EXACT ENTRY: `TS`, `DOMPurify`.
+# The widened form above is for a name also written in lower case, as
+# a package name is. An exact entry makes Vale report any other case
+# of the name ("Use 'TS' instead of 'ts'"), which is the point.
+#
+# AN ENTRY MATCHES A WHOLE WORD. `[Ee]nder` accepts `ender` and not
+# `enders`, so a plural or a possessive is an entry of its own.
 
 # --- The engine and the grammars that sit on it ------------------------
 [Tt]abnas
 [Jj]sonic
-[Aa]bnf
-[Ee]bnf
-[Gg]bnf
-[Bb]nf
-[Jj]son
-[Jj]sonc
-[Jj]son5
-[Jj]sonl
-[Xx]ml
-[Tt]oml
-[Yy]aml
-[Zz]on
-[Cc]sv
-[Ii]ni
+(?:[Aa]bnf|ABNF)
+EBNF
+GBNF
+(?:[Bb]nf|BNF)
+(?:[Jj]son|JSON)
+(?:[Jj]sonc|JSONC)
+(?:[Jj]son5|JSON5)
+JSONL
+(?:[Xx]ml|XML)
+(?:[Tt]oml|TOML)
+(?:[Yy]aml|YAML)
+(?:[Zz]on|ZON)
+(?:[Cc]sv|CSV)
+(?:[Ii]ni|INI)
 [Ee]xpr
 [Mm]ultisource
-[Vv]oxgig
+Voxgig
 
 # --- Parsing and lexing, the terms of art ------------------------------
 [Mm]atcher
@@ -43,10 +57,12 @@
 [Tt]okenise
 [Tt]okenising
 [Rr]elex
+[Uu]nrelex
 [Ll]ookahead
 [Ee]nder
-[Ff]uncref
-[Ff]uncrefs
+[Ee]nders
+(?:[Ff]uncref|FuncRef)
+(?:[Ff]uncrefs|FuncRefs)
 [Ff]nref
 [Bb]uiltin
 [Bb]uiltins
@@ -54,13 +70,17 @@
 [Vv]arints
 [Uu]ngated
 [Pp]arsable
+[Uu]nary
+[Cc]hainable
 
 # --- General computing terms the dictionary lacks ----------------------
 [Rr]untime
 [Rr]untimes
 [Bb]oolean
+[Bb]ooleans
 [Cc]onfig
 [Nn]amespace
+[Nn]amespaced
 [Nn]amespacing
 [Pp]luggable
 [Ii]ndexable
@@ -71,14 +91,18 @@
 [Uu]nexported
 [Dd]edup
 [Dd]edupe
+[Dd]edupes
+[Dd]eduped
 [Dd]edups
 [Cc]anonicalise
 [Ll]owercased
 APIs
-[Nn]pm
+TS
+npm
 [Aa]rgs
 [Ss]tdin
 [Rr]epo
+[Rr]epos
 [Ss]rc
 peerDependencies
 
@@ -86,16 +110,19 @@ peerDependencies
 [Ss]ubstring
 [Ss]ubstrings
 [Ss]uperset
+[Ss]upersets
 [Mm]ultiline
 [Tt]ruthy
 [Uu]ntrusted
 [Uu]ntyped
 [Uu]nexecuted
 [Uu]nbuildable
+[Uu]nportable
 [Uu]nprefixed
 [Tt]okenization
 [Uu]nmarshalling
 [Cc]ommutatively
+[Tt]ransactionally
 [Ss]tatefulness
 [Dd]estructure
 [Pp]ushback
@@ -112,8 +139,8 @@ peerDependencies
 [Tt]ranscode
 [Tt]ranscoded
 [Tt]ranscoding
-[Ll]ibc
-[Gg]libc
+libc
+glibc
 toolchain
 
 # --- Possessives the dictionary does not carry --------------------------
@@ -122,14 +149,14 @@ toolchain
 # possessive of a word it otherwise accepts.
 another's
 diagnostic's
-TS
+lexer's
 TS's
 
-# --- Irish, from the worked example corpus -----------------------------
+# --- Irish, from README.md's closing paragraph -------------------------
 #
-# The tutorial and the divergence notes parse a sample of Irish text, so
-# the words appear in prose that quotes the input. They are spelled the
-# way the corpus spells them.
+# README.md ends with a paragraph in Irish under the heading that gives
+# the engine its name, "Tábla na nAistrithe". Every word here comes from
+# that paragraph, spelled the way it spells them.
 nAistrithe
 agus
 innill
@@ -154,6 +181,8 @@ aici
 tagann
 chun
 suaimhnis
+nach
+d'adhmad
 
 # Words the gated pages have used since before this file did. The prose
 # gate was red on main with these eight errors -- four in

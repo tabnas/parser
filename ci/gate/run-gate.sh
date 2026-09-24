@@ -40,8 +40,8 @@ link_ts_dep "$ROOT/json/ts" parser "$PARSER_ROOT/ts"
 link_ts_dep "$ROOT/jsonic/ts" parser "$PARSER_ROOT/ts"
 link_ts_dep "$ROOT/jsonic/ts" json "$ROOT/json/ts"
 # jsonic's debug/api/custom tests require @tabnas/debug; wire it when
-# the sibling exists (CI clones it — see workflows/gate.yml). Without
-# it those three test files fail with MODULE_NOT_FOUND.
+# the sibling exists (CI clones it — see .github/workflows/gate.yml).
+# Without it those three test files fail with MODULE_NOT_FOUND.
 if [ -d "$ROOT/debug/ts" ]; then
   link_ts_dep "$ROOT/debug/ts" parser "$PARSER_ROOT/ts"
   link_ts_dep "$ROOT/jsonic/ts" debug "$ROOT/debug/ts"

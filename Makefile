@@ -105,7 +105,7 @@ reset:
 # missing this target fails rather than reporting a pass it did not earn.
 # The fast half of the same gate is ts/test/docs.test.js, which runs in
 # `make test-ts` and needs nothing but node. The workflow form of the
-# Vale half is staged, not wired: ci/workflows/docs.yml, see ci/README.md.
+# Vale half is .github/workflows/docs.yml, which CI runs.
 prose:
 	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)
 	node ts/scripts/vale-counts.cjs

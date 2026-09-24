@@ -70,7 +70,7 @@ later alternate may renegotiate rather than an immediate throw, and when
 no alternate can use it, the SAME diagnostic is raised, at the same token.
 
 The mechanism is the same on both sides: save point + token queue, re-cut
-under a wanted-tin filter across the match, fixed and builtin matcher
+under a wanted-tin filter across the match, fixed, and builtin matcher
 paths, restore on failure, plus the mismatch hook in the alternate loop.
 Per-runtime notes:
 
@@ -1131,7 +1131,7 @@ guarantees it **never panics**:
   `if (e instanceof TabnasError) err = e; else throw e`.
 
   The preserved error is rebuilt through the normal error funnel, so it
-  arrives with the source excerpt, tag, hint and rule context every other
+  arrives with the source excerpt, tag, hint, and rule context every other
   error carries: a plugin can populate only the exported fields.
 
   A typed **nil** (`var te *TabnasError; panic(te)`) is not a usable
@@ -1204,7 +1204,7 @@ The last two rows are an API-shape difference and not a parity one: `SKIP`
 and a JSON `null` are values a document can carry and Go's typed map
 cannot, while a `nil` slice is a value Go's map can carry and a document
 cannot. The one place both runtimes read the SAME input is the serialized
-door, and there all three runtimes answer alike: TypeScript, Go and Rust
+door, and there all three runtimes answer alike: TypeScript, Go, and Rust
 each refuse a null whole value.
 
 Both runtimes late-bind token-set references in rule alternates, so an

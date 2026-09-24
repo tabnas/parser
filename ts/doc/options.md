@@ -332,7 +332,7 @@ one entry per sequence otherwise.
 
 The enders apply to numbers on the same terms, because the number
 matcher is anchored on the same alternatives: a number has to be
-followed by an ender, a fixed token, whitespace or the end of the
+followed by an ender, a fixed token, whitespace, or the end of the
 source. Under `ender: [';|']`, `1;|2` lexes as the number `1`, and
 `1;2` as the text `1;2`.
 

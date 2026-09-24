@@ -42,7 +42,7 @@ sweep, an install or a fetch, a release, a wait on CI, a benchmark, a
 script or loop you write, and anything sent to the background.
 
 - **Minimal is enough.** One line with the step and a count, such as
-  `conformance: 412/1500 (27%)`, meets it. When no total is known, print
+  `conformance: 412 of 1500 (27%)`, meets it. When no total is known, print
   what is known (the step, the current item, the elapsed time) and say the
   percentage is unknown rather than inventing one.
 - **Build it into what you write.** A script or loop prints a line per
@@ -249,8 +249,10 @@ The steps, in order:
    any checkout where `ts/dist` is absent.
 3. **Regenerate the Rust lockfile:** `(cd rs && cargo update --workspace)`.
    It rewrites one line — the root `tabnas` entry — and re-pins nothing
-   else. This is the version site that gets missed, because no GitHub
-   workflow reads it; see "The Rust lockfile is a version site" below.
+   else. This is the version site that gets missed, because it is
+   generated rather than edited. `rust.yml` runs `ci/rust/run.sh` with
+   `--locked`, so a stale `rs/Cargo.lock` turns that job red; see "The
+   Rust lockfile is a version site" below.
 4. Verify all three runtimes, from a tree with no local wiring in it:
 
    ```bash
@@ -475,13 +477,13 @@ The fix is the one the test names: `cd ts && npm run gen-registry` (after
 ### The Rust lockfile is a version site
 
 The seventh is `rs/Cargo.lock`, and it is the one that gets missed, because
-it is *generated* rather than edited and **no GitHub workflow reads it** —
-nothing in `.github/workflows/` invokes the Rust gate, so CI stays green
-over a stale lock indefinitely.
+it is *generated* rather than edited.
 
-`ci/rust/run.sh` does read it, with `--locked` on build, test and clippy.
-Bumping `rs/Cargo.toml` without regenerating leaves the lock's root entry on
-the previous version, and `--locked` then refuses to run at all rather than
+`ci/rust/run.sh` reads it, with `--locked` on build, test and clippy, and
+`.github/workflows/rust.yml` runs that script on every push and pull request
+to `main`, so a stale `rs/Cargo.lock` turns that job red. Bumping
+`rs/Cargo.toml` without regenerating leaves the lock's root entry on the
+previous version, and `--locked` then refuses to run at all rather than
 silently updating:
 
 ```
