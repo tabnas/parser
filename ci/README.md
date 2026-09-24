@@ -1,15 +1,14 @@
 # CI harnesses
 
 Everything in this folder is runnable locally today: the harnesses and
-scripts that the workflows in `.github/workflows/` run, and one proposed
-workflow in `workflows/`.
+scripts that the workflows in `.github/workflows/` run. No workflow is
+staged here.
 
 To change CI, edit `.github/workflows/` in a reviewed pull request.
 Session credentials push workflow files (admin `DECISIONS.md` ADR-8, as
-amended 2026-09-24), so staging a workflow here first is optional. A
-workflow proposed in `workflows/` does nothing until it is moved to
-`.github/workflows/`. Sessions still cannot push tags, so a maintainer
-pushes any tag that a tag-triggered workflow needs.
+amended 2026-09-24), so nothing needs staging here first. Sessions still
+cannot push tags, so a maintainer pushes any tag that a tag-triggered
+workflow needs.
 
 Some of the workflows are maintained in admin as well, and an edit made
 only in this repository does not last:
@@ -17,9 +16,11 @@ only in this repository does not last:
 - A workflow with a template in admin `rollout/workflows/`, named
   `parser__<file>`, changes in that template too, in a pull request to
   admin. Today that is `ci.yml`, `release.yml`, `crates-release.yml`,
-  `notify-status.yml` and `scorecard.yml`. Admin `scripts/verify.sh`
-  reports a deployed copy that differs from its template, and the next
-  `rollout/apply-workflows.sh --apply` writes the template back over it.
+  `notify-status.yml` and `scorecard.yml`, and `deps-gate.yml` joins
+  them once it is deployed (see "Workflows" below). Admin
+  `scripts/verify.sh` reports a deployed copy that differs from its
+  template, and the next `rollout/apply-workflows.sh --apply` writes the
+  template back over it.
 - `clib.yml` and `clib-release.yml` are stamped from admin
   `tasks/clib-template/`, together with `go/clib/`. Change the template
   and restamp with admin `tasks/adopt-clib.sh`, which writes the two
@@ -426,8 +427,9 @@ the divergence register (ADR-14). Putting one in a gate whose contract is
 ## Workflows
 
 The workflows this folder staged were promoted on 2026-09-22 and live in
-`.github/workflows/`, all but one: `deps.yml` is still proposed, in
-`workflows/`.
+`.github/workflows/`. The one that was not, `deps.yml`, was retired
+instead: it ran checks that CI already runs (see the dependency gates
+below).
 
 - `gate.yml`, live in `.github/workflows/` — run-gate + both parity
   suites + a 500-case fuzz diff on push/PR. Note the coupling caveat in
@@ -451,13 +453,26 @@ The workflows this folder staged were promoted on 2026-09-22 and live in
   gate: a small required arm on every PR, the whole fleet nightly and on
   demand. See `fleet/` above for what it catches and why it is separate
   from `gate.yml`.
-- `deps.yml`, proposed in `workflows/` — the dependency-source gate
-  (`tools/dep-gate.cjs`) and its own suite, on every push and pull
-  request. One runner, node only, no path filter: the files it judges are
-  every manifest, lockfile, `go.mod`, `Cargo.toml`, `.npmrc`, symlink and
-  archive in the tree, so a path list would have to be complete to be
-  safe. `make deps` runs the same check locally, and `make test` already
-  carries it — this is the arm that catches a branch nobody ran it on.
+- The per-repo dependency gate, `tools/dep-gate.cjs`, has no workflow of
+  its own: it and its suite run inside `npm test`. `ts/test/deps.test.js`
+  requires `tools/dep-gate.test.cjs`, whose first case runs the gate over
+  this repository's index. `ci.yml`, through the shared `polyglot-ci.yml`,
+  runs `npm test` on every pull request and every push to `main`, so both
+  halves run on every change that reaches `main`, and a branch pushed
+  without a pull request is checked once one is opened. `make deps` and
+  `make deps-test` run the same two halves locally.
+
+  The org-wide npm floor (admin ADR-18), which checks less than
+  `tools/dep-gate.cjs` does, is `deps-gate.yml` once it is deployed: a
+  caller of the reusable workflow of the same name in `tabnas/.github`. A
+  maintainer adds the reusable workflow there first, because a caller of
+  a missing reusable workflow fails its run, and the caller follows in a
+  reviewed pull request.
+
+  A proposed `deps.yml` for the per-repo gate used to sit in this folder,
+  under `workflows/`. It was deleted on 2026-09-24 instead of being
+  promoted, because it ran the same two checks that `npm test` already
+  runs in CI.
 - `bench.yml`, live in `.github/workflows/` — weekly + manual benchmark
   run, artifact-only.
 - `rust.yml`, live in `.github/workflows/` — formatting, build, tests,

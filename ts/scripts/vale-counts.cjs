@@ -48,18 +48,14 @@ const ordinal = (n) => {
 // reports. Measuring with a different one rewrites the record to
 // numbers CI will not reproduce.
 function pinned() {
-  for (const rel of [['ci', 'workflows', 'docs.yml'],
-    ['.github', 'workflows', 'docs.yml']]) {
-    const file = Path.join(REPO, ...rel)
-    if (!Fs.existsSync(file)) continue
-    const text = Fs.readFileSync(file, 'utf8')
-    // Two ways the pin is written: a VALE_VERSION variable, or the
-    // release URL with the version in the path.
-    const found = /VALE_VERSION:\s*'?([0-9][^'\s]*)'?/.exec(text) ||
-      /vale\/releases\/download\/v([0-9][^/\s]*)\//.exec(text)
-    if (found) return found[1]
-  }
-  return null
+  const file = Path.join(REPO, '.github', 'workflows', 'docs.yml')
+  if (!Fs.existsSync(file)) return null
+  const text = Fs.readFileSync(file, 'utf8')
+  // Two ways the pin is written: a VALE_VERSION variable, or the
+  // release URL with the version in the path.
+  const found = /VALE_VERSION:\s*'?([0-9][^'\s]*)'?/.exec(text) ||
+    /vale\/releases\/download\/v([0-9][^/\s]*)\//.exec(text)
+  return found ? found[1] : null
 }
 
 
