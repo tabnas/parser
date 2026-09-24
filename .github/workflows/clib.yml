@@ -1,8 +1,8 @@
-# Staged per ADR-8: automation cannot push .github/workflows/*, so this
-# file is written to <repo>/ci/clib.yml for a maintainer to promote via
-# admin/rollout/apply-ci-folders.sh.
+# Stamped by admin tasks/adopt-clib.sh (ADR-12) to ci/clib.yml, and
+# promoted to .github/workflows/ by the restamp's own pull request or by
+# admin rollout/apply-ci-folders.sh (ADR-8, as amended 2026-09-24).
 #
-# tabnas-clib-template: v4
+# tabnas-clib-template: v5
 #
 # PR gate for the clib: build the shared library on the portable lane's
 # host and run the contract tests under -race. Artifact production for

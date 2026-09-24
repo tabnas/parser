@@ -1,6 +1,6 @@
 # libtabnasparser — the parser parser as a C ABI
 
-<!-- tabnas-clib-template: v4 — stamped by admin tasks/adopt-clib.sh;
+<!-- tabnas-clib-template: v5 — stamped by admin tasks/adopt-clib.sh;
      edit the template and re-stamp, not this file. -->
 
 The parser format parser as a C shared library, so languages with no
@@ -20,7 +20,7 @@ ZIG=/path/to/zig ./build.sh all
 
 | Function | Returns |
 |---|---|
-| `tabnas_version()` | `{"ok":true,"lib":"libtabnasparser","format":"parser","template":"v4"}` |
+| `tabnas_version()` | `{"ok":true,"lib":"libtabnasparser","format":"parser","template":"v5"}` |
 | `tabnas_grammar(opts, len)` | `{"ok":true,"handle":N}` — opts reserved, pass `(NULL, 0)`, unless the format notes below define them |
 | `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true[,"value":…]}` or `{"ok":true,"accept":false,"error":{…}}` |
 | `tabnas_grammar_free(handle)` | — |

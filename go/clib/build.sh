@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build libtabnasparser, the C-ABI shared library, for one or more targets.
 #
-# tabnas-clib-template: v4 (stamped by admin tasks/adopt-clib.sh;
+# tabnas-clib-template: v5 (stamped by admin tasks/adopt-clib.sh;
 # edit the template and re-stamp, not this file).
 #
 #   ./build.sh                 # host only, into ./dist
