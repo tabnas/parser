@@ -769,6 +769,15 @@ do not reintroduce a second copy of a rule for the sake of the file
 name, and do not turn the symlink back into a file with contents of its
 own.
 
+## Transient agent tasks report while they run
+
+**Every transient agent task prints a status line at least every 30
+seconds**, however minimal, with a percentage complete when one can be
+estimated (`fleet 4/12 packages, 33%`). That covers every background
+command, wait loop and subagent an agent starts: a suite run, the fleet
+gate, a CI or release watch. A silent task cannot be told from a hung
+one, and the person waiting on it can tell neither.
+
 ## Agent tooling
 
 An agent working in this repository does not have to drive it by hand. The
