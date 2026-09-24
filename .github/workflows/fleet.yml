@@ -1,22 +1,15 @@
 # Promoted from ci/workflows/ per ADR-8; this is the live workflow.
 #
-# What it closes: nothing in CI today runs a downstream grammar's own
-# suite against the engine under test. build.yml clones four repos and
-# tests none of them; the staged gate.yml would add json and jsonic —
-# two of thirty. So an engine change can pass every check here and still
-# break a published grammar, and the first anyone hears of it is after
-# the release.
+# What it closes: gate.yml runs only json's and jsonic's own suites
+# against the engine under test. Without this workflow an engine change
+# can pass every check here and still break a published grammar, and the
+# first anyone hears of it is after the release.
 #
 # That is not hypothetical. @tabnas/parser 0.9.1 shipped a regression in
 # expression precedence: with expr at ANY published version, `1+2*3`
 # parses to ["*",2,3] — the `1 +` is dropped. expr's own suite fails 16
 # tests on it and passes on 0.9.0, so this workflow would have caught it
 # on the pull request.
-#
-# **It opens RED on main today**, for that same regression — the gate is
-# working, the engine is not. Promote it once the precedence fix lands, or
-# promote it now as visible-but-not-required and let the red row be the
-# reminder. The same caveat is on gate.yml, for the same kind of reason.
 #
 # Two jobs, deliberately:
 #

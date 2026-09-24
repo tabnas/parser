@@ -32,9 +32,9 @@ jobs:
     # treatment for the same reason: without it the build takes whatever
     # rustc the ubuntu-latest image happens to carry, so a runner image
     # update lands in the recorded artifact looking like a parser change.
-    # `@stable` is what ci/workflows/rust.yml uses; the version is echoed
-    # into the results below so that when it does move, the artifact says
-    # so instead of leaving the step change invisible.
+    # The version is echoed into the results below so that when it does
+    # move, the artifact says so instead of leaving the step change
+    # invisible.
     # rustup, NOT dtolnay/rust-toolchain: these repos allow only
     # GitHub-owned and verified-creator actions, so that action is refused
     # before any job starts. The runners ship rustup; `stable` here is the
