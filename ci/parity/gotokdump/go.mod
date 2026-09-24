@@ -3,8 +3,8 @@ module gotokdump
 go 1.24.7
 
 require (
-	github.com/tabnas/json/go v0.5.9
-	github.com/tabnas/jsonic/go v0.7.0
+	github.com/tabnas/json/go v0.5.10
+	github.com/tabnas/jsonic/go v0.7.1
 	github.com/tabnas/parser/go v0.12.2
 )
 
