@@ -16,6 +16,11 @@
 # 'JSON'", and a separate `JSON` line does not help: the `[Jj]son`
 # entry still claims the word.
 #
+# A NAME WITH ONE CORRECT CASE IS ONE EXACT ENTRY: `TS`, `DOMPurify`.
+# The widened form above is for a name also written in lower case, as
+# a package name is. An exact entry makes Vale report any other case
+# of the name ("Use 'TS' instead of 'ts'"), which is the point.
+#
 # AN ENTRY MATCHES A WHOLE WORD. `[Ee]nder` accepts `ender` and not
 # `enders`, so a plural or a possessive is an entry of its own.
 
@@ -23,13 +28,13 @@
 [Tt]abnas
 [Jj]sonic
 (?:[Aa]bnf|ABNF)
-(?:[Ee]bnf|EBNF)
-(?:[Gg]bnf|GBNF)
+EBNF
+GBNF
 (?:[Bb]nf|BNF)
 (?:[Jj]son|JSON)
 (?:[Jj]sonc|JSONC)
 (?:[Jj]son5|JSON5)
-(?:[Jj]sonl|JSONL)
+JSONL
 (?:[Xx]ml|XML)
 (?:[Tt]oml|TOML)
 (?:[Yy]aml|YAML)
@@ -38,7 +43,7 @@
 (?:[Ii]ni|INI)
 [Ee]xpr
 [Mm]ultisource
-[Vv]oxgig
+Voxgig
 
 # --- Parsing and lexing, the terms of art ------------------------------
 [Mm]atcher
@@ -92,7 +97,8 @@
 [Cc]anonicalise
 [Ll]owercased
 APIs
-[Nn]pm
+TS
+npm
 [Aa]rgs
 [Ss]tdin
 [Rr]epo
@@ -133,8 +139,8 @@ peerDependencies
 [Tt]ranscode
 [Tt]ranscoded
 [Tt]ranscoding
-[Ll]ibc
-[Gg]libc
+libc
+glibc
 toolchain
 
 # --- Possessives the dictionary does not carry --------------------------
@@ -144,14 +150,13 @@ toolchain
 another's
 diagnostic's
 lexer's
-TS
 TS's
 
-# --- Irish, from the worked example corpus -----------------------------
+# --- Irish, from README.md's closing paragraph -------------------------
 #
-# The tutorial and the divergence notes parse a sample of Irish text, so
-# the words appear in prose that quotes the input. They are spelled the
-# way the corpus spells them.
+# README.md ends with a paragraph in Irish under the heading that gives
+# the engine its name, "Tábla na nAistrithe". Every word here comes from
+# that paragraph, spelled the way it spells them.
 nAistrithe
 agus
 innill
