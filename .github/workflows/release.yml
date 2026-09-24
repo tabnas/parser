@@ -6,12 +6,12 @@
 # header records only what differs for parser.
 #
 # WHY THIS FILE EXISTS AT ALL. parser's release.yml was live-only —
-# never staged here — which is exactly the M9 gap: ADR-16's node24 sweep
-# ran over rollout/workflows/, so a workflow that was not in this
-# directory was never swept. The deployed file still pins
-# checkout@34e11487 # v4 and setup-node@49933ea5 # v4, both node20-
-# runtime majors. Staging it fixes the pins AND puts the file under the
-# applier, so the next fleet-wide change reaches it automatically.
+# never staged in admin rollout/workflows/ — which was exactly the M9
+# gap: ADR-16's node24 sweep ran over rollout/workflows/, so a workflow
+# that was not in that directory was never swept. The deployed file then
+# pinned checkout@34e11487 # v4 and setup-node@49933ea5 # v4, both
+# node20-runtime majors. Staging it fixed the pins AND put the file under
+# the applier, so the next fleet-wide change reaches it automatically.
 #
 # TWO TRIGGERS:
 #   workflow_dispatch  the normal path. Bump in a reviewed PR first;

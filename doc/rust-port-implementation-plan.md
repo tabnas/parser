@@ -707,7 +707,14 @@ value-model progress only.
 
 CI as `ci/rust/` + a repo-local workflow, staged for maintainer
 application per ADR-8, never a change to the shared `polyglot-ci.yml`;
-the two stale harness paths fixed first (`§3.5 risks`). Registry and
+the two stale harness paths fixed first (`§3.5 risks`). **Done** for the
+CI arm: the repo-local `.github/workflows/rust.yml`, live since
+2026-09-22, runs `ci/rust/run.sh` on every push and pull request to
+`main`. Both stale paths are fixed: `gate.yml` reads `json/test/spec`,
+and the `AGENTS.md` CI section no longer describes a deleted
+`build.yml`. Staging for a maintainer is no longer required: ADR-8 was
+amended on 2026-09-24, and a session now changes a workflow in a
+reviewed pull request. Registry and
 honesty-gate entries flow from Phase 2g's generalisation. Release: the
 crate lane per D2 (independent version, engine-version report,
 `repo-tests` feature or `OUT_DIR` copy so the packaged crate's tests

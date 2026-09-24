@@ -1,7 +1,8 @@
 # PROPOSED workflow -- lives in ci/workflows/ for review; move to
-# .github/workflows/deps.yml to activate. Session credentials cannot
-# write .github/workflows/* (admin DECISIONS.md ADR-8), so it is staged
-# here like the rest of this folder.
+# .github/workflows/deps.yml to activate. It was staged here when
+# session credentials could not write .github/workflows/*. Under admin
+# DECISIONS.md ADR-8 as amended (2026-09-24) staging is optional, and
+# moving it is an ordinary reviewed pull request.
 #
 # The dependency-source gate. A committed dependency must name a published
 # package or a GitHub reference; local wiring is undone before the commit.
