@@ -263,12 +263,10 @@ lto = "fat"
 
 `lto` is the one that matters and the one that is not on by default.
 Without it, `tabnas/measure` records this port as **1.10x to 1.15x
-slower on every case**: more than all but two of the twenty
-optimisations in the engine's own history are worth individually. Go's
-compiler inlines across packages within a binary by default and V8
-inlines across module boundaries at runtime, so this is the flag that
-puts a Rust consumer on the same footing rather than an unusual
-tuning.
+slower on every case**. Go's compiler inlines across packages within a
+binary by default and V8 inlines across module boundaries at runtime, so
+this is the flag that puts a Rust consumer on the same footing rather
+than an unusual tuning.
 
 ### Pick an allocator
 
