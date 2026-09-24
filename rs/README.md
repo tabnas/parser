@@ -130,20 +130,17 @@ Cost, not only answers, is tracked against the canonical runtime. A rule
 with N elements is flattened by the tree builders once per level of the
 repetition that produced it, in every runtime: TypeScript spreads each
 level's kids into the level above, and so does this crate, so both curves
-are quadratic in the element count of one rule. This crate's constant was
-an order of magnitude worse (`tabnas/proto` measured 46 s for 800 fields
-against a tenth of a second) until a level whose own kids were still empty
-stopped cloning the level below element by element and took its array by
-handle, and `Rule::accept_child_node` stopped holding a second handle on a
-parent's own accumulator. Measured on `list = item *( "," item )` compiled
-with builtins, release profile, 4000 and 8000 items: TypeScript 0.38 s and
-2.1 s, this crate 0.7 s and 6.8 s, down from 2.7 s at 4000 and beyond the
-60 s budget at 8000. What remains is the algorithm the canonical runtime
-also runs, at this crate's per-element cost for a refcounted value.
+are quadratic in the element count of one rule. A level whose own kids
+are still empty takes the array of the level below by handle rather than
+cloning it element by element. Measured on `list = item *( "," item )`
+compiled with builtins, release profile, 4000 and 8000 items: TypeScript
+0.38 s and 2.1 s, this crate 0.7 s and 6.8 s. What remains is the
+algorithm the canonical runtime also runs, at this crate's per-element
+cost for a refcounted value.
 
-Two answers are deliberately this runtime's own, and both are recorded in
-the repository's divergence record. Object key order is out of the
-parsed-value contract (ADR-15): `Value::Object` keeps insertion order,
+Two answers are deliberately this runtime's own, and this crate's own
+suite pins both. Object key order is out of the parsed-value contract:
+`Value::Object` keeps insertion order,
 TypeScript's plain object puts integer-like keys first, and this crate must
 never emulate that. A parse that sets no value answers `Value::Null`, where
 TypeScript answers `undefined`; the engine's `Value::Undefined` is unwrapped
@@ -181,17 +178,15 @@ The portable serialized contract and native imperative tier have been audited
 against the TypeScript and Go surfaces, and the audit is executable rather
 than asserted: the fixture registration gate, the token-stream differential
 and the compiler-consumer gates are what hold it, and what the prose claims
-is what those gates run. The claim is not that no difference remains. The
-ABNF arm of the compiler-consumer gate found one in September 2026, on the
-optional-prefix shape `R = [ A "@" ] A`: a parent read its child link from
-the rule that popped, which is the last link of a replacement chain, where
-TypeScript and Go both keep the link on the rule they pushed. That link is
-now the pushed rule in whole, name and node together, and one narrower split
-survives it: walking `rule.child.next.next` and beyond reaches the rest of a
-replacement chain in TypeScript and Go and reaches nothing here. It is
-registered, with a control row, as "Forward traversal of a replacement chain
-in Rust". Known remaining API differences are listed under "Gaps against the
-canonical surface" below.
+is what those gates run. The claim is not that no difference remains.
+`rule.child` is the rule its parent pushed, name and node together, and
+its immediate `next` is the replacement that took its place, both as in
+TypeScript and Go. Walking `rule.child.next.next` and beyond reaches the
+rest of a replacement chain in TypeScript and Go and reaches nothing
+here. The shared fixture `test/spec/divergent.tsv` registers that split,
+with a control row, as "Forward traversal of a replacement chain in
+Rust". Known remaining API differences are listed under "Gaps against
+the canonical surface" below.
 
 Rust ownership is expressed explicitly:
 grammar and next-rule views are immutable snapshots, live mutation is limited
@@ -199,19 +194,16 @@ to the `&mut Rule`, `&mut Context`, `&mut Lexer`, and `&mut AltMatch` arguments
 supplied to a callback, and JavaScript function references are registered as
 typed Rust callbacks before loading serialized JSON. Unsupported or mistyped
 serialized callback forms fail at install time instead of being silently
-ignored. See
-`../doc/rust-port-implementation-plan.md` for the original architecture and
-gates; the implementation has intentionally advanced beyond that document's
-v0.1 scope.
+ignored.
 
 ## Gaps against the canonical surface
 
 Audited against `ts/src` (`tabnas.ts`, `parser.ts`, `lexer.ts`, `rules.ts`,
 `context.ts`, `utility.ts`) in September 2026. Parse behavior is not on this
 list: where a behavior differs it is a defect, it is repaired, and until it is
-repaired it lives in the repository's `DIVERGENCE.md` and its executable
-register, `test/spec/divergent.tsv`, whose `rust` column this crate's own
-suite asserts. One entry there is Rust's alone today, the chain walk named above.
+repaired it is registered in `test/spec/divergent.tsv`, whose `rust` column
+this crate's own suite asserts. One entry there is Rust's alone today, the
+chain walk named above.
 What follows is public API surface that TypeScript offers a plugin author and
 this crate does not, or offers in another shape.
 
@@ -329,5 +321,10 @@ proofs: the `InlineText` length invariant behind the crate's only
 Nothing there is compiled by the crate. Verus pins its own Rust
 toolchain, which is not the 1.85 above, so no gate runs it and it is not
 a build dependency. Run it by hand with `VERUS=/path/to/verus
-rs/verus/run.sh`. `doc/rust-verus-experiment.md` records what verified,
-what did not, and why the crate was not adopted onto Verus.
+rs/verus/run.sh`. For the `unsafe` block, the proof covers the length
+bound that keeps the slice in range, and not the UTF-8 validity it also
+relies on, because Verus has no specification for
+`str::from_utf8_unchecked`. The crate itself is not written for Verus:
+wrapping code in `verus!{}` spreads to everything that code touches, and
+the engine's `Rc`, `RefCell`, `dyn` and `HashMap` sites are outside the
+subset Verus verifies.

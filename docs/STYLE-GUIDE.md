@@ -67,7 +67,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 1688 alerts across 21 files. Those
+a clean run over the gated set: 1682 alerts across 21 files. Those
 numbers were once asserted rather than measured, and the total in this
 sentence and the one in `.vale.ini` drifted apart by 750.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -117,7 +117,7 @@ published:
 | Set | Files | Audience |
 |---|---|---|
 | Published | `doc/syntax.md`, `doc/architecture.md`, `doc/value-builtins.md`, `{ts,go}/doc/*.md`, the four READMEs | anyone using tabnas |
-| Internal | `AGENTS.md`, `DIVERGENCE.md`, `doc/rust-port-*.md`, `doc/engine-changes-for-portability.md`, the feasibility reports | contributors |
+| Internal | `AGENTS.md`, `DIVERGENCE.md`, `doc/rust-*.md`, `doc/engine-changes-for-portability.md`, the feasibility reports | contributors |
 
 **A published page never cites an internal one.** Not as a link, not as a
 parenthetical, not as a bare token. A decision record argues a choice
@@ -138,8 +138,9 @@ The rule runs one way. Internal documents cite each other and cite the
 documentation freely. Only the direction out of the published set is
 closed. The **root `README.md`** is exempt, because it is the
 repository's front page and its job includes pointing at `AGENTS.md`.
-`ts/README.md` and `go/README.md` are not exempt: npm and pkg.go.dev
-render them to somebody who has the package and not the repository.
+`ts/README.md`, `go/README.md` and `rs/README.md` are not exempt: npm,
+pkg.go.dev and crates.io render them to somebody who has the package and
+not the repository.
 
 ## The voice
 
