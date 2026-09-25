@@ -26,7 +26,6 @@ on:
       - 'go/README.md'
       - 'rs/README.md'
       - 'ts/README.md'
-      - 'docs/STYLE-GUIDE.md'
       - 'ts/scripts/gated-docs.cjs'
       - 'ts/scripts/vale-counts.cjs'
       - '.vale.ini'
@@ -41,7 +40,6 @@ on:
       - 'go/README.md'
       - 'rs/README.md'
       - 'ts/README.md'
-      - 'docs/STYLE-GUIDE.md'
       - 'ts/scripts/gated-docs.cjs'
       - 'ts/scripts/vale-counts.cjs'
       - '.vale.ini'
@@ -91,7 +89,7 @@ jobs:
         run: vale --minAlertLevel=error $(node ts/scripts/gated-docs.cjs)
 
       # .vale.ini justifies every demoted rule with the number of alerts
-      # it produced here, and docs/STYLE-GUIDE.md repeats the total. Both
+      # it produced here, and doc/STYLE-GUIDE.md repeats the total. Both
       # were once written by hand: the two totals drifted 750 apart
       # before anything compared them to a run. This step does.
       - name: Recorded alert counts

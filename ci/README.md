@@ -29,7 +29,7 @@ only in this repository does not last:
   reports a stamped file that differs from its template.
 
 The prose gate (Vale over the reader-facing pages, see
-`docs/STYLE-GUIDE.md`) was staged here and has been promoted: it runs
+`doc/STYLE-GUIDE.md`) was staged here and has been promoted: it runs
 from `.github/workflows/docs.yml`. It needs no sibling checkouts and no
 secrets; `make prose` runs the same check locally.
 
