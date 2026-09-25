@@ -1391,7 +1391,7 @@ function parse_alts(
   const built: AltIndex | undefined = RELEX
     ? undefined
     : (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
-  const first: AltIndex | undefined =
+  let first: AltIndex | undefined =
     null != built && built.alts === alts && built.n === len ? built : undefined
   // The two candidate lists (alternates naming the first tin, and the
   // wildcards), walked together in index order once selected, and the
@@ -1671,6 +1671,14 @@ function parse_alts(
         unI = -1
       }
     }
+    // A condition can also edit the rule's alternates (open() with a
+    // custom modifier changing a later alternate in place): norm() then
+    // builds a new index, and the one this scan holds no longer describes
+    // them, so the rest of the scan reads every remaining alternate as it
+    // now is.
+    const stale = null != first &&
+      first !== (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
+    if (stale) first = undefined
     if (null == named) altI++
     else {
       // A condition can retag the first token, or replace it, and then
@@ -1679,7 +1687,7 @@ function parse_alts(
       // the token as it is now: resume after this alternate, and select
       // again at the top of the loop.
       const t0 = tbuf[0]
-      if (null == t0 || NOTOKEN === t0 || keyTin !== t0.tin) {
+      if (stale || null == t0 || NOTOKEN === t0 || keyTin !== t0.tin) {
         named = null
         altI++
       }

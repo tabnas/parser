@@ -273,6 +273,36 @@ func TestAltIndexSelectsAgainWhenAConditionRetagsTheFirstToken(t *testing.T) {
 	}
 }
 
+func TestAltIndexScansInFullOnceAConditionEditsTheAlternates(t *testing.T) {
+	// A rejecting condition may edit the rule's alternates through
+	// ModifyOpen: here it turns the `#B` alternate after it into an `#A`
+	// one, in place. The index the scan selected from no longer describes
+	// them, and the full scan would reach the edited alternate, so the rest
+	// of this one does.
+	j := altIndexInstance(nil)
+	ta, tb := j.Token("#A"), j.Token("#B")
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{ta}}, C: func(r *Rule, _ *Context) bool {
+				r.Spec.ModifyOpen(&AltModListOpts{Custom: func(list []*AltSpec) []*AltSpec {
+					list[1].S = [][]Tin{{ta}}
+					return list
+				}})
+				return false
+			}},
+			&AltSpec{S: [][]Tin{{tb}}, A: func(r *Rule, _ *Context) { r.Node = "edited" }},
+		)
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	out, err := j.Parse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "edited" {
+		t.Fatalf("got %v, want %q", out, "edited")
+	}
+}
+
 func TestAltIndexGateColumnsAreSparse(t *testing.T) {
 	// A column is the tins a slot names, ascending and without repeats:
 	// a slot set by hand to a tin far beyond the registered ones must not

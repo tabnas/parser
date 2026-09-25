@@ -1169,11 +1169,16 @@ struct PortableAlt {
 }
 
 fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
-    let slots = alt
-        .s
-        .iter()
+    // A slot declared by name is what its names resolve to on the source
+    // instance now, which is how that instance's parser reads it: the spec
+    // keeps what they resolved to when the alternate was installed, and a
+    // token set overridden since would otherwise key, order and carry the
+    // old members.
+    let slots = (0..alt.s.len())
         .map(|slot| {
-            slot.iter()
+            crate::parser::resolved_slot(alt, slot, &tabnas.options)
+                .unwrap_or_else(|| alt.s[slot].clone())
+                .iter()
                 .map(|tin| tabnas.options.token_name(*tin))
                 .collect::<Vec<_>>()
         })

@@ -307,40 +307,39 @@ impl PreparedRoute {
 /// built from the alternates, and a `Vec` collected out of it, once per
 /// token. None of it can change while a parse runs, so it is derived once
 /// when the rule is installed.
-/// Resolve every slot that was declared by name against `options`. A
-/// slot naming a token set takes the set's current members; a slot naming
-/// a token takes that token. A slot with a name the options do not know
-/// keeps the tins it was installed with: a parser build must not mint a
-/// token. Alternates built from tins directly carry no names and are left
-/// alone, and so is a named slot whose `s` was set by hand since it was
+/// What the names on one slot resolve to against `options` now: a slot
+/// naming a token set takes the set's current members, and a slot naming a
+/// token takes that token. `None` leaves the slot with the tins it has, and
+/// is the answer for a slot with no names (an alternate built from tins
+/// directly, or a slot set by hand before a merge carried it, whose names
+/// the merge drops), a slot whose `s` was set by hand since it was
 /// installed (it no longer equals what the names last resolved to,
-/// `s_bound`): the edit wins over the names, as it did before the names
-/// were kept.
+/// `s_bound`: the edit wins over the names, as it did before the names
+/// were kept), and a slot naming something the options do not know (a
+/// parser build must not mint a token).
+pub(crate) fn resolved_slot(alt: &AltSpec, slot: usize, options: &Options) -> Option<Vec<Tin>> {
+    let names = alt.s_names.get(slot)?;
+    if names.is_empty() || alt.s.get(slot) != alt.s_bound.get(slot) {
+        return None;
+    }
+    let mut tins = Vec::with_capacity(names.len());
+    for name in names {
+        if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
+            tins.extend(set.iter().copied());
+        } else {
+            tins.push(options.token(name)?);
+        }
+    }
+    Some(tins)
+}
+
+/// Resolve every slot that was declared by name against `options`
+/// (`resolved_slot`).
 fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
     for alt in spec.open.iter_mut().chain(spec.close.iter_mut()) {
-        for (slot, names) in alt.s_names.iter().enumerate() {
-            // No names: the slot was set by hand before a merge carried
-            // the alternate here (the merge's portable copy drops them
-            // for such a slot), and stays as it is.
-            if names.is_empty() || alt.s.get(slot) != alt.s_bound.get(slot) {
-                continue;
-            }
-            let mut tins = Vec::with_capacity(names.len());
-            let mut resolvable = true;
-            for name in names {
-                if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
-                    tins.extend(set.iter().copied());
-                } else if let Some(tin) = options.token(name) {
-                    tins.push(tin);
-                } else {
-                    resolvable = false;
-                    break;
-                }
-            }
-            if resolvable {
-                if let Some(existing) = alt.s.get_mut(slot) {
-                    *existing = tins;
-                }
+        for slot in 0..alt.s.len() {
+            if let Some(tins) = resolved_slot(alt, slot, options) {
+                alt.s[slot] = tins;
             }
         }
     }

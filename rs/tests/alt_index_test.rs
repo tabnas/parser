@@ -353,3 +353,41 @@ fn a_merge_keeps_alternates_whose_different_sets_resolve_alike() {
         "BETA takes a string once overridden"
     );
 }
+
+#[test]
+fn a_merge_orders_a_named_slot_by_the_members_its_set_has_now() {
+    // `left` installs `#SET` as `#VL` and then overrides the set to `#TX`;
+    // `right` names `#TX` itself. On the merged instance both take text,
+    // and the tie between them falls to the tag, so `left` (tag A) comes
+    // first, as it does in TypeScript. Keyed on what `#SET` was when it was
+    // installed (`#VL`), `left` sorted after `right`, and the merged parse
+    // ran `right`'s action.
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let mut left = Tabnas::with_options(tabnas::Options {
+        tag: "A".into(),
+        ..Default::default()
+    });
+    recorder(&mut left, &seen, &["left"]);
+    left.grammar_json(
+        r##"{"options":{"rule":{"start":"top"},"tokenSet":{"SET":["#VL"]}},
+             "rule":{"top":{"open":[{"s":"#SET","a":["@left"]}],"close":[{"s":"#ZZ"}]}}}"##,
+    )
+    .unwrap();
+    left.set_token_set("SET", vec![TIN_TX]);
+    let mut right = Tabnas::with_options(tabnas::Options {
+        tag: "B".into(),
+        ..Default::default()
+    });
+    recorder(&mut right, &seen, &["right"]);
+    right
+        .grammar_json(
+            r##"{"options":{"rule":{"start":"top"}},
+                 "rule":{"top":{"open":[{"s":"#TX","a":["@right"]}],"close":[{"s":"#ZZ"}]}}}"##,
+        )
+        .unwrap();
+    assert_eq!(ran(&left, &seen, "x"), ["left"]);
+    let merged = left.merge(&right).unwrap();
+    assert_eq!(ran(&merged, &seen, "x"), ["left"]);
+    let merged = right.merge(&left).unwrap();
+    assert_eq!(ran(&merged, &seen, "x"), ["left"]);
+}

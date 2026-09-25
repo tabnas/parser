@@ -1773,9 +1773,16 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		// reject. The lists were selected for a tin the token no longer
 		// has, and the plain scan would test every later alternate against
 		// the token as it is now: resume after this alternate, and select
-		// again at the top of the loop.
+		// again at the top of the loop. A condition can also edit the
+		// rule's alternates (ModifyOpen, changing a later alternate's slot
+		// in place): the index then no longer describes them, so the rest
+		// of the scan reads every remaining alternate as it now is.
+		stale := index != nil && index.gen != rule.Spec.gen
+		if stale {
+			index = nil
+		}
 		if selected {
-			if len(ctx.T) == 0 || ctx.T[0] == nil || ctx.T[0].IsNoToken() || ctx.T[0].Tin != keyTin {
+			if stale || len(ctx.T) == 0 || ctx.T[0] == nil || ctx.T[0].IsNoToken() || ctx.T[0].Tin != keyTin {
 				selected = false
 				altI++
 			}

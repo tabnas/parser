@@ -184,4 +184,32 @@ describe('alt-index', () => {
     assert.equal(j.parse('b'), 'b')
   })
 
+
+  it('scans in full once a condition edits the alternates', () => {
+    // A rejecting condition may edit the rule's alternates through open():
+    // here it turns the `#B` alternate after it into an `#A` one, in place.
+    // The index the scan selected from no longer describes them, and the
+    // full scan would reach the edited alternate, so the rest of this one
+    // does.
+    const j = instance()
+    j.rule('top', (rs) => rs
+      .open([
+        {
+          s: '#A',
+          c: (r) => {
+            r.spec.open([], {
+              custom: (alts) => {
+                alts[1].s = ['#A']
+                return alts
+              },
+            })
+            return false
+          },
+        },
+        { s: '#B', a: (r) => (r.node = 'edited') },
+      ])
+      .close([{ s: '#ZZ' }]))
+    assert.equal(j.parse('a'), 'edited')
+  })
+
 })
