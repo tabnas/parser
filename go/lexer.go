@@ -1494,7 +1494,9 @@ func (l *Lex) expectedFixedLen(rule *Rule, alts []*AltSpec, fwd string) int {
 // the gate always did there.
 func (l *Lex) slotExpects(rule *Rule, alts []*AltSpec, slot int, tin Tin) bool {
 	if l.Ctx != nil && rule != nil && rule.Spec != nil {
-		return l.Ctx.altIndex(rule.Spec, rule.State == OPEN, alts).expects(slot, tin)
+		if idx := l.Ctx.altIndex(rule.Spec, rule.State == OPEN, alts); idx != nil {
+			return idx.expects(slot, tin)
+		}
 	}
 	for _, alt := range alts {
 		altS := alt.S

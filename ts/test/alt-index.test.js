@@ -156,4 +156,32 @@ describe('alt-index', () => {
     assert.equal(alt, null)
   })
 
+
+  it('selects again when a rejecting condition retags the first token', () => {
+    // A condition may change the buffered token's tin and reject. The
+    // full scan then tests every later alternate against the token as it
+    // is now, so the candidates have to follow it: the second `#A`
+    // candidate retags `a` as `#B`, the third can no longer take it, and
+    // the `#B` alternate after them does.
+    const j = instance()
+    const B = j.token('#B')
+    j.rule('top', (rs) => rs
+      .open([
+        { s: '#A', c: () => false, a: (r) => (r.node = 'first') },
+        {
+          s: '#A',
+          c: (r, ctx) => {
+            ctx.t[0].tin = B
+            return false
+          },
+          a: (r) => (r.node = 'second'),
+        },
+        { s: '#A', a: (r) => (r.node = 'third') },
+        { s: '#B', a: (r) => (r.node = 'b') },
+      ])
+      .close([{ s: '#ZZ' }]))
+    assert.equal(j.parse('a'), 'b')
+    assert.equal(j.parse('b'), 'b')
+  })
+
 })

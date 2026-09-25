@@ -196,6 +196,83 @@ func TestAltIndexFollowsAlternatesReorderedDuringAParse(t *testing.T) {
 	}
 }
 
+func TestAltIndexIgnoresAListReplacedBeforeTheScan(t *testing.T) {
+	// `top = item item`. On its first visit item's before-open action
+	// reorders item's own alternates, and ModifyOpen builds a fresh list
+	// of the same length. That visit still scans the list it read before
+	// the action ran, so an index built from it must not be kept as the
+	// index for the new list: the second visit would then look for `b`
+	// where the old order had it.
+	j := altIndexInstance(nil)
+	ta, tb, tc := j.Token("#A"), j.Token("#B"), j.Token("#C")
+	second := true
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{P: "item"})
+		rs.AddClose(&AltSpec{
+			C: func(*Rule, *Context) bool { return second },
+			P: "item",
+			A: func(*Rule, *Context) { second = false },
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	var seen []string
+	reordered := false
+	j.Rule("item", func(rs *RuleSpec, _ *Parser) {
+		rs.AddBO(func(r *Rule, _ *Context) {
+			if !reordered {
+				reordered = true
+				r.Spec.ModifyOpen(&AltModListOpts{Move: []int{1, 2}})
+			}
+		})
+		// The `#C` alternate comes first and fetches the token, so the
+		// scan consults the index for everything after it.
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{tc}}},
+			&AltSpec{S: [][]Tin{{ta}}, A: func(*Rule, *Context) { seen = append(seen, "a") }},
+			&AltSpec{S: [][]Tin{{tb}}, A: func(*Rule, *Context) { seen = append(seen, "b") }},
+		)
+		rs.AddClose(&AltSpec{})
+	})
+	if _, err := j.Parse("ab"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "b"}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("alternates run %v, want %v", seen, want)
+	}
+}
+
+func TestAltIndexSelectsAgainWhenAConditionRetagsTheFirstToken(t *testing.T) {
+	// A condition may change the buffered token's tin and reject. The
+	// full scan then tests every later alternate against the token as it
+	// is now, so the candidates have to follow it: the second `#A`
+	// candidate retags `a` as `#B`, the third can no longer take it, and
+	// the `#B` alternate after them does.
+	j := altIndexInstance(nil)
+	ta, tb := j.Token("#A"), j.Token("#B")
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{ta}}, C: func(*Rule, *Context) bool { return false },
+				A: func(r *Rule, _ *Context) { r.Node = "first" }},
+			&AltSpec{S: [][]Tin{{ta}}, C: func(_ *Rule, ctx *Context) bool {
+				ctx.T[0].Tin = tb
+				return false
+			}, A: func(r *Rule, _ *Context) { r.Node = "second" }},
+			&AltSpec{S: [][]Tin{{ta}}, A: func(r *Rule, _ *Context) { r.Node = "third" }},
+			&AltSpec{S: [][]Tin{{tb}}, A: func(r *Rule, _ *Context) { r.Node = "b" }},
+		)
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	for _, src := range []string{"a", "b"} {
+		out, err := j.Parse(src)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if out != "b" {
+			t.Fatalf("%q: got %v, want %q", src, out, "b")
+		}
+	}
+}
+
 func TestAltIndexGateColumnsAreSparse(t *testing.T) {
 	// A column is the tins a slot names, ascending and without repeats:
 	// a slot set by hand to a tin far beyond the registered ones must not

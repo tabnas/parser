@@ -73,4 +73,30 @@ describe('rule-add', () => {
     assert.equal(clear.parse('a'), 'replacement')
   })
 
+  it('a hook whose modifier returns a fresh array leaves its pass scanning the one it holds', () => {
+    // The pass read def.open before the hook ran. A custom modifier
+    // replaces the array, so that pass scans the array it holds (with the
+    // appended alternate in it) and the next pass scans the replacement.
+    // The rebuilt first-token index describes the replacement, so the
+    // pass holding the old array must not consult it.
+    const j = instance()
+    let hooked = false
+    j.rule('top', (rs) => rs
+      .open([{ s: '#A', a: (r) => (r.node = 'a') }])
+      .bo((r) => {
+        if (!hooked) {
+          hooked = true
+          r.spec.open([{ s: '#B', a: (r) => (r.node = 'b') }], {
+            append: true,
+            custom: (alts) => alts.slice().reverse(),
+          })
+        }
+      })
+      .close([{ s: '#ZZ' }]))
+    assert.equal(j.parse('b'), 'b')
+    assert.deepEqual(j.rule('top').def.open.map((alt) => alt.s[0]), ['#B', '#A'])
+    assert.equal(j.parse('a'), 'a')
+    assert.equal(j.parse('b'), 'b')
+  })
+
 })

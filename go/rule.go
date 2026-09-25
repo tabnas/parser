@@ -1530,17 +1530,21 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		index = ctx.altIndex(rule.Spec, isOpen, alts)
 	}
 	// The two candidate lists (alternates naming the first tin, and the
-	// wildcards), walked together in index order once selected.
+	// wildcards), walked together in index order once selected, and the
+	// tin they were selected for.
 	var named, wild []int32
 	selected := false
+	var keyTin Tin
 	nI, wI := 0, 0
 	altI := 0
 	for altI < len(alts) {
 		if !selected && index != nil && 0 < len(ctx.T) {
 			t0 := ctx.T[0]
 			if t0 != nil && !t0.IsNoToken() && t0.Tin != TinBD {
-				named, wild = index.named(t0.Tin), index.wild
+				keyTin = t0.Tin
+				named, wild = index.named(keyTin), index.wild
 				selected = true
+				nI, wI = 0, 0
 				for nI < len(named) && int(named[nI]) < altI {
 					nI++
 				}
@@ -1763,6 +1767,18 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				}
 			}
 			unI = -1
+		}
+
+		// A condition can retag the first token, or replace it, and then
+		// reject. The lists were selected for a tin the token no longer
+		// has, and the plain scan would test every later alternate against
+		// the token as it is now: resume after this alternate, and select
+		// again at the top of the loop.
+		if selected {
+			if len(ctx.T) == 0 || ctx.T[0] == nil || ctx.T[0].IsNoToken() || ctx.T[0].Tin != keyTin {
+				selected = false
+				altI++
+			}
 		}
 	}
 

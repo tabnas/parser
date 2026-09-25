@@ -1157,6 +1157,11 @@ struct PortableAlt {
     alt: AltSpec,
     slots: Vec<Vec<String>>,
     keys: Vec<String>,
+    /// Per slot, the sorted names the slot re-resolves from on the merged
+    /// instance, or its key when it has none. Two slots declared alike
+    /// resolve alike under every later token-set override; two that only
+    /// resolve alike now may not.
+    declared: Vec<String>,
     complexity: [usize; 10],
     group: String,
     tag: String,
@@ -1173,7 +1178,7 @@ fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let keys = slots
+    let keys: Vec<String> = slots
         .iter()
         .map(|slot| {
             let mut names = slot.clone();
@@ -1211,11 +1216,32 @@ fn portable_alt(tabnas: &Tabnas, alt: &AltSpec, tag: &str) -> PortableAlt {
             AltActionBinding::Matched(callback) => AltActionBinding::Matched(callback),
         })
         .collect();
+    // A slot set by hand since its names last resolved (its `s` is no
+    // longer `s_bound`) keeps its tins: its names are dropped here, so no
+    // rebuild on the merged instance resolves them over the edit.
+    for (slot, names) in cloned.s_names.iter_mut().enumerate() {
+        if alt.s.get(slot) != alt.s_bound.get(slot) {
+            names.clear();
+        }
+    }
+    let declared = keys
+        .iter()
+        .enumerate()
+        .map(|(slot, key)| match cloned.s_names.get(slot) {
+            Some(names) if !names.is_empty() => {
+                let mut names = names.clone();
+                names.sort();
+                names.join(" ")
+            }
+            _ => key.clone(),
+        })
+        .collect();
     cloned.s.clear();
     PortableAlt {
         alt: cloned,
         slots,
         keys,
+        declared,
         complexity: [
             usize::from(
                 !alt.c.is_empty()
@@ -1283,6 +1309,7 @@ fn identical_alts(left: &PortableAlt, right: &PortableAlt) -> bool {
     let left_alt = &left.alt;
     let right_alt = &right.alt;
     left.keys == right.keys
+        && left.declared == right.declared
         && left.group == right.group
         && left.action_identity == right.action_identity
         && eq_arc_vec(&left_alt.action_fns, &right_alt.action_fns)
@@ -1369,16 +1396,6 @@ impl MergedRule {
             alts.iter()
                 .map(|portable| {
                     let mut alt = portable.alt.clone();
-                    // A slot the source set by hand (its `s` no longer
-                    // what its names last resolved to) keeps its tins
-                    // here too: the names are dropped for it, so no
-                    // later rebuild resolves them over the edit.
-                    let edited: Vec<bool> = (0..portable.alt.s.len())
-                        .map(|slot| {
-                            portable.alt.s_names.get(slot).is_some()
-                                && portable.alt.s.get(slot) != portable.alt.s_bound.get(slot)
-                        })
-                        .collect();
                     alt.s = portable
                         .slots
                         .iter()
@@ -1393,13 +1410,6 @@ impl MergedRule {
                     // source's tins, every slot would read as set by hand
                     // and a set overridden here would never reach it.
                     alt.s_bound = alt.s.clone();
-                    for (slot, was_edited) in edited.into_iter().enumerate() {
-                        if was_edited {
-                            if let Some(names) = alt.s_names.get_mut(slot) {
-                                names.clear();
-                            }
-                        }
-                    }
                     alt
                 })
                 .collect()

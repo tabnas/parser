@@ -48,8 +48,21 @@ type altIndexKey struct {
 }
 
 // altIndex returns the index for one rule state, building it on first
-// use in this parse.
+// use in this parse, or nil when alts is not the list the rule holds
+// now. Rule.Process reads the list before the before-actions run, and an
+// action that replaces it (ModifyOpen builds a fresh list, of the same
+// length for a reorder) leaves that pass scanning the list it read. An
+// index built from that list and cached under the new mutation count
+// would answer for the new list on the rule's next step, so the old list
+// is scanned in full instead, and nothing is cached for it.
 func (ctx *Context) altIndex(spec *RuleSpec, isOpen bool, alts []*AltSpec) *altIndex {
+	current := spec.close
+	if isOpen {
+		current = spec.open
+	}
+	if !sameAltList(alts, current) {
+		return nil
+	}
 	key := altIndexKey{spec: spec, open: isOpen}
 	if idx, ok := ctx.altIdx[key]; ok && idx.gen == spec.gen && idx.n == len(alts) {
 		return idx
@@ -61,6 +74,12 @@ func (ctx *Context) altIndex(spec *RuleSpec, isOpen bool, alts []*AltSpec) *altI
 	}
 	ctx.altIdx[key] = idx
 	return idx
+}
+
+// sameAltList reports whether two slices are one list: the same length
+// over the same backing array from the same start.
+func sameAltList(a, b []*AltSpec) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
 }
 
 func buildAltIndex(ctx *Context, alts []*AltSpec) *altIndex {

@@ -11,7 +11,7 @@
 //! overridden after the alternate was installed reaches it.
 
 use std::sync::{Arc, Mutex};
-use tabnas::{Tabnas, Value, TIN_NR, TIN_TX};
+use tabnas::{Tabnas, Value, TIN_NR, TIN_ST, TIN_TX};
 
 type Seen = Arc<Mutex<Vec<String>>>;
 
@@ -251,5 +251,105 @@ fn a_merged_slot_still_follows_a_set_overridden_on_the_merged_instance() {
     assert!(
         merged.parse("@").is_err(),
         "the merged slot did not follow the set overridden on the merged instance"
+    );
+}
+
+#[test]
+fn a_rejecting_condition_that_retags_the_first_token_selects_again() {
+    // A condition may change the buffered token's tin and reject. The full
+    // scan then tests every later alternate against the token as it is
+    // now, so the candidates have to follow it: the second `#A` candidate
+    // retags `a` as `#B`, the third can no longer take it, and the `#B`
+    // alternate after them does.
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let mut tabnas = Tabnas::new();
+    recorder(&mut tabnas, &seen, &["first", "second", "third", "b"]);
+    tabnas
+        .grammar_json(&format!(
+            r##"{{"options":{{"rule":{{"start":"top"}},{FIXED}}}}}"##
+        ))
+        .unwrap();
+    let tin_b = tabnas.options.token("#B").expect("#B");
+    tabnas.alt_condition("@never", |_, _| false);
+    tabnas.alt_condition("@retag", move |_, context| {
+        context.t[0].tin = tin_b;
+        false
+    });
+    tabnas
+        .grammar_json(
+            r##"{"rule":{"top":{
+              "open":[
+                {"s":"#A","c":"@never","a":["@first"]},
+                {"s":"#A","c":"@retag","a":["@second"]},
+                {"s":"#A","a":["@third"]},
+                {"s":"#B","a":["@b"]}
+              ],
+              "close":[{"s":"#ZZ"}]
+            }}}"##,
+        )
+        .unwrap();
+    assert_eq!(ran(&tabnas, &seen, "a"), ["b"]);
+    assert_eq!(ran(&tabnas, &seen, "b"), ["b"]);
+}
+
+#[test]
+fn a_slot_set_by_hand_before_a_merge_keeps_its_edit_on_the_merged_instance() {
+    // The edit is the caller's decision on the source instance. The merge
+    // carries the slot's tins, and must not carry the names that would
+    // resolve over them when the merged instance builds its parser.
+    let mut left = Tabnas::with_options(tabnas::Options {
+        tag: "Z".into(),
+        ..Default::default()
+    });
+    left.grammar_json(RULES).unwrap();
+    left.rules.get_mut("top").expect("top").open[0].s[0] = vec![TIN_NR];
+    let right = Tabnas::with_options(tabnas::Options {
+        tag: "A".into(),
+        ..Default::default()
+    });
+    let mut merged = right.merge(&left).unwrap();
+    assert_eq!(merged.parse("1").unwrap(), Value::Number(1.0));
+    assert!(
+        merged.parse("a").is_err(),
+        "the merged instance resolved the names over the edit"
+    );
+    merged.set_token_set("KEY", vec![TIN_TX]);
+    assert_eq!(merged.parse("1").unwrap(), Value::Number(1.0));
+    assert!(merged.parse("a").is_err());
+}
+
+#[test]
+fn a_merge_keeps_alternates_whose_different_sets_resolve_alike() {
+    // Two alternates that differ only in the set they name are the same
+    // alternate while the sets agree, and different ones once either set
+    // is overridden on the merged instance. The merge keeps both, or the
+    // override would reach only the survivor.
+    fn side(tag: &str, set: &str) -> Tabnas {
+        let mut tabnas = Tabnas::with_options(tabnas::Options {
+            tag: tag.into(),
+            ..Default::default()
+        });
+        tabnas
+            .grammar_json(&format!(
+                r##"{{"options":{{"rule":{{"start":"top"}},"tokenSet":{{"{set}":["#NR"]}}}},
+                     "rule":{{"top":{{"open":[{{"s":"#{set}","a":"@value$"}}],
+                                      "close":[{{"s":"#ZZ"}}]}}}}}}"##
+            ))
+            .unwrap();
+        tabnas
+    }
+    let mut merged = side("A", "ALPHA").merge(&side("B", "BETA")).unwrap();
+    assert_eq!(merged.rules["top"].open.len(), 2);
+    assert_eq!(merged.parse("1").unwrap(), Value::Number(1.0));
+    merged.set_token_set("BETA", vec![TIN_ST]);
+    assert_eq!(
+        merged.parse("1").unwrap(),
+        Value::Number(1.0),
+        "ALPHA still takes a number"
+    );
+    assert_eq!(
+        merged.parse(r#""s""#).unwrap(),
+        Value::String("s".into()),
+        "BETA takes a string once overridden"
     );
 }

@@ -27,6 +27,7 @@ import { defaults } from './defaults'
 type PortableAlt = {
   alt: Record<string, any>   // Portable AltSpec clone.
   keys: string[]             // Canonical per-position token-name keys.
+  names: string[]            // Per-position declared names, see declaredNames.
   complexity: number[]       // Presence vector, see altComplexity.
   gkey: string               // Joined (pre-sorted) group tags.
   tag: string                // Source instance tag (final tie-break).
@@ -254,6 +255,25 @@ function altComplexity(alt: any): number[] {
 }
 
 
+// The names each position of a portable alt declares, sorted and joined:
+// what the position resolves from on the merged instance. A position
+// naming a token set follows every later override of that set, so two
+// positions declared alike resolve alike under every override, while two
+// that only resolve alike now (`#ALPHA` and `#BETA`, both `[#NR]` today)
+// may not.
+function declaredNames(s: any[] | null): string[] {
+  return (s || []).map((entry: any) =>
+    (Array.isArray(entry) ? entry : [entry])
+      .flatMap((e: any) =>
+        null == e ? [] : 'string' === typeof e ? e.split(/\s* +\s*/) : [String(e)],
+      )
+      .filter((n: string) => '' !== n)
+      .sort()
+      .join(' '),
+  )
+}
+
+
 // Build the portable form of a normalized alt. The canonical
 // per-position key is the sorted, space-joined token-name expansion of
 // that position (uniform over single tokens, tokensets, and Tin-array
@@ -290,6 +310,7 @@ function portable(alt: any, cfg: Config, tag: string): PortableAlt {
   return {
     alt: clone,
     keys,
+    names: declaredNames(clone.s),
     complexity: altComplexity(alt),
     gkey: (alt.g || []).join(','),
     tag,
@@ -345,10 +366,12 @@ function fneq(u: any, v: any): boolean {
 }
 
 
-// Identical alts (same token keys and group tags, same behavior
-// fields, same data props by value) are emitted once — the
+// Identical alts (same token keys, declared names and group tags, same
+// behavior fields, same data props by value) are emitted once — the
 // shared-base-plugin case, where both instances installed the same
-// grammar plugin. Fields compare by reference or by function source;
+// grammar plugin. The declared names count as well as the keys: an alt
+// naming a set that resolves like its rival's today is a different alt
+// once either set is overridden on the merged instance. Fields compare by reference or by function source;
 // for the source path the alts must be unconditioned (or share one
 // condition reference): with no condition the first of two
 // identical-sequence alts always wins the match and the second is
@@ -358,6 +381,8 @@ function identicalAlts(a: PortableAlt, b: PortableAlt): boolean {
   if (
     a.keys.length !== b.keys.length ||
     !a.keys.every((k, i) => k === b.keys[i]) ||
+    a.names.length !== b.names.length ||
+    !a.names.every((n, i) => n === b.names[i]) ||
     a.gkey !== b.gkey
   ) {
     return false

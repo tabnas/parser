@@ -320,7 +320,7 @@ fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
     for alt in spec.open.iter_mut().chain(spec.close.iter_mut()) {
         for (slot, names) in alt.s_names.iter().enumerate() {
             // No names: the slot was set by hand before a merge carried
-            // the alternate here (`MergedRule::materialize` drops them
+            // the alternate here (the merge's portable copy drops them
             // for such a slot), and stays as it is.
             if names.is_empty() || alt.s.get(slot) != alt.s_bound.get(slot) {
                 continue;
@@ -2234,16 +2234,19 @@ impl Parser {
             };
             // The two candidate lists (alternates naming the first tin,
             // and the wildcards), walked together in index order once
-            // selected.
+            // selected, and the tin they were selected for.
             let mut lists: Option<(&[usize], &[usize])> = None;
+            let mut key_tin = TIN_BD;
             let (mut ni, mut wi) = (0, 0);
             let mut next_idx = 0;
             loop {
                 if lists.is_none() {
                     if let (Some(index), Some(t0)) = (first_index, context.t.first()) {
                         if t0.tin != TIN_BD {
-                            let named = index.named(t0.tin);
+                            key_tin = t0.tin;
+                            let named = index.named(key_tin);
                             let wild = index.wild.as_slice();
+                            (ni, wi) = (0, 0);
                             while ni < named.len() && named[ni] < next_idx {
                                 ni += 1;
                             }
@@ -2499,6 +2502,15 @@ impl Parser {
                         })?;
                     }
                     debug_assert_eq!(context.t.get(undo.position), Some(&undo.token));
+                }
+                // A condition can retag the first token, or replace it,
+                // and then reject. The lists were selected for a tin the
+                // token no longer has, and the plain scan would test every
+                // later alternate against the token as it is now: resume
+                // after this alternate, and select again at the top.
+                if lists.is_some() && context.t.first().map(|t0| t0.tin) != Some(key_tin) {
+                    lists = None;
+                    next_idx = idx + 1;
                 }
             }
 

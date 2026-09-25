@@ -1272,7 +1272,16 @@ function attemptRecover(
 // it left out, and first-match-wins is preserved. The lists stay
 // separate rather than being merged per tin: a rule with W wildcard
 // alternates and T distinct first tins would otherwise cost W×T entries.
+//
+// An index answers only for the array it was built from, at the length
+// it had then (`alts`, `n`). A before-action can replace a rule's list
+// mid-pass (a custom list modifier returns a fresh array), and the pass
+// that ran it still scans the array it captured; an array edited in
+// place without norm() changes length. Either way parse_alts scans that
+// array in full rather than trust an index built for another.
 type AltIndex = {
+  alts: NormAltSpec[]
+  n: number
   byTin: Map<Tin, number[]>
   wild: number[]
 }
@@ -1302,7 +1311,7 @@ function indexFirst(alts: NormAltSpec[]): AltIndex {
       if (list[list.length - 1] !== aI) list.push(aI)
     }
   }
-  return { byTin, wild }
+  return { alts, n: alts.length, byTin, wild }
 }
 
 function parse_alts(
@@ -1379,23 +1388,30 @@ function parse_alts(
   // at position 0 are tried, in their original order. Until the first
   // fetch, alternates are tried in order as before: the first alternate
   // with a sequence fetches the token, under this rule's own gate.
-  const first: AltIndex | undefined = RELEX
+  const built: AltIndex | undefined = RELEX
     ? undefined
     : (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
+  const first: AltIndex | undefined =
+    null != built && built.alts === alts && built.n === len ? built : undefined
   // The two candidate lists (alternates naming the first tin, and the
-  // wildcards), walked together in index order once selected.
+  // wildcards), walked together in index order once selected, and the
+  // tin they were selected for.
   let named: number[] | null = null
   let wild: number[] = NO_ALTS
   let nI = 0
   let wI = 0
+  let keyTin: Tin = BD // Never a key: the lists are not selected for #BD.
 
   altI = 0
   while (altI < len) {
     if (null == named && null != first) {
       const t0 = tbuf[0]
       if (null != t0 && NOTOKEN !== t0 && BD !== t0.tin) {
-        named = first.byTin.get(t0.tin) ?? NO_ALTS
+        keyTin = t0.tin
+        named = first.byTin.get(keyTin) ?? NO_ALTS
         wild = first.wild
+        nI = 0
+        wI = 0
         while (nI < named.length && named[nI] < altI) nI++
         while (wI < wild.length && wild[wI] < altI) wI++
       }
@@ -1656,6 +1672,18 @@ function parse_alts(
       }
     }
     if (null == named) altI++
+    else {
+      // A condition can retag the first token, or replace it, and then
+      // reject. The lists were selected for a tin the token no longer
+      // has, and the plain scan would test every later alternate against
+      // the token as it is now: resume after this alternate, and select
+      // again at the top of the loop.
+      const t0 = tbuf[0]
+      if (null == t0 || NOTOKEN === t0 || keyTin !== t0.tin) {
+        named = null
+        altI++
+      }
+    }
   }
 
   if (!cond) {

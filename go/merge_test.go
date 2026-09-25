@@ -832,3 +832,47 @@ func TestMergeGrammarPermutations(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeKeepsAlternatesWhoseDifferentSetsResolveAlike(t *testing.T) {
+	// Two alternates that differ only in the set they name are the same
+	// alternate while the sets agree, and different ones once either set
+	// is overridden on the merged instance, where TypeScript and Rust
+	// follow the set. The merge keeps both, as they do, so the merged rule
+	// holds the same alternates in every runtime.
+	side := func(tag, set, s string) *Tabnas {
+		j := Make(Options{Tag: tag})
+		spec, err := GrammarSpecFromJSON([]byte(`{"options":{"rule":{"start":"val"},
+		  "tokenSet":{"` + set + `":["#NR"]}},
+		  "rule":{"val":{"open":[{"s":` + s + `,"a":"@value$"}],"close":[{"s":"#ZZ"}]}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Grammar(spec); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	alpha := func() *Tabnas { return side("A", "ALPHA", `"#ALPHA"`) }
+	beta := func() *Tabnas { return side("B", "BETA", `"#BETA"`) }
+	for _, pair := range [][2]*Tabnas{{alpha(), beta()}, {beta(), alpha()}} {
+		m, err := pair[0].Merge(pair[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(m.RSM()["val"].open); n != 2 {
+			t.Fatalf("merged val has %d open alternates, want 2", n)
+		}
+		if out, err := m.Parse("1"); err != nil || out != 1.0 {
+			t.Fatalf("1: got %v, %v", out, err)
+		}
+	}
+
+	// Declared alike, they are one alternate, however each spelled it.
+	m, err := side("A", "ALPHA", `"#ALPHA"`).Merge(side("B", "ALPHA", `["#ALPHA"]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(m.RSM()["val"].open); n != 1 {
+		t.Fatalf("merged val has %d open alternates, want 1", n)
+	}
+}
