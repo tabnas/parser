@@ -165,6 +165,11 @@ struct PreparedRule {
     spec: Arc<RuleSpec>,
     open: Vec<PreparedAlt>,
     close: Vec<PreparedAlt>,
+    /// The alternates of each state indexed by the tin they can take at
+    /// position 0, so a step tries the candidates for the first
+    /// lookahead token rather than every alternate.
+    open_first: AltIndex,
+    close_first: AltIndex,
     /// The four lifecycle action orders, in the same order the rule runs
     /// them. Most grammars declare none of them, and an empty list here is
     /// what lets a step skip the whole phase rather than walk an empty
@@ -178,6 +183,15 @@ struct PreparedRule {
 }
 
 impl PreparedRule {
+    /// The first-token index of the open or close alternates.
+    fn first(&self, is_open: bool) -> &AltIndex {
+        if is_open {
+            &self.open_first
+        } else {
+            &self.close_first
+        }
+    }
+
     fn alt(&self, is_open: bool, idx: usize) -> Option<&PreparedAlt> {
         if is_open {
             self.open.get(idx)
@@ -293,6 +307,96 @@ impl PreparedRoute {
 /// built from the alternates, and a `Vec` collected out of it, once per
 /// token. None of it can change while a parse runs, so it is derived once
 /// when the rule is installed.
+/// Resolve every slot that was declared by name against `options`. A
+/// slot naming a token set takes the set's current members; a slot naming
+/// a token takes that token. A slot with a name the options do not know
+/// keeps the tins it was installed with: a parser build must not mint a
+/// token. Alternates built from tins directly carry no names and are left
+/// alone.
+fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
+    for alt in spec.open.iter_mut().chain(spec.close.iter_mut()) {
+        for (slot, names) in alt.s_names.iter().enumerate() {
+            let mut tins = Vec::with_capacity(names.len());
+            let mut resolvable = true;
+            for name in names {
+                if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
+                    tins.extend(set.iter().copied());
+                } else if let Some(tin) = options.token(name) {
+                    tins.push(tin);
+                } else {
+                    resolvable = false;
+                    break;
+                }
+            }
+            if resolvable {
+                if let Some(existing) = alt.s.get_mut(slot) {
+                    *existing = tins;
+                }
+            }
+        }
+    }
+}
+
+/// Alternates indexed by the tin they can take at position 0.
+///
+/// `by_tin` maps each tin some alternate names at position 0 to the
+/// ordered indices of the alternates that can take it: those naming it,
+/// with the alternates that constrain nothing at position 0 (an empty
+/// sequence, an empty slot, or a slot naming `#AA`, exactly the slots
+/// `slot_matches` accepts every tin for) merged in at their own places.
+/// So a list is the original scan with the alternates that cannot take
+/// the first token left out, and first-match-wins is preserved. `wild`
+/// is the list for a tin no alternate names.
+#[derive(Debug, Default)]
+struct AltIndex {
+    by_tin: HashMap<Tin, Vec<usize>>,
+    wild: Vec<usize>,
+}
+
+impl AltIndex {
+    fn of(alts: &[AltSpec]) -> Self {
+        let mut by_tin: HashMap<Tin, Vec<usize>> = HashMap::new();
+        let mut wild = Vec::new();
+        for (idx, alt) in alts.iter().enumerate() {
+            match alt.s.first() {
+                Some(slot) if !slot.is_empty() && !slot.contains(&TIN_AA) => {
+                    for tin in slot {
+                        let list = by_tin.entry(*tin).or_default();
+                        // A slot naming one tin twice must not try the
+                        // alternate twice: a condition could observe it.
+                        if list.last() != Some(&idx) {
+                            list.push(idx);
+                        }
+                    }
+                }
+                _ => wild.push(idx),
+            }
+        }
+        if !wild.is_empty() {
+            for list in by_tin.values_mut() {
+                let mut merged = Vec::with_capacity(list.len() + wild.len());
+                let (mut i, mut j) = (0, 0);
+                while i < list.len() || j < wild.len() {
+                    if j >= wild.len() || (i < list.len() && list[i] < wild[j]) {
+                        merged.push(list[i]);
+                        i += 1;
+                    } else {
+                        merged.push(wild[j]);
+                        j += 1;
+                    }
+                }
+                *list = merged;
+            }
+        }
+        AltIndex { by_tin, wild }
+    }
+
+    /// The ordered alternates that can take `tin` at position 0.
+    fn candidates(&self, tin: Tin) -> &[usize] {
+        self.by_tin.get(&tin).map_or(&self.wild, Vec::as_slice)
+    }
+}
+
 #[derive(Debug, Default)]
 struct ExpectedTins {
     open: Vec<Vec<Tin>>,
@@ -370,6 +474,13 @@ impl Parser {
     }
 
     pub fn add_rule(&mut self, spec: RuleSpec) {
+        // A slot declared by name is resolved against the options this
+        // parser is built with, so a token set overridden after the rule
+        // was installed reaches it (tabnas/parser#217). The parser is
+        // rebuilt whenever the options change, which is what makes this
+        // the late binding TypeScript's `norm()` and Go's `altS` provide.
+        let mut spec = spec;
+        resolve_slot_names(&mut spec, &self.options);
         let expected = ExpectedTins::of(&spec);
         let shared = RuleName::from(spec.name.as_str());
         let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
@@ -409,6 +520,8 @@ impl Parser {
                 spec: Arc::clone(spec),
                 open: Self::prepared_alts(&spec.open, &self.rules, &self.names, &self.options),
                 close: Self::prepared_alts(&spec.close, &self.rules, &self.names, &self.options),
+                open_first: AltIndex::of(&spec.open),
+                close_first: AltIndex::of(&spec.close),
                 bo: resolved_action_order(
                     &spec.bo,
                     &spec.bo_fns,
@@ -2107,7 +2220,52 @@ impl Parser {
             let groups_prepared = self.options.rule.include == self.prepared_include
                 && self.options.rule.exclude == self.prepared_exclude;
 
-            for (idx, alt) in alts.iter().enumerate() {
+            // First-token index. Once the first lookahead token is in
+            // hand, and the lexer is not renegotiating token identity
+            // (under relex an alternate may re-cut a token it does not
+            // name, so every alternate stays a candidate), only the
+            // alternates that can take that token at position 0 are
+            // tried, in their original order. Until the first fetch,
+            // alternates are tried in order as before: the first
+            // alternate with a sequence fetches the token.
+            let first_index = if self.options.lex.relex {
+                None
+            } else {
+                prepared.map(|prepared| prepared.first(is_open))
+            };
+            let mut cands: Option<&[usize]> = None;
+            let mut ci = 0;
+            let mut next_idx = 0;
+            loop {
+                if cands.is_none() {
+                    if let (Some(index), Some(t0)) = (first_index, context.t.first()) {
+                        if t0.tin != TIN_BD {
+                            let list = index.candidates(t0.tin);
+                            while ci < list.len() && list[ci] < next_idx {
+                                ci += 1;
+                            }
+                            cands = Some(list);
+                        }
+                    }
+                }
+                let idx = match cands {
+                    Some(list) => {
+                        if list.len() <= ci {
+                            // No remaining alternate can take the first token.
+                            break;
+                        }
+                        ci += 1;
+                        list[ci - 1]
+                    }
+                    None => {
+                        if alts.len() <= next_idx {
+                            break;
+                        }
+                        next_idx += 1;
+                        next_idx - 1
+                    }
+                };
+                let alt = &alts[idx];
                 let enabled = match prepared
                     .filter(|_| groups_prepared)
                     .and_then(|prepared| prepared.alt(is_open, idx))

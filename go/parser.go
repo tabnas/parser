@@ -114,6 +114,13 @@ type Context struct {
 	tokenSetDyn bool
 	altSlots    map[*AltSpec][][]Tin
 
+	// altIdx caches, for the duration of one parse, the first-token index
+	// and the per-slot gate columns of each rule state the parse consults
+	// (see altindex.go). Per-Context for the same reason as altSlots: it
+	// is built from the re-resolved slots, and a per-parse cache needs no
+	// invalidation and no lock.
+	altIdx map[altIndexKey]*altIndex
+
 	// parseErrDiag freezes the structured-diagnostic context (rule stack,
 	// failing rule, expected tokens) at the moment ctx.ParseErr is set —
 	// rule.Process keeps mutating RS/RSI and flips the rule state after

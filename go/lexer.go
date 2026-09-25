@@ -1210,9 +1210,15 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 // Handles both match.value (regexp → #VL) and match.token (regexp → custom token).
 //
 // PERFORMANCE. This runs at every lex attempt, so its inner loop is the
-// engine's hottest path on grammars with many match tokens. The gating
-// work is O(match tokens x alternates x tins-per-slot) and it is easy to
-// pay it for nothing:
+// engine's hottest path on grammars with many match tokens. The gate
+// (is this token expected at the rule position) is answered from the
+// per-parse index of altindex.go: one column lookup per candidate
+// token, with the columns built once per rule state per parse. It used
+// to walk every alternate's slot, with a Context.altS lookup each, for
+// every candidate on every lex attempt, O(match tokens x alternates x
+// tins-per-slot), and on a grammar with hundreds of alternates that was
+// most of the parse time (tabnas/proto, 104 KB: 88% of samples under
+// this function). It is easy to pay gating for nothing:
 //
 //   - Under a negotiated-lexing want, the rule-position scan is dead —
 //     l.wants(tin) is the gate, and positionExpected is never read.
@@ -1223,7 +1229,8 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 //     pure loop overhead.
 //
 // Keep gating work inside the branch that reads it. A profile that shows
-// tinMatch high and regexp matching low means this has regressed.
+// tinMatch or Context.altS high and regexp matching low means this has
+// regressed.
 func (l *Lex) matchMatch(rule *Rule) *Token {
 	if l.pnt.SI >= l.pnt.Len {
 		return nil
@@ -1324,7 +1331,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 			if fixLen < 0 {
 				fixLen = 0
 				if gated && l.want == nil && l.Config.FixedLex {
-					fixLen = l.expectedFixedLen(alts, fwd)
+					fixLen = l.expectedFixedLen(rule, alts, fwd)
 				}
 			}
 			return fixLen
@@ -1395,14 +1402,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 					// Ungated: nothing to be expected BY, so everything
 					// is, and pass 0 runs every candidate in tin order.
 					positionExpected := !gated
-					for _, alt := range alts {
-						altS := alt.S
-						if l.Ctx != nil {
-							altS = l.Ctx.altS(alt)
-						}
-						if len(altS) <= slot {
-							continue
-						}
+					if gated {
 						// EXACT membership, not tinMatch. TS gates on
 						// `tcol[oc][tI].includes(tin$)`, a plain list
 						// test, and leaves #AA to the parser. tinMatch
@@ -1415,15 +1415,12 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 						// does Go with this test. A wildcard says the
 						// PARSER will take any tin, not that the LEXER
 						// should invent one.
-						for _, want := range altS[slot] {
-							if want == tin {
-								positionExpected = true
-								break
-							}
-						}
-						if positionExpected {
-							break
-						}
+						//
+						// The answer is the union of what every alternate
+						// names at this slot, built once per rule state
+						// per parse (altindex.go): the alternates are not
+						// walked here, and neither is Context.altS.
+						positionExpected = l.slotExpects(rule, alts, slot, tin)
 					}
 					if pass == 0 {
 						// Pass 0: only tokens expected at this rule position.
@@ -1468,7 +1465,7 @@ func (l *Lex) matchMatch(rule *Rule) *Token {
 // here, or 0. See the call site in matchMatch: it is what lets an
 // expected literal beat an eager-only match token it out-cuts or ties.
 // FixedSorted is longest-first, so the first hit is the longest.
-func (l *Lex) expectedFixedLen(alts []*AltSpec, fwd string) int {
+func (l *Lex) expectedFixedLen(rule *Rule, alts []*AltSpec, fwd string) int {
 	if len(l.Config.FixedSorted) == 0 {
 		return 0
 	}
@@ -1481,22 +1478,36 @@ func (l *Lex) expectedFixedLen(alts []*AltSpec, fwd string) int {
 		if !ok {
 			continue
 		}
-		for _, alt := range alts {
-			altS := alt.S
-			if l.Ctx != nil {
-				altS = l.Ctx.altS(alt)
-			}
-			if len(altS) <= slot {
-				continue
-			}
-			for _, want := range altS[slot] {
-				if want == ftin {
-					return len(fs)
-				}
-			}
+		if l.slotExpects(rule, alts, slot, ftin) {
+			return len(fs)
 		}
 	}
 	return 0
+}
+
+// slotExpects reports whether some alternate of the rule's current state
+// names tin at the lookahead slot: the match-token gate. Inside a parse
+// the answer comes from the per-parse index (altindex.go), built once per
+// rule state from the slots as the parsing instance resolves them, so a
+// token set overridden on the instance (options.tokenSet) is honoured. A
+// standalone lexer with a rule but no Context walks the alternates, as
+// the gate always did there.
+func (l *Lex) slotExpects(rule *Rule, alts []*AltSpec, slot int, tin Tin) bool {
+	if l.Ctx != nil && rule != nil && rule.Spec != nil {
+		return l.Ctx.altIndex(rule.Spec, rule.State == OPEN, alts).expects(slot, tin)
+	}
+	for _, alt := range alts {
+		altS := alt.S
+		if len(altS) <= slot {
+			continue
+		}
+		for _, want := range altS[slot] {
+			if want == tin {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (l *Lex) bad(why string, pstart, pend int) *Token {

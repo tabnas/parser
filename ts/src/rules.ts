@@ -222,6 +222,7 @@ class RuleSpec {
     ao: [] as StateAction[],            // After-open actions.
     ac: [] as StateAction[],            // After-close actions.
     tcol: [] as Tin[][][],              // Collated lookahead tins: [stateI][tokenI][tins].
+    first: [] as AltIndex[],            // First-token index: [stateI] -> alternates by position-0 tin.
     fnref: {} as FuncRefMap<Function>,  // Named function references (@name handlers).
   }
   cfg: Config                           // Resolved configuration.
@@ -353,7 +354,11 @@ class RuleSpec {
       alts.length = 0
     }
 
-    alts[inject](...aa)
+    // Concatenate rather than spread into push/unshift: a spread passes
+    // every alternate as an argument, and a compiled grammar can hand
+    // over more alternates than the engine's argument limit allows
+    // (RangeError: Maximum call stack size exceeded).
+    alts = 'push' === inject ? alts.concat(aa) : aa.concat(alts)
 
     alts = this.def[altState] = modlist(alts, mods)
 
@@ -506,6 +511,14 @@ class RuleSpec {
     for (let tI = 0; tI < maxClose; tI++) columns[1][tI] = columns[1][tI] || []
 
     this.def.tcol = columns
+
+    // First-token index, per state. parse_alts consults it once the
+    // first lookahead token is in hand, so a rule with many alternates
+    // tries only those that can take that token at position 0.
+    this.def.first = [
+      indexFirst(this.def.open as NormAltSpec[]),
+      indexFirst(this.def.close as NormAltSpec[]),
+    ]
 
     function collate(
       stateI: number,
@@ -1239,6 +1252,61 @@ function attemptRecover(
   return undefined
 }
 
+// Alternates indexed by the tin they can take at position 0.
+// `byTin` maps each tin some alternate names at position 0 to the
+// ordered indices of the alternates that can match it: those naming
+// it, with the alternates that constrain nothing at position 0 (an
+// empty sequence, or a wildcard) merged in at their own places. So a
+// list is exactly the original scan with the alternates that cannot
+// take the first token left out, and first-match-wins is preserved.
+// `wild` is the list for a tin no alternate names.
+type AltIndex = {
+  byTin: Map<Tin, number[]>
+  wild: number[]
+}
+
+function indexFirst(alts: NormAltSpec[]): AltIndex {
+  const byTin = new Map<Tin, number[]>()
+  const wild: number[] = []
+  for (let aI = 0; aI < alts.length; aI++) {
+    const a = alts[aI]
+    // No position-0 constraint: an empty sequence, or a position that
+    // resolved to the wildcard (normalt sets S[0] to null for #AA and
+    // for a position with no tins).
+    if (0 === (a.sN | 0) || null == a.S || null == a.S[0]) {
+      wild.push(aI)
+      continue
+    }
+    for (const tin of a.t[0] ?? []) {
+      let list = byTin.get(tin)
+      if (null == list) {
+        list = []
+        byTin.set(tin, list)
+      }
+      // A position naming one tin twice (`#TX #TX`) must not try the
+      // alternate twice: a condition function could observe it.
+      if (list[list.length - 1] !== aI) list.push(aI)
+    }
+  }
+  if (0 < wild.length) {
+    for (const [tin, list] of byTin) {
+      // Merge two ascending index lists, keeping order.
+      const merged: number[] = []
+      let i = 0
+      let j = 0
+      while (i < list.length || j < wild.length) {
+        if (j >= wild.length || (i < list.length && list[i] < wild[j])) {
+          merged.push(list[i++])
+        } else {
+          merged.push(wild[j++])
+        }
+      }
+      byTin.set(tin, merged)
+    }
+  }
+  return { byTin, wild }
+}
+
 function parse_alts(
   is_open: boolean,
   alts: NormAltSpec[],
@@ -1275,7 +1343,6 @@ function parse_alts(
   // S (the string table) is shadowed by alt.S inside the loop below.
   const UNEXPECTED = S.unexpected
 
-  // TODO: replace with lookup map
   let len = alts.length
   const NOTOKEN = ctx.NOTOKEN
   const tbuf = ctx.t
@@ -1307,7 +1374,37 @@ function parse_alts(
 
   let deepest = 0
 
-  for (altI = 0; altI < len; altI++) {
+  // First-token index. Once the first lookahead token is in hand, and
+  // the lexer is not renegotiating token identity (under relex an
+  // alternate may re-cut a token it does not name, so every alternate
+  // stays a candidate), only the alternates that can take that token
+  // at position 0 are tried, in their original order. Until the first
+  // fetch, alternates are tried in order as before: the first alternate
+  // with a sequence fetches the token, under this rule's own gate.
+  const first: AltIndex | undefined = RELEX
+    ? undefined
+    : (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
+  let cands: number[] | null = null
+  let cI = 0
+
+  altI = 0
+  while (altI < len) {
+    if (null == cands && null != first) {
+      const t0 = tbuf[0]
+      if (null != t0 && NOTOKEN !== t0 && BD !== t0.tin) {
+        cands = first.byTin.get(t0.tin) ?? first.wild
+        while (cI < cands.length && cands[cI] < altI) cI++
+      }
+    }
+    if (null != cands) {
+      if (cI >= cands.length) {
+        // No remaining alternate can take the first token.
+        cond = false
+        alt = null
+        break
+      }
+      altI = cands[cI++]
+    }
     alt = alts[altI] as NormAltSpec
 
     // Number of positions that matched in this alt. Tracked so the
@@ -1543,6 +1640,7 @@ function parse_alts(
         unI = -1
       }
     }
+    if (null == cands) altI++
   }
 
   if (!cond) {

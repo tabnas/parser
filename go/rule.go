@@ -1503,7 +1503,42 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	var unSaved relexPoint
 	var unTokens []*Token
 
-	for _, alt := range alts {
+	// First-token index. Once the first lookahead token is in hand, and
+	// the lexer is not renegotiating token identity (under relex an
+	// alternate may re-cut a token it does not name, so every alternate
+	// stays a candidate), only the alternates that can take that token
+	// at position 0 are tried, in their original order. Until the first
+	// fetch, alternates are tried in order as before: the first alternate
+	// with a sequence fetches the token, under this rule's own gate.
+	var index *altIndex
+	if !relex && rule != nil && rule.Spec != nil {
+		index = ctx.altIndex(rule.Spec, isOpen, alts)
+	}
+	var cands []int32
+	cI := 0
+	altI := 0
+	for altI < len(alts) {
+		if cands == nil && index != nil && 0 < len(ctx.T) {
+			t0 := ctx.T[0]
+			if t0 != nil && !t0.IsNoToken() && t0.Tin != TinBD {
+				cands = index.candidates(t0.Tin)
+				for cI < len(cands) && int(cands[cI]) < altI {
+					cI++
+				}
+			}
+		}
+		if cands != nil {
+			if len(cands) <= cI {
+				// No remaining alternate can take the first token.
+				break
+			}
+			altI = int(cands[cI])
+			cI++
+		}
+		alt := alts[altI]
+		if cands == nil {
+			altI++
+		}
 		matched := 0
 		cond := true
 		unI = -1
