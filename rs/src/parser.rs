@@ -319,7 +319,10 @@ impl PreparedRoute {
 fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
     for alt in spec.open.iter_mut().chain(spec.close.iter_mut()) {
         for (slot, names) in alt.s_names.iter().enumerate() {
-            if alt.s.get(slot) != alt.s_bound.get(slot) {
+            // No names: the slot was set by hand before a merge carried
+            // the alternate here (`MergedRule::materialize` drops them
+            // for such a slot), and stays as it is.
+            if names.is_empty() || alt.s.get(slot) != alt.s_bound.get(slot) {
                 continue;
             }
             let mut tins = Vec::with_capacity(names.len());

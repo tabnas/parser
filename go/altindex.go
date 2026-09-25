@@ -1,5 +1,7 @@
 package tabnas
 
+import "sort"
+
 // altIndex is a parse-scoped index over one rule state's alternates.
 //
 // byTin maps each tin some alternate names at position 0 to the
@@ -12,13 +14,17 @@ package tabnas
 // than being merged per tin: a rule with W wildcard alternates and T
 // distinct first tins would otherwise cost W×T entries, per parse.
 //
-// cols is the lexer's gate: cols[slot][tin] is true when some alternate
-// names tin at that lookahead slot (exact membership, as the gate has
-// always tested; #AA is a plain tin here, since a wildcard says the
+// cols is the lexer's gate: cols[slot] holds, ascending, every tin some
+// alternate names at that lookahead slot (exact membership, as the gate
+// has always tested; #AA is a plain tin here, since a wildcard says the
 // PARSER will take any tin, not that the lexer should invent one). It
 // replaces a walk of every alternate's slot, with a Context.altS lookup
 // each, for every candidate match token on every lex attempt, which was
-// most of the parse time on a grammar with hundreds of alternates.
+// most of the parse time on a grammar with hundreds of alternates. A
+// column is the tins it names and nothing more: sized by the largest tin
+// instead, a rule naming a high tin (custom tins are sequential, and a
+// slot can be set by hand to any value) would allocate up to it, once
+// per rule state, per parse.
 //
 // The index is built from the slots as the parsing instance resolves
 // them (Context.altS), so a token set overridden on the instance is
@@ -33,7 +39,7 @@ type altIndex struct {
 	n     int
 	byTin map[Tin][]int32
 	wild  []int32
-	cols  [][]bool
+	cols  [][]Tin
 }
 
 type altIndexKey struct {
@@ -63,31 +69,19 @@ func buildAltIndex(ctx *Context, alts []*AltSpec) *altIndex {
 		byTin: make(map[Tin][]int32),
 		wild:  make([]int32, 0),
 	}
-	maxTin := Tin(-1)
 	maxSlots := 0
 	for _, alt := range alts {
-		altS := ctx.altS(alt)
-		if maxSlots < len(altS) {
+		if altS := ctx.altS(alt); maxSlots < len(altS) {
 			maxSlots = len(altS)
 		}
-		for _, slot := range altS {
-			for _, tin := range slot {
-				if maxTin < tin {
-					maxTin = tin
-				}
-			}
-		}
 	}
-	idx.cols = make([][]bool, maxSlots)
-	for s := range idx.cols {
-		idx.cols[s] = make([]bool, maxTin+1)
-	}
+	idx.cols = make([][]Tin, maxSlots)
 	for aI, alt := range alts {
 		altS := ctx.altS(alt)
 		for s, slot := range altS {
 			for _, tin := range slot {
 				if 0 <= tin {
-					idx.cols[s][tin] = true
+					idx.cols[s] = append(idx.cols[s], tin)
 				}
 			}
 		}
@@ -107,6 +101,18 @@ func buildAltIndex(ctx *Context, alts []*AltSpec) *altIndex {
 			idx.byTin[tin] = append(list, int32(aI))
 		}
 	}
+	// Each column ascending and without repeats, for the search below.
+	for s, col := range idx.cols {
+		sort.Ints(col)
+		n := 0
+		for i, tin := range col {
+			if i == 0 || tin != col[i-1] {
+				col[n] = tin
+				n++
+			}
+		}
+		idx.cols[s] = col[:n]
+	}
 	return idx
 }
 
@@ -122,13 +128,24 @@ func (idx *altIndex) named(tin Tin) []int32 {
 var noAlts = []int32{}
 
 // expects reports whether some alternate names tin at the lookahead
-// slot: the match-token gate.
+// slot: the match-token gate. A column is short as a rule (the few tins
+// a slot names), so it is scanned; a long one (a token set spelled out)
+// is searched.
 func (idx *altIndex) expects(slot int, tin Tin) bool {
 	if slot < 0 || len(idx.cols) <= slot {
 		return false
 	}
 	col := idx.cols[slot]
-	return 0 <= tin && tin < len(col) && col[tin]
+	if len(col) <= 8 {
+		for _, t := range col {
+			if t == tin {
+				return true
+			}
+		}
+		return false
+	}
+	i := sort.SearchInts(col, tin)
+	return i < len(col) && col[i] == tin
 }
 
 func hasTin(tins []Tin, want Tin) bool {

@@ -210,3 +210,46 @@ fn a_slot_set_by_hand_after_the_rule_is_not_overwritten_by_its_names() {
     assert_eq!(tabnas.parse("1").unwrap(), Value::Number(1.0));
     assert!(tabnas.parse("a").is_err());
 }
+
+#[test]
+fn a_merged_slot_still_follows_a_set_overridden_on_the_merged_instance() {
+    // The merge re-registers every token in the merged instance's own
+    // token space, so a set member's tin can differ from the source's
+    // (`right` registers two tokens of its own first). The merged slot's
+    // baseline has to be the remapped tins: left at the source's, the
+    // slot reads as set by hand, and a set overridden on the merged
+    // instance never reaches it.
+    let mut left = Tabnas::with_options(tabnas::Options {
+        tag: "Z".into(),
+        ..Default::default()
+    });
+    left.grammar_json(
+        r##"{"options":{"rule":{"start":"top"},"fixed":{"token":{"#ZT":"@"}},
+             "tokenSet":{"KEY":["#TX","#ZT"]}},
+             "rule":{"top":{"open":[{"s":"#KEY","a":"@value$"}],"close":[{"s":"#ZZ"}]}}}"##,
+    )
+    .unwrap();
+    let mut right = Tabnas::with_options(tabnas::Options {
+        tag: "A".into(),
+        ..Default::default()
+    });
+    right
+        .grammar_json(r##"{"options":{"fixed":{"token":{"#BA":"%","#BB":"^"}}}}"##)
+        .unwrap();
+    let mut merged = right.merge(&left).unwrap();
+    assert_ne!(
+        left.options.token("#ZT"),
+        merged.options.token("#ZT"),
+        "the merge has to move the tin for this test to mean anything"
+    );
+    assert!(
+        merged.parse("@").is_ok(),
+        "before the override an @ is a key"
+    );
+    merged.set_token_set("KEY", vec![TIN_TX]);
+    assert_eq!(merged.parse("a").unwrap(), Value::String("a".into()));
+    assert!(
+        merged.parse("@").is_err(),
+        "the merged slot did not follow the set overridden on the merged instance"
+    );
+}

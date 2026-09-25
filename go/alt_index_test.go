@@ -195,3 +195,54 @@ func TestAltIndexFollowsAlternatesReorderedDuringAParse(t *testing.T) {
 		t.Fatalf("alternates run %v, want %v", seen, want)
 	}
 }
+
+func TestAltIndexGateColumnsAreSparse(t *testing.T) {
+	// A column is the tins a slot names, ascending and without repeats:
+	// a slot set by hand to a tin far beyond the registered ones must not
+	// size a column by it, and membership answers exactly, whether the
+	// column is scanned (short) or searched (long).
+	high := Tin(1 << 30)
+	idx := buildAltIndex(&Context{}, []*AltSpec{
+		{S: [][]Tin{{high}, {3, 1}}},
+		{S: [][]Tin{{1, 3, 3}}},
+	})
+	if got := idx.cols[0]; !reflect.DeepEqual(got, []Tin{1, 3, high}) {
+		t.Fatalf("slot 0 column: %v", got)
+	}
+	if got := idx.cols[1]; !reflect.DeepEqual(got, []Tin{1, 3}) {
+		t.Fatalf("slot 1 column: %v", got)
+	}
+	for _, tin := range []Tin{1, 3, high} {
+		if !idx.expects(0, tin) {
+			t.Fatalf("slot 0 should expect %d", tin)
+		}
+	}
+	for _, tin := range []Tin{0, 2, 4, high - 1, -1} {
+		if idx.expects(0, tin) {
+			t.Fatalf("slot 0 should not expect %d", tin)
+		}
+	}
+	if idx.expects(1, high) || idx.expects(2, 1) || idx.expects(-1, 1) {
+		t.Fatal("a tin outside its slot, or a slot outside the index, is not expected")
+	}
+	if got := idx.named(3); !reflect.DeepEqual(got, []int32{1}) {
+		t.Fatalf("named(3): %v", got)
+	}
+
+	long := &AltSpec{S: [][]Tin{{}}}
+	for i := 19; 0 <= i; i-- {
+		long.S[0] = append(long.S[0], Tin(5*i+2))
+	}
+	idx = buildAltIndex(&Context{}, []*AltSpec{long})
+	if len(idx.cols[0]) != 20 || idx.cols[0][0] != 2 || idx.cols[0][19] != 97 {
+		t.Fatalf("long column: %v", idx.cols[0])
+	}
+	for i := 0; i < 20; i++ {
+		if !idx.expects(0, Tin(5*i+2)) {
+			t.Fatalf("long column should expect %d", 5*i+2)
+		}
+		if idx.expects(0, Tin(5*i+3)) {
+			t.Fatalf("long column should not expect %d", 5*i+3)
+		}
+	}
+}

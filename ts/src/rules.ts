@@ -354,11 +354,21 @@ class RuleSpec {
       alts.length = 0
     }
 
-    // Concatenate rather than spread into push/unshift: a spread passes
-    // every alternate as an argument, and a compiled grammar can hand
-    // over more alternates than the engine's argument limit allows
+    // Inject IN PLACE, and without a spread. In place, because process()
+    // reads def.open before the before-actions run, so an alternate a
+    // `bo` hook installs for the pass about to run has to land in the
+    // array that pass holds (a fresh array from concat left it scanning
+    // the stale one). Without a spread, because a spread passes every
+    // alternate as an argument, and a compiled grammar can hand over
+    // more alternates than the engine's argument limit allows
     // (RangeError: Maximum call stack size exceeded).
-    alts = 'push' === inject ? alts.concat(aa) : aa.concat(alts)
+    if ('push' === inject) {
+      for (let aI = 0; aI < aa.length; aI++) alts.push(aa[aI])
+    } else {
+      const old = alts.splice(0, alts.length)
+      for (let aI = 0; aI < aa.length; aI++) alts.push(aa[aI])
+      for (let oI = 0; oI < old.length; oI++) alts.push(old[oI])
+    }
 
     alts = this.def[altState] = modlist(alts, mods)
 
@@ -1394,7 +1404,10 @@ function parse_alts(
       const n = nI < named.length ? named[nI] : len
       const w = wI < wild.length ? wild[wI] : len
       if (n >= len && w >= len) {
-        // No remaining alternate can take the first token.
+        // No remaining alternate can take the first token: the scan is
+        // exhausted, and altI says so, as it does when the plain scan
+        // runs off the end (the parse log reads the match from it).
+        altI = len
         cond = false
         alt = null
         break

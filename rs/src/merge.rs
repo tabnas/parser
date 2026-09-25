@@ -1369,6 +1369,16 @@ impl MergedRule {
             alts.iter()
                 .map(|portable| {
                     let mut alt = portable.alt.clone();
+                    // A slot the source set by hand (its `s` no longer
+                    // what its names last resolved to) keeps its tins
+                    // here too: the names are dropped for it, so no
+                    // later rebuild resolves them over the edit.
+                    let edited: Vec<bool> = (0..portable.alt.s.len())
+                        .map(|slot| {
+                            portable.alt.s_names.get(slot).is_some()
+                                && portable.alt.s.get(slot) != portable.alt.s_bound.get(slot)
+                        })
+                        .collect();
                     alt.s = portable
                         .slots
                         .iter()
@@ -1378,6 +1388,18 @@ impl MergedRule {
                                 .collect()
                         })
                         .collect();
+                    // The tins are this instance's now, so what the names
+                    // are compared with has to be too: left at the
+                    // source's tins, every slot would read as set by hand
+                    // and a set overridden here would never reach it.
+                    alt.s_bound = alt.s.clone();
+                    for (slot, was_edited) in edited.into_iter().enumerate() {
+                        if was_edited {
+                            if let Some(names) = alt.s_names.get_mut(slot) {
+                                names.clear();
+                            }
+                        }
+                    }
                     alt
                 })
                 .collect()

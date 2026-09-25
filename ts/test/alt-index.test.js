@@ -128,4 +128,32 @@ describe('alt-index', () => {
     assert.equal(j.parse('c'), 'c')
   })
 
+
+  it('logs an exhausted indexed scan as a miss', () => {
+    // `top` reads two tokens and pushes the second back, so `item`
+    // begins with `b` already in the buffer and its index answers at
+    // once: no alternate takes `b`. The parse log for that step has to
+    // say so, as it does when the plain scan runs off the end, rather
+    // than report the last candidate as matched.
+    const j = instance()
+    j.rule('top', (rs) => rs
+      .open([{ s: '#A #B', b: 1, p: 'item' }])
+      .close([{ s: '#ZZ' }]))
+    j.rule('item', (rs) => rs
+      .open([{ s: '#C', a: (r) => (r.node = 'c') }])
+      .close([{ s: '#ZZ' }]))
+    const steps = []
+    assert.throws(() => j.parse('ab', {
+      log: (...args) => {
+        if ('parse' === args[0] && 'item' === args[2].name) steps.push(args)
+      },
+    }), /unexpected/)
+    assert.equal(steps.length, 1)
+    const [, , , , match, cond, altI, alt] = steps[0]
+    assert.equal(match, false)
+    assert.equal(cond, false)
+    assert.equal(altI, 1)
+    assert.equal(alt, null)
+  })
+
 })
