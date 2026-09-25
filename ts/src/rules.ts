@@ -1254,16 +1254,20 @@ function attemptRecover(
 
 // Alternates indexed by the tin they can take at position 0.
 // `byTin` maps each tin some alternate names at position 0 to the
-// ordered indices of the alternates that can match it: those naming
-// it, with the alternates that constrain nothing at position 0 (an
-// empty sequence, or a wildcard) merged in at their own places. So a
-// list is exactly the original scan with the alternates that cannot
-// take the first token left out, and first-match-wins is preserved.
-// `wild` is the list for a tin no alternate names.
+// ascending indices of the alternates naming it; `wild` holds the
+// alternates that constrain nothing at position 0 (an empty sequence,
+// or a wildcard), which are candidates for every tin. parse_alts walks
+// the two lists together in index order, so the candidates for a tin
+// are exactly the original scan with the alternates that cannot take
+// it left out, and first-match-wins is preserved. The lists stay
+// separate rather than being merged per tin: a rule with W wildcard
+// alternates and T distinct first tins would otherwise cost W×T entries.
 type AltIndex = {
   byTin: Map<Tin, number[]>
   wild: number[]
 }
+
+const NO_ALTS: number[] = []
 
 function indexFirst(alts: NormAltSpec[]): AltIndex {
   const byTin = new Map<Tin, number[]>()
@@ -1286,22 +1290,6 @@ function indexFirst(alts: NormAltSpec[]): AltIndex {
       // A position naming one tin twice (`#TX #TX`) must not try the
       // alternate twice: a condition function could observe it.
       if (list[list.length - 1] !== aI) list.push(aI)
-    }
-  }
-  if (0 < wild.length) {
-    for (const [tin, list] of byTin) {
-      // Merge two ascending index lists, keeping order.
-      const merged: number[] = []
-      let i = 0
-      let j = 0
-      while (i < list.length || j < wild.length) {
-        if (j >= wild.length || (i < list.length && list[i] < wild[j])) {
-          merged.push(list[i++])
-        } else {
-          merged.push(wild[j++])
-        }
-      }
-      byTin.set(tin, merged)
     }
   }
   return { byTin, wild }
@@ -1384,26 +1372,40 @@ function parse_alts(
   const first: AltIndex | undefined = RELEX
     ? undefined
     : (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
-  let cands: number[] | null = null
-  let cI = 0
+  // The two candidate lists (alternates naming the first tin, and the
+  // wildcards), walked together in index order once selected.
+  let named: number[] | null = null
+  let wild: number[] = NO_ALTS
+  let nI = 0
+  let wI = 0
 
   altI = 0
   while (altI < len) {
-    if (null == cands && null != first) {
+    if (null == named && null != first) {
       const t0 = tbuf[0]
       if (null != t0 && NOTOKEN !== t0 && BD !== t0.tin) {
-        cands = first.byTin.get(t0.tin) ?? first.wild
-        while (cI < cands.length && cands[cI] < altI) cI++
+        named = first.byTin.get(t0.tin) ?? NO_ALTS
+        wild = first.wild
+        while (nI < named.length && named[nI] < altI) nI++
+        while (wI < wild.length && wild[wI] < altI) wI++
       }
     }
-    if (null != cands) {
-      if (cI >= cands.length) {
+    if (null != named) {
+      const n = nI < named.length ? named[nI] : len
+      const w = wI < wild.length ? wild[wI] : len
+      if (n >= len && w >= len) {
         // No remaining alternate can take the first token.
         cond = false
         alt = null
         break
       }
-      altI = cands[cI++]
+      if (n < w) {
+        altI = n
+        nI++
+      } else {
+        altI = w
+        wI++
+      }
     }
     alt = alts[altI] as NormAltSpec
 
@@ -1640,7 +1642,7 @@ function parse_alts(
         unI = -1
       }
     }
-    if (null == cands) altI++
+    if (null == named) altI++
   }
 
   if (!cond) {

@@ -11,7 +11,7 @@
 //! overridden after the alternate was installed reaches it.
 
 use std::sync::{Arc, Mutex};
-use tabnas::{Tabnas, Value, TIN_TX};
+use tabnas::{Tabnas, Value, TIN_NR, TIN_TX};
 
 type Seen = Arc<Mutex<Vec<String>>>;
 
@@ -190,4 +190,23 @@ fn a_token_set_overridden_after_the_rule_reaches_the_rule() {
         .grammar_json(r##"{"options":{"tokenSet":{"KEY":["#TX","#NR","#ST","#VL"]}}}"##)
         .unwrap();
     assert_eq!(tabnas.parse("1").unwrap(), Value::Number(1.0));
+}
+
+#[test]
+fn a_slot_set_by_hand_after_the_rule_is_not_overwritten_by_its_names() {
+    // The names on a slot late-bind a token set, but an explicit edit of
+    // `s` after the grammar was installed is the caller's decision and
+    // has to survive every rebuild of the parser.
+    let mut tabnas = Tabnas::new();
+    tabnas.grammar_json(RULES).unwrap();
+    tabnas.rules.get_mut("top").expect("top").open[0].s[0] = vec![TIN_NR];
+    assert_eq!(tabnas.parse("1").unwrap(), Value::Number(1.0));
+    assert!(
+        tabnas.parse("a").is_err(),
+        "the edit narrowed the slot to #NR"
+    );
+    // An options change rebuilds the parser: the edit still stands.
+    tabnas.set_token_set("KEY", vec![TIN_TX]);
+    assert_eq!(tabnas.parse("1").unwrap(), Value::Number(1.0));
+    assert!(tabnas.parse("a").is_err());
 }

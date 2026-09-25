@@ -549,9 +549,12 @@ fn parse_alt(
                     );
                 }
             }
-            alt.s.push(tins);
             // The names are kept so a token set overridden later still
-            // reaches this alternate: see `AltSpec::s_names`.
+            // reaches this alternate, and what they resolved to beside
+            // them, so a slot set by hand afterwards is left alone: see
+            // `AltSpec::s_names` and `AltSpec::s_bound`.
+            alt.s_bound.push(tins.clone());
+            alt.s.push(tins);
             alt.s_names.push(names);
         }
     }

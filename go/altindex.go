@@ -2,13 +2,15 @@ package tabnas
 
 // altIndex is a parse-scoped index over one rule state's alternates.
 //
-// byTin maps each tin some alternate names at position 0 to the ordered
-// indices of the alternates that can take it: those naming it, with the
+// byTin maps each tin some alternate names at position 0 to the
+// ascending indices of the alternates naming it; wild holds the
 // alternates that constrain nothing at position 0 (an empty sequence, or
-// a wildcard slot) merged in at their own places. So a list is exactly
-// the original scan with the alternates that cannot take the first token
-// left out, and first-match-wins is preserved. wild is the list for a
-// tin no alternate names.
+// a wildcard slot), which are candidates for every tin. ParseAlts walks
+// the two lists together in index order, so the candidates for a tin are
+// exactly the original scan with the alternates that cannot take it left
+// out, and first-match-wins is preserved. The lists stay separate rather
+// than being merged per tin: a rule with W wildcard alternates and T
+// distinct first tins would otherwise cost W×T entries, per parse.
 //
 // cols is the lexer's gate: cols[slot][tin] is true when some alternate
 // names tin at that lookahead slot (exact membership, as the gate has
@@ -22,10 +24,12 @@ package tabnas
 // them (Context.altS), so a token set overridden on the instance is
 // honoured, and it lives on the Context: one build per rule state per
 // parse, no invalidation and no lock, for the same reason altSlots is
-// per-Context. head and n detect alternates added to the rule during a
-// parse, which rebuilds it.
+// per-Context. gen is the RuleSpec's mutation count when the index was
+// built: a list changed by an action during a parse (an append, a
+// prepend, a reorder through ModifyOpen) moves it, and the next step
+// through the rule rebuilds.
 type altIndex struct {
-	head  *AltSpec
+	gen   uint64
 	n     int
 	byTin map[Tin][]int32
 	wild  []int32
@@ -41,11 +45,11 @@ type altIndexKey struct {
 // use in this parse.
 func (ctx *Context) altIndex(spec *RuleSpec, isOpen bool, alts []*AltSpec) *altIndex {
 	key := altIndexKey{spec: spec, open: isOpen}
-	if idx, ok := ctx.altIdx[key]; ok && idx.n == len(alts) &&
-		(len(alts) == 0 || idx.head == alts[0]) {
+	if idx, ok := ctx.altIdx[key]; ok && idx.gen == spec.gen && idx.n == len(alts) {
 		return idx
 	}
 	idx := buildAltIndex(ctx, alts)
+	idx.gen = spec.gen
 	if ctx.altIdx == nil {
 		ctx.altIdx = make(map[altIndexKey]*altIndex)
 	}
@@ -58,9 +62,6 @@ func buildAltIndex(ctx *Context, alts []*AltSpec) *altIndex {
 		n:     len(alts),
 		byTin: make(map[Tin][]int32),
 		wild:  make([]int32, 0),
-	}
-	if 0 < len(alts) {
-		idx.head = alts[0]
 	}
 	maxTin := Tin(-1)
 	maxSlots := 0
@@ -106,22 +107,19 @@ func buildAltIndex(ctx *Context, alts []*AltSpec) *altIndex {
 			idx.byTin[tin] = append(list, int32(aI))
 		}
 	}
-	if 0 < len(idx.wild) {
-		for tin, list := range idx.byTin {
-			idx.byTin[tin] = mergeAltLists(list, idx.wild)
-		}
-	}
 	return idx
 }
 
-// candidates is the ordered list of alternates that can take tin at
-// position 0. Never nil: an empty list means none can.
-func (idx *altIndex) candidates(tin Tin) []int32 {
+// named is the ascending list of alternates naming tin at position 0,
+// never nil; the wildcards are idx.wild, walked beside it.
+func (idx *altIndex) named(tin Tin) []int32 {
 	if list, ok := idx.byTin[tin]; ok {
 		return list
 	}
-	return idx.wild
+	return noAlts
 }
+
+var noAlts = []int32{}
 
 // expects reports whether some alternate names tin at the lookahead
 // slot: the match-token gate.
@@ -140,20 +138,4 @@ func hasTin(tins []Tin, want Tin) bool {
 		}
 	}
 	return false
-}
-
-// mergeAltLists merges two ascending index lists, keeping order.
-func mergeAltLists(a, b []int32) []int32 {
-	out := make([]int32, 0, len(a)+len(b))
-	i, j := 0, 0
-	for i < len(a) || j < len(b) {
-		if j >= len(b) || (i < len(a) && a[i] < b[j]) {
-			out = append(out, a[i])
-			i++
-		} else {
-			out = append(out, b[j])
-			j++
-		}
-	}
-	return out
 }

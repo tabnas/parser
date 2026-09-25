@@ -822,9 +822,11 @@ func (j *Tabnas) Merge(other *Tabnas) (result *Tabnas, err error) {
 				rs.ac = append(rs.ac, rec.ac...)
 				for _, pa := range rec.open {
 					rs.open = append(rs.open, resolveMergeAlt(t, pa))
+					rs.gen++
 				}
 				for _, pa := range rec.close {
 					rs.close = append(rs.close, resolveMergeAlt(t, pa))
+					rs.gen++
 				}
 			})
 			if err := NormAlts(t.parser.RSM[name]); err != nil {

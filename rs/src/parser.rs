@@ -312,10 +312,16 @@ impl PreparedRoute {
 /// a token takes that token. A slot with a name the options do not know
 /// keeps the tins it was installed with: a parser build must not mint a
 /// token. Alternates built from tins directly carry no names and are left
-/// alone.
+/// alone, and so is a named slot whose `s` was set by hand since it was
+/// installed (it no longer equals what the names last resolved to,
+/// `s_bound`): the edit wins over the names, as it did before the names
+/// were kept.
 fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
     for alt in spec.open.iter_mut().chain(spec.close.iter_mut()) {
         for (slot, names) in alt.s_names.iter().enumerate() {
+            if alt.s.get(slot) != alt.s_bound.get(slot) {
+                continue;
+            }
             let mut tins = Vec::with_capacity(names.len());
             let mut resolvable = true;
             for name in names {
@@ -340,18 +346,23 @@ fn resolve_slot_names(spec: &mut RuleSpec, options: &Options) {
 /// Alternates indexed by the tin they can take at position 0.
 ///
 /// `by_tin` maps each tin some alternate names at position 0 to the
-/// ordered indices of the alternates that can take it: those naming it,
-/// with the alternates that constrain nothing at position 0 (an empty
-/// sequence, an empty slot, or a slot naming `#AA`, exactly the slots
-/// `slot_matches` accepts every tin for) merged in at their own places.
-/// So a list is the original scan with the alternates that cannot take
-/// the first token left out, and first-match-wins is preserved. `wild`
-/// is the list for a tin no alternate names.
+/// ascending indices of the alternates naming it; `wild` holds the
+/// alternates that constrain nothing at position 0 (an empty sequence,
+/// an empty slot, or a slot naming `#AA`, exactly the slots
+/// `slot_matches` accepts every tin for), which are candidates for every
+/// tin. The step walks the two lists together in index order, so the
+/// candidates for a tin are the original scan with the alternates that
+/// cannot take it left out, and first-match-wins is preserved. The lists
+/// stay separate rather than being merged per tin: a rule with W
+/// wildcard alternates and T distinct first tins would otherwise cost
+/// W×T entries.
 #[derive(Debug, Default)]
 struct AltIndex {
     by_tin: HashMap<Tin, Vec<usize>>,
     wild: Vec<usize>,
 }
+
+const NO_ALTS: &[usize] = &[];
 
 impl AltIndex {
     fn of(alts: &[AltSpec]) -> Self {
@@ -372,28 +383,13 @@ impl AltIndex {
                 _ => wild.push(idx),
             }
         }
-        if !wild.is_empty() {
-            for list in by_tin.values_mut() {
-                let mut merged = Vec::with_capacity(list.len() + wild.len());
-                let (mut i, mut j) = (0, 0);
-                while i < list.len() || j < wild.len() {
-                    if j >= wild.len() || (i < list.len() && list[i] < wild[j]) {
-                        merged.push(list[i]);
-                        i += 1;
-                    } else {
-                        merged.push(wild[j]);
-                        j += 1;
-                    }
-                }
-                *list = merged;
-            }
-        }
         AltIndex { by_tin, wild }
     }
 
-    /// The ordered alternates that can take `tin` at position 0.
-    fn candidates(&self, tin: Tin) -> &[usize] {
-        self.by_tin.get(&tin).map_or(&self.wild, Vec::as_slice)
+    /// The ascending alternates naming `tin` at position 0; the
+    /// wildcards are `wild`, walked beside them.
+    fn named(&self, tin: Tin) -> &[usize] {
+        self.by_tin.get(&tin).map_or(NO_ALTS, Vec::as_slice)
     }
 }
 
@@ -2233,29 +2229,43 @@ impl Parser {
             } else {
                 prepared.map(|prepared| prepared.first(is_open))
             };
-            let mut cands: Option<&[usize]> = None;
-            let mut ci = 0;
+            // The two candidate lists (alternates naming the first tin,
+            // and the wildcards), walked together in index order once
+            // selected.
+            let mut lists: Option<(&[usize], &[usize])> = None;
+            let (mut ni, mut wi) = (0, 0);
             let mut next_idx = 0;
             loop {
-                if cands.is_none() {
+                if lists.is_none() {
                     if let (Some(index), Some(t0)) = (first_index, context.t.first()) {
                         if t0.tin != TIN_BD {
-                            let list = index.candidates(t0.tin);
-                            while ci < list.len() && list[ci] < next_idx {
-                                ci += 1;
+                            let named = index.named(t0.tin);
+                            let wild = index.wild.as_slice();
+                            while ni < named.len() && named[ni] < next_idx {
+                                ni += 1;
                             }
-                            cands = Some(list);
+                            while wi < wild.len() && wild[wi] < next_idx {
+                                wi += 1;
+                            }
+                            lists = Some((named, wild));
                         }
                     }
                 }
-                let idx = match cands {
-                    Some(list) => {
-                        if list.len() <= ci {
+                let idx = match lists {
+                    Some((named, wild)) => {
+                        let n = named.get(ni).copied().unwrap_or(alts.len());
+                        let w = wild.get(wi).copied().unwrap_or(alts.len());
+                        if alts.len() <= n && alts.len() <= w {
                             // No remaining alternate can take the first token.
                             break;
                         }
-                        ci += 1;
-                        list[ci - 1]
+                        if n < w {
+                            ni += 1;
+                            n
+                        } else {
+                            wi += 1;
+                            w
+                        }
                     }
                     None => {
                         if alts.len() <= next_idx {

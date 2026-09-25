@@ -10,6 +10,7 @@ package tabnas
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -152,5 +153,45 @@ func TestAltIndexHandlesManyAlternates(t *testing.T) {
 	}
 	if _, err := j.Parse("a"); err == nil {
 		t.Fatal("a should be refused")
+	}
+}
+
+func TestAltIndexFollowsAlternatesReorderedDuringAParse(t *testing.T) {
+	// `top = item item`: the first item builds the index for item's open
+	// state; an action after it reorders item's alternates (same length,
+	// same first pointer); the second item must be parsed by the new
+	// order, not by the cached one.
+	j := altIndexInstance(nil)
+	ta := j.Token("#A")
+	second := true
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{P: "item"})
+		// The close pass runs once per child that returns: the first time
+		// it reorders item and pushes the second item, the next time it
+		// takes the end of the source.
+		rs.AddClose(&AltSpec{
+			C: func(*Rule, *Context) bool { return second },
+			P: "item",
+			A: func(r *Rule, ctx *Context) {
+				second = false
+				ctx.Inst.RSM()["item"].ModifyOpen(&AltModListOpts{Move: []int{1, 2}})
+			},
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	var seen []string
+	j.Rule("item", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{ta}}, C: func(*Rule, *Context) bool { return false }},
+			&AltSpec{S: [][]Tin{{ta}}, A: func(*Rule, *Context) { seen = append(seen, "second") }},
+			&AltSpec{S: [][]Tin{{ta}}, A: func(*Rule, *Context) { seen = append(seen, "third") }},
+		)
+		rs.AddClose(&AltSpec{})
+	})
+	if _, err := j.Parse("aa"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"second", "third"}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("alternates run %v, want %v", seen, want)
 	}
 }
