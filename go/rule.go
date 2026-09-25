@@ -196,12 +196,18 @@ type RuleSpec struct {
 	// was built as a bare struct literal and carries no order.
 	Def int
 
-	open  []*AltSpec    // Open-phase alternates, tried in order.
-	close []*AltSpec    // Close-phase alternates, tried in order.
-	bo    []StateAction // Before-open actions.
-	bc    []StateAction // Before-close actions.
-	ao    []StateAction // After-open actions.
-	ac    []StateAction // After-close actions.
+	open  []*AltSpec // Open-phase alternates, tried in order.
+	close []*AltSpec // Close-phase alternates, tried in order.
+
+	// gen counts the mutations of the two alternate lists. A parse
+	// Context caches a first-token index per rule state (altindex.go)
+	// and rebuilds it when this moves, so a list reordered by an action
+	// during a parse is seen by the next step through the rule.
+	gen uint64
+	bo  []StateAction // Before-open actions.
+	bc  []StateAction // Before-close actions.
+	ao  []StateAction // After-open actions.
+	ac  []StateAction // After-close actions.
 
 	// fnrefInstalled tracks which StateAction functions are already wired into
 	// each phase via wireStateActions, deduped by function pointer, so repeated
@@ -218,6 +224,7 @@ type RuleSpec struct {
 func (rs *RuleSpec) Clear() *RuleSpec {
 	rs.open = rs.open[:0]
 	rs.close = rs.close[:0]
+	rs.gen++
 	rs.bo = rs.bo[:0]
 	rs.bc = rs.bc[:0]
 	rs.ao = rs.ao[:0]
@@ -228,24 +235,28 @@ func (rs *RuleSpec) Clear() *RuleSpec {
 // AddOpen appends alternates to the open list (at the end).
 func (rs *RuleSpec) AddOpen(alts ...*AltSpec) *RuleSpec {
 	rs.open = append(rs.open, alts...)
+	rs.gen++
 	return rs
 }
 
 // AddClose appends alternates to the close list (at the end).
 func (rs *RuleSpec) AddClose(alts ...*AltSpec) *RuleSpec {
 	rs.close = append(rs.close, alts...)
+	rs.gen++
 	return rs
 }
 
 // PrependOpen inserts alternates at the beginning of the open list.
 func (rs *RuleSpec) PrependOpen(alts ...*AltSpec) *RuleSpec {
 	rs.open = append(alts, rs.open...)
+	rs.gen++
 	return rs
 }
 
 // PrependClose inserts alternates at the beginning of the close list.
 func (rs *RuleSpec) PrependClose(alts ...*AltSpec) *RuleSpec {
 	rs.close = append(alts, rs.close...)
+	rs.gen++
 	return rs
 }
 
@@ -261,12 +272,14 @@ type AltModListOpts struct {
 // Matches TS `rs.open(alts, mods)` where mods has delete/move/custom.
 func (rs *RuleSpec) ModifyOpen(mods *AltModListOpts) *RuleSpec {
 	rs.open = modifyAltList(rs.open, mods)
+	rs.gen++
 	return rs
 }
 
 // ModifyClose applies delete/move/custom modifications to the close alternates list.
 func (rs *RuleSpec) ModifyClose(mods *AltModListOpts) *RuleSpec {
 	rs.close = modifyAltList(rs.close, mods)
+	rs.gen++
 	return rs
 }
 
@@ -332,12 +345,14 @@ func (rs *RuleSpec) AddAC(action StateAction) *RuleSpec {
 // replace the open alternates contributed by earlier plugins.
 func (rs *RuleSpec) ClearOpen() *RuleSpec {
 	rs.open = nil
+	rs.gen++
 	return rs
 }
 
 // ClearClose removes this rule's close alternates (see ClearOpen).
 func (rs *RuleSpec) ClearClose() *RuleSpec {
 	rs.close = nil
+	rs.gen++
 	return rs
 }
 
@@ -1503,7 +1518,65 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	var unSaved relexPoint
 	var unTokens []*Token
 
-	for _, alt := range alts {
+	// First-token index. Once the first lookahead token is in hand, and
+	// the lexer is not renegotiating token identity (under relex an
+	// alternate may re-cut a token it does not name, so every alternate
+	// stays a candidate), only the alternates that can take that token
+	// at position 0 are tried, in their original order. Until the first
+	// fetch, alternates are tried in order as before: the first alternate
+	// with a sequence fetches the token, under this rule's own gate.
+	var index *altIndex
+	if !relex && rule != nil && rule.Spec != nil {
+		index = ctx.altIndex(rule.Spec, isOpen, alts)
+	}
+	// The two candidate lists (alternates naming the first tin, and the
+	// wildcards), walked together in index order once selected, and the
+	// tin they were selected for.
+	var named, wild []int32
+	selected := false
+	var keyTin Tin
+	nI, wI := 0, 0
+	altI := 0
+	for altI < len(alts) {
+		if !selected && index != nil && 0 < len(ctx.T) {
+			t0 := ctx.T[0]
+			if t0 != nil && !t0.IsNoToken() && t0.Tin != TinBD {
+				keyTin = t0.Tin
+				named, wild = index.named(keyTin), index.wild
+				selected = true
+				nI, wI = 0, 0
+				for nI < len(named) && int(named[nI]) < altI {
+					nI++
+				}
+				for wI < len(wild) && int(wild[wI]) < altI {
+					wI++
+				}
+			}
+		}
+		if selected {
+			n, w := len(alts), len(alts)
+			if nI < len(named) {
+				n = int(named[nI])
+			}
+			if wI < len(wild) {
+				w = int(wild[wI])
+			}
+			if len(alts) <= n && len(alts) <= w {
+				// No remaining alternate can take the first token.
+				break
+			}
+			if n < w {
+				altI = n
+				nI++
+			} else {
+				altI = w
+				wI++
+			}
+		}
+		alt := alts[altI]
+		if !selected {
+			altI++
+		}
 		matched := 0
 		cond := true
 		unI = -1
@@ -1694,6 +1767,26 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				}
 			}
 			unI = -1
+		}
+
+		// A condition can retag the first token, or replace it, and then
+		// reject. The lists were selected for a tin the token no longer
+		// has, and the plain scan would test every later alternate against
+		// the token as it is now: resume after this alternate, and select
+		// again at the top of the loop. A condition can also edit the
+		// rule's alternates (ModifyOpen, changing a later alternate's slot
+		// in place): the index then no longer describes them, so the rest
+		// of the scan reads every remaining alternate as it now is.
+		stale := index != nil && index.gen != rule.Spec.gen
+		if stale {
+			index = nil
+			ctx.forgetAltSlots(alts)
+		}
+		if selected {
+			if stale || len(ctx.T) == 0 || ctx.T[0] == nil || ctx.T[0].IsNoToken() || ctx.T[0].Tin != keyTin {
+				selected = false
+				altI++
+			}
 		}
 	}
 

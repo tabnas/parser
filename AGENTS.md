@@ -768,7 +768,8 @@ file to one job:
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
 `ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only what is
 language-neutral — `syntax.md` (syntax spec), `architecture.md`,
-`value-builtins.md`, and the five Rust-port documents
+`value-builtins.md`, `STYLE-GUIDE.md` (how every page is written, and
+what the prose gate enforces), and the five Rust-port documents
 (`rust-port-feasibility.md`, `rust-callback-porting-strategy.md`,
 `rust-port-risks.md`, `engine-changes-for-portability.md`,
 `rust-port-implementation-plan.md`), which concern a prospective third

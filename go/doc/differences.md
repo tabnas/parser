@@ -105,6 +105,15 @@ Per-runtime notes:
   not "restore parity" by reinstating the scan on the want path: there
   is nothing on either side to be parity with.
 
+  Outside a want, both runtimes now answer the gate from a per-slot
+  column rather than a walk of the alternates: TS from `tcol`, built
+  when the rule is normalised, and Go from the per-parse index
+  (`go/altindex.go`), built once per rule state per parse from the
+  slots as the parsing instance resolves them, so a token-set override
+  is honoured there too. The same index gives `ParseAlts` the
+  alternates that can take the first token, in order, so a rule with
+  hundreds of alternates no longer costs a scan of every one per step.
+
   Until the TS lexer gained its second pass, the two orders differed and
   the difference was observable: an eager matcher earlier in tin order
   beat a position-expected one later in TS but not in Go. That entry has

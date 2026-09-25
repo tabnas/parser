@@ -211,6 +211,18 @@ pub struct Condition {
 #[derive(Clone, Default)]
 pub struct AltSpec {
     pub s: Vec<Vec<Tin>>,
+    /// The token names each `s` slot was declared with, when the
+    /// alternate came from a serialized grammar; empty for an alternate
+    /// built from tins directly. A slot naming a token set (`#KEY`,
+    /// `#VAL`, a custom set) is resolved again against the instance's
+    /// options whenever the parser is rebuilt, so a set overridden after
+    /// the alternate was installed still reaches it, as in TypeScript and
+    /// Go (tabnas/parser#217).
+    pub s_names: Vec<Vec<String>>,
+    /// What `s_names` last resolved to, slot by slot. A slot whose `s`
+    /// no longer equals this was set by hand after the alternate was
+    /// installed, and that edit wins: the names are not applied over it.
+    pub s_bound: Vec<Vec<Tin>>,
     pub p: Option<String>,
     pub p_fn: Option<AltNext>,
     pub p_match: Option<AltNextWithMatch>,

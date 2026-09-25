@@ -180,7 +180,10 @@ case, where both instances installed the same grammar plugin. Fields
 compare by reference or, since each plugin run creates fresh closures,
 by function source text; the source-based comparison applies only to
 unconditioned alts (where the duplicate is unreachable anyway, so the
-dedupe cannot change behavior). Lifecycle handlers dedupe the same way.
+dedupe cannot change behavior). Each position must also declare the same
+names: a merged alt keeps the token-set names it declared and follows a
+later override of those sets, so `#ALPHA` and `#BETA` with the same
+members today are two alts, not one. Lifecycle handlers dedupe the same way.
 Note a handler whose behavior differs *only* through its closure
 environment (for example, built by a shared helper factory on both sides)
 dedupes to one copy. Token references are translated by name into the

@@ -1096,6 +1096,7 @@ func (j *Tabnas) include(groups ...string) *Tabnas {
 	for _, rs := range j.parser.RSM {
 		rs.open = filterAltsInclude(rs.open, includeSet)
 		rs.close = filterAltsInclude(rs.close, includeSet)
+		rs.gen++
 	}
 	return j
 }
@@ -1109,6 +1110,7 @@ func (j *Tabnas) exclude(groups ...string) *Tabnas {
 	for _, rs := range j.parser.RSM {
 		rs.open = filterAlts(rs.open, excludeSet)
 		rs.close = filterAlts(rs.close, excludeSet)
+		rs.gen++
 	}
 	return j
 }

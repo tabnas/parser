@@ -96,7 +96,7 @@ reset:
 	cd go && go clean -cache && go build ./... && go test -v ./...
 	cd rs && cargo clean && cargo build --all-targets && cargo test --all-targets
 
-# The prose gate (see docs/STYLE-GUIDE.md). Vale over the reader-facing
+# The prose gate (see doc/STYLE-GUIDE.md). Vale over the reader-facing
 # pages, at the levels set in .vale.ini, on the same file list
 # ts/test/docs.test.js reads. Warnings are advisory, errors fail.
 #
@@ -110,7 +110,7 @@ prose:
 	vale --minAlertLevel=error $$(node ts/scripts/gated-docs.cjs)
 	node ts/scripts/vale-counts.cjs
 
-# Re-measure the counts .vale.ini and docs/STYLE-GUIDE.md record, after
+# Re-measure the counts .vale.ini and doc/STYLE-GUIDE.md record, after
 # a change to the pages or the rules moves them.
 prose-counts:
 	node ts/scripts/vale-counts.cjs --write

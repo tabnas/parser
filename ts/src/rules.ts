@@ -222,6 +222,7 @@ class RuleSpec {
     ao: [] as StateAction[],            // After-open actions.
     ac: [] as StateAction[],            // After-close actions.
     tcol: [] as Tin[][][],              // Collated lookahead tins: [stateI][tokenI][tins].
+    first: [] as AltIndex[],            // First-token index: [stateI] -> alternates by position-0 tin.
     fnref: {} as FuncRefMap<Function>,  // Named function references (@name handlers).
   }
   cfg: Config                           // Resolved configuration.
@@ -353,7 +354,21 @@ class RuleSpec {
       alts.length = 0
     }
 
-    alts[inject](...aa)
+    // Inject IN PLACE, and without a spread. In place, because process()
+    // reads def.open before the before-actions run, so an alternate a
+    // `bo` hook installs for the pass about to run has to land in the
+    // array that pass holds (a fresh array from concat left it scanning
+    // the stale one). Without a spread, because a spread passes every
+    // alternate as an argument, and a compiled grammar can hand over
+    // more alternates than the engine's argument limit allows
+    // (RangeError: Maximum call stack size exceeded).
+    if ('push' === inject) {
+      for (let aI = 0; aI < aa.length; aI++) alts.push(aa[aI])
+    } else {
+      const old = alts.splice(0, alts.length)
+      for (let aI = 0; aI < aa.length; aI++) alts.push(aa[aI])
+      for (let oI = 0; oI < old.length; oI++) alts.push(old[oI])
+    }
 
     alts = this.def[altState] = modlist(alts, mods)
 
@@ -506,6 +521,14 @@ class RuleSpec {
     for (let tI = 0; tI < maxClose; tI++) columns[1][tI] = columns[1][tI] || []
 
     this.def.tcol = columns
+
+    // First-token index, per state. parse_alts consults it once the
+    // first lookahead token is in hand, so a rule with many alternates
+    // tries only those that can take that token at position 0.
+    this.def.first = [
+      indexFirst(this.def.open as NormAltSpec[]),
+      indexFirst(this.def.close as NormAltSpec[]),
+    ]
 
     function collate(
       stateI: number,
@@ -1239,6 +1262,58 @@ function attemptRecover(
   return undefined
 }
 
+// Alternates indexed by the tin they can take at position 0.
+// `byTin` maps each tin some alternate names at position 0 to the
+// ascending indices of the alternates naming it; `wild` holds the
+// alternates that constrain nothing at position 0 (an empty sequence,
+// or a wildcard), which are candidates for every tin. parse_alts walks
+// the two lists together in index order, so the candidates for a tin
+// are exactly the original scan with the alternates that cannot take
+// it left out, and first-match-wins is preserved. The lists stay
+// separate rather than being merged per tin: a rule with W wildcard
+// alternates and T distinct first tins would otherwise cost W×T entries.
+//
+// An index answers only for the array it was built from, at the length
+// it had then (`alts`, `n`). A before-action can replace a rule's list
+// mid-pass (a custom list modifier returns a fresh array), and the pass
+// that ran it still scans the array it captured; an array edited in
+// place without norm() changes length. Either way parse_alts scans that
+// array in full rather than trust an index built for another.
+type AltIndex = {
+  alts: NormAltSpec[]
+  n: number
+  byTin: Map<Tin, number[]>
+  wild: number[]
+}
+
+const NO_ALTS: number[] = []
+
+function indexFirst(alts: NormAltSpec[]): AltIndex {
+  const byTin = new Map<Tin, number[]>()
+  const wild: number[] = []
+  for (let aI = 0; aI < alts.length; aI++) {
+    const a = alts[aI]
+    // No position-0 constraint: an empty sequence, or a position that
+    // resolved to the wildcard (normalt sets S[0] to null for #AA and
+    // for a position with no tins).
+    if (0 === (a.sN | 0) || null == a.S || null == a.S[0]) {
+      wild.push(aI)
+      continue
+    }
+    for (const tin of a.t[0] ?? []) {
+      let list = byTin.get(tin)
+      if (null == list) {
+        list = []
+        byTin.set(tin, list)
+      }
+      // A position naming one tin twice (`#TX #TX`) must not try the
+      // alternate twice: a condition function could observe it.
+      if (list[list.length - 1] !== aI) list.push(aI)
+    }
+  }
+  return { alts, n: alts.length, byTin, wild }
+}
+
 function parse_alts(
   is_open: boolean,
   alts: NormAltSpec[],
@@ -1275,7 +1350,6 @@ function parse_alts(
   // S (the string table) is shadowed by alt.S inside the loop below.
   const UNEXPECTED = S.unexpected
 
-  // TODO: replace with lookup map
   let len = alts.length
   const NOTOKEN = ctx.NOTOKEN
   const tbuf = ctx.t
@@ -1307,7 +1381,61 @@ function parse_alts(
 
   let deepest = 0
 
-  for (altI = 0; altI < len; altI++) {
+  // First-token index. Once the first lookahead token is in hand, and
+  // the lexer is not renegotiating token identity (under relex an
+  // alternate may re-cut a token it does not name, so every alternate
+  // stays a candidate), only the alternates that can take that token
+  // at position 0 are tried, in their original order. Until the first
+  // fetch, alternates are tried in order as before: the first alternate
+  // with a sequence fetches the token, under this rule's own gate.
+  const built: AltIndex | undefined = RELEX
+    ? undefined
+    : (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
+  let first: AltIndex | undefined =
+    null != built && built.alts === alts && built.n === len ? built : undefined
+  // The two candidate lists (alternates naming the first tin, and the
+  // wildcards), walked together in index order once selected, and the
+  // tin they were selected for.
+  let named: number[] | null = null
+  let wild: number[] = NO_ALTS
+  let nI = 0
+  let wI = 0
+  let keyTin: Tin = BD // Never a key: the lists are not selected for #BD.
+
+  altI = 0
+  while (altI < len) {
+    if (null == named && null != first) {
+      const t0 = tbuf[0]
+      if (null != t0 && NOTOKEN !== t0 && BD !== t0.tin) {
+        keyTin = t0.tin
+        named = first.byTin.get(keyTin) ?? NO_ALTS
+        wild = first.wild
+        nI = 0
+        wI = 0
+        while (nI < named.length && named[nI] < altI) nI++
+        while (wI < wild.length && wild[wI] < altI) wI++
+      }
+    }
+    if (null != named) {
+      const n = nI < named.length ? named[nI] : len
+      const w = wI < wild.length ? wild[wI] : len
+      if (n >= len && w >= len) {
+        // No remaining alternate can take the first token: the scan is
+        // exhausted, and altI says so, as it does when the plain scan
+        // runs off the end (the parse log reads the match from it).
+        altI = len
+        cond = false
+        alt = null
+        break
+      }
+      if (n < w) {
+        altI = n
+        nI++
+      } else {
+        altI = w
+        wI++
+      }
+    }
     alt = alts[altI] as NormAltSpec
 
     // Number of positions that matched in this alt. Tracked so the
@@ -1541,6 +1669,27 @@ function parse_alts(
           ctx.sub.lex.map((sub) => sub(unTkn, rule, ctx))
         }
         unI = -1
+      }
+    }
+    // A condition can also edit the rule's alternates (open() with a
+    // custom modifier changing a later alternate in place): norm() then
+    // builds a new index, and the one this scan holds no longer describes
+    // them, so the rest of the scan reads every remaining alternate as it
+    // now is.
+    const stale = null != first &&
+      first !== (rule.spec.def.first as AltIndex[] | undefined)?.[is_open ? 0 : 1]
+    if (stale) first = undefined
+    if (null == named) altI++
+    else {
+      // A condition can retag the first token, or replace it, and then
+      // reject. The lists were selected for a tin the token no longer
+      // has, and the plain scan would test every later alternate against
+      // the token as it is now: resume after this alternate, and select
+      // again at the top of the loop.
+      const t0 = tbuf[0]
+      if (stale || null == t0 || NOTOKEN === t0 || keyTin !== t0.tin) {
+        named = null
+        altI++
       }
     }
   }

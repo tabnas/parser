@@ -536,7 +536,9 @@ fn parse_alt(
         };
         for slot in slots {
             let mut tins = Vec::new();
+            let mut names = Vec::new();
             for name in slot.split_whitespace() {
+                names.push(name.to_string());
                 if let Some(set) = options.token_set.get(name.trim_start_matches('#')) {
                     tins.extend(set.iter().copied());
                 } else {
@@ -547,7 +549,13 @@ fn parse_alt(
                     );
                 }
             }
+            // The names are kept so a token set overridden later still
+            // reaches this alternate, and what they resolved to beside
+            // them, so a slot set by hand afterwards is left alone: see
+            // `AltSpec::s_names` and `AltSpec::s_bound`.
+            alt.s_bound.push(tins.clone());
             alt.s.push(tins);
+            alt.s_names.push(names);
         }
     }
     match map.get("b") {

@@ -456,6 +456,41 @@ describe('merge', () => {
     )
   })
 
+
+  it('keeps-alts-whose-different-sets-resolve-alike', () => {
+    // Two alts that differ only in the set they name are the same alt
+    // while the sets agree, and different ones once either set is
+    // overridden on the merged instance. The merge keeps both, or the
+    // override would reach only the survivor.
+    const side = (tag, set) => {
+      const tn = new Tabnas({ tag, tokenSet: { [set]: ['#NR'] } })
+      tn.rule('val', (rs) =>
+        rs.open([{ s: ['#' + set], a: (r) => (r.node = r.o0.val) }]),
+      )
+      return tn
+    }
+    for (const m of [
+      side('A', 'ALPHA').merge(side('B', 'BETA')),
+      side('B', 'BETA').merge(side('A', 'ALPHA')),
+    ]) {
+      assert.deepEqual(
+        m.rule('val').def.open.map((alt) => alt.s[0]),
+        ['#ALPHA', '#BETA'],
+      )
+      assert.equal(m.parse('1'), 1)
+      m.options({ tokenSet: { BETA: ['#ST'] } })
+      assert.equal(m.parse('1'), 1)
+      assert.equal(m.parse('"s"'), 's')
+    }
+
+    // Declared alike, they are one alt, however each spelled it.
+    const c = new Tabnas({ tag: 'A', tokenSet: { ALPHA: ['#NR'] } })
+    c.rule('val', (rs) => rs.open([{ s: '#ALPHA', a: (r) => (r.node = r.o0.val) }]))
+    const d = new Tabnas({ tag: 'B', tokenSet: { ALPHA: ['#NR'] } })
+    d.rule('val', (rs) => rs.open([{ s: ['#ALPHA'], a: (r) => (r.node = r.o0.val) }]))
+    assert.equal(c.merge(d).rule('val').def.open.length, 1)
+  })
+
 })
 
 

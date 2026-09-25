@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 Richard Rodger and other contributors, MIT License */
 
-// The fast half of the prose gate (docs/STYLE-GUIDE.md).
+// The fast half of the prose gate (doc/STYLE-GUIDE.md).
 //
 // Vale is the other half, run by `make prose` wherever vale is installed.
 // The two read ONE file list (ts/scripts/gated-docs.cjs) and ONE banned list
@@ -34,7 +34,7 @@ const REPO = Path.join(__dirname, '..', '..')
 // which `the-guide-covers-every-banned-pattern` holds to this file.
 const REJECT = Path.join(
   REPO, '.vale', 'styles', 'config', 'vocabularies', 'Tabnas', 'reject.txt')
-const GUIDE = Path.join(REPO, 'docs', 'STYLE-GUIDE.md')
+const GUIDE = Path.join(REPO, 'doc', 'STYLE-GUIDE.md')
 
 
 function lf(s) {
@@ -368,7 +368,7 @@ describe('docs-style', () => {
       }
     }
     Assert.deepEqual(hits, [],
-      `banned phrases (docs/STYLE-GUIDE.md):\n${hits.join('\n')}`)
+      `banned phrases (doc/STYLE-GUIDE.md):\n${hits.join('\n')}`)
   })
 
 
@@ -386,7 +386,7 @@ describe('docs-style', () => {
         })
     }
     Assert.deepEqual(hits, [],
-      `em dashes in prose (docs/STYLE-GUIDE.md):\n${hits.join('\n')}`)
+      `em dashes in prose (doc/STYLE-GUIDE.md):\n${hits.join('\n')}`)
   })
 
 
@@ -428,7 +428,7 @@ describe('docs-style', () => {
     }
 
     Assert.deepEqual(faults, [],
-      `quoted output rewritten (docs/STYLE-GUIDE.md):\n${faults.join('\n')}`)
+      `quoted output rewritten (doc/STYLE-GUIDE.md):\n${faults.join('\n')}`)
   })
 
   test('we-appears-only-in-tutorials', () => {
@@ -494,7 +494,7 @@ describe('docs-style', () => {
       }
     }
     Assert.deepEqual(hits, [],
-      `exclamation marks (docs/STYLE-GUIDE.md):\n${hits.join('\n')}`)
+      `exclamation marks (doc/STYLE-GUIDE.md):\n${hits.join('\n')}`)
   })
 
 
@@ -517,7 +517,7 @@ describe('docs-style', () => {
         })
     }
     Assert.deepEqual(hits, [],
-      `emoji in documentation (docs/STYLE-GUIDE.md):\n${hits.join('\n')}`)
+      `emoji in documentation (doc/STYLE-GUIDE.md):\n${hits.join('\n')}`)
   })
 
 

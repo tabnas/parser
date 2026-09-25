@@ -83,6 +83,18 @@ predictable, and it is the main thing a grammar author has to design
 around: a grammar has to be resolvable without exploring alternatives,
 however far ahead it needs to look to do so.
 
+The scan itself is indexed. Each runtime keeps, per rule state, the
+alternates that can take each token at their first position, so once the
+first lookahead token is in hand only those alternates are tried, in
+their original order; alternates with no first-position constraint (an
+empty sequence, or a wildcard) stay candidates for every token. The
+result is the one the full scan gives, and a rule with hundreds of
+alternates costs what its handful of candidates cost. The lexer's
+match-token gate (which custom match tokens the current rule position
+can accept) reads the same per-slot columns rather than walking the
+alternates. Under negotiated lexing (`lex.relex`) every alternate stays
+a candidate, since an alternate may re-cut a token it does not name.
+
 ## Instances and derivation
 
 A parser **instance** bundles a resolved configuration, a token table, a

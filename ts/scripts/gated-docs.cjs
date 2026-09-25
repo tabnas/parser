@@ -6,7 +6,7 @@ const REPO = Path.join(__dirname, '..', '..')
 
 // The language-neutral pages under doc/. The Rust-port series and the
 // feasibility reports are working documents for contributors, and are
-// deliberately out: see "The published set" in docs/STYLE-GUIDE.md.
+// deliberately out: see "The published set" in doc/STYLE-GUIDE.md.
 const NEUTRAL = [
   'syntax.md',
   'architecture.md',

@@ -208,12 +208,13 @@ func mergeOptionsCommutative(a, b *Options) (Options, error) {
 // instance: S is carried as token names, with sort metadata for the
 // interleave comparator.
 type portableAlt struct {
-	alt   AltSpec    // Value copy with S nil'd (names carry the sequence).
-	names [][]string // Per-position token names, original order.
-	keys  []string   // Canonical per-position keys (sorted, joined names).
-	comp  []int      // Complexity presence vector.
-	gkey  string     // Sorted, joined group tags.
-	tag   string     // Source instance tag (final tie-break).
+	alt      AltSpec    // Value copy with S nil'd (names carry the sequence).
+	names    [][]string // Per-position token names, original order.
+	keys     []string   // Canonical per-position keys (sorted, joined names).
+	declared []string   // Per-position declared names (SNames), sorted and joined; the key where none.
+	comp     []int      // Complexity presence vector.
+	gkey     string     // Sorted, joined group tags.
+	tag      string     // Source instance tag (final tie-break).
 }
 
 // mergeRuleRecord is the portable form of one rule from one side.
@@ -243,6 +244,18 @@ func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
 		sorted := append([]string{}, posNames...)
 		sort.Strings(sorted)
 		keys[i] = strings.Join(sorted, " ")
+	}
+	// What each position was declared as, for identicalMergeAlts: its
+	// SNames where the grammar named it, else its key.
+	declared := make([]string, len(alt.S))
+	for i := range alt.S {
+		if i < len(alt.SNames) && 0 < len(alt.SNames[i]) {
+			sorted := append([]string{}, alt.SNames[i]...)
+			sort.Strings(sorted)
+			declared[i] = strings.Join(sorted, " ")
+		} else {
+			declared[i] = keys[i]
+		}
 	}
 
 	gtags := splitGroupTags(alt.G)
@@ -276,7 +289,7 @@ func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
 	}
 
 	return portableAlt{
-		alt: clone, names: names, keys: keys,
+		alt: clone, names: names, keys: keys, declared: declared,
 		comp: comp, gkey: strings.Join(gtags, ","), tag: tag,
 	}
 }
@@ -353,9 +366,17 @@ func compareMergeAlts(a, b portableAlt) int {
 }
 
 // identicalMergeAlts reports whether two alts from different sides are
-// the same alt (shared-base-plugin case): same token keys and group
-// tags, behavior fields equal by function identity, data props equal
-// by value. Such pairs are emitted once.
+// the same alt (shared-base-plugin case): same token keys, declared names
+// and group tags, behavior fields equal by function identity, data props
+// equal by value. Such pairs are emitted once.
+//
+// The declared names count as well as the keys, as in TS and Rust, where
+// a merged alt keeps the set names it declared and follows a later
+// override of them: `#ALPHA` and `#BETA` resolving to the same tins today
+// are different alts once either set is overridden. The merged Go alt is
+// flattened to token names (makePortable drops SNames), so here the second
+// of such a pair can never match; it is kept so the merged rule holds the
+// same alternates in every runtime.
 //
 // Unlike TS (where function reference identity is exact), Go closures
 // built from the same literal share one code pointer even when they
@@ -372,7 +393,7 @@ func identicalMergeAlts(a, b portableAlt) bool {
 		return false
 	}
 	for i := range a.keys {
-		if a.keys[i] != b.keys[i] {
+		if a.keys[i] != b.keys[i] || a.declared[i] != b.declared[i] {
 			return false
 		}
 	}
@@ -822,9 +843,11 @@ func (j *Tabnas) Merge(other *Tabnas) (result *Tabnas, err error) {
 				rs.ac = append(rs.ac, rec.ac...)
 				for _, pa := range rec.open {
 					rs.open = append(rs.open, resolveMergeAlt(t, pa))
+					rs.gen++
 				}
 				for _, pa := range rec.close {
 					rs.close = append(rs.close, resolveMergeAlt(t, pa))
+					rs.gen++
 				}
 			})
 			if err := NormAlts(t.parser.RSM[name]); err != nil {

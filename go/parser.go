@@ -114,6 +114,13 @@ type Context struct {
 	tokenSetDyn bool
 	altSlots    map[*AltSpec][][]Tin
 
+	// altIdx caches, for the duration of one parse, the first-token index
+	// and the per-slot gate columns of each rule state the parse consults
+	// (see altindex.go). Per-Context for the same reason as altSlots: it
+	// is built from the re-resolved slots, and a per-parse cache needs no
+	// invalidation and no lock.
+	altIdx map[altIndexKey]*altIndex
+
 	// parseErrDiag freezes the structured-diagnostic context (rule stack,
 	// failing rule, expected tokens) at the moment ctx.ParseErr is set —
 	// rule.Process keeps mutating RS/RSI and flips the rule state after
@@ -148,6 +155,18 @@ func (ctx *Context) setT(i int, tkn *Token) {
 func (ctx *Context) dropT(i int) {
 	for j := i; j < len(ctx.T); j++ {
 		ctx.setT(j, NoToken)
+	}
+}
+
+// forgetAltSlots drops what altS remembered for these alternates, so the
+// next altS reads them again. A rule's alternates can be edited in place
+// mid-parse (ModifyOpen with a custom modifier rewriting an alternate's S
+// and SNames), and the index resolves every alternate of a rule at once
+// where the scan once reached each in turn, so an edit made after that
+// must be read, not the slots remembered from before it.
+func (ctx *Context) forgetAltSlots(alts []*AltSpec) {
+	for _, alt := range alts {
+		delete(ctx.altSlots, alt)
 	}
 }
 

@@ -126,6 +126,12 @@ both JSON and parser corpora. Additional compiler-consumer gates compare Rust
 against TypeScript over pure-data grammars emitted by the current ABNF, EBNF,
 and GBNF compilers.
 
+A slot that names a token set (`#KEY`, `#VAL`, a custom set) keeps its
+names on the alternate and is resolved again against the instance's
+options whenever the parser is rebuilt, so a set overridden after the
+alternate was installed reaches it, as in TypeScript and Go
+(tabnas/parser#217).
+
 Cost, not only answers, is tracked against the canonical runtime. A rule
 with N elements is flattened by the tree builders once per level of the
 repetition that produced it, in every runtime: TypeScript spreads each
