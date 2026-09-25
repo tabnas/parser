@@ -1780,6 +1780,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 		stale := index != nil && index.gen != rule.Spec.gen
 		if stale {
 			index = nil
+			ctx.forgetAltSlots(alts)
 		}
 		if selected {
 			if stale || len(ctx.T) == 0 || ctx.T[0] == nil || ctx.T[0].IsNoToken() || ctx.T[0].Tin != keyTin {

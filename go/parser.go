@@ -158,6 +158,18 @@ func (ctx *Context) dropT(i int) {
 	}
 }
 
+// forgetAltSlots drops what altS remembered for these alternates, so the
+// next altS reads them again. A rule's alternates can be edited in place
+// mid-parse (ModifyOpen with a custom modifier rewriting an alternate's S
+// and SNames), and the index resolves every alternate of a rule at once
+// where the scan once reached each in turn, so an edit made after that
+// must be read, not the slots remembered from before it.
+func (ctx *Context) forgetAltSlots(alts []*AltSpec) {
+	for _, alt := range alts {
+		delete(ctx.altSlots, alt)
+	}
+}
+
 func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 	if !ctx.tokenSetDyn || alt.SNames == nil || ctx.Inst == nil {
 		return alt.S

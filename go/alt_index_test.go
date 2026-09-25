@@ -303,6 +303,43 @@ func TestAltIndexScansInFullOnceAConditionEditsTheAlternates(t *testing.T) {
 	}
 }
 
+func TestAltIndexScanRereadsSlotsAConditionEditsInPlace(t *testing.T) {
+	// With a token set on the instance, slots declared by name are resolved
+	// once per parse and remembered (Context.altS), and building the index
+	// resolves every alternate of the rule at once. A rejecting condition
+	// that edits a later alternate's slot and names in place must still be
+	// seen by the rest of the scan, as it was when each alternate was
+	// resolved only as the scan reached it.
+	a, b, c := "a", "b", "c"
+	j := Make(Options{
+		Rule:     &RuleOptions{Start: "top"},
+		Fixed:    &FixedOptions{Token: map[string]*string{"#A": &a, "#B": &b, "#C": &c}},
+		TokenSet: map[string][]string{"SET": {"#C"}},
+	})
+	ta, tb := j.Token("#A"), j.Token("#B")
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(
+			&AltSpec{S: [][]Tin{{ta}}, SNames: [][]string{{"#A"}}, C: func(r *Rule, _ *Context) bool {
+				r.Spec.ModifyOpen(&AltModListOpts{Custom: func(list []*AltSpec) []*AltSpec {
+					list[1].S = [][]Tin{{ta}}
+					list[1].SNames = [][]string{{"#A"}}
+					return list
+				}})
+				return false
+			}},
+			&AltSpec{S: [][]Tin{{tb}}, SNames: [][]string{{"#B"}}, A: func(r *Rule, _ *Context) { r.Node = "edited" }},
+		)
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	out, err := j.Parse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "edited" {
+		t.Fatalf("got %v, want %q", out, "edited")
+	}
+}
+
 func TestAltIndexGateColumnsAreSparse(t *testing.T) {
 	// A column is the tins a slot names, ascending and without repeats:
 	// a slot set by hand to a tin far beyond the registered ones must not

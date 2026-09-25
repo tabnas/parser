@@ -64,8 +64,13 @@ func (ctx *Context) altIndex(spec *RuleSpec, isOpen bool, alts []*AltSpec) *altI
 		return nil
 	}
 	key := altIndexKey{spec: spec, open: isOpen}
-	if idx, ok := ctx.altIdx[key]; ok && idx.gen == spec.gen && idx.n == len(alts) {
-		return idx
+	if idx, ok := ctx.altIdx[key]; ok {
+		if idx.gen == spec.gen && idx.n == len(alts) {
+			return idx
+		}
+		// The alternates changed since this index was built, and one
+		// edited in place looks unchanged to altS: read them all again.
+		ctx.forgetAltSlots(alts)
 	}
 	idx := buildAltIndex(ctx, alts)
 	idx.gen = spec.gen
