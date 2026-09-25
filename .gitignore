@@ -172,3 +172,5 @@ ci/bench/rustbench/Cargo.lock
 ci/bench/rustbench/target/
 ci/bench/profl/target/
 ci/bench/alloc/target/
+
+.DS_Store
