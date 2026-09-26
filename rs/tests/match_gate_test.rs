@@ -171,3 +171,59 @@ fn a_literal_the_slot_does_not_name_holds_nothing_back_in_the_eager_pass() {
     assert_eq!(error.code, "unexpected");
     assert_eq!(error.token.name, "#I");
 }
+
+#[test]
+fn an_excluded_alternate_does_not_decide_which_matcher_runs_first() {
+    // TypeScript collates the tokens a rule position expects (`tcol`)
+    // after `filterRules` has removed the alternates the options exclude,
+    // so an excluded alternate never puts a matcher in the
+    // position-expected pass. Counted here, the excluded `#KEY #CL`
+    // alternate made `val` expect `#ID`, and the `#ID` matcher, which also
+    // takes digits, claimed `1` ahead of the number matcher. toml, which
+    // excludes jsonic and sets KEY to `#ST #ID`, met exactly this once
+    // token sets were resolved against the options in force (0.12.3).
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"val","exclude":"off"},
+                "tokenSet":{"KEY":["#ID"]},
+                "match":{"token":{"#ID":"@/^[A-Za-z0-9_]+/"}}
+              },
+              "rule":{"val":{"open":[
+                {"s":"#KEY #CL","g":"off"},
+                {"s":"#NR","a":"@value$"}
+              ]}}
+            }"##,
+        )
+        .unwrap();
+    assert_eq!(parser.parse("1").unwrap(), Value::Number(1.0));
+}
+
+#[test]
+fn a_matcher_can_ask_whether_the_options_enable_an_alternate() {
+    // A custom matcher that reads a rule's alternates, to tell a key
+    // position from a value one, has to see the alternates TypeScript
+    // keeps, and TypeScript drops the excluded ones from the spec.
+    let mut options = tabnas::Options::default();
+    options.rule.exclude = "off".into();
+    let lexer = tabnas::Lexer::new("", options);
+    let on = tabnas::AltSpec {
+        g: "on".into(),
+        ..Default::default()
+    };
+    let off = tabnas::AltSpec {
+        g: "on, off".into(),
+        ..Default::default()
+    };
+    assert!(lexer.alt_enabled(&on));
+    assert!(!lexer.alt_enabled(&off));
+
+    let mut options = tabnas::Options::default();
+    options.rule.include = "on".into();
+    let lexer = tabnas::Lexer::new("", options);
+    assert!(lexer.alt_enabled(&on));
+    assert!(!lexer.alt_enabled(&tabnas::AltSpec::default()));
+}

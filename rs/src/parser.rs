@@ -402,19 +402,32 @@ struct ExpectedTins {
 }
 
 impl ExpectedTins {
-    fn of(spec: &RuleSpec) -> Self {
+    /// Collated over the alternates `options` enable, as TypeScript's
+    /// `tcol` is: `filterRules` has removed the others from the spec
+    /// before `norm()` collates it. An excluded alternate is never tried,
+    /// so it must not decide which matchers run in the position-expected
+    /// pass either. It did until 0.12.4, and a grammar that excludes a
+    /// group while redefining a set that group's alternates name had the
+    /// set's members expected where the grammar never takes them (toml
+    /// excludes jsonic and sets `KEY` to `#ST #ID`, and its `val` came to
+    /// expect `#ID`, whose matcher then claimed every number).
+    fn of(spec: &RuleSpec, options: &Options) -> Self {
         Self {
-            open: Self::by_slot(&spec.open),
-            close: Self::by_slot(&spec.close),
+            open: Self::by_slot(&spec.open, options),
+            close: Self::by_slot(&spec.close, options),
         }
     }
 
-    fn by_slot(alts: &[AltSpec]) -> Vec<Vec<Tin>> {
+    fn by_slot(alts: &[AltSpec], options: &Options) -> Vec<Vec<Tin>> {
+        let alts: Vec<&AltSpec> = alts
+            .iter()
+            .filter(|alt| groups_enabled(alt, options))
+            .collect();
         let slots = alts.iter().map(|alt| alt.s.len()).max().unwrap_or(0);
         (0..slots)
             .map(|slot| {
                 let mut expected = BTreeSet::new();
-                for alt in alts {
+                for alt in &alts {
                     if let Some(tins) = alt.s.get(slot) {
                         expected.extend(tins.iter().copied());
                     }
@@ -479,7 +492,7 @@ impl Parser {
         // the late binding TypeScript's `norm()` and Go's `altS` provide.
         let mut spec = spec;
         resolve_slot_names(&mut spec, &self.options);
-        let expected = ExpectedTins::of(&spec);
+        let expected = ExpectedTins::of(&spec, &self.options);
         let shared = RuleName::from(spec.name.as_str());
         let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
         // A replacement keeps the key's index, so it overwrites its own
@@ -4071,7 +4084,7 @@ fn listed(list: &str) -> impl Iterator<Item = &str> {
         .filter(|entry| !entry.is_empty())
 }
 
-fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
+pub(crate) fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // With neither an include nor an exclude list there is nothing to
     // test against, so every alternate is enabled whatever groups it
     // declares. That is the usual case, and it is asked once per

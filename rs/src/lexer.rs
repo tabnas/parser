@@ -226,6 +226,17 @@ impl<'a> Lexer<'a> {
         self.options.token_name(tin)
     }
 
+    /// Whether the options this lexer runs under enable `alt`: not when
+    /// `rule.exclude` names one of its groups, nor when `rule.include`
+    /// lists groups and it declares none of them. The parser skips such an
+    /// alternate, and TypeScript removes it from the rule spec
+    /// (`filterRules`) before anything reads the spec, so a custom matcher
+    /// that reads a rule's alternates, to tell a key position from a value
+    /// one, asks this to see the same alternates TypeScript does.
+    pub fn alt_enabled(&self, alt: &crate::AltSpec) -> bool {
+        crate::parser::groups_enabled(alt, &self.options)
+    }
+
     /// Construct a bad token at the current cursor.
     pub fn bad(&self, why: impl Into<String>) -> Token {
         let point = self.current_point();
