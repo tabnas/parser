@@ -85,7 +85,23 @@ var _ = &sharedMu // referenced only by opt-in constructs
 // ignore it; a row that defines options must validate it here, since
 // nothing upstream does.
 func newParser(opts string) (parseFn, error) {
-	off := false; tn := plug.Make(plug.Options{Color: &plug.ColorOptions{Active: &off}}); gs, err := plug.GrammarSpecFromJSON([]byte(opts)); if err != nil { return nil, &plug.TabnasError{Code: "grammar", Detail: "unreadable spec: " + err.Error()} }; if err := tn.Grammar(gs); err != nil { return nil, err }; start := tn.Config().RuleStart; if start == "" { start = "val" }; if tn.RSM()[start] == nil { return nil, &plug.TabnasError{Code: "grammar", Detail: "spec installs no start rule " + start + ", so no input could be validated against it"} }; return tn.Parse, nil
+	off := false
+	tn := plug.Make(plug.Options{Color: &plug.ColorOptions{Active: &off}})
+	gs, err := plug.GrammarSpecFromJSON([]byte(opts))
+	if err != nil {
+		return nil, &plug.TabnasError{Code: "grammar", Detail: "unreadable spec: " + err.Error()}
+	}
+	if err := tn.Grammar(gs); err != nil {
+		return nil, err
+	}
+	start := tn.Config().RuleStart
+	if start == "" {
+		start = "val"
+	}
+	if tn.RSM()[start] == nil {
+		return nil, &plug.TabnasError{Code: "grammar", Detail: "spec installs no start rule " + start + ", so no input could be validated against it"}
+	}
+	return tn.Parse, nil
 }
 
 // reply marshals a result document. Marshalling cannot fail for the
