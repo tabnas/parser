@@ -231,11 +231,15 @@ func fnPtr(fn any) uintptr {
 	return v.Pointer()
 }
 
-// makePortable translates one alt out of its source Tin space.
+// makePortable translates one alt out of its source Tin space. Each
+// position is read as the source matches it now (Tabnas.liveSlots), so a
+// position naming a token set carries the set's current members, an
+// override made on the side before the merge included.
 func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
-	names := make([][]string, len(alt.S))
-	keys := make([]string, len(alt.S))
-	for i, tins := range alt.S {
+	slots := side.liveSlots(alt)
+	names := make([][]string, len(slots))
+	keys := make([]string, len(slots))
+	for i, tins := range slots {
 		posNames := make([]string, len(tins))
 		for k, tin := range tins {
 			posNames[k] = side.TinName(tin)
@@ -247,8 +251,8 @@ func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
 	}
 	// What each position was declared as, for identicalMergeAlts: its
 	// SNames where the grammar named it, else its key.
-	declared := make([]string, len(alt.S))
-	for i := range alt.S {
+	declared := make([]string, len(slots))
+	for i := range slots {
 		if i < len(alt.SNames) && 0 < len(alt.SNames[i]) {
 			sorted := append([]string{}, alt.SNames[i]...)
 			sort.Strings(sorted)
@@ -263,10 +267,12 @@ func makePortable(alt *AltSpec, side *Tabnas, tag string) portableAlt {
 
 	clone := *alt
 	clone.S = nil
-	// Merge flattens each position to concrete token names (see `names`
-	// above), so the source alt's declared set references no longer describe
-	// the merged sequence — drop them rather than let them re-bind.
-	clone.SNames = nil
+	// The declared names travel with the alternate, as in TS and Rust. The
+	// merged instance holds every set either side defines (mergeTokenSets),
+	// so a position naming one reads the set when the merged instance
+	// parses, and an override of it made on the merged instance reaches
+	// the alternate.
+	clone.SNames = copyNames(alt.SNames)
 	clone.N = copyIntMap(alt.N)
 	clone.U = copyAnyMap(alt.U)
 	clone.K = copyAnyMap(alt.K)
@@ -299,6 +305,17 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func copyNames(names [][]string) [][]string {
+	if names == nil {
+		return nil
+	}
+	out := make([][]string, len(names))
+	for i, pos := range names {
+		out[i] = append([]string(nil), pos...)
+	}
+	return out
 }
 
 func copyIntMap(m map[string]int) map[string]int {
@@ -370,13 +387,11 @@ func compareMergeAlts(a, b portableAlt) int {
 // and group tags, behavior fields equal by function identity, data props
 // equal by value. Such pairs are emitted once.
 //
-// The declared names count as well as the keys, as in TS and Rust, where
-// a merged alt keeps the set names it declared and follows a later
-// override of them: `#ALPHA` and `#BETA` resolving to the same tins today
-// are different alts once either set is overridden. The merged Go alt is
-// flattened to token names (makePortable drops SNames), so here the second
-// of such a pair can never match; it is kept so the merged rule holds the
-// same alternates in every runtime.
+// The declared names count as well as the keys: a merged alt keeps the
+// set names it declared and follows a later override of them, so `#ALPHA`
+// and `#BETA` resolving to the same tins today are different alts once
+// either set is overridden, and the merged rule keeps both, in every
+// runtime.
 //
 // Unlike TS (where function reference identity is exact), Go closures
 // built from the same literal share one code pointer even when they
@@ -496,6 +511,7 @@ func mergeRuleRecords(side *Tabnas, tag string) map[string]*mergeRuleRecord {
 // share alt structs with the parent.
 func resolveMergeAlt(t *Tabnas, pa portableAlt) *AltSpec {
 	alt := pa.alt
+	alt.SNames = copyNames(pa.alt.SNames)
 	alt.N = copyIntMap(pa.alt.N)
 	alt.U = copyAnyMap(pa.alt.U)
 	alt.K = copyAnyMap(pa.alt.K)

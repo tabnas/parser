@@ -491,6 +491,40 @@ describe('merge', () => {
     assert.equal(c.merge(d).rule('val').def.open.length, 1)
   })
 
+
+  it('follows-token-set-overrides-on-either-side-of-the-merge', () => {
+    // A merged alt naming a token set reads the set's members when it
+    // matches, so an override of the set reaches it whether it was made
+    // on a side before the merge or on the merged instance after it.
+    const spec = {
+      options: { rule: { start: 'top' }, tokenSet: { SET: ['#VL'] } },
+      rule: {
+        top: { open: [{ s: '#SET', a: '@value$' }], close: [{ s: '#ZZ' }] },
+      },
+    }
+    const override = { options: { tokenSet: { SET: ['#TX'] } } }
+    const expect = (tn, accepts, refuses) => {
+      assert.doesNotThrow(() => tn.parse(accepts))
+      assert.throws(() => tn.parse(refuses))
+    }
+
+    for (const first of [true, false]) {
+      const a = new Tabnas({ tag: 'A' })
+      a.grammar(spec)
+      a.grammar(override)
+      expect(a, 'x', 'true')
+      const b = new Tabnas({ tag: 'B' })
+      expect(first ? a.merge(b) : b.merge(a), 'x', 'true')
+    }
+
+    const a = new Tabnas({ tag: 'A' })
+    a.grammar(spec)
+    const m = a.merge(new Tabnas({ tag: 'B' }))
+    expect(m, 'true', 'x')
+    m.grammar(override)
+    expect(m, 'x', 'true')
+  })
+
 })
 
 

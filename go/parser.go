@@ -129,11 +129,6 @@ type Context struct {
 	parseErrDiag *diagSnapshot
 }
 
-// altS returns the effective per-position Tin sets for an alt, re-resolving
-// any position that names a token set against the parsing instance. Alts
-// without recorded names, and instances without custom token sets, use
-// AltSpec.S unchanged. The result is memoized per parse, so the walk below
-// runs at most once per alt.
 // setT writes the lookahead buffer slot i, keeping the legacy T0 / T1
 // aliases in sync so grammar and plugin code reading them observes the
 // same values as ctx.T[0] / ctx.T[1].
@@ -170,6 +165,10 @@ func (ctx *Context) forgetAltSlots(alts []*AltSpec) {
 	}
 }
 
+// altS returns the effective per-position Tin sets for an alt on the
+// parsing instance (see Tabnas.liveSlots). Alts without recorded names, and
+// instances without custom token sets, use AltSpec.S unchanged. The result
+// is memoized per parse, so the resolution runs at most once per alt.
 func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 	if !ctx.tokenSetDyn || alt.SNames == nil || ctx.Inst == nil {
 		return alt.S
@@ -177,11 +176,26 @@ func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 	if slots, ok := ctx.altSlots[alt]; ok {
 		return slots
 	}
-	slots := alt.S
-	// Only positions that actually name a token set need re-resolving;
-	// everything else keeps the tins already resolved for it. A position
-	// naming anything this instance does not know is left alone too —
-	// resolving it would have to mint a token mid-parse.
+	slots := ctx.Inst.liveSlots(alt)
+	if ctx.altSlots == nil {
+		ctx.altSlots = make(map[*AltSpec][][]Tin)
+	}
+	ctx.altSlots[alt] = slots
+	return slots
+}
+
+// liveSlots returns the per-position Tin sets alt resolves to on this
+// instance now. A position that names a token set reads the set's current
+// members, so an override of the set reaches an alternate installed before
+// it; every other position keeps the tins resolved when the alternate was
+// installed. A position naming anything this instance does not know is left
+// alone too, since resolving it would have to mint a token. Parsing reads it
+// through Context.altS; Merge reads it to carry each alternate across as it
+// matches on its side now.
+func (j *Tabnas) liveSlots(alt *AltSpec) [][]Tin {
+	if len(j.customTokenSets) == 0 || alt.SNames == nil {
+		return alt.S
+	}
 	var rebuilt [][]Tin
 	for i, names := range alt.SNames {
 		if i >= len(alt.S) {
@@ -190,9 +204,9 @@ func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 		usesSet, resolvable := false, true
 		for _, name := range names {
 			switch {
-			case ctx.Inst.hasTokenSet(strings.TrimPrefix(name, "#")):
+			case j.hasTokenSet(strings.TrimPrefix(name, "#")):
 				usesSet = true
-			case ctx.Inst.hasToken(name):
+			case j.hasToken(name):
 			default:
 				resolvable = false
 			}
@@ -206,18 +220,14 @@ func (ctx *Context) altS(alt *AltSpec) [][]Tin {
 		}
 		var tins []Tin
 		for _, name := range names {
-			tins = append(tins, ctx.Inst.resolveTokenName(name)...)
+			tins = append(tins, j.resolveTokenName(name)...)
 		}
 		rebuilt[i] = tins
 	}
 	if rebuilt != nil {
-		slots = rebuilt
+		return rebuilt
 	}
-	if ctx.altSlots == nil {
-		ctx.altSlots = make(map[*AltSpec][][]Tin)
-	}
-	ctx.altSlots[alt] = slots
-	return slots
+	return alt.S
 }
 
 // recordConsumed appends the leading `consumed` lookahead tokens to the
