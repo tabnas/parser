@@ -17,6 +17,7 @@ use crate::{
     TokenSubscriber,
 };
 use indexmap::IndexMap;
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
@@ -94,12 +95,14 @@ pub struct Parser {
     /// there was nothing to go stale, so this hazard arrived with the table.
     rules: IndexMap<String, Arc<RuleSpec>>,
     /// The `rule.include` and `rule.exclude` every `PreparedAlt::groups`
-    /// was worked out against. Both are public and a callback may write
-    /// either between one step and the next, so the step compares these
-    /// two strings before trusting the prepared answer -- the same shape
-    /// of guard the compiled `number.exclude` pattern carries, and for
-    /// the same reason: a cache derived from a public mutable field is a
-    /// cache with a second writer.
+    /// was worked out against, and every `expected_tins` row collated
+    /// against. Both are public and a callback may write either between
+    /// one step and the next, so the step compares these two strings
+    /// before trusting the prepared answer, and `expected_match_tins`
+    /// before trusting the row -- the same shape of guard the compiled
+    /// `number.exclude` pattern carries, and for the same reason: a cache
+    /// derived from a public mutable field is a cache with a second
+    /// writer.
     prepared_include: String,
     prepared_exclude: String,
     /// The token identities each rule can accept at each lookahead slot,
@@ -402,26 +405,55 @@ struct ExpectedTins {
 }
 
 impl ExpectedTins {
-    fn of(spec: &RuleSpec) -> Self {
+    /// Collated over the alternates `options` enable, as TypeScript's
+    /// `tcol` is: `filterRules` has removed the others from the spec
+    /// before `norm()` collates it. An excluded alternate is never tried,
+    /// so it must not decide which matchers run in the position-expected
+    /// pass either. It did until 0.12.4, and a grammar that excludes a
+    /// group while redefining a set that group's alternates name had the
+    /// set's members expected where the grammar never takes them (toml
+    /// excludes jsonic and sets `KEY` to `#ST #ID`, and its `val` came to
+    /// expect `#ID`, whose matcher then claimed every number).
+    ///
+    /// The filters are the ones in force at install, which the parser
+    /// records as `prepared_include` and `prepared_exclude`. Both are
+    /// public options a caller may rewrite afterwards, and the step then
+    /// chooses among the alternates the live filters enable, so
+    /// `Parser::expected_match_tins` reads this table only while the live
+    /// filters are still the recorded ones, and collates from them with
+    /// `live` otherwise.
+    fn of(spec: &RuleSpec, options: &Options) -> Self {
         Self {
-            open: Self::by_slot(&spec.open),
-            close: Self::by_slot(&spec.close),
+            open: Self::by_slot(&spec.open, options),
+            close: Self::by_slot(&spec.close, options),
         }
     }
 
-    fn by_slot(alts: &[AltSpec]) -> Vec<Vec<Tin>> {
+    fn by_slot(alts: &[AltSpec], options: &Options) -> Vec<Vec<Tin>> {
+        let alts: Vec<&AltSpec> = alts
+            .iter()
+            .filter(|alt| groups_enabled(alt, options))
+            .collect();
         let slots = alts.iter().map(|alt| alt.s.len()).max().unwrap_or(0);
         (0..slots)
-            .map(|slot| {
-                let mut expected = BTreeSet::new();
-                for alt in alts {
-                    if let Some(tins) = alt.s.get(slot) {
-                        expected.extend(tins.iter().copied());
-                    }
-                }
-                expected.into_iter().collect()
-            })
+            .map(|slot| Self::collate(alts.iter().copied(), slot))
             .collect()
+    }
+
+    /// One slot's row, collated from the alternates `options` enable now
+    /// rather than the ones they enabled at install.
+    fn live(alts: &[AltSpec], options: &Options, slot: usize) -> Vec<Tin> {
+        Self::collate(alts.iter().filter(|alt| groups_enabled(alt, options)), slot)
+    }
+
+    fn collate<'a>(alts: impl Iterator<Item = &'a AltSpec>, slot: usize) -> Vec<Tin> {
+        let mut expected = BTreeSet::new();
+        for alt in alts {
+            if let Some(tins) = alt.s.get(slot) {
+                expected.extend(tins.iter().copied());
+            }
+        }
+        expected.into_iter().collect()
     }
 
     fn at(&self, is_open: bool, slot: usize) -> &[Tin] {
@@ -479,7 +511,18 @@ impl Parser {
         // the late binding TypeScript's `norm()` and Go's `altS` provide.
         let mut spec = spec;
         resolve_slot_names(&mut spec, &self.options);
-        let expected = ExpectedTins::of(&spec);
+        // `rebuild_prepared` below records the live filters as the ones
+        // every accepted-token row was collated against, so a row collated
+        // under filters rewritten since then is collated again first. Only
+        // a rewrite between two installs reaches this.
+        if self.options.rule.include != self.prepared_include
+            || self.options.rule.exclude != self.prepared_exclude
+        {
+            for (row, installed) in self.expected_tins.iter_mut().zip(self.rules.values()) {
+                *row = ExpectedTins::of(installed, &self.options);
+            }
+        }
+        let expected = ExpectedTins::of(&spec, &self.options);
         let shared = RuleName::from(spec.name.as_str());
         let (index, _) = self.rules.insert_full(spec.name.clone(), Arc::new(spec));
         // A replacement keeps the key's index, so it overwrites its own
@@ -1684,9 +1727,17 @@ impl Parser {
     /// `options` is the one `Arc<Options>` the lexer reads too, so this
     /// guard consults the field its consumers consult and cannot drift
     /// from it.
-    fn expected_match_tins(&self, rule: &Rule, slot: usize) -> &[Tin] {
+    ///
+    /// The table was collated over the alternates the group filters
+    /// enabled at install. `rule.include` and `rule.exclude` are public and
+    /// may have been rewritten since, and the step then chooses among the
+    /// alternates the live filters enable (its `groups_prepared` guard),
+    /// so the row is collated from the live filters too, rather than
+    /// letting an alternate the step will not try decide which matcher
+    /// runs first.
+    fn expected_match_tins(&self, rule: &Rule, slot: usize) -> Cow<'_, [Tin]> {
         if self.options.match_tokens.is_empty() {
-            return &[];
+            return Cow::Borrowed(&[]);
         }
         // The table is the rule's, chosen by what the rule is called --
         // exactly as the name-keyed map this replaced chose it. The slot
@@ -1699,10 +1750,22 @@ impl Parser {
             Some(installed) if *installed == rule.name => rule.slot,
             _ => match self.rules.get_index_of(&*rule.name) {
                 Some(index) => index,
-                None => return &[],
+                None => return Cow::Borrowed(&[]),
             },
         };
-        self.expected_tins[index].at(rule.state == RuleState::Open, slot)
+        let is_open = rule.state == RuleState::Open;
+        if self.options.rule.include == self.prepared_include
+            && self.options.rule.exclude == self.prepared_exclude
+        {
+            return Cow::Borrowed(self.expected_tins[index].at(is_open, slot));
+        }
+        let installed = &self.rules[index];
+        let alts = if is_open {
+            &installed.open
+        } else {
+            &installed.close
+        };
+        Cow::Owned(ExpectedTins::live(alts, &self.options, slot))
     }
 
     fn ensure_lookahead(
@@ -1724,7 +1787,7 @@ impl Parser {
                     Some(token) => Ok(token),
                     None => {
                         let result = self.catch_callback("lexer callback", site.source, || {
-                            lexer.next_rule_token(expected_match_tins, rule, context)
+                            lexer.next_rule_token(&expected_match_tins, rule, context)
                         });
                         result.map_err(|error| {
                             self.attach_active_error(
@@ -4071,7 +4134,7 @@ fn listed(list: &str) -> impl Iterator<Item = &str> {
         .filter(|entry| !entry.is_empty())
 }
 
-fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
+pub(crate) fn groups_enabled(alt: &AltSpec, options: &Options) -> bool {
     // With neither an include nor an exclude list there is nothing to
     // test against, so every alternate is enabled whatever groups it
     // declares. That is the usual case, and it is asked once per
@@ -4459,7 +4522,7 @@ mod tests {
             parser.names[val_slot].clone(),
             val_slot,
         );
-        assert_eq!(parser.expected_match_tins(&rule, 0), [crate::TIN_NR]);
+        assert_eq!(&*parser.expected_match_tins(&rule, 0), [crate::TIN_NR]);
 
         // A callback renames the rule to another installed rule. The slot
         // still points at `val`, so the slot alone would answer with
@@ -4467,7 +4530,7 @@ mod tests {
         // the lookup by name always gave.
         rule.name = parser.names[other_slot].clone();
         assert_eq!(
-            parser.expected_match_tins(&rule, 0),
+            &*parser.expected_match_tins(&rule, 0),
             [crate::TIN_ST],
             "the rule is called `other` now, so `other`'s row answers"
         );
@@ -4478,7 +4541,7 @@ mod tests {
         rule.name = parser.names[val_slot].clone();
         rule.spec = Arc::clone(&parser.rules()["other"]);
         assert_eq!(
-            parser.expected_match_tins(&rule, 0),
+            &*parser.expected_match_tins(&rule, 0),
             [crate::TIN_NR],
             "still called `val`, so still gated by `val`'s row"
         );
@@ -4487,7 +4550,7 @@ mod tests {
         // `usize::MAX`, so nothing is in range to answer by accident.
         let ghost = Rule::new("ghost", Value::Undefined);
         assert_eq!(
-            parser.expected_match_tins(&ghost, 0),
+            &*parser.expected_match_tins(&ghost, 0),
             &[] as &[Tin],
             "an uninstalled name has no row, not another rule's"
         );
@@ -4517,7 +4580,7 @@ mod tests {
         assert!(without.options.match_tokens.is_empty());
         assert_eq!(without.expected_tins[0].at(true, 0), [crate::TIN_NR]);
         assert_eq!(
-            without.expected_match_tins(&rule, 0),
+            &*without.expected_match_tins(&rule, 0),
             &[] as &[Tin],
             "no custom matcher: nothing to gate, so nothing to look up"
         );
@@ -4536,12 +4599,12 @@ mod tests {
         let mut with = Parser::new(options);
         with.add_rule(val_rule());
         assert_eq!(
-            with.expected_match_tins(&rule, 0),
+            &*with.expected_match_tins(&rule, 0),
             [crate::TIN_NR],
             "a custom matcher is present, so the slot's tins gate it"
         );
         assert_eq!(
-            with.expected_match_tins(&rule, 1),
+            &*with.expected_match_tins(&rule, 1),
             &[] as &[Tin],
             "a slot the rule never fills expects nothing"
         );

@@ -19,7 +19,7 @@
 //! covers for the same reason.
 
 use std::sync::{Arc, Mutex};
-use tabnas::{AltSpec, Options, Parser, RuleSpec, TIN_NR};
+use tabnas::{AltSpec, MatchToken, MatchTokenMatcher, Options, Parser, RuleSpec, Tin, TIN_NR};
 
 type Seen = Arc<Mutex<Vec<&'static str>>>;
 
@@ -115,5 +115,95 @@ fn reinstalling_the_rule_rebuilds_the_prepared_answers() {
         ran(&parser, &seen),
         ["second"],
         "the prepared answers are rebuilt with the rule"
+    );
+}
+
+/// Options carrying one custom matcher, `#ID`, that takes digits as well
+/// as letters, and the given exclude list. The token's identity is handed
+/// back so the rule can name it; registration is deterministic, so every
+/// call hands back the same one.
+fn id_options(exclude: &str) -> (Arc<Options>, Tin) {
+    let mut options = Options::default();
+    options.rule.start = "top".into();
+    options.rule.exclude = exclude.to_string();
+    let tin = options.register_token("#ID");
+    options.match_tokens.insert(
+        "#ID".into(),
+        MatchToken {
+            name: "#ID".into(),
+            tin,
+            matcher: MatchTokenMatcher::Regex(regex::Regex::new("^[A-Za-z0-9_]+").unwrap()),
+            eager: false,
+        },
+    );
+    (Arc::new(options), tin)
+}
+
+/// A word alternate taking `#ID` and a number alternate taking `#NR`,
+/// told apart by their groups alone. On `1` the `#ID` matcher runs only
+/// if the position expects `#ID`, and when it runs it takes the `1`.
+fn word_or_number(id: Tin, seen: &Seen) -> RuleSpec {
+    let mut top = RuleSpec::new("top");
+    for (tin, group) in [(id, "word"), (TIN_NR, "number")] {
+        let mut alt = AltSpec {
+            s: vec![vec![tin]],
+            g: group.to_string(),
+            ..Default::default()
+        };
+        let seen = seen.clone();
+        alt.add_action(move |_rule, _context| seen.lock().unwrap().push(group));
+        top.open.push(alt);
+    }
+    top
+}
+
+/// The lexer runs the matchers for the tokens a rule position expects
+/// before the rest, and those tokens are collated over the alternates the
+/// group filters enable. The collation is worked out at install, so it is
+/// the same kind of cache as the prepared answers above and needs the same
+/// guard: here the live filters leave only the number alternate, and a
+/// collation kept from install would still expect `#ID`, whose matcher
+/// takes the `1` before the number matcher is asked.
+#[test]
+fn the_tokens_a_position_expects_follow_filters_replaced_directly_on_the_parser() {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let (options, id) = id_options("number");
+    let mut parser = Parser::from_shared(options);
+    parser.add_rule(word_or_number(id, &seen));
+    assert_eq!(
+        ran(&parser, &seen),
+        ["word"],
+        "as installed, `#ID` takes the `1`"
+    );
+
+    parser.options = id_options("word").0;
+    assert_eq!(
+        ran(&parser, &seen),
+        ["number"],
+        "only the number alternate is live, so nothing expects `#ID`"
+    );
+
+    // Back again, so this cannot pass by latching in one direction.
+    parser.options = id_options("number").0;
+    assert_eq!(ran(&parser, &seen), ["word"], "and back");
+}
+
+/// Installing a rule records the live filters as the ones every row was
+/// collated against, so a rule installed after the filters changed must
+/// not leave the rows installed before it describing the old ones.
+#[test]
+fn installing_after_the_filters_change_recollates_the_rules_already_in() {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let (options, id) = id_options("number");
+    let mut parser = Parser::from_shared(options);
+    parser.add_rule(word_or_number(id, &seen));
+    assert_eq!(ran(&parser, &seen), ["word"]);
+
+    parser.options = id_options("word").0;
+    parser.add_rule(RuleSpec::new("other"));
+    assert_eq!(
+        ran(&parser, &seen),
+        ["number"],
+        "`top` was collated under the old filters and must be again"
     );
 }
