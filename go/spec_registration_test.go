@@ -61,7 +61,7 @@ func TestSpecFixturesRunByAllRuntimes(t *testing.T) {
 				"one port runs is not a parity fixture", name)
 		}
 		if !inRust {
-			t.Errorf("%s.tsv is not referenced by any Rust test — a fixture only " +
+			t.Errorf("%s.tsv is not referenced by any Rust test — a fixture only "+
 				"the mature ports run is not a three-runtime parity fixture", name)
 		}
 	}

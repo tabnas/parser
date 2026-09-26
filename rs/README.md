@@ -73,6 +73,12 @@ owned snapshot of the rendered diagnostic and its color palette.
 Named parse lifecycle hooks bind through `parse_prepare_ref` and
 `parse_budget_ref`; serialized prepare maps are deterministic by callback name
 and budget callbacks remain inactive until `checkEveryN` is non-zero.
+Parse guards, installed by name through `parse_guard`, are Rust's own and
+have no TypeScript or Go counterpart. The loop runs each one at every step,
+ahead of the budget, and a guard that returns false stops the parse with
+`cancel`. A caller's `parse_budget` replaces the budget and leaves the
+guards alone, so a grammar bounds nesting with one: a `Value` drops and
+displays by recursion, and a deep one can overflow a small stack.
 Load-time `options.config.modify` callbacks bind through
 `config_modifier_ref`, run in declaration order after option resolution, and
 are reapplied on later grammar option overlays until removed.

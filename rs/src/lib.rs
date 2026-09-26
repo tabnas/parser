@@ -149,6 +149,8 @@ pub type TokenSubscriber = Arc<dyn Fn(&Token) + Send + Sync>;
 pub type LexSubscriber = Arc<dyn Fn(&mut Token, &mut Rule, &mut Context) + Send + Sync>;
 pub type RuleSubscriber = Arc<dyn Fn(&mut Rule, &mut Context) + Send + Sync>;
 pub type RuleDoneSubscriber = Arc<dyn Fn(&Rule, &Context, &RuleDone) + Send + Sync>;
+/// A check the parse loop runs at every step; see [`Tabnas::parse_guard`].
+pub type ParseGuard = Arc<dyn Fn(&Context) -> bool + Send + Sync>;
 
 pub type PluginCallback = Arc<dyn Fn(&mut Tabnas, &Value) -> Result<(), PluginError> + Send + Sync>;
 
@@ -230,6 +232,9 @@ pub struct Tabnas {
     pub lex_subscribers: Tracked<Vec<LexSubscriber>>,
     pub rule_subscribers: Tracked<Vec<RuleSubscriber>>,
     pub rule_done_subscribers: Tracked<Vec<RuleDoneSubscriber>>,
+    /// Checks the parse loop runs at every step, by name; see
+    /// [`Tabnas::parse_guard`].
+    pub parse_guards: Tracked<IndexMap<String, ParseGuard>>,
     pub plugins: Tracked<Vec<Plugin>>,
     pub plugin_options: IndexMap<String, Value>,
     /// Plugin-attached named values carried to derived instances.
@@ -305,6 +310,7 @@ impl Tabnas {
             lex_subscribers: Tracked::new(Vec::new()),
             rule_subscribers: Tracked::new(Vec::new()),
             rule_done_subscribers: Tracked::new(Vec::new()),
+            parse_guards: Tracked::new(IndexMap::new()),
             plugins: Tracked::new(Vec::new()),
             plugin_options,
             decorations: IndexMap::new(),
@@ -468,6 +474,10 @@ impl Tabnas {
         child.plugin_options = self.plugin_options.clone();
         child.decorations = self.decorations.clone();
         child.inherit_function_references(self);
+        // The guards travel as the budget does, in the options above: a
+        // plugin re-run below that installs one again under the same name
+        // replaces it rather than adding a second.
+        child.parse_guards = Tracked::new(self.parse_guards.peek().clone());
         for plugin in self.plugins.iter() {
             let options = child
                 .plugin_options
@@ -655,6 +665,7 @@ impl Tabnas {
             "  RuleDone subscribers: {}",
             self.rule_done_subscribers.len()
         );
+        let _ = writeln!(output, "  Parse guards: {}", self.parse_guards.len());
 
         output.push_str("\n--- Config ---\n");
         let _ = writeln!(output, "  FixedLex: {}", self.options.fixed.lex);
@@ -1351,6 +1362,48 @@ impl Tabnas {
         self
     }
 
+    /// Install a named check that the parse loop runs at every step, ahead
+    /// of the budget. A check that returns `false` stops the parse with the
+    /// `cancel` code, as the budget does.
+    ///
+    /// A guard is the budget's counterpart for a grammar rather than for
+    /// its caller. The budget is one slot: [`Tabnas::parse_budget`]
+    /// replaces it in place, so a check a grammar kept there went whenever
+    /// a caller set a budget of its own after installing the grammar. The
+    /// grammars use that check to bound nesting, because a `Value` drops
+    /// and displays by recursion, one frame per level, and a stack
+    /// overflow ends the process. Guards are kept apart from the budget
+    /// and from the options, so neither a budget nor a grammar document
+    /// applied later removes one; a derived instance carries them, and a
+    /// merge keeps both sides'. Only [`Tabnas::remove_parse_guard`] does.
+    ///
+    /// The name is the guard's identity: installing a second guard under
+    /// a name already in use replaces the first. A grammar layered on
+    /// another uses that to change the check its base installed, as JSONC
+    /// raises the depth jsonic allows. Guards run in the order their names
+    /// were first installed, before the budget, from the second step on,
+    /// the steps the budget can run on. Each runs at every step, so it
+    /// has to be cheap. A guard that panics fails the parse with an
+    /// error, as a panicking budget does.
+    ///
+    /// Rust only: the TypeScript and Go engines have no guards, as their
+    /// grammars have no depth limits to keep.
+    pub fn parse_guard(
+        &mut self,
+        name: impl Into<String>,
+        check: impl Fn(&Context) -> bool + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.parse_guards.insert(name.into(), Arc::new(check));
+        self
+    }
+
+    /// Remove the named guard, if one is installed. See
+    /// [`Tabnas::parse_guard`].
+    pub fn remove_parse_guard(&mut self, name: &str) -> &mut Self {
+        self.parse_guards.shift_remove(name);
+        self
+    }
+
     pub fn parse_prepare(
         &mut self,
         prepare: impl Fn(&mut Context) + Send + Sync + 'static,
@@ -1453,6 +1506,7 @@ impl Tabnas {
             .wrapping_add(self.lex_subscribers.generation())
             .wrapping_add(self.rule_subscribers.generation())
             .wrapping_add(self.rule_done_subscribers.generation())
+            .wrapping_add(self.parse_guards.generation())
             .wrapping_add(self.plugins.generation())
     }
 
@@ -1500,6 +1554,9 @@ impl Tabnas {
         }
         for subscriber in self.rule_done_subscribers.iter() {
             p.add_rule_done_subscriber(subscriber.clone());
+        }
+        for guard in self.parse_guards.values() {
+            p.add_parse_guard(guard.clone());
         }
         p
     }

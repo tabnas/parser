@@ -13,8 +13,8 @@ use crate::rule::{
 use crate::token::{Tin, Token, TIN_AA, TIN_BD, TIN_ZZ};
 use crate::value::Value;
 use crate::{
-    Action, AltAction, ContextAction, LexSubscriber, RuleDoneSubscriber, RuleSubscriber,
-    TokenSubscriber,
+    Action, AltAction, ContextAction, LexSubscriber, ParseGuard, RuleDoneSubscriber,
+    RuleSubscriber, TokenSubscriber,
 };
 use indexmap::IndexMap;
 use std::borrow::Cow;
@@ -140,6 +140,7 @@ pub struct Parser {
     pub lex_subscribers: Vec<LexSubscriber>,
     pub rule_subscribers: Vec<RuleSubscriber>,
     pub rule_done_subscribers: Vec<RuleDoneSubscriber>,
+    pub parse_guards: Vec<ParseGuard>,
     pub instance: InstanceInfo,
 }
 
@@ -491,6 +492,7 @@ impl Parser {
             lex_subscribers: Vec::new(),
             rule_subscribers: Vec::new(),
             rule_done_subscribers: Vec::new(),
+            parse_guards: Vec::new(),
             instance: InstanceInfo::default(),
         }
     }
@@ -699,6 +701,10 @@ impl Parser {
 
     pub fn add_rule_subscriber(&mut self, subscriber: RuleSubscriber) {
         self.rule_subscribers.push(subscriber);
+    }
+
+    pub fn add_parse_guard(&mut self, guard: ParseGuard) {
+        self.parse_guards.push(guard);
     }
 
     pub fn add_rule_done_subscriber(&mut self, subscriber: RuleDoneSubscriber) {
@@ -1024,6 +1030,24 @@ impl Parser {
     ) -> Result<T, TabnasError> {
         catch_unwind(AssertUnwindSafe(callback))
             .map_err(|payload| TabnasError::from_panic(payload, api, src, 0, 1, 1, &self.options))
+    }
+
+    /// The `cancel` error a budget or a guard stops the parse with, at the
+    /// token about to be read.
+    fn cancelled(&self, src: &str, context: &Context, rule: &Rule, stack: &[Rule]) -> TabnasError {
+        let token = context.t.first();
+        let pnt = token
+            .map(|token| {
+                (
+                    token.src.as_str(),
+                    token.site.pos,
+                    token.site.ri,
+                    token.site.ci,
+                )
+            })
+            .unwrap_or(("", 0, 1, 1));
+        let error = TabnasError::new("cancel", pnt.0, src, pnt.1, pnt.2, pnt.3);
+        self.attach_active_error(error, rule, stack, token)
     }
 
     fn attach_active_error(
@@ -2022,6 +2046,24 @@ impl Parser {
                 return Err(TabnasError::new("unexpected", "", src, pnt.0, pnt.1, pnt.2));
             }
             context.iteration = iterations - 1;
+            // The guards run first, and at every step the budget can run
+            // on: a grammar's bound holds whatever budget the caller set.
+            if context.iteration > 0 {
+                for guard in &self.parse_guards {
+                    let result = self.catch_callback("parse guard", src, || guard(&context));
+                    let keep_going = result.map_err(|error| {
+                        self.attach_active_error(
+                            error,
+                            &current_rule,
+                            &stack,
+                            Self::phase_token(&current_rule).or_else(|| context.t.first()),
+                        )
+                    })?;
+                    if !keep_going {
+                        return Err(self.cancelled(src, &context, &current_rule, &stack));
+                    }
+                }
+            }
             if budget.check_every_n > 0
                 && context.iteration > 0
                 && context.iteration % budget.check_every_n == 0
@@ -2038,19 +2080,7 @@ impl Parser {
                         )
                     })?;
                     if !keep_going {
-                        let token = context.t.first();
-                        let pnt = token
-                            .map(|token| {
-                                (
-                                    token.src.as_str(),
-                                    token.site.pos,
-                                    token.site.ri,
-                                    token.site.ci,
-                                )
-                            })
-                            .unwrap_or(("", 0, 1, 1));
-                        let error = TabnasError::new("cancel", pnt.0, src, pnt.1, pnt.2, pnt.3);
-                        return Err(self.attach_active_error(error, &current_rule, &stack, token));
+                        return Err(self.cancelled(src, &context, &current_rule, &stack));
                     }
                 }
             }
