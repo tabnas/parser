@@ -836,9 +836,10 @@ func TestMergeGrammarPermutations(t *testing.T) {
 func TestMergeKeepsAlternatesWhoseDifferentSetsResolveAlike(t *testing.T) {
 	// Two alternates that differ only in the set they name are the same
 	// alternate while the sets agree, and different ones once either set
-	// is overridden on the merged instance, where TypeScript and Rust
-	// follow the set. The merge keeps both, as they do, so the merged rule
-	// holds the same alternates in every runtime.
+	// is overridden on the merged instance, where every runtime follows
+	// the set. The merge keeps both, so the merged rule holds the same
+	// alternates in every runtime, and each keeps matching through its own
+	// set after the other set moves.
 	side := func(tag, set, s string) *Tabnas {
 		j := Make(Options{Tag: tag})
 		spec, err := GrammarSpecFromJSON([]byte(`{"options":{"rule":{"start":"val"},
@@ -865,6 +866,19 @@ func TestMergeKeepsAlternatesWhoseDifferentSetsResolveAlike(t *testing.T) {
 		if out, err := m.Parse("1"); err != nil || out != 1.0 {
 			t.Fatalf("1: got %v, %v", out, err)
 		}
+		over, err := GrammarSpecFromJSON([]byte(`{"options":{"tokenSet":{"ALPHA":["#ST"]}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Grammar(over); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := m.Parse("1"); err != nil || out != 1.0 {
+			t.Fatalf("1 after ALPHA moved: got %v, %v", out, err)
+		}
+		if out, err := m.Parse(`"s"`); err != nil || out != "s" {
+			t.Fatalf(`"s" after ALPHA moved: got %v, %v`, out, err)
+		}
 	}
 
 	// Declared alike, they are one alternate, however each spelled it.
@@ -875,4 +889,75 @@ func TestMergeKeepsAlternatesWhoseDifferentSetsResolveAlike(t *testing.T) {
 	if n := len(m.RSM()["val"].open); n != 1 {
 		t.Fatalf("merged val has %d open alternates, want 1", n)
 	}
+}
+
+func TestMergeFollowsTokenSetOverridesOnEitherSideOfTheMerge(t *testing.T) {
+	// A merged alternate that names a token set reads the set's members
+	// when it matches, as the source alternate does, so an override of the
+	// set reaches it whether it was made before the merge, on a side, or
+	// after it, on the merged instance. TypeScript and Rust already did;
+	// Go flattened each position to the tins the source resolved when the
+	// alternate was installed, and matched `true` where the override says
+	// `x`.
+	grammar := func(j *Tabnas) {
+		spec, err := GrammarSpecFromJSON([]byte(`{"options":{"rule":{"start":"top"},
+		  "tokenSet":{"SET":["#VL"]}},
+		  "rule":{"top":{"open":[{"s":"#SET","a":"@value$"}],"close":[{"s":"#ZZ"}]}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Grammar(spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	override := func(j *Tabnas) {
+		spec, err := GrammarSpecFromJSON([]byte(`{"options":{"tokenSet":{"SET":["#TX"]}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Grammar(spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expect := func(what string, j *Tabnas, accepts, refuses string) {
+		t.Helper()
+		if _, err := j.Parse(accepts); err != nil {
+			t.Fatalf("%s: %q refused: %v", what, accepts, err)
+		}
+		if _, err := j.Parse(refuses); err == nil {
+			t.Fatalf("%s: %q accepted", what, refuses)
+		}
+	}
+
+	// Before: the override is made on a side, then the sides merge, in
+	// both orders.
+	for _, grammarFirst := range []bool{true, false} {
+		a := Make(Options{Tag: "A"})
+		grammar(a)
+		override(a)
+		expect("source", a, "x", "true")
+		b := Make(Options{Tag: "B"})
+		var m *Tabnas
+		var err error
+		if grammarFirst {
+			m, err = a.Merge(b)
+		} else {
+			m, err = b.Merge(a)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect("merged after an override on a side", m, "x", "true")
+	}
+
+	// After: the sides merge, then the merged instance overrides the set.
+	a := Make(Options{Tag: "A"})
+	grammar(a)
+	m, err := a.Merge(Make(Options{Tag: "B"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect("merged before its override", m, "true", "x")
+	override(m)
+	expect("merged after its override", m, "x", "true")
 }

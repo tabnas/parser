@@ -406,3 +406,40 @@ fn matched_and_state_action_refs_are_namespaced_across_merge() {
         assert_eq!(child.parse("b").unwrap(), Value::String("right".into()));
     }
 }
+
+#[test]
+fn merged_alternates_follow_token_set_overrides_on_either_side_of_the_merge() {
+    // A merged alternate naming a token set reads the set's members when
+    // it matches, so an override of the set reaches it whether it was made
+    // on a side before the merge or on the merged instance after it.
+    const GRAMMAR: &str = r##"{"options":{"rule":{"start":"top"},"tokenSet":{"SET":["#VL"]}},
+      "rule":{"top":{"open":[{"s":"#SET","a":"@value$"}],"close":[{"s":"#ZZ"}]}}}"##;
+    const OVERRIDE: &str = r##"{"options":{"tokenSet":{"SET":["#TX"]}}}"##;
+    fn tagged(tag: &str) -> Tabnas {
+        Tabnas::with_options(Options {
+            tag: tag.into(),
+            ..Default::default()
+        })
+    }
+    fn expect(tabnas: &Tabnas, accepts: &str, refuses: &str) {
+        assert!(tabnas.parse(accepts).is_ok(), "{accepts:?} refused");
+        assert!(tabnas.parse(refuses).is_err(), "{refuses:?} accepted");
+    }
+
+    for first in [true, false] {
+        let mut a = tagged("A");
+        a.grammar_json(GRAMMAR).unwrap();
+        a.grammar_json(OVERRIDE).unwrap();
+        expect(&a, "x", "true");
+        let b = tagged("B");
+        let merged = if first { a.merge(&b) } else { b.merge(&a) }.unwrap();
+        expect(&merged, "x", "true");
+    }
+
+    let mut a = tagged("A");
+    a.grammar_json(GRAMMAR).unwrap();
+    let mut merged = a.merge(&tagged("B")).unwrap();
+    expect(&merged, "true", "x");
+    merged.grammar_json(OVERRIDE).unwrap();
+    expect(&merged, "x", "true");
+}

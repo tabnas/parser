@@ -103,6 +103,12 @@ complexity (condition first) then group tags. Identical unconditioned
 alts (shared-base-plugin case) are emitted once. Lifecycle actions
 concatenate in tag order; lex matchers order by `(Order, Name)`.
 
+A merged alternate keeps the token-set names its positions declared. It
+matches each set as the set stands on its side when the sides merge, and
+follows a later override of the set on the merged instance. Alternates
+naming `#ALPHA` and `#BETA` therefore stay two alternates even while the
+two sets have the same members.
+
 ```go
 a := tabnas.Make(tabnas.Options{Tag: "A"})
 at := a.Token("#AT", "@")
