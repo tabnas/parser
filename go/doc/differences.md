@@ -1376,6 +1376,18 @@ Cancellation is an ordinary error of the parse, so it is recorded in
 recovery mode it surfaces through `{ value, errors }`; Go, still
 fail-fast, returns it directly.
 
+### Parse guards
+
+The Rust engine adds `Tabnas::parse_guard(name, check)` beside the
+budget. TypeScript and Go have no counterpart. A guard runs at every
+step, ahead of the budget, and a false return cancels the parse with
+the same `cancel` code. A caller's `parse_budget` replaces the budget
+and leaves the guards in place, and a guard's name identifies it, so
+installing another under the same name replaces it. The Rust grammars
+bound nesting with one, because a Rust `Value` drops and displays by
+recursion. TypeScript and Go values have no such problem, so their
+grammars set no bound and need no guard. See `rs/README.md`.
+
 ## Post-process rule event (`sub({ ruleDone })` / `SubRuleDone`)
 
 Both runtimes carry the third subscriber kind: it fires AFTER each rule

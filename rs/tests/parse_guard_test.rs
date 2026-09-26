@@ -208,6 +208,43 @@ fn a_merge_keeps_both_sides_guards() {
 }
 
 #[test]
+fn a_merge_prefixes_every_guard_name_so_none_collide() {
+    // A `$` exempts an action reference from the merge's renaming; a
+    // guard's name is an identity, and two alike must both survive.
+    let tagged = |tag: &str| {
+        let mut parser = number_parser();
+        parser.options.tag = tag.into();
+        parser
+    };
+    let mut left = tagged("A");
+    left.parse_guard("depth$", |_| true);
+    let mut right = tagged("B");
+    right.parse_guard("depth$", |_| false);
+    let merged = left.merge(&right).unwrap();
+    assert_eq!(
+        merged.parse_guards.keys().collect::<Vec<_>>(),
+        ["A:depth$", "B:depth$"]
+    );
+    assert_eq!(merged.parse("1").unwrap_err().code, "cancel");
+}
+
+#[test]
+fn a_guard_added_after_a_merge_survives_a_derive() {
+    // `derive` re-runs the merge's install over a copy of the merged
+    // parent's guards, which must add to them rather than replace them.
+    let tagged = |tag: &str| {
+        let mut parser = number_parser();
+        parser.options.tag = tag.into();
+        parser
+    };
+    let mut merged = tagged("A").merge(&tagged("B")).unwrap();
+    merged.parse_guard("later", |_| false);
+    let child = merged.derive(|_| {}).unwrap();
+    assert!(child.parse_guards.contains_key("later"));
+    assert_eq!(child.parse("1").unwrap_err().code, "cancel");
+}
+
+#[test]
 fn a_panicking_guard_is_an_error_and_not_a_crash() {
     let mut parser = number_parser();
     parser.parse_guard("boom", |_| panic!("guard exploded"));

@@ -1668,7 +1668,10 @@ fn prefix_hash_map<T: Clone>(source: &HashMap<String, T>, tag: &str) -> HashMap<
 
 /// Both sides' guards, each under its side's tag, so that two grammars
 /// that name a guard alike each keep theirs: a merged parser holds to the
-/// bounds of both.
+/// bounds of both. Every name is prefixed, whatever it contains: a guard
+/// name is an identity, not a reference, so `rename_ref`'s exemption for
+/// builtin action names (anything with a `$`) must not apply, or two such
+/// names would collide and one side's bound would be dropped.
 fn combine_guards(
     left: &IndexMap<String, crate::ParseGuard>,
     left_tag: &str,
@@ -1678,7 +1681,7 @@ fn combine_guards(
     let side = |guards: &IndexMap<String, crate::ParseGuard>, tag: &str| {
         guards
             .iter()
-            .map(|(name, guard)| (rename_ref(name, tag), guard.clone()))
+            .map(|(name, guard)| (format!("{tag}:{name}"), guard.clone()))
             .collect::<Vec<_>>()
     };
     side(left, left_tag)
@@ -1762,7 +1765,12 @@ impl MergedInstall {
         tabnas.lex_subscribers = (self.lex_subscribers.clone()).into();
         tabnas.rule_subscribers = (self.rule_subscribers.clone()).into();
         tabnas.rule_done_subscribers = (self.rule_done_subscribers.clone()).into();
-        tabnas.parse_guards = (self.parse_guards.clone()).into();
+        // Added, not assigned: `derive` re-runs this install on a copy of
+        // the merged parent's guards, and a guard installed on that parent
+        // after the merge has to survive it.
+        for (name, guard) in &self.parse_guards {
+            tabnas.parse_guards.insert(name.clone(), guard.clone());
+        }
         tabnas.alt_conditions = self.alt_conditions.clone();
         tabnas.alt_match_conditions = self.alt_match_conditions.clone();
         tabnas.alt_lexer_conditions = self.alt_lexer_conditions.clone();
