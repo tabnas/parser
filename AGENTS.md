@@ -659,6 +659,48 @@ rule, say in its doc comment which bag it uses and why. The propagation
 rule is contract, not implementation detail: it is observable from any
 grammar, in both runtimes, and a port has to reproduce it exactly.
 
+## Repetition is replacement, never a push chain
+
+An alternate either **pushes** a child rule (`p`), which opens a new
+stack frame that closes when the child does, or **replaces** the current
+rule (`r`), which re-enters a rule in the same frame. Push is for
+structure: a value inside a container, a child inside a parent, anything
+the tree must nest. Replace is for sequence: the next item of a list, the
+next line of a file, the next term of a sum. The README's addition
+grammar is the model, and its diagram says so: `val` pushes `add` once,
+`add`'s close alternate on `+` is `r: 'add'`, so `1+2+3` runs the whole
+loop in one stack slot and `val` is the parent of every `add`. The
+propagation rules above hold on push and replace alike; what differs
+between the two is the depth, and only the depth.
+
+**Every repetition compiles to a replace loop.** A `*A`, `1*A` or `m*A`
+in a grammar, a `{ A }` in EBNF, a list of records, a file of lines: the
+loop is `r`, the item may be `p`, and rule depth is bounded by the
+grammar's nesting, never by the input's length. A grammar author, a
+grammar compiler or a port that spells a star as right recursion —
+`H = inner H / ε`, each item pushing a new `H` — is wrong even when the
+parse succeeds. Rule depth then grows with the item count, so a flat
+file of a few thousand records trips the depth guards the hosts put on a
+parse, the rule stack and `rewind.history` grow with it, and the tree
+comes out nested where the source is flat. The ABNF grammar work found
+exactly that on 2026-09-27: a compiler emitting `star_x = inner star_x /
+ε` made every line of a 1,500-line file cost a frame, and the viewer
+refused the parse as nested deeper than it reads.
+`ts/test/deep-push.fixture.json` shows the engine BUILDING the right
+value from such a chain, because `@push$` reaches the list's owner from
+any depth; that is builder parity across the runtimes, not a licence for
+the shape.
+
+The observable is the rule's `d` (`rule.d` in TypeScript and Rust, `r.D`
+in Go): the stack depth at which the rule was pushed. A push sets it one
+deeper than the pusher (`ctx.rs[ctx.rsI++] = rule` before `makeRule` in
+`ts/src/rules.ts`, `D: ctx.RSI` after `ctx.RSI++` in `go/rule.go`,
+`child.d = stack.len() + 1` in `rs/src/parser.rs`); a replace carries it
+over unchanged (`next.d = current_rule.d`, and its twins). Rule depth
+over a repetition is constant; a test that repeats an item ten thousand
+times and asserts the maximum `d` stays what a single item needs is the
+proof.
+
 ## Error codes
 
 The engine declares the base error codes every grammar inherits, in
