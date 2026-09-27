@@ -661,9 +661,11 @@ grammar, in both runtimes, and a port has to reproduce it exactly.
 
 ## Repetition is replacement, never a push chain
 
-An alternate either **pushes** a child rule (`p`), which opens a new
-stack frame that closes when the child does, or **replaces** the current
-rule (`r`), which re-enters a rule in the same frame. Push is for
+When an alternate hands control to another rule, it either **pushes** a
+child rule (`p`), which opens a new stack frame that closes when the
+child does, or **replaces** the current rule (`r`), which re-enters a
+rule in the same frame; an alternate that only matches tokens, or
+closes, does neither. Push is for
 structure: a value inside a container, a child inside a parent, anything
 the tree must nest. Replace is for sequence: the next item of a list, the
 next line of a file, the next term of a sum. The README's addition
@@ -679,9 +681,8 @@ next rule's close phase that runs. Choose by shape, structure or
 sequence, and the depth follows.
 
 **Every repetition compiles to a replace loop.** A `*A`, `1*A` or `m*A`
-in a grammar, a `{ A }` in EBNF, a list of records, a file of lines: the
-loop is `r`, the item may be `p`, and rule depth is bounded by the
-grammar's nesting, never by the input's length. A grammar author, a
+in a grammar, a `{ A }` in EBNF, a list of records, a file of lines: the loop is `r`, the item may be `p`, and the loop's iterations add no
+depth. Real recursion still nests with its input, as it should: a grammar with `node = "(" node ")" / "x"` is as deep as its brackets. What a repetition may never do is make rule depth grow with a list's length. A grammar author, a
 grammar compiler or a port that spells a star as right recursion —
 `H = inner H / ε`, each item pushing a new `H` — is wrong even when the
 parse succeeds. Rule depth then grows with the item count, so a flat
