@@ -7,7 +7,7 @@ require (
 	github.com/tabnas/jsonic/go v0.7.1
 )
 
-require github.com/tabnas/parser/go v0.12.4 // indirect
+require github.com/tabnas/parser/go v0.12.5 // indirect
 
 // The engine under test is this repository's own module, so it is replaced by
 // path and travels with the checkout. The two grammars come from the proxy at
