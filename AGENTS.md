@@ -664,8 +664,7 @@ grammar, in both runtimes, and a port has to reproduce it exactly.
 When an alternate hands control to another rule, it either **pushes** a
 child rule (`p`), which opens a new stack frame that closes when the
 child does, or **replaces** the current rule (`r`), which re-enters a
-rule in the same frame; an alternate that only matches tokens, or
-closes, does neither. Push is for
+rule in the same frame; an alternate that only matches its tokens, or pops the frame to end the rule, does neither. Push is for
 structure: a value inside a container, a child inside a parent, anything
 the tree must nest. Replace is for sequence: the next item of a list, the
 next line of a file, the next term of a sum. The README's addition
