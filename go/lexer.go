@@ -180,6 +180,11 @@ type LexConfig struct {
 	MatchTokensSorted []*MatchTokenEntry     // Sorted-by-tin view for deterministic iteration.
 	MatchValues       []*MatchValueEntry     // Custom value matchers, sorted by name.
 
+	// The MatchValues entries the last buildConfig produced, from the
+	// options and the config modifiers. SetOptions rebuilds these, and
+	// carries forward only the entries appended to the live config since.
+	builtMatchValues []*MatchValueEntry
+
 	// Number options
 	NumberExclude func(string) bool // Exclude certain number-like strings.
 

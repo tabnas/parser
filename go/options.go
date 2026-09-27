@@ -901,9 +901,7 @@ func buildConfig(o *Options) *LexConfig {
 				})
 			}
 			// Sort by name for deterministic iteration at lex time.
-			sort.Slice(cfg.MatchValues, func(i, j int) bool {
-				return cfg.MatchValues[i].Name < cfg.MatchValues[j].Name
-			})
+			sortMatchValues(cfg.MatchValues)
 		}
 		cfg.MatchCheck = o.Match.Check
 	}
@@ -1290,6 +1288,13 @@ func buildConfig(o *Options) *LexConfig {
 		}
 	}
 
+	// The modifiers run in map order, so values two of them append land in
+	// either order; sort again, since the lexer takes the first value that
+	// matches. Then record this build's entries, on a copy that a later
+	// append to MatchValues cannot reach.
+	sortMatchValues(cfg.MatchValues)
+	cfg.builtMatchValues = append([]*MatchValueEntry(nil), cfg.MatchValues...)
+
 	// Scan specs and dispatch tables derive purely from the char sets
 	// resolved above (and by the modifiers), so build them here — the
 	// config is then read-only during parsing instead of being written
@@ -1298,6 +1303,14 @@ func buildConfig(o *Options) *LexConfig {
 	cfg.refreshLexTables()
 
 	return cfg
+}
+
+// sortMatchValues puts value matchers in name order, the order the lexer
+// tries them in. It is stable, so entries sharing a name keep their order.
+func sortMatchValues(mvs []*MatchValueEntry) {
+	sort.SliceStable(mvs, func(i, j int) bool {
+		return mvs[i].Name < mvs[j].Name
+	})
 }
 
 // optBool extracts a *bool from an optional sub-options struct.

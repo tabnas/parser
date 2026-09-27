@@ -13,6 +13,7 @@ package tabnas
 
 import (
 	"reflect"
+	"regexp"
 	"sort"
 	"testing"
 )
@@ -235,4 +236,206 @@ func TestCommentDefLineFalseSurvivesTheOverlay(t *testing.T) {
 	if !block {
 		t.Errorf("a def with no Line is not a block comment: CommentBlock = %v", novel.CommentBlock)
 	}
+}
+
+// Match.Value on the setting path (#237). buildConfig rebuilds MatchValues
+// in full from the merged options, and SetOptions used to append the live
+// entries on top, so every call added another copy of every matcher. The
+// copies were not inert: sort.Slice is unstable, so a replaced or removed
+// value kept firing through a stale copy. TypeScript and Rust rebuild from
+// the options alone.
+func TestMatchValueOverlayOnTheSettingPath(t *testing.T) {
+	hexVal := func(m []string) any { return "HEX:" + m[0] }
+	hex := func() map[string]*MatchValueSpec {
+		return map[string]*MatchValueSpec{
+			"hex": {Match: regexp.MustCompile(`^0x[0-9a-f]+`), Val: hexVal},
+		}
+	}
+	withHex := func() *Tabnas {
+		j := pmTopVal()
+		j.SetOptions(Options{Match: &MatchOptions{Value: hex()}})
+		return j
+	}
+	names := func(j *Tabnas) []string {
+		out := []string{}
+		for _, mv := range j.Config().MatchValues {
+			out = append(out, mv.Name)
+		}
+		return out
+	}
+	parses := func(t *testing.T, j *Tabnas, src string, want any) {
+		t.Helper()
+		if got, err := j.Parse(src); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("Parse(%q) = %#v, %v; want %#v", src, got, err, want)
+		}
+	}
+
+	t.Run("repeated calls keep one copy", func(t *testing.T) {
+		j := withHex()
+		for i := 0; i < 3; i++ {
+			j.SetOptions(Options{})
+		}
+		if got := names(j); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("after three empty SetOptions calls: %v, want [hex]", got)
+		}
+		parses(t, j, "0xff", "HEX:0xff")
+	})
+
+	// The new pattern needs a digit after 0x, so 0xff falls through to the
+	// number matcher's hex form. A stale copy of the old pattern caught it.
+	t.Run("a replaced value stops matching", func(t *testing.T) {
+		j := withHex()
+		j.SetOptions(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{
+			"hex": {Match: regexp.MustCompile(`^0x[0-9]+`), Val: hexVal},
+		}}})
+		if got := names(j); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("after replacing hex: %v, want [hex]", got)
+		}
+		parses(t, j, "0xff", float64(255))
+	})
+
+	t.Run("a removed value stops matching", func(t *testing.T) {
+		j := withHex()
+		j.SetOptions(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{"hex": nil}}})
+		if got := names(j); len(got) != 0 {
+			t.Errorf("after removing hex: %v, want none", got)
+		}
+		parses(t, j, "0xff", float64(255))
+	})
+
+	t.Run("an added value joins in name order", func(t *testing.T) {
+		j := withHex()
+		j.SetOptions(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{
+			"b64": {Match: regexp.MustCompile(`^b64:[A-Za-z0-9+/=]+`)},
+		}}})
+		if got := names(j); !reflect.DeepEqual(got, []string{"b64", "hex"}) {
+			t.Errorf("after adding b64: %v, want [b64 hex]", got)
+		}
+		parses(t, j, "0xff", "HEX:0xff")
+	})
+
+	t.Run("the same grammar applied twice", func(t *testing.T) {
+		j := pmTopVal()
+		gs := &GrammarSpec{OptionsMap: map[string]any{
+			"match": map[string]any{"value": map[string]any{
+				"hex": map[string]any{"match": "@/^0x[0-9a-f]+/"},
+			}},
+		}}
+		for i := 0; i < 2; i++ {
+			if err := j.Grammar(gs); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := names(j); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("after applying the grammar twice: %v, want [hex]", got)
+		}
+	})
+
+	t.Run("a derived child", func(t *testing.T) {
+		j := withHex()
+		for i := 0; i < 3; i++ {
+			j.SetOptions(Options{})
+		}
+		child, err := j.Derive()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := names(child); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("derived child: %v, want [hex]", got)
+		}
+	})
+
+	// A config modifier adds a value outside Match.Value, and it re-runs
+	// on every rebuild, so it is kept exactly once rather than carried
+	// forward from the live config. The empty Match options switch the
+	// match lexer on.
+	t.Run("a value a config modifier adds", func(t *testing.T) {
+		j := pmTopVal()
+		j.SetOptions(Options{Match: &MatchOptions{}, Property: &PropertyOptions{ConfigModify: map[string]ConfigModifier{
+			"add-hex": func(cfg *LexConfig, _ *Options) {
+				cfg.MatchValues = append(cfg.MatchValues, &MatchValueEntry{
+					Name: "hex", Match: regexp.MustCompile(`^0x[0-9a-f]+`), Val: hexVal,
+				})
+			},
+		}}})
+		for i := 0; i < 3; i++ {
+			j.SetOptions(Options{})
+		}
+		if got := names(j); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("after three empty SetOptions calls: %v, want [hex]", got)
+		}
+		parses(t, j, "0xff", "HEX:0xff")
+	})
+
+	// Config() is open to modification, so a value appended to the live
+	// config is one the options know nothing about and buildConfig cannot
+	// rebuild. SetOptions carries it forward, once, however often it runs.
+	t.Run("a value registered on the live config", func(t *testing.T) {
+		j := pmTopVal()
+		j.SetOptions(Options{Match: &MatchOptions{}})
+		cfg := j.Config()
+		cfg.MatchValues = append(cfg.MatchValues, &MatchValueEntry{
+			Name: "hex", Match: regexp.MustCompile(`^0x[0-9a-f]+`), Val: hexVal,
+		})
+		for i := 0; i < 3; i++ {
+			j.SetOptions(Options{Tag: "x"})
+		}
+		if got := names(j); !reflect.DeepEqual(got, []string{"hex"}) {
+			t.Errorf("after three unrelated SetOptions calls: %v, want [hex]", got)
+		}
+		parses(t, j, "0xff", "HEX:0xff")
+	})
+
+	// What SetOptions carries is told apart from what it rebuilds by the
+	// entry itself, not its name, so removing the option value leaves the
+	// live one alone.
+	t.Run("a live value beside an option value", func(t *testing.T) {
+		j := withHex()
+		cfg := j.Config()
+		cfg.MatchValues = append(cfg.MatchValues, &MatchValueEntry{
+			Name: "b64", Match: regexp.MustCompile(`^b64:[A-Za-z0-9+/=]+`),
+		})
+		for i := 0; i < 3; i++ {
+			j.SetOptions(Options{})
+		}
+		if got := names(j); !reflect.DeepEqual(got, []string{"b64", "hex"}) {
+			t.Errorf("after three empty SetOptions calls: %v, want [b64 hex]", got)
+		}
+		j.SetOptions(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{"hex": nil}}})
+		if got := names(j); !reflect.DeepEqual(got, []string{"b64"}) {
+			t.Errorf("after removing hex: %v, want [b64]", got)
+		}
+		parses(t, j, "0xff", float64(255))
+	})
+
+	// Modifiers run in map order, so two that each add a value landed in
+	// either order, and the lexer takes the first value that matches:
+	// both of these match 0xff. Every build puts them in name order.
+	t.Run("values modifiers add come out in name order", func(t *testing.T) {
+		add := func(name string) ConfigModifier {
+			return func(cfg *LexConfig, _ *Options) {
+				cfg.MatchValues = append(cfg.MatchValues, &MatchValueEntry{
+					Name: name, Match: regexp.MustCompile(`^0x[0-9a-f]+`),
+					Val: func(m []string) any { return name + ":" + m[0] },
+				})
+			}
+		}
+		mods := Options{Match: &MatchOptions{}, Property: &PropertyOptions{
+			ConfigModify: map[string]ConfigModifier{"z": add("z"), "a": add("a")},
+		}}
+		for i := 0; i < 32; i++ {
+			if got := names(Make(mods)); !reflect.DeepEqual(got, []string{"a", "z"}) {
+				t.Fatalf("Make, build %d: %v, want [a z]", i+1, got)
+			}
+		}
+		j := pmTopVal()
+		j.SetOptions(mods)
+		for i := 0; i < 32; i++ {
+			j.SetOptions(Options{})
+			if got := names(j); !reflect.DeepEqual(got, []string{"a", "z"}) {
+				t.Fatalf("SetOptions call %d: %v, want [a z]", i+1, got)
+			}
+		}
+		parses(t, j, "0xff", "a:0xff")
+	})
 }
