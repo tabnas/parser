@@ -670,8 +670,13 @@ next line of a file, the next term of a sum. The README's addition
 grammar is the model, and its diagram says so: `val` pushes `add` once,
 `add`'s close alternate on `+` is `r: 'add'`, so `1+2+3` runs the whole
 loop in one stack slot and `val` is the parent of every `add`. The
-propagation rules above hold on push and replace alike; what differs
-between the two is the depth, and only the depth.
+propagation rules above hold on push and replace alike, but the two
+routes are not otherwise interchangeable: a push keeps the pushing rule
+on the stack to resume its close phase when the child ends, and links
+the two as `parent` and `child`; a replace drops the current rule, hands
+its `parent` on to the next one and links them as `prev`, so it is the
+next rule's close phase that runs. Choose by shape, structure or
+sequence, and the depth follows.
 
 **Every repetition compiles to a replace loop.** A `*A`, `1*A` or `m*A`
 in a grammar, a `{ A }` in EBNF, a list of records, a file of lines: the
@@ -681,8 +686,9 @@ grammar compiler or a port that spells a star as right recursion —
 `H = inner H / ε`, each item pushing a new `H` — is wrong even when the
 parse succeeds. Rule depth then grows with the item count, so a flat
 file of a few thousand records trips the depth guards the hosts put on a
-parse, the rule stack and `rewind.history` grow with it, and the tree
-comes out nested where the source is flat. The ABNF grammar work found
+parse, the rule stack grows with the record count (the rewind history
+does not: it records consumed tokens either way, and `rewind.history`
+caps it), and the tree comes out nested where the source is flat. The ABNF grammar work found
 exactly that on 2026-09-27: a compiler emitting `star_x = inner star_x /
 ε` made every line of a 1,500-line file cost a frame, and the viewer
 refused the parse as nested deeper than it reads.
