@@ -66,4 +66,37 @@ describe('options-overlay', () => {
     tn.options({ result: { fail: ['c'] } })
     assert.deepStrictEqual(tn.options.result.fail, ['c', 'b'])
   })
+
+  // The twin of TestMatchValueOverlayOnTheSettingPath (#237): options()
+  // rebuilds match.value from the merged options, so repeated calls keep
+  // one matcher and a replaced or removed value stops matching. Go carried
+  // the live matchers forward on top of the rebuilt ones.
+  it('match.value is rebuilt, not carried forward, by options()', () => {
+    const hexVal = (m) => 'HEX:' + m[0]
+    const make = () => {
+      const tn = new Tabnas({
+        rule: { start: 'top' },
+        match: { value: { hex: { match: /^0x[0-9a-f]+/, val: hexVal } } },
+      })
+      const { ZZ } = tn.token
+      const { VAL } = tn.tokenSet
+      tn.rule('top', (rs) =>
+        rs.open([{ s: [VAL], a: (r) => (r.node = r.o0.val) }]).close([{ s: [ZZ] }]))
+      return tn
+    }
+
+    const repeated = make()
+    repeated.options({})
+    repeated.options({})
+    repeated.options({})
+    assert.equal(repeated.parse('0xff'), 'HEX:0xff')
+
+    const replaced = make()
+    replaced.options({ match: { value: { hex: { match: /^0x[0-9]+/, val: hexVal } } } })
+    assert.equal(replaced.parse('0xff'), 255)
+
+    const removed = make()
+    removed.options({ match: { value: { hex: null } } })
+    assert.equal(removed.parse('0xff'), 255)
+  })
 })

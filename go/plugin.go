@@ -910,7 +910,12 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	if j.parser.Config.KeySet != nil {
 		cfg.KeySet = j.parser.Config.KeySet
 	}
-	// Preserve match token/value entries added by prior SetOptions/Grammar calls.
+	// Preserve match token entries added by prior SetOptions/Grammar calls.
+	// The token maps are keyed by Tin, so carrying them forward is
+	// idempotent. Match VALUES are not carried: buildConfig has already
+	// rebuilt them in full from the merged options, and appending the live
+	// slice again added a copy of every matcher on each call, through which
+	// a replaced or removed value kept firing (#237).
 	if len(j.parser.Config.MatchTokens) > 0 {
 		for k, v := range j.parser.Config.MatchTokens {
 			cfg.MatchTokens[k] = v
@@ -931,14 +936,6 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 		for k, v := range j.parser.Config.MatchTokenFns {
 			cfg.MatchTokenFns[k] = v
 		}
-	}
-	if len(j.parser.Config.MatchValues) > 0 {
-		cfg.MatchValues = append(cfg.MatchValues, j.parser.Config.MatchValues...)
-		// Re-sort: the preserved entries may break the name-ascending order
-		// built by buildConfig. Keep lex-time iteration deterministic.
-		sort.Slice(cfg.MatchValues, func(i, k int) bool {
-			return cfg.MatchValues[i].Name < cfg.MatchValues[k].Name
-		})
 	}
 	// Re-project the merged MatchTokens map to its sorted view.
 	cfg.RebuildMatchTokensSorted()
