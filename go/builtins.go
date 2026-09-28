@@ -115,7 +115,12 @@ func cfgFlag(cfg map[string]any, key string, def bool) bool {
 
 // @node$ — allocate (when init) and/or accumulate matched terminals' src.
 // Config in r.K["node$"] = {init?, rule?, kind?, nterms?}.
-func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
+//
+// Like @capture$ and @fold$, it grows src through appendSrc
+// (srcappend.go), in amortized constant time per append: a loop that
+// carries one node through n items costs O(n), not the O(n²) that
+// copying the accumulated string on every append did.
+func builtinNodeCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if cfgBool(cfg["init"]) {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
 		r.nodeOwner = nil
@@ -127,15 +132,15 @@ func builtinNodeCfg(r *Rule, _ *Context, cfg map[string]any) {
 	nterms := cfgInt(cfg["nterms"])
 	src, _ := n["src"].(string)
 	for i := 0; i < nterms && i < len(r.O); i++ {
-		src += r.O[i].Src
+		src = appendSrc(ctx, src, r.O[i].Src)
 	}
 	n["src"] = src
 }
 
 // @capture$ — merge the just-returned child node into the current node.
 // Tagged children push into kids; untagged ones flatten (src + kids).
-// Config in r.K["capture$"] = {rule?, kind?}.
-func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
+// Config in r.K["capture$"] = {rule?, kind?}. src grows through appendSrc.
+func builtinCaptureCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if r.Node == nil {
 		r.Node = mkNode(cfgStr(cfg["rule"]), cfgStr(cfg["kind"]))
 		r.nodeOwner = nil
@@ -163,7 +168,7 @@ func builtinCaptureCfg(r *Rule, _ *Context, cfg map[string]any) {
 	}
 	ns, _ := n["src"].(string)
 	cs, _ := cm["src"].(string)
-	n["src"] = ns + cs
+	n["src"] = appendSrc(ctx, ns, cs)
 	if cm["rule"] != nil && cm["rule"] != "" {
 		n["kids"] = append(asAnySlice(n["kids"]), cm)
 	} else if ck, ok := cm["kids"].([]any); ok {
@@ -196,8 +201,8 @@ func builtinBubble(r *Rule, _ *Context) {
 // cN close-phase tokens (the separator, e.g. `+`) append their src to
 // the parent after the fold, so the parent's src spans the full run
 // while each kid spans only its own segment.
-// Config in r.K["fold$"] = {cN?}.
-func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
+// Config in r.K["fold$"] = {cN?}. src grows through appendSrc.
+func builtinFoldCfg(r *Rule, ctx *Context, cfg map[string]any) {
 	if r.Parent == nil || r.Parent == NoRule {
 		return
 	}
@@ -214,7 +219,7 @@ func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
 			reflect.ValueOf(own).Pointer() != reflect.ValueOf(p).Pointer() {
 			ps, _ := p["src"].(string)
 			os, _ := own["src"].(string)
-			p["src"] = ps + os
+			p["src"] = appendSrc(ctx, ps, os)
 			if own["rule"] != nil && own["rule"] != "" {
 				p["kids"] = append(asAnySlice(p["kids"]), own)
 			} else if oks, okk := own["kids"].([]any); okk {
@@ -226,7 +231,7 @@ func builtinFoldCfg(r *Rule, _ *Context, cfg map[string]any) {
 	for i := 0; i < cN && i < len(r.C); i++ {
 		if r.C[i] != nil {
 			ps, _ := p["src"].(string)
-			p["src"] = ps + r.C[i].Src
+			p["src"] = appendSrc(ctx, ps, r.C[i].Src)
 		}
 	}
 	r.Node = Undefined

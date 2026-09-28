@@ -121,6 +121,13 @@ type Context struct {
 	// invalidation and no lock.
 	altIdx map[altIndexKey]*altIndex
 
+	// srcTails holds, for the duration of one parse, the growable buffer
+	// behind each tree-node src string appendSrc built, keyed by its
+	// first byte, so a node's src grows in place in amortized constant
+	// time (see srcappend.go). Per-Context for the same reason as
+	// altSlots, and created on the first append that needs it.
+	srcTails map[*byte][]byte
+
 	// parseErrDiag freezes the structured-diagnostic context (rule stack,
 	// failing rule, expected tokens) at the moment ctx.ParseErr is set —
 	// rule.Process keeps mutating RS/RSI and flips the rule state after
