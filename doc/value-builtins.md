@@ -15,6 +15,19 @@ A grammar whose rules thread a node from parent to child (the engine seeds
 a pushed child's node from the parent) can assemble plain objects/arrays
 with the native-value builders as **alt actions** (`a:`).
 
+**A tree builder's append to `src` costs amortised constant time, in every
+runtime.** `@node$` appends each matched terminal to the node's `src`,
+`@capture$` each captured child's, and `@fold$` each iteration's and its
+separator's. A repetition is a replace loop that carries one node through
+all of its items, so that node takes one append per item, and the loop
+builds its `src` in time linear in the item count. TypeScript concatenates
+into ropes and Rust appends with `push_str`. A Go string is immutable, so
+the Go engine keeps the buffer behind each `src` it builds for the length
+of a parse and extends that buffer in place, in `go/srcappend.go`. The
+engine copies a `src` from anywhere else, such as one an action assigned,
+as it always has. The values are the same either way: only the time and
+the allocations differ.
+
 ## Where builtin config lives: and what it inherits
 
 **A builtin's config is bound when the GRAMMAR LOADS, and does not live in
