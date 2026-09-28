@@ -150,7 +150,11 @@ const makeCapture$ = (cfg: CaptureConfig): AltAction => (r: Rule) => {
   if (c === n) return
   n.src += c.src
   if (c.rule) n.kids.push(c)
-  else if (Array.isArray(c.kids)) n.kids.push(...c.kids)
+  // One push per kid, never a spread: a rule that repeats by replacement
+  // accumulates every item into one node, and a spread of a hundred
+  // thousand and more arguments overflows the call stack (RangeError,
+  // not a parse error) where the Go and Rust engines carry on.
+  else if (Array.isArray(c.kids)) for (const k of c.kids) n.kids.push(k)
 }
 
 // Lift the committed child's node straight up (no merge).
@@ -176,7 +180,8 @@ const makeFold$ = (cfg: FoldConfig): AltAction => (r: Rule) => {
   if (null != own && 'object' === typeof own && 'src' in own && own !== p) {
     p.src += own.src
     if (own.rule) p.kids.push(own)
-    else if (Array.isArray(own.kids)) p.kids.push(...own.kids)
+    // One push per kid, never a spread (see makeCapture$).
+    else if (Array.isArray(own.kids)) for (const k of own.kids) p.kids.push(k)
   }
   const cN = cfg.cN || 0
   for (let i = 0; i < cN; i++) p.src += r.c[i].src

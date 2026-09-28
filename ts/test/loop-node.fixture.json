@@ -1,0 +1,160 @@
+{
+  "ref": {},
+  "options": {
+    "fixed": {
+      "token": {
+        "#A": "a",
+        "#B": "b"
+      }
+    },
+    "rule": {
+      "start": "__start__"
+    },
+    "lex": {
+      "empty": true
+    }
+  },
+  "rule": {
+    "S": {
+      "open": [
+        {
+          "g": "tt",
+          "p": "_gen1_star_X",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "S",
+              "kind": "user",
+              "nterms": 0
+            }
+          }
+        }
+      ],
+      "close": [
+        {
+          "a": "@capture$",
+          "k": {
+            "capture$": {
+              "rule": "S",
+              "kind": "user"
+            }
+          },
+          "g": "tt"
+        }
+      ]
+    },
+    "X": {
+      "open": [
+        {
+          "g": "tt",
+          "s": "#A #B",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "X",
+              "kind": "user",
+              "nterms": 2
+            }
+          }
+        }
+      ]
+    },
+    "_gen1_star_X$alt0": {
+      "open": [
+        {
+          "p": "X",
+          "n": {
+            "rep": 0
+          },
+          "g": "tt"
+        }
+      ],
+      "close": [
+        {
+          "r": "_gen1_star_X$alt0$step1",
+          "n": {
+            "rep": 1
+          },
+          "a": "@capture$",
+          "k": {
+            "capture$": {
+              "rule": "_gen1_star_X$alt0",
+              "kind": "helper"
+            }
+          },
+          "g": "tt"
+        }
+      ]
+    },
+    "_gen1_star_X$alt0$step1": {
+      "open": [
+        {
+          "r": "_gen1_star_X",
+          "g": "tt"
+        }
+      ]
+    },
+    "_gen1_star_X": {
+      "open": [
+        {
+          "c": {
+            "n.rep": 0
+          },
+          "n": {
+            "rep": 1
+          },
+          "r": "_gen1_star_X",
+          "a": "@node$",
+          "k": {
+            "node$": {
+              "init": true,
+              "rule": "_gen1_star_X",
+              "kind": "helper",
+              "nterms": 0
+            }
+          },
+          "g": "tt"
+        },
+        {
+          "s": "#A",
+          "b": 1,
+          "r": "_gen1_star_X$alt0",
+          "g": "tt"
+        },
+        {
+          "g": "tt",
+          "s": "#ZZ",
+          "b": 1
+        },
+        {
+          "g": "tt"
+        }
+      ]
+    },
+    "__start__": {
+      "open": [
+        {
+          "p": "S",
+          "g": "tt"
+        }
+      ],
+      "close": [
+        {
+          "s": "#ZZ",
+          "a": "@bubble$",
+          "g": "tt,end"
+        }
+      ]
+    }
+  },
+  "meta": {
+    "provenance": {
+      "__start__": "S",
+      "_gen1_star_X": "S",
+      "_gen1_star_X$alt0": "S",
+      "_gen1_star_X$alt0$step1": "S"
+    }
+  }
+}
