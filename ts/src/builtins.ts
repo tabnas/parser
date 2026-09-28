@@ -49,6 +49,14 @@ export const BUILTIN_SCHEMA_VERSION = 5
 
 const defprop = Object.defineProperty
 
+// Append `from`'s elements to `to`, one push each, over the count `from`
+// had when the call began: `push(...from)` did the same without the call
+// stack, and a live count would never end where the two are one array.
+function appendKids(to: any[], from: any[]): void {
+  const n = from.length
+  for (let i = 0; i < n; i++) to.push(from[i])
+}
+
 // Attach the engine's info marker as a hidden (non-enumerable) property on
 // a node, so a grammar running with `info` on can introspect a container's
 // origin (implicit flag, meta bag) or a string's quote without the marker
@@ -153,8 +161,11 @@ const makeCapture$ = (cfg: CaptureConfig): AltAction => (r: Rule) => {
   // One push per kid, never a spread: a rule that repeats by replacement
   // accumulates every item into one node, and a spread of a hundred
   // thousand and more arguments overflows the call stack (RangeError,
-  // not a parse error) where the Go and Rust engines carry on.
-  else if (Array.isArray(c.kids)) for (const k of c.kids) n.kids.push(k)
+  // not a parse error) where the Go and Rust engines carry on. The count
+  // is taken first, as the spread took it: two nodes whose `kids` are one
+  // array (a custom action can build them so) would otherwise grow the
+  // array under the loop that reads it, and never end.
+  else if (Array.isArray(c.kids)) appendKids(n.kids, c.kids)
 }
 
 // Lift the committed child's node straight up (no merge).
@@ -181,7 +192,7 @@ const makeFold$ = (cfg: FoldConfig): AltAction => (r: Rule) => {
     p.src += own.src
     if (own.rule) p.kids.push(own)
     // One push per kid, never a spread (see makeCapture$).
-    else if (Array.isArray(own.kids)) for (const k of own.kids) p.kids.push(k)
+    else if (Array.isArray(own.kids)) appendKids(p.kids, own.kids)
   }
   const cN = cfg.cN || 0
   for (let i = 0; i < cN; i++) p.src += r.c[i].src
