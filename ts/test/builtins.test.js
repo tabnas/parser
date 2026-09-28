@@ -101,6 +101,24 @@ describe('builtins', () => {
       assert.equal(j.parse('12+3+45').kids.length, 3)
     })
 
+    it('@capture$ takes a child of two hundred thousand kids', () => {
+      // A rule that repeats by replacement, as @tabnas/bnf emits `S = *X`
+      // (loop-node.fixture.json: the loop's node accumulates every item,
+      // and its parent's @capture$ merges that one untagged node), hands
+      // over a node holding as many kids as the input has items. Merging
+      // them with a spread passed every kid as an argument, which V8
+      // refuses past about 130,000 with a RangeError, no TabnasError and
+      // no position, where the Go and Rust engines parse the same input.
+      const j = new Tabnas()
+      j.grammar(require('./loop-node.fixture.json'))
+      const n = 200_000
+      const out = j.parse('ab'.repeat(n))
+      assert.equal(out.rule, 'S')
+      assert.equal(out.kids.length, n)
+      assert.equal(out.kids[n - 1].src, 'ab')
+      assert.equal(out.src.length, 2 * n)
+    })
+
     it('@capture$ merges the PUSHED child, not its replacement chain', () => {
       // `rule.child` is linked in the push arm (rules.ts:665) and never
       // relinked, so a child that replaces itself leaves the parent on the
