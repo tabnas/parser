@@ -110,9 +110,14 @@ canonical engine, with `test/spec` rows that pin what a cut chain
 answers (`prev.prev.name` under `history: 1` is absent) and a fixture
 that parses 10,000 items under `history: 3` while a rule subscriber
 records the number of live snapshots, which must stay under a constant.
-If the Rust port carries it before TypeScript does, the option is
-registered in `DIVERGENCE.md` as a Rust-only setting until then, in the
-form the register uses for a repaired split.
+The Rust port carries it first, as this design's prototype, so the
+option is registered in `DIVERGENCE.md` ("A bounded rule history in
+Rust") and in `test/spec/divergent.tsv` as `rule-history-bounded` with
+`rule-history-control` as its control: `prev.prev.name` read two
+replacements back resolves in every runtime with the option unset, and
+under `history: 1` resolves in TypeScript and Go, which do not carry the
+option, and not in Rust. The group is deleted when the other two
+runtimes implement it.
 
 ## Measurements
 

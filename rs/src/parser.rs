@@ -4338,20 +4338,32 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
 /// copy is a twenty-field struct with eight `Rc` clones, `history` of
 /// them per link. `None` links the snapshot untouched.
 fn bounded_history(snapshot: Rc<RuleSnapshot>, history: Option<usize>) -> Rc<RuleSnapshot> {
-    fn cut(snapshot: &Rc<RuleSnapshot>, keep: usize) -> Rc<RuleSnapshot> {
-        let mut copy = (**snapshot).clone();
+    let Some(history) = history else {
+        return snapshot;
+    };
+    // The links to copy, nearest first: the snapshot and up to
+    // `history - 1` of its predecessors. Collected and then rebuilt from
+    // the far end, with no recursion, so that a bound as long as the
+    // chain costs stack nothing, as `RuleSnapshot`'s `Drop` walks the
+    // same chain without it.
+    let mut links: Vec<&Rc<RuleSnapshot>> = Vec::with_capacity(history.min(64));
+    let mut link = Some(&snapshot);
+    while let Some(current) = link {
+        if links.len() == history {
+            break;
+        }
+        links.push(current);
+        link = current.prev_rule.as_ref();
+    }
+    let mut prev: Option<Rc<RuleSnapshot>> = None;
+    for original in links.into_iter().rev() {
+        let mut copy = (**original).clone();
         copy.child_rule = None;
         copy.next_rule = None;
-        copy.prev_rule = match (keep, snapshot.prev_rule.as_ref()) {
-            (0, _) | (_, None) => None,
-            (keep, Some(prev)) => Some(cut(prev, keep - 1)),
-        };
-        Rc::new(copy)
+        copy.prev_rule = prev.take();
+        prev = Some(Rc::new(copy));
     }
-    match history {
-        None => snapshot,
-        Some(history) => cut(&snapshot, history.saturating_sub(1)),
-    }
+    prev.expect("at least the snapshot itself is copied")
 }
 
 fn snapshot_condition_exists(rule: &RuleSnapshot, path: &[String]) -> bool {

@@ -10,10 +10,10 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use tabnas::{RuleSnapshot, Tabnas};
+use tabnas::{RuleSnapshot, Tabnas, Value};
 
 /// The serialized strict-JSON builder grammar, with the history set as
 /// `spelling` says (`null` for the default, an integer for a bound).
@@ -156,13 +156,15 @@ fn the_history_bounds_the_chain_a_sequence_links_and_changes_no_value() {
     assert_eq!(bounded.to_string().len(), long.len());
 }
 
-/// Peak resident memory and time over a flat array, for the design
-/// document's table. Run by hand, in a release build:
+/// Peak resident memory (`VmHWM`, so Linux only) and time over a flat
+/// array, for the design document's table. Run by hand, in a release
+/// build:
 ///
 ///     TABNAS_HISTORY=null TABNAS_ITEMS=300000 \
 ///     cargo test --release --test rule_history_test -- --ignored --nocapture
 ///
-/// `TABNAS_FILE=<path>` parses that JSON file instead.
+/// `TABNAS_FILE=<path>` parses that JSON file instead. A line every
+/// thirty seconds says how far the parse is through the source.
 #[test]
 #[ignore]
 fn measure_peak_memory_over_a_flat_array() {
@@ -176,21 +178,59 @@ fn measure_peak_memory_over_a_flat_array() {
         Ok(file) => std::fs::read_to_string(&file).expect("the file to parse"),
         Err(_) => flat_array(items),
     };
-    let parser = json_parser(&spelling);
+    let mut parser = json_parser(&spelling);
     let started = Instant::now();
+    let last_report = Mutex::new(started);
+    let len = src.len();
+    parser.subscribe_rules(move |rule, _context| {
+        let mut last = last_report.lock().unwrap();
+        if last.elapsed() < Duration::from_secs(30) {
+            return;
+        }
+        *last = Instant::now();
+        let at = rule.o0().map_or(0, |token| token.site.si);
+        println!(
+            "parsing: {at} of {len} bytes ({}%), {:.0}s",
+            at * 100 / len.max(1),
+            started.elapsed().as_secs_f64()
+        );
+    });
     let value = parser.parse(&src).expect("parses");
     let elapsed = started.elapsed();
-    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-    let peak_kb: usize = status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmHWM:"))
-        .and_then(|rest| rest.trim().trim_end_matches(" kB").trim().parse().ok())
-        .unwrap_or(0);
+    // The count reported is the parsed array's, so a file's is its own.
+    let items = match &value {
+        Value::Array(elements) => elements.len(),
+        _ => items,
+    };
     println!(
-        "history={spelling} items={items} bytes={} elapsed={:.2}s peak={} MB value_len={}",
-        src.len(),
+        "history={spelling} items={items} bytes={len} elapsed={:.2}s peak={} MB value_len={}",
         elapsed.as_secs_f64(),
-        peak_kb / 1024,
+        peak_rss_mb(),
         value.to_string().len()
     );
+}
+
+/// Peak resident memory of this process in MB, from `VmHWM`.
+#[cfg(target_os = "linux")]
+fn peak_rss_mb() -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").expect("/proc/self/status");
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))
+        .and_then(|rest| {
+            rest.trim()
+                .trim_end_matches(" kB")
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .expect("VmHWM in /proc/self/status")
+        / 1024
+}
+
+/// The measurement reads Linux's `/proc`; elsewhere it stops rather than
+/// report a peak it did not measure.
+#[cfg(not(target_os = "linux"))]
+fn peak_rss_mb() -> usize {
+    panic!("peak resident memory is read from /proc/self/status, which needs Linux");
 }

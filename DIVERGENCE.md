@@ -655,6 +655,40 @@ Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
 one:** it is what tells a later reader that the child link itself is at
 parity and only the walk past it is not.
 
+### A bounded rule history in Rust
+
+**Deferred, designed** — an option the Rust port carries before the
+canonical engine does, as the prototype of a design the three runtimes
+are meant to share, recorded here so the split is executable until they
+do.
+
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) designs
+`options.rule.history`: an integer of at least 1 bounding how many
+predecessor snapshots a rule can reach through `prev`, so that a
+replacement loop's iterations stop keeping every earlier iteration alive
+until the container closes (peak memory 65 to 90 times the input on
+record-shaped documents). The Rust port implements it. TypeScript and
+Go do not yet, and neither refuses the key: Go's option validator checks
+declared fields only and TypeScript's merge keeps unknown keys. So under
+the same grammar and the same option, they keep every predecessor and
+Rust keeps `history`.
+
+| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
+|---|---|---|---|---|---|
+| `child` replaced by `child2`, `child2` by `child3` | `prev.prev.name` on `child3` | unset | `child` | `child` | `child` |
+| same | same | `1` | `child` | `child` | **nothing** |
+
+Repair direction: **TypeScript and Go change**, TypeScript first as the
+canonical engine, by implementing the option as the design describes;
+then the columns agree and this entry and its group are deleted. Until
+then a grammar must not set the option and read past the bound in one
+runtime while expecting the other's answer, and no grammar in the fleet
+does: the survey in the design document found no `prev.prev` read.
+
+Registered as `rule-history-bounded`, with `rule-history-control` as
+its control: the same grammar with the option unset, where the three
+ports agree that `prev.prev.name` resolves.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

@@ -1773,23 +1773,30 @@ fn apply_options(
         // An integer of at least 1 bounds the chain; `null` or `false`
         // keeps every link, as the default does.
         if let Some(history) = rule.get("history") {
-            options.rule.history =
-                match history {
-                    JsonValue::Null | JsonValue::Bool(false) => None,
-                    JsonValue::Number(_) => match history.as_i64() {
-                        Some(value) if value >= 1 => Some(value as usize),
-                        _ => return Err(GrammarError(
+            options.rule.history = match history {
+                JsonValue::Null | JsonValue::Bool(false) => None,
+                JsonValue::Number(_) => match history.as_i64() {
+                    Some(value) if value >= 1 => Some(usize::try_from(value).map_err(|_| {
+                        GrammarError(
+                            "Grammar: options.rule.history is outside the supported range".into(),
+                        )
+                    })?),
+                    _ => {
+                        return Err(GrammarError(
                             "Grammar: options.rule.history must be an integer of at least 1, null \
                              or false"
                                 .into(),
-                        )),
-                    },
-                    _ => return Err(GrammarError(
+                        ))
+                    }
+                },
+                _ => {
+                    return Err(GrammarError(
                         "Grammar: options.rule.history must be an integer of at least 1, null or \
                          false"
                             .into(),
-                    )),
-                };
+                    ))
+                }
+            };
         }
     }
     if let Some(parse) = map.get("parse") {
