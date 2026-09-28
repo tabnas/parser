@@ -835,6 +835,12 @@ pub struct RuleOptions {
     pub include: String,
     pub exclude: String,
     pub start: String,
+    /// How many predecessor snapshots a rule can reach through `prev`:
+    /// the `prev_rule` chain a replace or a push links is cut past this
+    /// many links, so a sequence's iterations are not all kept until its
+    /// container closes. `None` keeps every link, which is the canonical
+    /// behaviour and the default (`doc/rule-history-bound.md`).
+    pub history: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -949,6 +955,7 @@ impl Default for RuleOptions {
             include: String::new(),
             exclude: String::new(),
             start: "val".to_string(),
+            history: None,
         }
     }
 }

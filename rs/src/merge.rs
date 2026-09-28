@@ -739,6 +739,13 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
         "rule.finish",
         &PartialEq::eq,
     )?;
+    out.rule.history = pick(
+        &left.rule.history,
+        &right.rule.history,
+        &default.rule.history,
+        "rule.history",
+        &PartialEq::eq,
+    )?;
     out.rule.maxmul = pick(
         &left.rule.maxmul,
         &right.rule.maxmul,

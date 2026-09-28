@@ -3259,7 +3259,10 @@ impl Parser {
                     child.parent_node = Some(current_rule.node.clone());
                     child.n = Rc::clone(&current_rule.n);
                     child.k = Rc::clone(&current_rule.k);
-                    child.parent_rule = Some(current_rule.snapshot());
+                    child.parent_rule = Some(bounded_history(
+                        current_rule.snapshot(),
+                        self.options.rule.history,
+                    ));
                     current_rule.next_rule_name = Some(push_shared);
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
@@ -3297,7 +3300,10 @@ impl Parser {
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
-                    child.parent_rule = Some(current_rule.snapshot());
+                    child.parent_rule = Some(bounded_history(
+                        current_rule.snapshot(),
+                        self.options.rule.history,
+                    ));
                     completed_rule = self.rule_done_copy(&current_rule);
                     // The child about to run shares this rule's node cell,
                     // and `child_node` may be a second handle on the very
@@ -3363,7 +3369,10 @@ impl Parser {
                     if is_open {
                         current_rule.state = RuleState::Close;
                     }
-                    next.prev_rule = Some(current_rule.snapshot());
+                    next.prev_rule = Some(bounded_history(
+                        current_rule.snapshot(),
+                        self.options.rule.history,
+                    ));
                     // The rule being replaced stops existing here. If it is
                     // the one its parent PUSHED, the parent's `child` link
                     // stays on it -- TypeScript never relinks `rule.child`
@@ -4314,6 +4323,34 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
         }
         "spec" if rest == ["name"] => Some(Value::String(rule.name.to_string())),
         _ => None,
+    }
+}
+
+/// A snapshot to link, bounded by `options.rule.history`
+/// (`doc/rule-history-bound.md`): a copy that keeps `history - 1`
+/// predecessors, each a copy the same way, and no child links. The
+/// child links are what defeat a cut of the predecessors alone: a
+/// predecessor's child carries a parent link to a copy with
+/// predecessors of its own, and that ladder reaches back through the
+/// whole sequence. What a rule reads through `prev` (its counters,
+/// values, tokens, node and name) and through `parent` (the pusher and
+/// its own parents) is kept; `prev.child` and `prev.next` are not. A
+/// copy is a twenty-field struct with eight `Rc` clones, `history` of
+/// them per link. `None` links the snapshot untouched.
+fn bounded_history(snapshot: Rc<RuleSnapshot>, history: Option<usize>) -> Rc<RuleSnapshot> {
+    fn cut(snapshot: &Rc<RuleSnapshot>, keep: usize) -> Rc<RuleSnapshot> {
+        let mut copy = (**snapshot).clone();
+        copy.child_rule = None;
+        copy.next_rule = None;
+        copy.prev_rule = match (keep, snapshot.prev_rule.as_ref()) {
+            (0, _) | (_, None) => None,
+            (keep, Some(prev)) => Some(cut(prev, keep - 1)),
+        };
+        Rc::new(copy)
+    }
+    match history {
+        None => snapshot,
+        Some(history) => cut(&snapshot, history.saturating_sub(1)),
     }
 }
 
