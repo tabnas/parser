@@ -5,7 +5,7 @@ go 1.24.7
 require (
 	github.com/tabnas/json/go v0.5.11
 	github.com/tabnas/jsonic/go v0.7.2
-	github.com/tabnas/parser/go v0.12.5
+	github.com/tabnas/parser/go v0.12.6
 )
 
 // The engine under test is this repository's own module, so it is replaced by

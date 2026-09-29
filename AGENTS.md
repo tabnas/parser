@@ -105,7 +105,7 @@ rather than letting the subset that did run stand in for the whole.
 |---|---|
 | `ts/` | **Canonical** TypeScript implementation. The grammar-free engine package (`@tabnas/parser` on npm). Source in `src/` (`tabnas.ts`, `lexer.ts`, `rules.ts`, `parser.ts`, `context.ts`, `defaults.ts`, `error.ts`, `utility.ts`, `types.ts`). Strict-JSON grammar lives as a test fixture (`ts/test/json-plugin.ts`). BNF and Debug plugins live in separate repos. |
 | `go/` | Go port of the engine — grammar-free like TS. Module: `github.com/tabnas/parser/go`; the package's `const VERSION` lives in `go/tabnas.go`. Strict-JSON grammar lives as a test fixture (`go/jsonplugin_test.go`), mirroring the TS fixture. Grammar packages are shipped separately, not in this repo. |
-| `rs/` | Rust port of the engine, grammar-free like TS. Crate `tabnas` (`rs/Cargo.toml`; `pub const VERSION` in `rs/src/lib.rs`). It runs every non-exempt shared fixture, the imperative plugin surface and recovery; `rs/README.md` records the parity status and `doc/rust-port-implementation-plan.md` the design it follows. |
+| `rs/` | Rust port of the engine, grammar-free like TS. Package `tabnas-parser` on crates.io, with the Rust library/import name `tabnas` (`rs/Cargo.toml`; `pub const VERSION` in `rs/src/lib.rs`). It runs every non-exempt shared fixture, the imperative plugin surface and recovery; `rs/README.md` records the parity status and `doc/rust-port-implementation-plan.md` the design it follows. |
 | `go/clib/` | The engine as a C shared library, `libtabnasparser`, exporting the uniform tabnas C ABI of admin ADR-12 (`tabnas_version`, `tabnas_grammar`, `tabnas_parse`, `tabnas_grammar_free`, `tabnas_free`; every call returns a JSON document). This is the one clib whose `tabnas_grammar` argument is defined: a serialized GrammarSpec. Files carrying a `tabnas-clib-template` marker are stamped by admin `tasks/adopt-clib.sh`; change the template and restamp, never the files. `engine_test.go` is this repo's own. `go test ./...` from `go/` runs it; `./build.sh` builds it; `release.yml` (through `clib-release.yml`) attaches it to the GitHub Release. See [`go/clib/README.md`](go/clib/README.md). |
 | `py/` | A `ctypes` binding over `libtabnasparser`, not yet packaged. Build the library, then `cd py && python3 -m unittest -v`; `make test` does not run it, and no workflow in this repo does. See [`py/README.md`](py/README.md). |
 | `test/spec/` | `.tsv` fixtures (input → expected pairs, or `ERROR:<code>`) for the engine's own surface: strict-JSON (`include-json*.tsv`), `utility-*.tsv`, `lex-string-control.tsv`, `happy.tsv`. Every file here has a runner in this repo. Relaxed-grammar fixtures belong in the grammar's repo — see [`test/AGENTS.md`](test/AGENTS.md). |
@@ -248,7 +248,7 @@ The steps, in order:
    regenerating before building stops the release at `MODULE_NOT_FOUND` on
    any checkout where `ts/dist` is absent.
 3. **Regenerate the Rust lockfile:** `(cd rs && cargo update --workspace)`.
-   It rewrites one line — the root `tabnas` entry — and re-pins nothing
+   It rewrites one line — the root `tabnas-parser` entry — and re-pins nothing
    else. This is the version site that gets missed, because it is
    generated rather than edited. `rust.yml` runs `ci/rust/run.sh` with
    `--locked`, so a stale `rs/Cargo.lock` turns that job red; see "The
