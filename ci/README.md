@@ -483,7 +483,10 @@ below).
   meant hand-merging a second `release.yml` against the live one, and the
   bulk promotion of 2026-09-22 made it live too early. What replaces it is
   already in `.github/workflows/` and inert: `crates-release.yml`, which
-  `release.yml`'s `crates` job calls with the release tag. Both skip
+  `release.yml`'s `crates` job calls with the dedicated `rs/v<version>` tag.
+  A normal dispatch creates that tag atomically with `ts/v<version>` and the
+  optional `go/v<version>` tag. `crates-release.yml` rejects the TS and Go
+  tags, so a Rust artifact always has its own release ref. Both workflows skip
   unless the repository or organisation variable `TABNAS_CRATES` is `on`
   (admin ADR-21, proposed).
 
