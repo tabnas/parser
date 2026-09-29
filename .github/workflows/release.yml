@@ -155,9 +155,6 @@ jobs:
           V="${{ steps.v.outputs.version }}"
           MISSING=""; ANCHOR=""; ANCHOR_TAG=""
           for T in "ts/v$V" "rs/v$V" "go/v$V"; do
-            case "$T" in
-              go/*) [ "${{ inputs.go }}" = "true" ] || continue ;;
-            esac
             if C="$(git rev-parse -q --verify "refs/tags/$T^{commit}")"; then
               if [ -z "$ANCHOR" ]; then
                 ANCHOR="$C"
@@ -167,6 +164,11 @@ jobs:
                 exit 1
               fi
             else
+              # `go: false` suppresses only creation of a missing Go tag.
+              # An existing one still anchors and constrains every repair.
+              case "$T" in
+                go/*) [ "${{ inputs.go }}" = "true" ] || continue ;;
+              esac
               MISSING="$MISSING $T"
             fi
           done
