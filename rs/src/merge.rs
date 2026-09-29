@@ -739,6 +739,16 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
         "rule.finish",
         &PartialEq::eq,
     )?;
+    // Each bound as the links read it (`effective_rule_history`): two
+    // values that parse alike, `Some(0)` and `Some(1)` or one past the
+    // cap and the cap, are no conflict.
+    out.rule.history = pick(
+        &crate::options::effective_rule_history(left.rule.history),
+        &crate::options::effective_rule_history(right.rule.history),
+        &default.rule.history,
+        "rule.history",
+        &PartialEq::eq,
+    )?;
     out.rule.maxmul = pick(
         &left.rule.maxmul,
         &right.rule.maxmul,

@@ -1770,6 +1770,39 @@ fn apply_options(
         if let Some(exclude) = rule.get("exclude").and_then(JsonValue::as_str) {
             options.rule.exclude = exclude.into();
         }
+        // An integer of at least 1, and at most `MAX_RULE_HISTORY`,
+        // bounds the chain; `null` or `false` keeps every link, as the
+        // default does.
+        if let Some(history) = rule.get("history") {
+            options.rule.history =
+                match history {
+                    JsonValue::Null | JsonValue::Bool(false) => None,
+                    JsonValue::Number(_) => match history.as_i64() {
+                        Some(value) if value >= 1 => Some(
+                            usize::try_from(value)
+                                .ok()
+                                .filter(|value| *value <= crate::options::MAX_RULE_HISTORY)
+                                .ok_or_else(|| {
+                                    GrammarError(format!(
+                                        "Grammar: options.rule.history is outside the supported \
+                                     range (at most {})",
+                                        crate::options::MAX_RULE_HISTORY
+                                    ))
+                                })?,
+                        ),
+                        _ => return Err(GrammarError(
+                            "Grammar: options.rule.history must be an integer of at least 1, null \
+                             or false"
+                                .into(),
+                        )),
+                    },
+                    _ => return Err(GrammarError(
+                        "Grammar: options.rule.history must be an integer of at least 1, null or \
+                         false"
+                            .into(),
+                    )),
+                };
+        }
     }
     if let Some(parse) = map.get("parse") {
         let parse = object(parse, "options.parse")?;

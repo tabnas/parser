@@ -828,6 +828,27 @@ pub struct ResultOptions {
     pub fail: Vec<crate::Value>,
 }
 
+/// The largest `options.rule.history` a rule's links honour. Every
+/// replace and push copies up to `history` snapshots, so the bound is
+/// the cost of each link: capped, a parse stays linear in its length
+/// whatever the bound, where a bound as long as the sequence copied
+/// `1 + 2 + … + N` snapshots. Sixteen is five times the deepest walk the
+/// fleet reads (three hops), and the largest bound measured faster than
+/// no bound at all: over 300,000 array items a release build took 2.2 s
+/// at 16 and 2.8 s unbounded, 3.3 s at 32 and 6.2 s at 64
+/// (`doc/rule-history-bound.md`). A grammar that asks for more is
+/// refused; a larger value set on [`RuleOptions::history`] directly is
+/// read as this, and `Some(0)` as 1.
+pub const MAX_RULE_HISTORY: usize = 16;
+
+/// The bound a rule's links honour for `history`: 1 to
+/// [`MAX_RULE_HISTORY`], or `None` for every link. Read wherever the
+/// option decides something, the links themselves and a merge, so two
+/// values that parse alike are alike everywhere.
+pub(crate) fn effective_rule_history(history: Option<usize>) -> Option<usize> {
+    history.map(|history| history.clamp(1, MAX_RULE_HISTORY))
+}
+
 #[derive(Debug, Clone)]
 pub struct RuleOptions {
     pub finish: bool,
@@ -835,6 +856,14 @@ pub struct RuleOptions {
     pub include: String,
     pub exclude: String,
     pub start: String,
+    /// How many predecessor snapshots a rule can reach through `prev`:
+    /// the `prev_rule` chain a replace or a push links is cut past this
+    /// many links, so a sequence's iterations are not all kept until its
+    /// container closes. `None` keeps every link, which is the canonical
+    /// behaviour and the default (`doc/rule-history-bound.md`). Read as
+    /// 1 to [`MAX_RULE_HISTORY`]: `Some(0)` as 1, a larger value as the
+    /// cap.
+    pub history: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -949,6 +978,7 @@ impl Default for RuleOptions {
             include: String::new(),
             exclude: String::new(),
             start: "val".to_string(),
+            history: None,
         }
     }
 }

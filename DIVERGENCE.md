@@ -655,6 +655,96 @@ Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
 one:** it is what tells a later reader that the child link itself is at
 parity and only the walk past it is not.
 
+### A bounded rule history in Rust
+
+**Deferred, designed** — an option the Rust port carries before the
+canonical engine does, as the prototype of a design the three runtimes
+are meant to share, recorded here so the split is executable until they
+do.
+
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) designs
+`options.rule.history`: an integer of at least 1 bounding how many
+predecessor snapshots a rule can reach through `prev`, so that a
+replacement loop's iterations stop keeping every earlier iteration alive
+until the container closes (peak memory 65 to 90 times the input on
+record-shaped documents). The Rust port implements it, from 1 to 16,
+and refuses a grammar that asks for more when it installs. TypeScript
+and Go do not yet, and neither refuses the key: Go's option validator
+checks declared fields only and TypeScript's merge keeps unknown keys.
+So under the same grammar and the same option, they keep every
+predecessor and Rust keeps `history`, and a pusher's copy keeps
+`history - 1`, so under a bound of 1 `parent.prev` is cut too. Rust's
+copy of a replaced rule also keeps no `child` or `next` link, and no
+name for its `next`, under any bound: a finished child's `next` leads
+back to its pusher's record, and that record's `prev` to the copy
+before it, a ladder that kept every iteration alive. So `prev.child`
+and `prev.next` resolve to nothing in Rust even at a bound of 1, where
+`prev` itself resolves. A pushed child's copy of its pusher keeps both,
+so `parent.child` and `parent.next` agree; the pusher as it stood before
+it linked the child, `parent.child.parent` and past, keeps neither.
+
+| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
+|---|---|---|---|---|---|
+| `child` replaced by `child2`, `child2` by `child3` | `prev.prev.name` on `child3` | unset | `child` | `child` | `child` |
+| same | same | `1` | `child` | `child` | **nothing** |
+| `child` pushes `leaf`, then is replaced by `child2` | `prev.child.name` on `child2` | unset | `leaf` | `leaf` | `leaf` |
+| same | same | `1` | `leaf` | `leaf` | **nothing** |
+| `child` replaced by a new `child` | `prev.next.name` on the second | unset | `child` | `child` | `child` |
+| same | same | `1` | `child` | `child` | **nothing** |
+| the first grammar | `prev.prev.name` on `child3` | `17` | `child` | `child` | **refused at install** |
+
+Repair direction: **TypeScript and Go change**, TypeScript first as the
+canonical engine, by implementing the option as the design describes;
+then the columns agree and this entry and its group are deleted. Until
+then a grammar must not set the option and read past the bound, or
+through `prev.child` or `prev.next`, in one runtime while expecting the
+other's answer, and no grammar in the fleet does: the survey in the
+design document found no `prev.prev`, `prev.child` or `prev.next` read.
+
+Registered as `rule-history-bounded`, `rule-history-bounded-child` and
+`rule-history-bounded-next`, with `rule-history-control`,
+`rule-history-child-control` and `rule-history-next-control` as their
+controls: the same grammars with the option unset, where the three
+ports agree that `prev.prev.name`, `prev.child.name` and
+`prev.next.name` resolve. `rule-history-past-the-cap` registers the
+refusal, against the first control. The pusher before it linked the
+child is read through a path Rust already answers differently with the
+option unset, so its bounded row, `rule-history-bounded-pusher`, is
+registered with that split, in the entry below.
+
+### A pusher read back through its child's snapshot in Rust
+
+**Deferred** — a Rust split in how a pushed child's own snapshot links
+its pusher, found while registering the rule-history bound.
+
+A push links the child to its pusher both ways: the child's `parent`
+is the pusher, and the pusher's `child` is the child. TypeScript and
+Go link the live rules, so from the child, `parent.child.parent` is the
+pusher as it stands, and its `child` is the child itself. Rust links
+snapshots, and the child's own snapshot, the one the pusher keeps as
+`child`, carries as its `parent` a snapshot of the pusher taken before
+the pusher linked the child. So in Rust `parent.child.parent.child` is
+the child the pusher pushed before, or nothing on its first push.
+
+| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
+|---|---|---|---|---|---|
+| `list` pushes `first`, then `second` from its close phase | `parent.child.name` on `second` | unset | `second` | `second` | `second` |
+| same | `parent.child.parent.child.name` on `second` | unset | `second` | `second` | **`first`** |
+| same | same | `1` | `second` | `second` | **nothing** |
+
+Under a bound, Rust's copy of that pre-link pusher keeps no `child` or
+`next` (see the entry above), so the path resolves to nothing.
+
+Repair direction: **Rust changes**, linking the child's own snapshot to
+the pusher once the pusher has linked it, as the canonical engine reads
+it; then the rows with the option unset agree, and the bounded row
+belongs to the entry above until TypeScript and Go carry the option. No
+grammar in the fleet reads a four-hop path through `parent.child.parent`.
+
+Registered as `pusher-through-child` and `rule-history-bounded-pusher`,
+with `pusher-through-child-control` as their control: `parent.child.name`,
+the same pusher read directly, where the three ports agree.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:

@@ -28,6 +28,7 @@ pub use grammar::{
 };
 pub use lexer::{Lexer, RelexCheckpoint};
 pub use merge::MergeError;
+pub use options::MAX_RULE_HISTORY;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
     ContextParsePrepare, DebugOptions, DebugOutput, DebugPrintOptions, DebugSourceFormatter,
