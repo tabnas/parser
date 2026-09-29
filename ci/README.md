@@ -492,10 +492,9 @@ below).
   renaming `release.yml` breaks crates.io publishing exactly as it breaks
   npm.
 
-  Admin's `docs/crates-maintainer-steps.md` lists the steps that come
-  before the switch: the first manual publish of `tabnas` (RFC 3691 allows
-  a trusted publisher only on a crate that exists), its trusted publisher,
-  and then the other crates in dependency order.
+  Before the switch, a maintainer must manually publish `tabnas-parser`
+  (RFC 3691 allows a trusted publisher only on a crate that exists), add its
+  trusted publisher, and only then enable the repository variable.
 
   The org actions policy admits `rust-lang/crates-io-auth-action`. A probe
   run on 2026-09-23 downloaded and ran it, and a skipped job that uses it

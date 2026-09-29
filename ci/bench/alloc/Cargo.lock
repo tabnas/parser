@@ -17,7 +17,7 @@ version = "0.0.0"
 dependencies = [
  "indexmap",
  "mimalloc",
- "tabnas",
+ "tabnas-parser",
 ]
 
 [[package]]
@@ -199,8 +199,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "tabnas"
-version = "0.12.5"
+name = "tabnas-parser"
+version = "0.12.6"
 dependencies = [
  "indexmap",
  "regex",

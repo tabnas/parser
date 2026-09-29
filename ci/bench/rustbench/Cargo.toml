@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-tabnas = { path = "../../../rs" }
+tabnas = { package = "tabnas-parser", path = "../../../rs" }
 mimalloc = "0.1"
 
 # The configuration rs/README.md documents as the one to measure in, and

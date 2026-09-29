@@ -493,7 +493,7 @@ error: cannot update the lock file /…/rs/Cargo.lock because --locked was passe
 `v0.9.6` shipped in exactly that state: the bump commit changed
 `rs/Cargo.toml` and `rs/src/lib.rs` and not `rs/Cargo.lock`. `cargo update
 --workspace` is the fix — it re-resolves only workspace members, so the diff
-is the single `tabnas` version line and no third-party pin moves. Note that
+is the single `tabnas-parser` version line and no third-party pin moves. Note that
 the `make rs-*` targets do **not** pass `--locked`, so they update the lock
 underneath you and will not reproduce this; `ci/rust/run.sh` is the gate.
 
