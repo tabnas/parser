@@ -3262,6 +3262,7 @@ impl Parser {
                     child.parent_rule = Some(bounded_history(
                         current_rule.snapshot(),
                         self.options.rule.history,
+                        Link::Parent,
                     ));
                     current_rule.next_rule_name = Some(push_shared);
                     current_rule.child_rule = Some(child.snapshot());
@@ -3303,6 +3304,7 @@ impl Parser {
                     child.parent_rule = Some(bounded_history(
                         current_rule.snapshot(),
                         self.options.rule.history,
+                        Link::Parent,
                     ));
                     completed_rule = self.rule_done_copy(&current_rule);
                     // The child about to run shares this rule's node cell,
@@ -3372,6 +3374,7 @@ impl Parser {
                     next.prev_rule = Some(bounded_history(
                         current_rule.snapshot(),
                         self.options.rule.history,
+                        Link::Prev,
                     ));
                     // The rule being replaced stops existing here. If it is
                     // the one its parent PUSHED, the parent's `child` link
@@ -4326,40 +4329,68 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
     }
 }
 
+/// Which link a bounded snapshot becomes (see [`bounded_history`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Link {
+    /// A pushed child's `parent_rule`: the pusher.
+    Parent,
+    /// A replacement's `prev_rule`: the rule it replaces.
+    Prev,
+}
+
 /// A snapshot to link, bounded by `options.rule.history`
 /// (`doc/rule-history-bound.md`): a copy that keeps `history - 1`
-/// predecessors, each a copy the same way, and no child links. The
-/// child links are what defeat a cut of the predecessors alone: a
-/// predecessor's child carries a parent link to a copy with
-/// predecessors of its own, and that ladder reaches back through the
-/// whole sequence. What a rule reads through `prev` (its counters,
-/// values, tokens, node and name) and through `parent` (the pusher and
-/// its own parents) is kept; `prev.child` and `prev.next` are not. A
-/// copy is a twenty-field struct with eight `Rc` clones, `history` of
-/// them per link. `None` links the snapshot untouched.
-fn bounded_history(snapshot: Rc<RuleSnapshot>, history: Option<usize>) -> Rc<RuleSnapshot> {
+/// predecessors, each a copy the same way, with no `child` or `next`
+/// links. Those links are what defeat a cut of the predecessors alone:
+/// a rule's `child` is its finished child, whose `next` leads back to
+/// the rule's own record, whose `prev` is a copy of its predecessor,
+/// whose `child` does the same, a ladder through the whole sequence. So
+/// `prev.child` and `prev.next` resolve to nothing, and so does a
+/// predecessor's past them.
+///
+/// A pusher's copy, the `parent` a pushed child links, keeps the
+/// pusher's own `child` and `next` (the child itself, as it stood when
+/// pushed, before it had a `next`): no ladder starts there, and
+/// `parent.child` and `parent.next` read as they do unbounded. Its
+/// predecessors drop theirs as a replacement's do.
+///
+/// What a rule reads through `prev` (counters, values, tokens, node and
+/// name) and through `parent` (the pusher and its own parents) is kept.
+/// A copy is a twenty-field struct with eight `Rc` clones, `history` of
+/// them per link, and `history` is read as at most
+/// [`crate::options::MAX_RULE_HISTORY`], so a link costs a constant.
+/// `None` links the snapshot untouched.
+fn bounded_history(
+    snapshot: Rc<RuleSnapshot>,
+    history: Option<usize>,
+    link: Link,
+) -> Rc<RuleSnapshot> {
     let Some(history) = history else {
         return snapshot;
     };
+    let history = history.min(crate::options::MAX_RULE_HISTORY);
     // The links to copy, nearest first: the snapshot and up to
     // `history - 1` of its predecessors. Collected and then rebuilt from
     // the far end, with no recursion, so that a bound as long as the
     // chain costs stack nothing, as `RuleSnapshot`'s `Drop` walks the
     // same chain without it.
-    let mut links: Vec<&Rc<RuleSnapshot>> = Vec::with_capacity(history.min(64));
-    let mut link = Some(&snapshot);
-    while let Some(current) = link {
+    let mut links: Vec<&Rc<RuleSnapshot>> = Vec::with_capacity(history);
+    let mut current = Some(&snapshot);
+    while let Some(snapshot) = current {
         if links.len() == history {
             break;
         }
-        links.push(current);
-        link = current.prev_rule.as_ref();
+        links.push(snapshot);
+        current = snapshot.prev_rule.as_ref();
     }
     let mut prev: Option<Rc<RuleSnapshot>> = None;
-    for original in links.into_iter().rev() {
+    // `depth` counts back from the snapshot itself, which is 0.
+    for (depth, original) in links.into_iter().enumerate().rev() {
         let mut copy = (**original).clone();
-        copy.child_rule = None;
-        copy.next_rule = None;
+        if depth != 0 || link == Link::Prev {
+            copy.child_rule = None;
+            copy.next_rule = None;
+        }
         copy.prev_rule = prev.take();
         prev = Some(Rc::new(copy));
     }

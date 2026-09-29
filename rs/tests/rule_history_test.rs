@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tabnas::{RuleSnapshot, Tabnas, Value};
+use tabnas::{RuleSnapshot, Tabnas, Value, MAX_RULE_HISTORY};
 
 /// The serialized strict-JSON builder grammar, with the history set as
 /// `spelling` says (`null` for the default, an integer for a bound).
@@ -111,6 +111,25 @@ fn serialized_rule_history_spellings() {
         .grammar_json(r#"{"options":{"rule":{"history":false}}}"#)
         .unwrap();
     assert_eq!(parser.options.rule.history, None);
+    parser
+        .grammar_json(&format!(
+            r#"{{"options":{{"rule":{{"history":{MAX_RULE_HISTORY}}}}}}}"#
+        ))
+        .unwrap();
+    assert_eq!(parser.options.rule.history, Some(MAX_RULE_HISTORY));
+    let error = parser
+        .grammar_json(&format!(
+            r#"{{"options":{{"rule":{{"history":{}}}}}}}"#,
+            MAX_RULE_HISTORY + 1
+        ))
+        .err()
+        .expect("a bound past the cap is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("options.rule.history is outside the supported range (at most 16)"),
+        "{error}"
+    );
     for bad in ["0", "-3", "2.5", "true", "\"3\""] {
         let error = parser
             .grammar_json(&format!(r#"{{"options":{{"rule":{{"history":{bad}}}}}}}"#))
@@ -154,6 +173,72 @@ fn the_history_bounds_the_chain_a_sequence_links_and_changes_no_value() {
     let plain = json_parser("null").parse(&long).unwrap();
     assert_eq!(bounded, plain);
     assert_eq!(bounded.to_string().len(), long.len());
+}
+
+/// What a pushed child reads through `parent`, for every rule a parse
+/// runs: its name, and the names its pusher's copy links as `child` and
+/// `next`.
+fn parent_links(parser: &mut Tabnas, src: &str) -> Vec<(String, Option<String>, Option<String>)> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    parser.subscribe_rules(move |rule, _context| {
+        if let Some(parent) = rule.parent_rule.as_deref() {
+            let name = |link: &Option<Rc<RuleSnapshot>>| link.as_ref().map(|s| s.name.to_string());
+            sink.lock().unwrap().push((
+                rule.name.to_string(),
+                name(&parent.child_rule),
+                name(&parent.next_rule),
+            ));
+        }
+    });
+    parser.parse(src).expect("parses");
+    let links = seen.lock().unwrap().clone();
+    links
+}
+
+/// A pushed child reads its pusher's `child` and `next` under a bound as
+/// it does without one: the pusher's copy keeps its own links, since
+/// they hold the child as it stood when pushed and reach no further
+/// back. Cut with the rest, `parent.child` and `parent.next` resolved to
+/// nothing in Rust alone. Only a replaced rule's copy drops them, where
+/// they are a ladder through the sequence (`rule-history-bounded-child`
+/// registers `prev.child`).
+#[test]
+fn a_pushed_child_reads_its_parents_child_and_next_under_a_bound() {
+    let src = r#"{"a":[1,[2,3],{"b":4}],"c":[5]}"#;
+    let plain = parent_links(&mut json_parser("null"), src);
+    assert!(
+        plain
+            .iter()
+            .any(|(_, child, next)| child.is_some() && next.is_some()),
+        "no parent links to compare: {plain:?}"
+    );
+    for bound in ["1", "3"] {
+        assert_eq!(
+            parent_links(&mut json_parser(bound), src),
+            plain,
+            "history {bound}"
+        );
+    }
+}
+
+/// A bound past [`MAX_RULE_HISTORY`] set on the options directly, where
+/// no grammar refuses it, is read as the cap: each link copies at most
+/// that many snapshots, so a bound as long as the sequence costs a
+/// constant per link rather than one copy per item before it.
+#[test]
+fn a_bound_past_the_cap_is_read_as_the_cap() {
+    let (short, long) = (flat_array(500), flat_array(2000));
+    let capped = |src: &str| {
+        let mut parser = json_parser("null");
+        parser.options.rule.history = Some(usize::MAX);
+        reach(&mut parser, src)
+    };
+    let (chain, over_short) = capped(&short);
+    assert_eq!(chain, MAX_RULE_HISTORY);
+    let (chain, over_long) = capped(&long);
+    assert_eq!(chain, MAX_RULE_HISTORY);
+    assert_eq!(over_short, over_long, "reach grew with the sequence");
 }
 
 /// Peak resident memory (`VmHWM`, so Linux only) and time over a flat

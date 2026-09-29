@@ -667,27 +667,38 @@ do.
 predecessor snapshots a rule can reach through `prev`, so that a
 replacement loop's iterations stop keeping every earlier iteration alive
 until the container closes (peak memory 65 to 90 times the input on
-record-shaped documents). The Rust port implements it. TypeScript and
-Go do not yet, and neither refuses the key: Go's option validator checks
-declared fields only and TypeScript's merge keeps unknown keys. So under
-the same grammar and the same option, they keep every predecessor and
-Rust keeps `history`.
+record-shaped documents). The Rust port implements it, up to a bound
+of 16. TypeScript and Go do not yet, and neither refuses the key: Go's
+option validator checks declared fields only and TypeScript's merge
+keeps unknown keys. So under the same grammar and the same option, they
+keep every predecessor and Rust keeps `history`. Rust's copy of a
+replaced rule also keeps no `child` or `next` link, under any bound:
+a finished child's `next` leads back to its pusher's record, and that
+record's `prev` to the copy before it, a ladder that kept every
+iteration alive. So `prev.child` and `prev.next` resolve to nothing in
+Rust even at a bound of 1, where `prev` itself resolves. A pushed
+child's copy of its pusher keeps both, so `parent.child` and
+`parent.next` agree.
 
 | grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
 |---|---|---|---|---|---|
 | `child` replaced by `child2`, `child2` by `child3` | `prev.prev.name` on `child3` | unset | `child` | `child` | `child` |
 | same | same | `1` | `child` | `child` | **nothing** |
+| `child` pushes `leaf`, then is replaced by `child2` | `prev.child.name` on `child2` | unset | `leaf` | `leaf` | `leaf` |
+| same | same | `1` | `leaf` | `leaf` | **nothing** |
 
 Repair direction: **TypeScript and Go change**, TypeScript first as the
 canonical engine, by implementing the option as the design describes;
 then the columns agree and this entry and its group are deleted. Until
-then a grammar must not set the option and read past the bound in one
-runtime while expecting the other's answer, and no grammar in the fleet
-does: the survey in the design document found no `prev.prev` read.
+then a grammar must not set the option and read past the bound, or
+through `prev.child` or `prev.next`, in one runtime while expecting the
+other's answer, and no grammar in the fleet does: the survey in the
+design document found no `prev.prev`, `prev.child` or `prev.next` read.
 
-Registered as `rule-history-bounded`, with `rule-history-control` as
-its control: the same grammar with the option unset, where the three
-ports agree that `prev.prev.name` resolves.
+Registered as `rule-history-bounded` and `rule-history-bounded-child`,
+with `rule-history-control` and `rule-history-child-control` as their
+controls: the same grammars with the option unset, where the three
+ports agree that `prev.prev.name` and `prev.child.name` resolve.
 
 ## Not divergences
 

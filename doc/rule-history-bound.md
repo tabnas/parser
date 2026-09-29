@@ -70,7 +70,7 @@ links:
 
 ## The design
 
-An option, `options.rule.history`, an integer of at least 1 or `null`
+An option, `options.rule.history`, an integer from 1 to 16 or `null`
 (today's behaviour, and the default until every runtime carries the
 option): the number of predecessor snapshots a rule can reach through
 `prev`. Under it, the snapshot a replace or a push links is a bounded
@@ -79,23 +79,38 @@ copy:
 - It keeps `history - 1` predecessors, each a bounded copy the same
   way, and the one past them none. The copy is a twenty-field struct
   with eight `Rc` clones, `history` of them per link; the parse loop
-  already snapshots a rule several times per step.
+  already snapshots a rule several times per step. Because every link
+  copies up to `history` snapshots, the bound is capped at 16
+  (`MAX_RULE_HISTORY` in the Rust port): a grammar that asks for more
+  is refused, and a larger value set on the options directly is read as
+  16. Uncapped, a bound as long as the sequence copied `1 + 2 + … + N`
+  snapshots over `N` items, and a linear parse became quadratic. Sixteen
+  is five times the deepest walk the fleet reads, and the largest bound
+  measured faster than none (the table below).
 - It keeps its `parent_rule` (the pusher and, through it, the pusher's
-  own parents: a chain bounded by nesting) and drops its `child_rule`
-  and `next_rule`. The child links are what defeats a cut of the
-  predecessors alone, and the first prototype measured it: a
-  predecessor's child carries a `parent_rule` to a copy with
-  predecessors of its own, whose children carry parents with
-  predecessors, a ladder that reaches back through the whole sequence.
-  With the predecessors cut and the child links kept, peak memory went
-  UP (the copies beside the originals); with both cut it fell tenfold.
+  own parents: a chain bounded by nesting). A replaced rule's copy
+  drops its `child_rule` and `next_rule`, and so does every
+  predecessor's. Those links are what defeats a cut of the predecessors
+  alone: a rule's `child` is its finished child, whose `next` leads
+  back to the rule's own record, whose `prev` is a copy of its
+  predecessor, whose `child` does the same, a ladder that reaches back
+  through the whole sequence. The first prototype measured it: with the
+  predecessors cut and the child links kept, peak memory went UP (the
+  copies beside the originals); with both cut it fell tenfold. Keeping
+  the links on the nearest copy alone is not enough either: what a rule
+  could reach then grew by thirteen snapshots per item of the array.
+- A pusher's copy, the `parent_rule` a pushed child links, keeps its
+  own `child_rule` and `next_rule`: they hold the child as it stood when
+  pushed, before it has a `next`, so no ladder starts there. Its
+  predecessors drop theirs.
 - What a rule reads is kept: through `prev`, the predecessor's counters,
   values, tokens, node and name, and its own `prev` up to the bound;
-  through `parent`, the pusher and its parents. `prev.child` and
-  `prev.next` resolve to nothing, as `prev` on a rule with no
-  predecessor does today; no grammar in the fleet reads them.
-  `history: 3` serves every path the fleet reads and R7's walk;
-  `history: 1` serves a grammar that reads one hop.
+  through `parent`, the pusher and its parents, `parent.child` and
+  `parent.next` included. `prev.child` and `prev.next` resolve to
+  nothing, as `prev` on a rule with no predecessor does today; no
+  grammar in the fleet reads them. `history: 3` serves every path the
+  fleet reads and R7's walk; `history: 1` serves a grammar that reads
+  one hop.
 
 What a rule can reach is then a constant: over the strict-JSON fixture
 grammar, thirteen snapshots at `history: 3` whether the array has 500
@@ -116,8 +131,9 @@ Rust") and in `test/spec/divergent.tsv` as `rule-history-bounded` with
 `rule-history-control` as its control: `prev.prev.name` read two
 replacements back resolves in every runtime with the option unset, and
 under `history: 1` resolves in TypeScript and Go, which do not carry the
-option, and not in Rust. The group is deleted when the other two
-runtimes implement it.
+option, and not in Rust. `rule-history-bounded-child`, with
+`rule-history-child-control`, registers `prev.child.name` the same way.
+The group is deleted when the other two runtimes implement it.
 
 ## Measurements
 
@@ -128,11 +144,19 @@ row; the value parsed is the same under every setting.
 
 | Document | `rule.history` | Time | Peak RSS |
 |---|---|---|---|
-| 300,000 numbers in one array, 1.9 MB | unbounded | 3.3 s | 554 MB |
-| the same | 3 | 1.1 s | 57 MB |
+| 300,000 numbers in one array, 1.9 MB | unbounded | 2.8 s | 553 MB |
+| the same | 3 | 1.2 s | 57 MB |
 | the same | 1 | 1.0 s | 57 MB |
+| the same | 8 | 1.8 s | 56 MB |
+| the same | 16, the cap | 2.2 s | 56 MB |
 | 312,194 API records in one array, 25 MB | unbounded | 223 s | 2,724 MB |
 | the same | 3 | 16 s | 795 MB |
+
+The array rows at no bound, 3, 8 and 16 were measured again once the
+pusher's copy kept its `child` and `next` links and the cap came in;
+the memory did not move. Past the cap the copies cost more time than
+the bound saves: 3.3 s at 32 and 6.2 s at 64, against 2.8 s with no
+bound, for the same 56 MB. That is why the cap is 16.
 
 The records rows ran while a TypeScript suite and six audit builds
 shared the four cores (load average above ten); the same file parsed
