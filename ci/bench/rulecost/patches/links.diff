@@ -1,0 +1,295 @@
+diff -ruN a/rs/src/parser.rs b/rs/src/parser.rs
+--- a/rs/src/parser.rs
++++ b/rs/src/parser.rs
+@@ -3259,8 +3259,18 @@
+                     child.parent_node = Some(current_rule.node.clone());
+                     child.n = Rc::clone(&current_rule.n);
+                     child.k = Rc::clone(&current_rule.k);
+-                    child.parent_rule = Some(bounded_history(
+-                        current_rule.snapshot(),
++                    // Both of the push's links copy the pusher's
++                    // predecessors the same way: copy them once, and keep
++                    // them for the replace that may end this rule.
++                    if let Some(history) =
++                        crate::options::effective_rule_history(self.options.rule.history)
++                    {
++                        let source = current_rule.prev_rule.clone();
++                        let tail = bounded_tail(source.as_ref(), history);
++                        current_rule.history_tail = Some((source, tail));
++                    }
++                    child.parent_rule = Some(bounded_link(
++                        &current_rule,
+                         self.options.rule.history,
+                         Link::PusherBefore,
+                     ));
+@@ -3301,8 +3311,8 @@
+                     if is_open {
+                         current_rule.state = RuleState::Close;
+                     }
+-                    child.parent_rule = Some(bounded_history(
+-                        current_rule.snapshot(),
++                    child.parent_rule = Some(bounded_link(
++                        &current_rule,
+                         self.options.rule.history,
+                         Link::Parent,
+                     ));
+@@ -3371,8 +3381,8 @@
+                     if is_open {
+                         current_rule.state = RuleState::Close;
+                     }
+-                    next.prev_rule = Some(bounded_history(
+-                        current_rule.snapshot(),
++                    next.prev_rule = Some(bounded_link(
++                        &current_rule,
+                         self.options.rule.history,
+                         Link::Prev,
+                     ));
+@@ -4379,33 +4389,121 @@
+     let Some(history) = crate::options::effective_rule_history(history) else {
+         return snapshot;
+     };
+-    // The links to copy, nearest first: the snapshot and up to
+-    // `history - 1` of its predecessors. Collected and then rebuilt from
+-    // the far end, with no recursion, so that a bound as long as the
+-    // chain costs stack nothing, as `RuleSnapshot`'s `Drop` walks the
+-    // same chain without it.
+-    let mut links: Vec<&Rc<RuleSnapshot>> = Vec::with_capacity(history);
+-    let mut current = Some(&snapshot);
++    bounded_head(
++        &snapshot,
++        link,
++        bounded_tail(snapshot.prev_rule.as_ref(), history),
++    )
++}
++
++/// The part of a bounded link below the snapshot itself: copies of up to
++/// `history - 1` of its predecessors, starting at `prev`, each with no
++/// `child` or `next` links (see [`bounded_history`]). It depends only on
++/// `prev` and the bound, so every bounded link a rule makes while its
++/// `prev_rule` is one handle can share it.
++fn bounded_tail(
++    prev: Option<&Rc<RuleSnapshot>>,
++    history: usize,
++) -> Option<Rc<RuleSnapshot>> {
++    // The links to copy, nearest first, collected and then rebuilt from
++    // the far end with no recursion, so that a bound as long as the chain
++    // costs stack nothing, as `RuleSnapshot`'s `Drop` walks the same chain
++    // without it. `history` is at most `MAX_RULE_HISTORY`, so the list
++    // lives on the stack.
++    let mut links: [Option<&Rc<RuleSnapshot>>; crate::options::MAX_RULE_HISTORY] =
++        [None; crate::options::MAX_RULE_HISTORY];
++    let mut len = 0;
++    let mut current = prev;
+     while let Some(snapshot) = current {
+-        if links.len() == history {
++        if len + 1 >= history {
+             break;
+         }
+-        links.push(snapshot);
++        links[len] = Some(snapshot);
++        len += 1;
+         current = snapshot.prev_rule.as_ref();
+     }
+-    let mut prev: Option<Rc<RuleSnapshot>> = None;
+-    // `depth` counts back from the snapshot itself, which is 0.
+-    for (depth, original) in links.into_iter().enumerate().rev() {
+-        let mut copy = (**original).clone();
+-        if depth != 0 || link != Link::Parent {
+-            copy.child_rule = None;
+-            copy.next_rule = None;
+-            copy.next_rule_name = None;
++    let mut tail: Option<Rc<RuleSnapshot>> = None;
++    for original in links[..len].iter().rev().flatten() {
++        tail = Some(Rc::new(relinked(original, false, tail.take())));
++    }
++    tail
++}
++
++/// The snapshot itself as a bounded link: a copy over `tail`, cut of its
++/// `child` and `next` links except as the parent a pushed child keeps.
++fn bounded_head(
++    snapshot: &RuleSnapshot,
++    link: Link,
++    tail: Option<Rc<RuleSnapshot>>,
++) -> Rc<RuleSnapshot> {
++    Rc::new(relinked(snapshot, link == Link::Parent, tail))
++}
++
++/// A copy of `original` with `prev` as its predecessor, keeping its
++/// `child` and `next` links only when `keep_links`. Built field by field,
++/// so the links it drops are never cloned to be dropped again.
++fn relinked(
++    original: &RuleSnapshot,
++    keep_links: bool,
++    prev: Option<Rc<RuleSnapshot>>,
++) -> RuleSnapshot {
++    RuleSnapshot {
++        i: original.i,
++        d: original.d,
++        name: original.name.clone(),
++        spec: Arc::clone(&original.spec),
++        state: original.state,
++        bo: original.bo,
++        ao: original.ao,
++        bc: original.bc,
++        ac: original.ac,
++        need: original.need,
++        node: Rc::clone(&original.node),
++        parent_rule: original.parent_rule.clone(),
++        child_rule: if keep_links {
++            original.child_rule.clone()
++        } else {
++            None
++        },
++        prev_rule: prev,
++        next_rule: if keep_links {
++            original.next_rule.clone()
++        } else {
++            None
++        },
++        next_rule_name: if keep_links {
++            original.next_rule_name.clone()
++        } else {
++            None
++        },
++        n: Rc::clone(&original.n),
++        u: Rc::clone(&original.u),
++        k: Rc::clone(&original.k),
++        o: Rc::clone(&original.o),
++        c: Rc::clone(&original.c),
++    }
++}
++
++/// Whether two optional links are the same handle (or both absent).
++fn same_link(left: &Option<Rc<RuleSnapshot>>, right: &Option<Rc<RuleSnapshot>>) -> bool {
++    match (left, right) {
++        (None, None) => true,
++        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
++        _ => false,
++    }
++}
++
++/// The bounded link `link` of `rule`, sharing the predecessors its last
++/// push copied while `prev_rule` is still the handle they came from.
++fn bounded_link(rule: &Rule, history: Option<usize>, link: Link) -> Rc<RuleSnapshot> {
++    match &rule.history_tail {
++        Some((source, tail))
++            if history.is_some() && same_link(source, &rule.prev_rule) =>
++        {
++            bounded_head(rule, link, tail.clone())
+         }
+-        copy.prev_rule = prev.take();
+-        prev = Some(Rc::new(copy));
++        _ => bounded_history(rule.snapshot(), history, link),
+     }
+-    prev.expect("at least the snapshot itself is copied")
+ }
+ 
+ fn snapshot_condition_exists(rule: &RuleSnapshot, path: &[String]) -> bool {
+diff -ruN a/rs/src/rule.rs b/rs/src/rule.rs
+--- a/rs/src/rule.rs
++++ b/rs/src/rule.rs
+@@ -1316,8 +1316,19 @@
+     /// it -- so the loop checks the record it finds against both before
+     /// trusting it.
+     pub(crate) slot: usize,
++    /// Under a bounded `rule.history`, the bounded copies of this rule's
++    /// predecessors that its last push linked, and the `prev_rule` they
++    /// were copied from. Every bounded link this rule makes copies the
++    /// same predecessors the same way, so a later link shares them while
++    /// `prev_rule` is still that handle. Holding the handle keeps it from
++    /// being written in place: a write through it copies, and the test
++    /// fails.
++    pub(crate) history_tail: Option<HistoryTail>,
+ }
+ 
++/// See [`Rule::history_tail`]: `(source, tail)`.
++pub(crate) type HistoryTail = (Option<Rc<RuleSnapshot>>, Option<Rc<RuleSnapshot>>);
++
+ impl Drop for RuleSnapshot {
+     /// Unlink iteratively, because the derived drop recurses and the links
+     /// below form a chain as long as the input.
+@@ -1362,14 +1373,20 @@
+         /// walked without allocating anything at all. `pending` is only
+         /// reached for a snapshot holding more than one link, and a `Vec`
+         /// that is never pushed to never allocates.
++        ///
++        /// A link some other strong handle also holds is let go of where it
++        /// stands: that is a decrement, no destructor runs, and nothing can
++        /// recurse. Only a link this snapshot owns last is walked.
+         fn unlink(
+             snapshot: &mut RuleSnapshot,
+             cursor: &mut Option<Rc<RuleSnapshot>>,
+-            pending: &mut Vec<Rc<RuleSnapshot>>,
++            pending: &mut Pending,
+         ) {
+             let mut hold = |held: Option<Rc<RuleSnapshot>>| {
+                 if let Some(held) = held {
+-                    if cursor.is_none() {
++                    if Rc::strong_count(&held) > 1 {
++                        drop(held);
++                    } else if cursor.is_none() {
+                         *cursor = Some(held);
+                     } else {
+                         pending.push(held);
+@@ -1382,8 +1399,43 @@
+             hold(snapshot.next_rule.take());
+         }
+ 
++        /// A stack of links still to walk: four inline, then a `Vec`. A
++        /// snapshot holds at most four links, so a walk that meets no
++        /// fan-out wider than that never allocates.
++        struct Pending {
++            inline: [Option<Rc<RuleSnapshot>>; 4],
++            len: usize,
++            spill: Vec<Rc<RuleSnapshot>>,
++        }
++
++        impl Pending {
++            fn push(&mut self, link: Rc<RuleSnapshot>) {
++                if self.len < self.inline.len() {
++                    self.inline[self.len] = Some(link);
++                    self.len += 1;
++                } else {
++                    self.spill.push(link);
++                }
++            }
++
++            fn pop(&mut self) -> Option<Rc<RuleSnapshot>> {
++                if let Some(link) = self.spill.pop() {
++                    return Some(link);
++                }
++                if self.len == 0 {
++                    return None;
++                }
++                self.len -= 1;
++                self.inline[self.len].take()
++            }
++        }
++
+         let mut cursor: Option<Rc<RuleSnapshot>> = None;
+-        let mut pending: Vec<Rc<RuleSnapshot>> = Vec::new();
++        let mut pending = Pending {
++            inline: [None, None, None, None],
++            len: 0,
++            spill: Vec::new(),
++        };
+         unlink(self, &mut cursor, &mut pending);
+         while let Some(mut link) = cursor.take().or_else(|| pending.pop()) {
+             if Rc::weak_count(&link) == 0 {
+@@ -1544,6 +1596,7 @@
+             child_cell: None,
+             child_record: None,
+             slot: usize::MAX,
++            history_tail: None,
+         }
+     }
+ 
+@@ -1602,6 +1655,7 @@
+             child_cell: None,
+             child_record: None,
+             slot,
++            history_tail: None,
+         }
+     }
+ 

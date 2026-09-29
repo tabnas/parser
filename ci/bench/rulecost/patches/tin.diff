@@ -1,0 +1,179 @@
+diff -ruN a/rs/src/builtins.rs b/rs/src/builtins.rs
+--- a/rs/src/builtins.rs
++++ b/rs/src/builtins.rs
+@@ -197,7 +197,11 @@
+ }
+ 
+ fn token_value(rule: &mut Rule, context: &mut Context, index: usize, info: &InfoOptions) -> Value {
+-    let Some(token) = rule.o.get(index).cloned() else {
++    // Borrowed through a handle of its own on the matched list, so the live
++    // rule stays free for the lazy value callback, and the token is not
++    // copied only to read its value, tin and source.
++    let open = Rc::clone(&rule.o);
++    let Some(token) = open.get(index) else {
+         return Value::Undefined;
+     };
+     let value = token.resolve_val(rule, context);
+diff -ruN a/rs/src/parser.rs b/rs/src/parser.rs
+--- a/rs/src/parser.rs
++++ b/rs/src/parser.rs
+@@ -6,6 +6,7 @@
+ use crate::lexer::{compile_number_exclude, Lexer, RelexCheckpoint};
+ use crate::options::Options;
+ use crate::rule::{
++    empty_tokens,
+     resolved_action_order, resolved_alt_action_order, ActionBinding, AltActionBinding, AltMatch,
+     AltSpec, CompareOp, Condition, Rule, RuleDone, RuleDoneAlt, RuleName, RuleSnapshot, RuleSpec,
+     RuleState, StateAction,
+@@ -364,14 +365,45 @@
+ /// W×T entries.
+ #[derive(Debug, Default)]
+ struct AltIndex {
++    /// Indexed by tin for the tins below `DENSE_TINS`, which is every tin
++    /// the built-in tokens and the grammars allocate; a lookup is a bounds
++    /// check and a load rather than a SipHash of an `i32` per step.
++    dense: Vec<Vec<usize>>,
++    /// Any tin outside that range a grammar named explicitly.
+     by_tin: HashMap<Tin, Vec<usize>>,
+     wild: Vec<usize>,
+ }
+ 
+ const NO_ALTS: &[usize] = &[];
+ 
++/// Tins are allocated upward from `TIN_MAX`; a grammar declares tens of
++/// them, so this bounds the dense table without ever being reached in
++/// practice. A tin past it falls back to the map.
++const DENSE_TINS: usize = 1024;
++
+ impl AltIndex {
+     fn of(alts: &[AltSpec]) -> Self {
++        let mut index = Self::by_map(alts);
++        let dense_len = index
++            .by_tin
++            .keys()
++            .filter_map(|tin| usize::try_from(*tin).ok())
++            .filter(|tin| *tin < DENSE_TINS)
++            .max()
++            .map_or(0, |max| max + 1);
++        let mut dense = vec![Vec::new(); dense_len];
++        index.by_tin.retain(|tin, list| match usize::try_from(*tin) {
++            Ok(at) if at < dense_len => {
++                dense[at] = std::mem::take(list);
++                false
++            }
++            _ => true,
++        });
++        index.dense = dense;
++        index
++    }
++
++    fn by_map(alts: &[AltSpec]) -> Self {
+         let mut by_tin: HashMap<Tin, Vec<usize>> = HashMap::new();
+         let mut wild = Vec::new();
+         for (idx, alt) in alts.iter().enumerate() {
+@@ -389,13 +421,22 @@
+                 _ => wild.push(idx),
+             }
+         }
+-        AltIndex { by_tin, wild }
++        AltIndex {
++            dense: Vec::new(),
++            by_tin,
++            wild,
++        }
+     }
+ 
+     /// The ascending alternates naming `tin` at position 0; the
+     /// wildcards are `wild`, walked beside them.
++    #[inline]
+     fn named(&self, tin: Tin) -> &[usize] {
+-        self.by_tin.get(&tin).map_or(NO_ALTS, Vec::as_slice)
++        match usize::try_from(tin) {
++            Ok(at) if at < self.dense.len() => self.dense[at].as_slice(),
++            Ok(at) if at < DENSE_TINS => NO_ALTS,
++            _ => self.by_tin.get(&tin).map_or(NO_ALTS, Vec::as_slice),
++        }
+     }
+ }
+ 
+@@ -2406,20 +2447,23 @@
+                     ) {
+                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
+                     }
+-                    let Some(token) = context.t.get(pos).cloned() else {
++                    // Only the tin is tested. The token itself is copied
++                    // only for the relex branch, the one reader of a copy.
++                    let Some(tin) = context.t.get(pos).map(|token| token.tin) else {
+                         alt_matches = false;
+                         break;
+                     };
+-                    if !slot_matches(pos_tins, token.tin) {
+-                        let recut = if self.options.lex.relex
+-                            && !token.src.is_empty()
+-                            && !pos_tins.is_empty()
+-                        {
++                    if !slot_matches(pos_tins, tin) {
++                        let relex_token = (self.options.lex.relex
++                            && !context.t[pos].src.is_empty()
++                            && !pos_tins.is_empty())
++                        .then(|| context.t[pos].clone());
++                        let recut = if let Some(token) = &relex_token {
+                             let result = self.catch_callback("lexer relex callback", src, || {
+-                                lexer.relex(&token, pos_tins, &mut current_rule, &mut context)
++                                lexer.relex(token, pos_tins, &mut current_rule, &mut context)
+                             });
+                             result.map_err(|error| {
+-                                self.attach_error(error, &current_rule, &stack, alts, Some(&token))
++                                self.attach_error(error, &current_rule, &stack, alts, Some(token))
+                             })?
+                         } else {
+                             None
+@@ -2428,6 +2472,7 @@
+                             alt_matches = false;
+                             break;
+                         };
++                        let token = relex_token.expect("a recut comes only from the relex branch");
+                         for subscriber in &self.lex_subscribers {
+                             let result = self.catch_callback("lex subscriber", src, || {
+                                 subscriber(&mut recut, &mut current_rule, &mut context)
+@@ -2455,8 +2500,13 @@
+                 }
+ 
+                 if alt_matches {
+-                    let tokens: Rc<Vec<Token>> =
+-                        Rc::new(context.t.iter().take(s_len).cloned().collect());
++                    // An alternate that matches no token shares the empty
++                    // list every new rule starts with.
++                    let tokens: Rc<Vec<Token>> = if s_len == 0 {
++                        empty_tokens()
++                    } else {
++                        Rc::new(context.t.iter().take(s_len).cloned().collect())
++                    };
+                     // The declarative conditions are the only readers of a
+                     // candidate rule; the callback tiers below run against
+                     // `current_rule` itself, after its matched tokens are in
+@@ -2609,7 +2659,11 @@
+             if let Some(idx) = matched_alt_idx {
+                 // Copy matched tokens
+                 let matched_tokens = matched_tokens.unwrap_or_else(|| {
+-                    Rc::new(context.t.iter().take(matched_count).cloned().collect())
++                    if matched_count == 0 {
++                        empty_tokens()
++                    } else {
++                        Rc::new(context.t.iter().take(matched_count).cloned().collect())
++                    }
+                 });
+                 if is_open {
+                     current_rule.o = matched_tokens;
+diff -ruN a/rs/src/rule.rs b/rs/src/rule.rs
+--- a/rs/src/rule.rs
++++ b/rs/src/rule.rs
+@@ -1487,7 +1487,7 @@
+ /// The matched-token lists start empty and are replaced wholesale when an
+ /// alternate matches, so every rule created allocated two `Rc` boxes for two
+ /// vectors that never grew. Shared like the counter and value bags above.
+-fn empty_tokens() -> Rc<Vec<Token>> {
++pub(crate) fn empty_tokens() -> Rc<Vec<Token>> {
+     thread_local! {
+         static EMPTY: Rc<Vec<Token>> = Rc::new(Vec::new());
+     }
