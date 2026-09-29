@@ -667,18 +667,21 @@ do.
 predecessor snapshots a rule can reach through `prev`, so that a
 replacement loop's iterations stop keeping every earlier iteration alive
 until the container closes (peak memory 65 to 90 times the input on
-record-shaped documents). The Rust port implements it, up to a bound
-of 16. TypeScript and Go do not yet, and neither refuses the key: Go's
-option validator checks declared fields only and TypeScript's merge
-keeps unknown keys. So under the same grammar and the same option, they
-keep every predecessor and Rust keeps `history`. Rust's copy of a
-replaced rule also keeps no `child` or `next` link, under any bound:
-a finished child's `next` leads back to its pusher's record, and that
-record's `prev` to the copy before it, a ladder that kept every
-iteration alive. So `prev.child` and `prev.next` resolve to nothing in
-Rust even at a bound of 1, where `prev` itself resolves. A pushed
-child's copy of its pusher keeps both, so `parent.child` and
-`parent.next` agree.
+record-shaped documents). The Rust port implements it, from 1 to 16,
+and refuses a grammar that asks for more when it installs. TypeScript
+and Go do not yet, and neither refuses the key: Go's option validator
+checks declared fields only and TypeScript's merge keeps unknown keys.
+So under the same grammar and the same option, they keep every
+predecessor and Rust keeps `history`, and a pusher's copy keeps
+`history - 1`, so under a bound of 1 `parent.prev` is cut too. Rust's
+copy of a replaced rule also keeps no `child` or `next` link, and no
+name for its `next`, under any bound: a finished child's `next` leads
+back to its pusher's record, and that record's `prev` to the copy
+before it, a ladder that kept every iteration alive. So `prev.child`
+and `prev.next` resolve to nothing in Rust even at a bound of 1, where
+`prev` itself resolves. A pushed child's copy of its pusher keeps both,
+so `parent.child` and `parent.next` agree; the pusher as it stood before
+it linked the child, `parent.child.parent` and past, keeps neither.
 
 | grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
 |---|---|---|---|---|---|
@@ -686,6 +689,9 @@ child's copy of its pusher keeps both, so `parent.child` and
 | same | same | `1` | `child` | `child` | **nothing** |
 | `child` pushes `leaf`, then is replaced by `child2` | `prev.child.name` on `child2` | unset | `leaf` | `leaf` | `leaf` |
 | same | same | `1` | `leaf` | `leaf` | **nothing** |
+| `child` replaced by a new `child` | `prev.next.name` on the second | unset | `child` | `child` | `child` |
+| same | same | `1` | `child` | `child` | **nothing** |
+| the first grammar | `prev.prev.name` on `child3` | `17` | `child` | `child` | **refused at install** |
 
 Repair direction: **TypeScript and Go change**, TypeScript first as the
 canonical engine, by implementing the option as the design describes;
@@ -695,10 +701,13 @@ through `prev.child` or `prev.next`, in one runtime while expecting the
 other's answer, and no grammar in the fleet does: the survey in the
 design document found no `prev.prev`, `prev.child` or `prev.next` read.
 
-Registered as `rule-history-bounded` and `rule-history-bounded-child`,
-with `rule-history-control` and `rule-history-child-control` as their
+Registered as `rule-history-bounded`, `rule-history-bounded-child` and
+`rule-history-bounded-next`, with `rule-history-control`,
+`rule-history-child-control` and `rule-history-next-control` as their
 controls: the same grammars with the option unset, where the three
-ports agree that `prev.prev.name` and `prev.child.name` resolve.
+ports agree that `prev.prev.name`, `prev.child.name` and
+`prev.next.name` resolve. `rule-history-past-the-cap` registers the
+refusal, against the first control.
 
 ## Not divergences
 

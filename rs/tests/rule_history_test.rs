@@ -222,6 +222,77 @@ fn a_pushed_child_reads_its_parents_child_and_next_under_a_bound() {
     }
 }
 
+/// `list` pushes every item from its close phase: `b` peeks the next
+/// item's token and pushes `item` again, `e` ends the list. Rule depth
+/// stays constant, and each item is linked to its pusher as it stood
+/// just after the item before it popped.
+fn close_push_parser(history: &str) -> Tabnas {
+    let mut parser = Tabnas::new();
+    parser
+        .grammar_json(&format!(
+            r#"{{"options":{{"rule":{{"start":"list","history":{history}}},
+                "fixed":{{"token":{{"Ta":"a","Tb":"b","Te":"e"}}}}}},
+              "rule":{{
+                "list":{{"open":[{{"s":"Ta"}}],
+                         "close":[{{"s":"Tb","b":1,"p":"item"}},{{"s":"Te"}}]}},
+                "item":{{"open":[{{"s":"Tb"}}],"close":[{{}}]}}}}}}"#
+        ))
+        .expect("install the close-push grammar");
+    parser
+}
+
+/// A rule that pushes again from its close phase keeps the bound too.
+/// The pusher's copy made before it links the new child holds the child
+/// before, finished; kept, that copy linked each item to the one before
+/// it, through the new child's own snapshot, and what a rule could reach
+/// grew five snapshots per item under every bound, past the unbounded
+/// parse. The pusher's `parent.child` and `parent.next` still read as
+/// unbounded.
+#[test]
+fn a_close_phase_push_loop_keeps_the_bound() {
+    let items = |count: usize| format!("a{}e", "b".repeat(count));
+    let (short, long) = (items(500), items(2000));
+    for bound in ["1", "3"] {
+        let (_, over_short) = reach(&mut close_push_parser(bound), &short);
+        let (_, over_long) = reach(&mut close_push_parser(bound), &long);
+        assert_eq!(over_short, over_long, "history {bound}: reach grew");
+        assert!(over_long <= 32, "history {bound}: reach {over_long}");
+        assert_eq!(
+            parent_links(&mut close_push_parser(bound), &short),
+            parent_links(&mut close_push_parser("null"), &short),
+            "history {bound}"
+        );
+    }
+}
+
+/// A copy that cuts its `next` cuts the name with it. A snapshot whose
+/// `next` has its own name reads itself as `next`, so under a bound a
+/// replacement loop's `prev.next` read the predecessor itself, not
+/// nothing, and `prev.next.state` its state. Every copy a bounded parse
+/// links as `prev` carries neither.
+#[test]
+fn a_cut_next_takes_its_name_with_it() {
+    let cut = Arc::new(AtomicUsize::new(0));
+    let named = Arc::new(AtomicUsize::new(0));
+    let (cut_sink, named_sink) = (Arc::clone(&cut), Arc::clone(&named));
+    let mut parser = json_parser("3");
+    parser.subscribe_rules(move |rule, _context| {
+        if let Some(prev) = rule.prev_rule.as_deref() {
+            cut_sink.fetch_add(1, Ordering::Relaxed);
+            if prev.next_rule.is_some() || prev.next_rule_name.is_some() {
+                named_sink.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+    parser.parse(&flat_array(50)).expect("parses");
+    assert!(cut.load(Ordering::Relaxed) > 0, "no replacement ran");
+    assert_eq!(
+        named.load(Ordering::Relaxed),
+        0,
+        "a prev copy kept its next"
+    );
+}
+
 /// A bound past [`MAX_RULE_HISTORY`] set on the options directly, where
 /// no grammar refuses it, is read as the cap: each link copies at most
 /// that many snapshots, so a bound as long as the sequence costs a
@@ -239,6 +310,13 @@ fn a_bound_past_the_cap_is_read_as_the_cap() {
     let (chain, over_long) = capped(&long);
     assert_eq!(chain, MAX_RULE_HISTORY);
     assert_eq!(over_short, over_long, "reach grew with the sequence");
+    // And `Some(0)`, which no grammar can set, as 1: a copy keeps the
+    // snapshot itself at least, where it copied nothing and failed every
+    // push and replace with an internal error.
+    let mut parser = json_parser("null");
+    parser.options.rule.history = Some(0);
+    let (chain, _) = reach(&mut parser, &short);
+    assert_eq!(chain, 1);
 }
 
 /// Peak resident memory (`VmHWM`, so Linux only) and time over a flat

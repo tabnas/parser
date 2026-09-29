@@ -3262,7 +3262,7 @@ impl Parser {
                     child.parent_rule = Some(bounded_history(
                         current_rule.snapshot(),
                         self.options.rule.history,
-                        Link::Parent,
+                        Link::PusherBefore,
                     ));
                     current_rule.next_rule_name = Some(push_shared);
                     current_rule.child_rule = Some(child.snapshot());
@@ -4332,8 +4332,13 @@ fn resolve_condition_path(rule: &Rule, ancestors: &[Rule], path: &[String]) -> O
 /// Which link a bounded snapshot becomes (see [`bounded_history`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Link {
-    /// A pushed child's `parent_rule`: the pusher.
+    /// The `parent_rule` a pushed child keeps: the pusher once it has
+    /// linked the child, made at the end of the push arm.
     Parent,
+    /// The pusher before it links the child, made at the start of the
+    /// push arm. It survives as the `parent_rule` of the child's own
+    /// snapshot, the one the pusher links as `child`.
+    PusherBefore,
     /// A replacement's `prev_rule`: the rule it replaces.
     Prev,
 }
@@ -4346,18 +4351,24 @@ enum Link {
 /// the rule's own record, whose `prev` is a copy of its predecessor,
 /// whose `child` does the same, a ladder through the whole sequence. So
 /// `prev.child` and `prev.next` resolve to nothing, and so does a
-/// predecessor's past them.
+/// predecessor's past them. A cut `next` takes its name with it: a
+/// snapshot whose next has its own name reads itself as `next`, and a
+/// copy that kept the name would read `prev.next` as `prev`.
 ///
-/// A pusher's copy, the `parent` a pushed child links, keeps the
-/// pusher's own `child` and `next` (the child itself, as it stood when
-/// pushed, before it had a `next`): no ladder starts there, and
-/// `parent.child` and `parent.next` read as they do unbounded. Its
-/// predecessors drop theirs as a replacement's do.
+/// The `parent` a pushed child keeps ([`Link::Parent`]) keeps the
+/// pusher's own `child` and `next`, the child itself as it stood when
+/// pushed, before it had a `next`: no ladder starts there, and
+/// `parent.child` and `parent.next` read as they do unbounded. The copy
+/// made before the pusher links the child ([`Link::PusherBefore`]) cuts
+/// them: its `child` is the pusher's previous child, and a rule that
+/// pushes again from its close phase would link every child it pushed,
+/// each through the one before. So `parent.child.parent.child` and the
+/// like, the pusher as it stood before the push, resolve to nothing.
 ///
 /// What a rule reads through `prev` (counters, values, tokens, node and
 /// name) and through `parent` (the pusher and its own parents) is kept.
 /// A copy is a twenty-field struct with eight `Rc` clones, `history` of
-/// them per link, and `history` is read as at most
+/// them per link, and `history` is read as 1 to
 /// [`crate::options::MAX_RULE_HISTORY`], so a link costs a constant.
 /// `None` links the snapshot untouched.
 fn bounded_history(
@@ -4368,7 +4379,7 @@ fn bounded_history(
     let Some(history) = history else {
         return snapshot;
     };
-    let history = history.min(crate::options::MAX_RULE_HISTORY);
+    let history = history.clamp(1, crate::options::MAX_RULE_HISTORY);
     // The links to copy, nearest first: the snapshot and up to
     // `history - 1` of its predecessors. Collected and then rebuilt from
     // the far end, with no recursion, so that a bound as long as the
@@ -4387,9 +4398,10 @@ fn bounded_history(
     // `depth` counts back from the snapshot itself, which is 0.
     for (depth, original) in links.into_iter().enumerate().rev() {
         let mut copy = (**original).clone();
-        if depth != 0 || link == Link::Prev {
+        if depth != 0 || link != Link::Parent {
             copy.child_rule = None;
             copy.next_rule = None;
+            copy.next_rule_name = None;
         }
         copy.prev_rule = prev.take();
         prev = Some(Rc::new(copy));

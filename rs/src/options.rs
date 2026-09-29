@@ -838,7 +838,7 @@ pub struct ResultOptions {
 /// at 16 and 2.8 s unbounded, 3.3 s at 32 and 6.2 s at 64
 /// (`doc/rule-history-bound.md`). A grammar that asks for more is
 /// refused; a larger value set on [`RuleOptions::history`] directly is
-/// read as this.
+/// read as this, and `Some(0)` as 1.
 pub const MAX_RULE_HISTORY: usize = 16;
 
 #[derive(Debug, Clone)]
@@ -852,8 +852,9 @@ pub struct RuleOptions {
     /// the `prev_rule` chain a replace or a push links is cut past this
     /// many links, so a sequence's iterations are not all kept until its
     /// container closes. `None` keeps every link, which is the canonical
-    /// behaviour and the default (`doc/rule-history-bound.md`). At most
-    /// [`MAX_RULE_HISTORY`] is honoured.
+    /// behaviour and the default (`doc/rule-history-bound.md`). Read as
+    /// 1 to [`MAX_RULE_HISTORY`]: `Some(0)` as 1, a larger value as the
+    /// cap.
     pub history: Option<usize>,
 }
 

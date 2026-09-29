@@ -102,15 +102,26 @@ copy:
 - A pusher's copy, the `parent_rule` a pushed child links, keeps its
   own `child_rule` and `next_rule`: they hold the child as it stood when
   pushed, before it has a `next`, so no ladder starts there. Its
-  predecessors drop theirs.
+  predecessors drop theirs. The engine also copies the pusher once
+  before it links the child, and that copy survives as the parent of
+  the child's own snapshot; it drops them too. Its `child` is the
+  pusher's previous child, finished, and a rule that pushes again from
+  its close phase would otherwise link every child it pushed, each
+  through the one before: measured, five snapshots per item under every
+  bound, past the unbounded parse.
+- A copy that drops its `next_rule` drops its name too. A snapshot
+  whose next has its own name reads itself as `next`, so a replacement
+  loop's copy that kept the name read `prev.next` as `prev`.
 - What a rule reads is kept: through `prev`, the predecessor's counters,
   values, tokens, node and name, and its own `prev` up to the bound;
   through `parent`, the pusher and its parents, `parent.child` and
   `parent.next` included. `prev.child` and `prev.next` resolve to
-  nothing, as `prev` on a rule with no predecessor does today; no
-  grammar in the fleet reads them. `history: 3` serves every path the
-  fleet reads and R7's walk; `history: 1` serves a grammar that reads
-  one hop.
+  nothing, as `prev` on a rule with no predecessor does today, and so
+  do `parent.child.parent.child` and the like, the pusher before it
+  linked the child; no grammar in the fleet reads them. A pusher's copy
+  keeps `history - 1` predecessors like any other, so `history: 1` cuts
+  `parent.prev` too. `history: 3` serves every path the fleet reads and
+  R7's walk; `history: 1` serves a grammar that reads one hop.
 
 What a rule can reach is then a constant: over the strict-JSON fixture
 grammar, thirteen snapshots at `history: 3` whether the array has 500
@@ -131,9 +142,12 @@ Rust") and in `test/spec/divergent.tsv` as `rule-history-bounded` with
 `rule-history-control` as its control: `prev.prev.name` read two
 replacements back resolves in every runtime with the option unset, and
 under `history: 1` resolves in TypeScript and Go, which do not carry the
-option, and not in Rust. `rule-history-bounded-child`, with
-`rule-history-child-control`, registers `prev.child.name` the same way.
-The group is deleted when the other two runtimes implement it.
+option, and not in Rust. `rule-history-bounded-child` and
+`rule-history-bounded-next`, with their controls, register
+`prev.child.name` and `prev.next.name` the same way, and
+`rule-history-past-the-cap` the refusal of a bound past 16, which the
+other two install. The group is deleted when the other two runtimes
+implement it.
 
 ## Measurements
 
