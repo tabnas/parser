@@ -293,6 +293,42 @@ fn a_cut_next_takes_its_name_with_it() {
     );
 }
 
+/// Two instances merge on the bound each one's links honour, not on the
+/// value set: `Some(0)` and `Some(1)`, or a bound past the cap and the
+/// cap, parse alike, and refusing them as a conflict left two parsers
+/// that behave the same impossible to merge. Two bounds that differ
+/// where it counts still conflict.
+#[test]
+fn a_merge_reads_each_bound_as_the_links_do() {
+    let with = |tag: &str, history: Option<usize>| {
+        let mut parser = Tabnas::with_options(tabnas::Options {
+            tag: tag.into(),
+            ..Default::default()
+        });
+        parser.options.rule.history = history;
+        parser
+    };
+    for (left, right, merged) in [
+        (Some(0), Some(1), Some(1)),
+        (
+            Some(MAX_RULE_HISTORY + 1),
+            Some(MAX_RULE_HISTORY),
+            Some(MAX_RULE_HISTORY),
+        ),
+        (Some(usize::MAX), None, Some(MAX_RULE_HISTORY)),
+        (None, None, None),
+    ] {
+        let out = with("L", left)
+            .merge(&with("R", right))
+            .unwrap_or_else(|error| panic!("{left:?} and {right:?} conflict: {error:?}"));
+        assert_eq!(out.options.rule.history, merged, "{left:?} and {right:?}");
+    }
+    assert!(
+        with("L", Some(3)).merge(&with("R", Some(4))).is_err(),
+        "3 and 4 merged"
+    );
+}
+
 /// A bound past [`MAX_RULE_HISTORY`] set on the options directly, where
 /// no grammar refuses it, is read as the cap: each link copies at most
 /// that many snapshots, so a bound as long as the sequence costs a
@@ -360,13 +396,14 @@ fn measure_peak_memory_over_a_flat_array() {
     });
     let value = parser.parse(&src).expect("parses");
     let elapsed = started.elapsed();
-    // The count reported is the parsed array's, so a file's is its own.
+    // The count reported is the parsed array's, so a file's is its own,
+    // and a file that is no array reports none.
     let items = match &value {
-        Value::Array(elements) => elements.len(),
-        _ => items,
+        Value::Array(elements) => format!(" items={}", elements.len()),
+        _ => String::new(),
     };
     println!(
-        "history={spelling} items={items} bytes={len} elapsed={:.2}s peak={} MB value_len={}",
+        "history={spelling}{items} bytes={len} elapsed={:.2}s peak={} MB value_len={}",
         elapsed.as_secs_f64(),
         peak_rss_mb(),
         value.to_string().len()

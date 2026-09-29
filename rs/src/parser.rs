@@ -4376,10 +4376,9 @@ fn bounded_history(
     history: Option<usize>,
     link: Link,
 ) -> Rc<RuleSnapshot> {
-    let Some(history) = history else {
+    let Some(history) = crate::options::effective_rule_history(history) else {
         return snapshot;
     };
-    let history = history.clamp(1, crate::options::MAX_RULE_HISTORY);
     // The links to copy, nearest first: the snapshot and up to
     // `history - 1` of its predecessors. Collected and then rebuilt from
     // the far end, with no recursion, so that a bound as long as the

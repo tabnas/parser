@@ -707,7 +707,43 @@ Registered as `rule-history-bounded`, `rule-history-bounded-child` and
 controls: the same grammars with the option unset, where the three
 ports agree that `prev.prev.name`, `prev.child.name` and
 `prev.next.name` resolve. `rule-history-past-the-cap` registers the
-refusal, against the first control.
+refusal, against the first control. The pusher before it linked the
+child is read through a path Rust already answers differently with the
+option unset, so its bounded row, `rule-history-bounded-pusher`, is
+registered with that split, in the entry below.
+
+### A pusher read back through its child's snapshot in Rust
+
+**Deferred** — a Rust split in how a pushed child's own snapshot links
+its pusher, found while registering the rule-history bound.
+
+A push links the child to its pusher both ways: the child's `parent`
+is the pusher, and the pusher's `child` is the child. TypeScript and
+Go link the live rules, so from the child, `parent.child.parent` is the
+pusher as it stands, and its `child` is the child itself. Rust links
+snapshots, and the child's own snapshot, the one the pusher keeps as
+`child`, carries as its `parent` a snapshot of the pusher taken before
+the pusher linked the child. So in Rust `parent.child.parent.child` is
+the child the pusher pushed before, or nothing on its first push.
+
+| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
+|---|---|---|---|---|---|
+| `list` pushes `first`, then `second` from its close phase | `parent.child.name` on `second` | unset | `second` | `second` | `second` |
+| same | `parent.child.parent.child.name` on `second` | unset | `second` | `second` | **`first`** |
+| same | same | `1` | `second` | `second` | **nothing** |
+
+Under a bound, Rust's copy of that pre-link pusher keeps no `child` or
+`next` (see the entry above), so the path resolves to nothing.
+
+Repair direction: **Rust changes**, linking the child's own snapshot to
+the pusher once the pusher has linked it, as the canonical engine reads
+it; then the rows with the option unset agree, and the bounded row
+belongs to the entry above until TypeScript and Go carry the option. No
+grammar in the fleet reads a four-hop path through `parent.child.parent`.
+
+Registered as `pusher-through-child` and `rule-history-bounded-pusher`,
+with `pusher-through-child-control` as their control: `parent.child.name`,
+the same pusher read directly, where the three ports agree.
 
 ## Not divergences
 

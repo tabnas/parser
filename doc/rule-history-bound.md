@@ -147,7 +147,11 @@ option, and not in Rust. `rule-history-bounded-child` and
 `prev.child.name` and `prev.next.name` the same way, and
 `rule-history-past-the-cap` the refusal of a bound past 16, which the
 other two install. The group is deleted when the other two runtimes
-implement it.
+implement it. The pre-link pusher's cut, `parent.child.parent.child`,
+is registered as `rule-history-bounded-pusher` beside a split Rust has
+on that path with the option unset ("A pusher read back through its
+child's snapshot in Rust"), since TypeScript and Go read the live
+pusher there.
 
 ## Measurements
 

@@ -841,6 +841,14 @@ pub struct ResultOptions {
 /// read as this, and `Some(0)` as 1.
 pub const MAX_RULE_HISTORY: usize = 16;
 
+/// The bound a rule's links honour for `history`: 1 to
+/// [`MAX_RULE_HISTORY`], or `None` for every link. Read wherever the
+/// option decides something, the links themselves and a merge, so two
+/// values that parse alike are alike everywhere.
+pub(crate) fn effective_rule_history(history: Option<usize>) -> Option<usize> {
+    history.map(|history| history.clamp(1, MAX_RULE_HISTORY))
+}
+
 #[derive(Debug, Clone)]
 pub struct RuleOptions {
     pub finish: bool,
