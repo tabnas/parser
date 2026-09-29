@@ -4,7 +4,7 @@ Rust port of the grammar-free Tabnas parser engine. TypeScript is the canonical
 implementation; the shared fixtures in `../test/spec` define cross-port
 behavior.
 
-The crates.io package is `tabnas-parser`; the Rust library name remains
+The crates.io package is `tabnas-parser`. The Rust library name remains
 `tabnas`:
 
 ```console
