@@ -12,11 +12,11 @@
 #
 # TWO ENTRY POINTS:
 #   workflow_call      the normal path. release.yml calls this once the
-#                      release tag is on the remote. No job needs this
+#                      Rust release tag is on the remote. No job needs this
 #                      one, so a failure here blocks nothing and
 #                      unpublishes nothing: npm, the Go module and the
 #                      GitHub Release are already out.
-#   workflow_dispatch  repair or backfill, for an existing release tag.
+#   workflow_dispatch  repair or backfill, for an existing Rust release tag.
 #                      It is accepted only from main. It authenticates
 #                      only if the crate has a SECOND trusted publisher
 #                      that names crates-release.yml (see below).
@@ -32,8 +32,8 @@
 #
 # PUBLISHED FROM THE TAG, never from main, so the crate is built from
 # the commit that npm and the Go proxy serve. rs/Cargo.toml's version
-# must equal ts/package.json's, and the tag must be ts/v or go/v of that
-# version. The kind is read at the workflow's own ref, not at the tag, so
+# must equal ts/package.json's, and the tag must be rs/v of that version.
+# The kind is read at the workflow's own ref, not at the tag, so
 # a tag cut before .tabnas-kind existed can still be backfilled.
 #
 # THE COMMITTED MANIFEST STAYS PATH-ONLY. Sibling tabnas crates are
@@ -68,13 +68,13 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "release tag, e.g. go/v1.2.3"
+        description: "Rust release tag, e.g. rs/v1.2.3"
         required: true
         type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: "existing release tag, e.g. go/v1.2.3 (ts/v1.2.3 where there is no Go module)"
+        description: "existing Rust release tag, e.g. rs/v1.2.3"
         required: true
         type: string
 
@@ -96,7 +96,7 @@ jobs:
       # A dispatch is not tied to the default branch: the ref is a
       # parameter. Under a call, these are the caller's event and ref:
       # release.yml refuses a dispatch from anything but main, and its
-      # ts/v* push path (admin/publish.sh) runs at the pushed tag.
+      # tag-push path (admin/publish.sh) runs at the pushed tag.
       - name: Refuse a dispatch from anywhere but main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: |
@@ -125,8 +125,8 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           case "$TAG" in
-            ts/v[0-9]*|go/v[0-9]*) echo "tag: $TAG" ;;
-            *) echo "::error::'$TAG' is not a release tag (ts/v<version> or go/v<version>)"; exit 1 ;;
+            rs/v[0-9]*) echo "tag: $TAG" ;;
+            *) echo "::error::'$TAG' is not a Rust release tag (rs/v<version>)"; exit 1 ;;
           esac
 
       # The source that ships is the release tag, never main. It is
@@ -170,8 +170,8 @@ jobs:
             echo "::error::rs/Cargo.toml says ${NAME:-<no name>} ${C:-<no version>}, ts/package.json says $V; they must be equal"
             exit 1
           fi
-          if [ "$TAG" != "ts/v$V" ] && [ "$TAG" != "go/v$V" ]; then
-            echo "::error::$TAG is neither ts/v$V nor go/v$V, the tags of the version it contains"
+          if [ "$TAG" != "rs/v$V" ]; then
+            echo "::error::$TAG is not rs/v$V, the Rust tag of the version it contains"
             exit 1
           fi
           [ -n "$RV" ] || { echo "::error::rs/Cargo.toml declares no rust-version, so there is no toolchain to publish with"; exit 1; }

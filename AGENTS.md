@@ -225,9 +225,10 @@ They stay in the Makefile because removing them is a separate change.
 Publishing is **tag-driven and runs in CI**, not locally:
 `.github/workflows/release.yml` publishes to npm over GitHub OIDC trusted
 publishing (no token, provenance attached), and a `go/v*` tag is the Go
-module release — the proxy serves it straight from the tag. Do not run a
-local `npm publish` for a release: it goes out over a token and bypasses OIDC
-entirely.
+module release — the proxy serves it straight from the tag. Rust is tagged
+separately as `rs/v*`; `crates-release.yml` accepts only that tag when it
+publishes `rs/` to crates.io. Do not run a local `npm publish` for a release:
+it goes out over a token and bypasses OIDC entirely.
 
 ### Dispatch it; do not push the tag
 
@@ -236,8 +237,9 @@ true.** That is the path the workflow's own header calls normal, and it is
 the only one an agent can take: **a session's credentials cannot push tag
 refs — `git push origin ts/v…` fails with HTTP 403** while branch pushes from
 the same credentials succeed. It costs nothing, because the workflow creates
-both tags itself, atomically, *after* npm accepts the publish. Pushing a tag
-by hand is the orchestrator's path (`admin/publish.sh`), not yours.
+`ts/v*`, `rs/v*` and, when requested, `go/v*` itself, atomically, *after* npm
+accepts the publish. Pushing a tag by hand is the orchestrator's path
+(`admin/publish.sh`), not yours.
 
 The steps, in order:
 
@@ -272,7 +274,7 @@ The steps, in order:
 6. **Wait for `main` CI to go green on the bump commit.** The release
    workflow does not run the test suite: it reads `main`, publishes it and
    tags it. Nothing downstream of a dispatch will catch a broken bump, and
-   an npm version and a Go module tag are both immutable.
+   npm and crates.io versions and a Go module tag are immutable.
 7. **Record the release commit, then dispatch.** The confirmation
    below compares each tag against the commit you released, and a run
    that publishes and then fails to tag can be followed by `main`
@@ -291,14 +293,14 @@ The steps, in order:
    value the faulty anchor would also produce, so the check would agree with
    itself and pass. If you no longer have it, recover it from the original
    run: the `head_sha` of that `release.yml` run is the commit it published.
-8. Confirm `npm view @tabnas/parser@$V version`, and **query both tags
+8. Confirm `npm view @tabnas/parser@$V version`, and **query all three tags
    exactly**:
 
    ```bash
    V=x.y.z
    GH=$(npm view @tabnas/parser@$V gitHead)
    [ -n "$GH" ] || { echo "npm records no gitHead for $V"; exit 1; }
-   for T in "ts/v$V" "go/v$V"; do
+   for T in "ts/v$V" "rs/v$V" "go/v$V"; do
      S=$(git ls-remote origin "refs/tags/$T" | cut -f1)
      [ -n "$S" ] || { echo "missing tag $T"; exit 1; }
      [ "$S" = "$GH" ] || { echo "$T is $S, but npm shipped $GH"; exit 1; }
@@ -307,11 +309,12 @@ The steps, in order:
    ```
 
    `git ls-remote --tags origin | grep v$V` is not a check. `grep` exits 0
-   if *either* ref matches, so it reports success in precisely the
-   half-finished state — npm tag written, Go tag not — that a re-dispatch
-   exists to repair. Counting the two refs is not enough either: an anchor
-   fallback writes *both* tags on a commit npm never served, and two wrong
-   tags count as two. Comparing each against the commit you released is
+   if *any* ref matches, so it reports success in precisely the
+   half-finished state where only one release tag was written that a
+   re-dispatch exists to repair. Counting the three refs is not enough
+   either: an anchor
+   fallback writes *all* tags on a commit npm never served, and three wrong
+   tags count as three. Comparing each against the commit you released is
    what catches that. The refs carry the commit directly — `release.yml`
    uses `git tag "$T" "$ANCHOR"`, so they are lightweight and there is no
    `^{}` to peel.
@@ -326,10 +329,13 @@ The steps, in order:
    separately, as the CI question it actually is.
 
    When the script exits nonzero, the line that failed says what to do. A
-   tag that is not `$GH` is wrong, and the two are not equally
+   tag that is not `$GH` is wrong, and the three are not equally
    recoverable. A wrong `ts/v$V` simply moves: npm resolves from the
-   registry, so the tag is a signpost and nothing reads it. A wrong
-   `go/v$V` does not. `proxy.golang.org` caches a module version's content
+   registry, so the tag is a signpost and nothing reads it. Correct a wrong
+   `rs/v$V` before publishing the crate. If crates.io already has that
+   version, moving the tag cannot change its immutable archive; release a
+   corrected patch instead. A wrong `go/v$V` does not move safely either.
+   `proxy.golang.org` caches a module version's content
    immutably, so once anything has fetched `v$V` that content is what
    consumers get for good, and a corrected tag only makes Git and the
    proxy disagree — and you cannot find out whether it has been fetched
@@ -361,10 +367,11 @@ from any ref but `main`, and when every tag it would create already exists
 (the "you forgot to bump" signal). It fails *open* on an already-published
 npm version, so a run that published and then died before tagging can be
 re-dispatched — **but only while `main` still points at the release commit.**
-The repair anchors new tags to an *existing* tag; if neither tag was written
+The repair anchors new tags to an *existing* tag; if no tag was written
 there is nothing to anchor to, and once `main` moves the anchor falls back to
-the new `HEAD` while the publish step skips the version already on npm. Both
-tags then name a commit npm never served, permanently for the Go module.
+the new `HEAD` while the publish step skips the version already on npm. All
+tags then name a commit npm never served, permanently for any Go module or
+crate published from them.
 Recover the original SHA and tag it by hand, or bump to the next patch.
 
 ### Releasing for a downstream consumer

@@ -17,8 +17,9 @@
 #   workflow_dispatch  the normal path. Bump in a reviewed PR first;
 #                      this run reads main, publishes it, tags it. The
 #                      workflow never commits.
-#   push: ts/v*        the orchestrator path — admin/publish.sh pushes
-#                      the tag itself, so the tag steps no-op.
+#   push: ts/v*        the orchestrator path — admin/publish.sh pushes the
+#                      release tags itself, so the dispatch-only tag step
+#                      no-ops.
 #
 # THE VERSION-DERIVED GENERATOR IS THE BUMP PR'S JOB, NOT THIS FILE'S.
 # parser declares tabnas.release.generate ["gen-registry"], which writes
@@ -59,9 +60,11 @@
 # clib-release.yml dispatch (darwin_only: false) to finish.
 #
 # CRATES.IO (ADR-21, deployed and inert). Where the repository has a
-# Rust crate, the crates job hands the same release tag to
+# Rust crate, the crates job hands the dedicated rs/v<version> tag to
 # crates-release.yml, which publishes rs/ to crates.io from that tag over
-# OIDC trusted publishing. Both files are live, and both jobs are inert
+# OIDC trusted publishing. The normal dispatch writes that tag in the same
+# atomic transaction as ts/v<version> and, when requested, go/v<version>.
+# Both files are live, and both jobs are inert
 # until a maintainer sets the TABNAS_CRATES variable to 'on',
 # which happens once the crate exists and its trusted publisher names
 # THIS file. crates.io matches the top-level workflow (the OIDC
@@ -98,6 +101,7 @@ jobs:
       contents: write   # GITHUB_TOKEN -> tags; cannot publish
     outputs:
       clib-tag: ${{ steps.clib.outputs.tag }}
+      crates-tag: ${{ steps.crates.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -119,8 +123,9 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # ts/package.json is the source. go/tabnas.go's const VERSION is
-      # held equal to it by the fleet's version-drift tests.
+      # ts/package.json is the source. go/tabnas.go's const VERSION and
+      # rs/Cargo.toml's package.version are held equal to it by the
+      # version-drift tests.
       - name: Read the version
         id: v
         run: |
@@ -141,20 +146,26 @@ jobs:
 
       # Which tags this run still has to create. Fails closed only when
       # there is NOTHING left to do, which is the real "you forgot to
-      # bump" signal; a run that has ts/v but is missing go/v is a
-      # half-finished release and must be repairable, not refused.
+      # bump" signal; a run that has one release tag but is missing another
+      # is a half-finished release and must be repairable, not refused.
       - name: Decide which tags this run must create
         id: tags
         if: github.event_name == 'workflow_dispatch'
         run: |
           V="${{ steps.v.outputs.version }}"
-          MISSING=""; ANCHOR=""
-          for T in "ts/v$V" "go/v$V"; do
+          MISSING=""; ANCHOR=""; ANCHOR_TAG=""
+          for T in "ts/v$V" "rs/v$V" "go/v$V"; do
             case "$T" in
               go/*) [ "${{ inputs.go }}" = "true" ] || continue ;;
             esac
             if C="$(git rev-parse -q --verify "refs/tags/$T^{commit}")"; then
-              [ -n "$ANCHOR" ] || ANCHOR="$C"
+              if [ -z "$ANCHOR" ]; then
+                ANCHOR="$C"
+                ANCHOR_TAG="$T"
+              elif [ "$ANCHOR" != "$C" ]; then
+                echo "::error::existing release tags disagree: $ANCHOR_TAG is $ANCHOR, but $T is $C; refusing to add another tag"
+                exit 1
+              fi
             else
               MISSING="$MISSING $T"
             fi
@@ -166,10 +177,11 @@ jobs:
           fi
 
           # A REPAIR must name the commit the release actually happened at,
-          # not whatever main has become since. If ts/v landed and go/v did
-          # not, and main moved on, tagging HEAD would leave the two tags
-          # identifying DIFFERENT commits — permanent for the Go module,
-          # because proxy.golang.org caches module versions immutably.
+          # not whatever main has become since. Existing tags must agree on
+          # that anchor. If any release tag landed and another did not, and
+          # main moved on, tagging HEAD would leave the tags identifying
+          # DIFFERENT commits — permanent for the Go module and crates.io,
+          # whose versions are immutable.
           HEAD_C="$(git rev-parse HEAD)"
           if [ -z "$ANCHOR" ]; then
             ANCHOR="$HEAD_C"
@@ -225,11 +237,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           # ONE atomic transaction, not a push per tag. Pushed separately,
-          # ts/v could land and go/v fail on a transient error, leaving
-          # npm published, ts/v tagged and the Go module unreleased — and
-          # the guard above would then refuse every re-dispatch, so the
-          # half-release could never be repaired. --atomic makes it
-          # both-or-neither: neither is recoverable, both is done.
+          # one tag could land and another fail on a transient error,
+          # leaving only part of the release addressable. --atomic makes
+          # the requested tag set all-or-nothing.
           for T in ${{ steps.tags.outputs.missing }}; do
             git tag "$T" "${{ steps.tags.outputs.anchor }}"
           done
@@ -248,6 +258,19 @@ jobs:
             echo "::notice::$T is not on the remote — no GitHub Release or C artifacts this run"
           fi
 
+      # ADR-21: crates.io is its own release surface, so it gets its own
+      # tag. Read from the remote for the same reason as the Go handoff:
+      # this also supports tag-push orchestration and repair runs.
+      - name: Hand the Rust tag to the crates release
+        id: crates
+        run: |
+          T="rs/v${{ steps.v.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$T" >/dev/null; then
+            echo "tag=$T" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$T is not on the remote — no crates.io publish this run"
+          fi
+
   # The GitHub Release and the C artifacts (ADR-19; see the header).
   clib:
     needs: publish-npm
@@ -262,10 +285,10 @@ jobs:
   # this `if` and the called job's own, both on the TABNAS_CRATES variable.
   crates:
     needs: publish-npm
-    if: ${{ vars.TABNAS_CRATES == 'on' && needs.publish-npm.outputs.clib-tag != '' }}
+    if: ${{ vars.TABNAS_CRATES == 'on' && needs.publish-npm.outputs.crates-tag != '' }}
     permissions:
       contents: read    # the tagged source
       id-token: write   # OIDC -> crates.io (a called job gets no more than this)
     uses: ./.github/workflows/crates-release.yml
     with:
-      tag: ${{ needs.publish-npm.outputs.clib-tag }}
+      tag: ${{ needs.publish-npm.outputs.crates-tag }}
