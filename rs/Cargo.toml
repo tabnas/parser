@@ -1,12 +1,13 @@
 [package]
 name = "tabnas-parser"
-version = "0.12.6"
+version = "0.12.7"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Richard Rodger <http://richardrodger.com>"]
 description = "A dynamic JSON parser that isn't strict and can be customized."
 license = "MIT"
 repository = "https://github.com/tabnas/parser"
+homepage = "https://tabnas.dev"
 documentation = "https://docs.rs/tabnas-parser"
 readme = "README.md"
 keywords = ["parser", "grammar", "json"]

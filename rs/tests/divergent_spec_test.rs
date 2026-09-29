@@ -130,7 +130,7 @@ fn canon(value: &Value) -> String {
 
 fn canon_entries<'a>(entries: impl Iterator<Item = (&'a String, &'a Value)>) -> String {
     let mut pairs: Vec<(&String, &Value)> = entries.collect();
-    pairs.sort_by(|a, b| utf16_units(a.0).cmp(&utf16_units(b.0)));
+    pairs.sort_by_key(|a| utf16_units(a.0));
     let parts: Vec<String> = pairs
         .iter()
         .map(|(key, value)| format!("\"{key}\":{}", canon(value)))
