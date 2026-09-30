@@ -1,0 +1,129 @@
+diff -ru a/DIVERGENCE.md b/DIVERGENCE.md
+--- a/DIVERGENCE.md	2026-09-30 15:59:30.940349342 +0000
++++ b/DIVERGENCE.md	2026-09-30 16:00:22.333156553 +0000
+@@ -117,19 +117,17 @@
+ matcher, which the canonical chain reaches after a move and this one does
+ not.
+ 
+-What is left, over a differential run of about 12,700 generated documents
+-against the canonical TypeScript, is THIRTEEN documents that all three
++What was left, over a differential run of about 12,700 generated documents
++against the canonical TypeScript, was THIRTEEN documents that all three
+ runtimes refuse with the same code at a different place. Two of the
+-thirteen are tabled below as the representatives.
+-
+-**Two of the thirteen position differences, where all three runtimes
+-refuse the document with the same code and only the reported place
+-differs:**
+-
+-| input | TypeScript | Go | Rust |
+-|---|---|---|---|
+-| `[a, b\n{a: 1\n? k\n- x\n` | `unexpected` at 5:1 | 5:1 | 3:1 |
+-| `---\n{a: 1\na: 1\n  t2\n` | `unexpected` at 5:1 | 5:1 | 4:3 |
++thirteen were tabled here as the representatives, and both now agree:
++this port refuses a character with a bad token, and the Rust engine used
++to report a bad token fetched as lookahead as `unexpected` at the FIRST
++lookahead token, not at its own place. tabnas/parser c32ebfa ("raise a
++fetched bad token as TypeScript does") repaired that in the engine, and
++both documents are now `unexpected` at 5:1 in every runtime (they were at
++3:1 and 4:3 here). `rs/tests/divergence_test.rs` keeps them as a parity
++assertion. The other eleven have not been re-measured since the repair.
+ 
+ **And ONE document the other two runtimes accept and this one refuses,
+ found by a later sweep over tab placement:**
+@@ -154,11 +152,10 @@
+ `a: !é` reach the engine with an `internal` error, which
+ `rs/tests/untrusted_test.rs` catches.
+ 
+-`rs/tests/divergence_test.rs` pins all five tabled rows. No shared
+-fixture pins a diagnostic's position, and none of the first two
+-documents is valid YAML. The same differential run over 8,408 generated
+-documents of realistic YAML shape, over the 253 fixture rows, over the
+-402 conformance inputs and over every string literal in the Go test
++`rs/tests/divergence_test.rs` pins the tabled rows. No shared fixture
++pins a diagnostic's position. The same differential run over 8,408
++generated documents of realistic YAML shape, over the 253 fixture rows,
++over the 402 conformance inputs and over every string literal in the Go test
+ files found no difference at all beyond the astral column above; the
+ `? k` row came from a later sweep of 862 documents that put a tab at
+ every position of 35 constructs, and it is the only difference that
+diff -ru a/rs/AGENTS.md b/rs/AGENTS.md
+--- a/rs/AGENTS.md	2026-09-30 16:00:15.372548741 +0000
++++ b/rs/AGENTS.md	2026-09-30 16:00:15.391930299 +0000
+@@ -119,7 +119,9 @@
+ What is left of the difference is fourteen documents out of a 4,348-case
+ adversarial corpus: one value, and thirteen places a refusal all three
+ runtimes make is reported. They are recorded in `../DIVERGENCE.md` and
+-pinned in `tests/divergence_test.rs`.
++pinned in `tests/divergence_test.rs`. The two representatives of the
++thirteen agree since tabnas/parser c32ebfa raised a bad token fetched as
++lookahead at its own place; the other eleven are not re-measured.
+ 
+ ## Scanning is by byte, columns count characters
+ 
+diff -ru a/rs/README.md b/rs/README.md
+--- a/rs/README.md	2026-09-30 16:00:15.372323322 +0000
++++ b/rs/README.md	2026-09-30 16:00:15.391822853 +0000
+@@ -207,11 +207,6 @@
+   value with the call stack to display, convert or drop it, so an
+   unbounded document ends the caller's process rather than returning an
+   error. TypeScript and Go have no limit.
+-- **Two pathological documents are refused in a different place**, with
+-  the same code as TypeScript and Go give them. It comes from the order
+-  the engine's lexer offers a moved cursor to its remaining matchers. No
+-  document's **value** differs for that reason any more. The register
+-  names the inputs.
+ - **A `\u` escape naming an unpaired UTF-16 surrogate becomes the
+   replacement character.** A Rust string holds Unicode scalars and a lone
+   surrogate is not one, where a TypeScript string is UTF-16 and keeps it.
+diff -ru a/rs/tests/divergence_test.rs b/rs/tests/divergence_test.rs
+--- a/rs/tests/divergence_test.rs	2026-09-30 15:59:30.931997416 +0000
++++ b/rs/tests/divergence_test.rs	2026-09-30 16:00:15.390958744 +0000
+@@ -135,28 +135,31 @@
+     );
+ }
+ 
+-/// **A refusal both runtimes make can be reported at a different place.**
++/// **A refusal all three runtimes make, at the same place: REPAIRED,
++/// kept as a parity assertion.**
+ ///
+-/// Same cause as above: this port refuses at the character its own
+-/// matcher cannot claim, and the canonical one carries on to a later
+-/// one. Both refuse, with the same code; only the position differs, and
+-/// no shared fixture pins a position.
++/// These two documents were the representatives of the refusals this
++/// port reported somewhere else. Its matcher refuses a character with a
++/// bad token (`lexer.bad("unexpected")` in `src/lex.rs`), and the Rust
++/// engine used to buffer a bad token fetched as lookahead like any other,
++/// so the refusal surfaced as `unexpected` at the FIRST lookahead token
++/// instead of at its own place. tabnas/parser c32ebfa ("raise a fetched
++/// bad token as TypeScript does") raises it at the fetch, with its own
++/// position, as the canonical engine does. `../DIVERGENCE.md` no longer
++/// carries the rows.
+ ///
+-/// Measured:
++/// Measured 2026-09-30, all three runtimes:
+ ///
+-///  input                            TypeScript   Rust
+-///  `[a, b\n{a: 1\n? k\n- x\n`         5:1         3:1
+-///  `---\n{a: 1\na: 1\n  t2\n`         5:1         4:3
++///  input                            TypeScript   Go    Rust
++///  `[a, b\n{a: 1\n? k\n- x\n`         5:1        5:1    5:1   (was 3:1)
++///  `---\n{a: 1\na: 1\n  t2\n`         5:1        5:1    5:1   (was 4:3)
+ #[test]
+-fn a_shared_refusal_can_be_reported_at_a_different_place() {
++fn a_shared_refusal_is_reported_where_typescript_reports_it() {
+     let parser = tabnas_yaml::make();
+-    for (src, row, col) in [
+-        ("[a, b\n{a: 1\n? k\n- x\n", 3, 1),
+-        ("---\n{a: 1\na: 1\n  t2\n", 4, 3),
+-    ] {
+-        let error = parser.parse(src).expect_err("both runtimes refuse this");
++    for src in ["[a, b\n{a: 1\n? k\n- x\n", "---\n{a: 1\na: 1\n  t2\n"] {
++        let error = parser.parse(src).expect_err("every runtime refuses this");
+         assert_eq!(error.code, "unexpected", "{src:?}");
+-        assert_eq!((error.row, error.col), (row, col), "{src:?}");
++        assert_eq!((error.row, error.col), (5, 1), "{src:?}");
+     }
+ }
+ 

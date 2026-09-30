@@ -1,0 +1,22 @@
+diff --git a/go/plugin.go b/go/plugin.go
+index 6823343..8430dd6 100644
+--- a/go/plugin.go
++++ b/go/plugin.go
+@@ -203,7 +203,16 @@ func MultiSource(j *jsonic.Jsonic, pluginOpts map[string]any) error {
+ 					},
+ 					"map": {
+ 						Open: []*jsonic.GrammarAltSpec{
+-							{S: openToken, C: "@d-one-top", P: "pair", B: 1},
++							// Allocate the implicit top-level map node here,
++							// as TS does: @tabnas/json's @object$ only runs
++							// for `{`. Without it the pushed `pair` is seeded
++							// with an undefined node when a pair follows a
++							// leading `@` directive (`@a.jsonic b:2`). The
++							// directive action's map-merge then writes into
++							// this same shared node.
++							{S: openToken, C: "@d-one-top", P: "pair", B: 1,
++								A: "@object$",
++								K: map[string]any{"object$": map[string]any{"implicit": true}}},
+ 						},
+ 						Close: []*jsonic.GrammarAltSpec{
+ 							{S: openToken, C: "@pk-pos", B: 1},

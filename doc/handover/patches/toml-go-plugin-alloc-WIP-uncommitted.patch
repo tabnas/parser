@@ -1,0 +1,24 @@
+diff --git a/go/refs.go b/go/refs.go
+index a1e2fce..370c79f 100644
+--- a/go/refs.go
++++ b/go/refs.go
+@@ -37,6 +37,19 @@ func makeRefs() map[jsonic.FuncRef]any {
+ 			r.Node = newMap()
+ 		}),
+ 
++		// Allocate this map's node up front, as TS does. @tabnas/json
++		// allocates a braced map's node in the @object$ alt action (on #OB),
++		// but TOML prepends its own map-open alts (e.g. the inline-table
++		// `{ s: ['#OB' '#ST #NR #ID'] p: pair }`) that match first and carry
++		// no @object$, so without this the pushed `pair` would inherit the
++		// parent's node rather than a map of its own. Allocating here gives
++		// every map (table-context and inline-table alike) a real object;
++		// @table-bc copies the child map into the table node, so a fresh
++		// node per map is consistent.
++		"@map-bo": jsonic.StateAction(func(r *jsonic.Rule, _ *jsonic.Context) {
++			r.Node = newMap()
++		}),
++
+ 		"@table-bo": jsonic.StateAction(func(r *jsonic.Rule, _ *jsonic.Context) {
+ 			r.Node = r.Parent.Node
+ 		}),

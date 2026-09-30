@@ -1,0 +1,62 @@
+--- a/test/divergent.tsv	2026-09-30 15:58:49.779466102 +0000
++++ b/test/divergent.tsv	2026-09-30 15:59:06.454876507 +0000
+@@ -54,34 +54,34 @@
+ ["😀" 1]	ERROR:unexpected@1:6	ERROR:unexpected@1:5	ERROR:unexpected@1:5	astral column unit — permanent
+ ["ab😀cd" 1]	ERROR:unexpected@1:10	ERROR:unexpected@1:9	ERROR:unexpected@1:9	astral column unit — permanent
+ #
+-# --- A bad token reached in LOOKAHEAD: the code the reader is given ------
+-# When an alternate needs two tokens and the SECOND one is the lexer's bad
+-# token, TypeScript and Go raise that token's own diagnosis
+-# (unterminated_string, unprintable), and Rust answers `unexpected` at the
+-# first token instead. The Rust engine builds the "no alternate matched"
+-# error from the first lookahead token alone
+-# (tabnas/parser rs/src/parser.rs, `deferred_error_code(t0)`), so a bad
+-# token in any later slot loses its code; the canonical engine remembers it
+-# and throws it once every alternate has declined
+-# (tabnas/parser ts/src/rules.ts, the deferred bad-token throw).
++# --- A multi-line string's trailing quotes: the COLUMN after it -----------
++# A multi-line string may end in up to two quotes of content before its
++# closing delimiter (`'''x'''''` is `x''`). The TypeScript matcher consumes
++# those extra quotes with `sI++` and no `cI++` (ts/src/toml.ts, the
++# `isMultiline` close), and Go's does the same, so every column after such
++# a string on its row is short by the quotes it took. Rust hands the
++# engine a character count (`advance_chars`), so its column is the
++# character's own. `a = '''x''''' ?` is `unexpected` at 1:13 in TypeScript
++# and Go and at 1:15 here, before and after the engine repair below.
+ #
+-# Both other ports agree on the code AND the position, so these rows pin
+-# both. The repair is an ENGINE repair in tabnas/parser's Rust port, not a
+-# grammar one: this plugin sees the token after the engine has chosen what
+-# to report. Six documents of the BurntSushi corpus land here, which is why
+-# the `rust` row of ../test/conformance.tsv still reproduces the `ts` counts:
+-# all six are rejected by every port, and only the code differs.
++# The row below is where that surfaced. It used to be the third of three
++# rows recording a bad token reached in LOOKAHEAD: TypeScript and Go raise
++# that token's own diagnosis and the Rust engine answered `unexpected` at
++# the first lookahead token instead. tabnas/parser c32ebfa ("raise a fetched
++# bad token as TypeScript does") repaired that in the engine: the two
++# table-header rows (`["abc` and `["tbl\n"]`) now agree in every port and
++# were deleted, and this one now agrees on the CODE. What is left is the
++# column: the run of apostrophes re-lexes into a second multi-line string,
++# `''''''''`, whose two trailing quotes TypeScript and Go do not count, and
++# the leftover `'` that never closes is reported where each port thinks it
++# stands. The row was already carrying this difference (1:22 against 1:18)
++# under the old reason.
+ #
+-# The first row is a quoted table-header key that never closes, the second a
+-# raw newline inside one, and the third a value context: a run of
+-# apostrophes long enough that the leftovers of one string re-lex into
+-# another, whose failure only the lookahead sees.
++# NOT DECIDED here which side moves: TypeScript is canonical, but its
++# column is short by characters it consumed.
+ #
+-# MEASURED 2026-09-22 in all three ports, against the sibling checkouts and
+-# again against the published Go modules, which agree.
+-["abc	ERROR:unterminated_string@1:2	ERROR:unterminated_string@1:2	ERROR:unexpected@1:1	bad token in lookahead: engine repair in tabnas/parser rs
+-["tbl\n"]	ERROR:unprintable@1:2	ERROR:unprintable@1:2	ERROR:unexpected@1:1	bad token in lookahead: engine repair in tabnas/parser rs
+-a = '''x''''''''''''''	ERROR:unterminated_string@1:18	ERROR:unterminated_string@1:18	ERROR:unexpected@1:22	bad token in lookahead: engine repair in tabnas/parser rs
++# MEASURED 2026-09-30 in all three ports, against the sibling checkouts.
++a = '''x''''''''''''''	ERROR:unterminated_string@1:18	ERROR:unterminated_string@1:18	ERROR:unterminated_string@1:22	multi-line string trailing quotes: ts and go skip their columns
+ #
+ # --- A string escape where the three ports are not unanimous -------------
+ # `\u12g4` is a lax hexadecimal scan. The canonical `isHexadecimal`

@@ -1,0 +1,48 @@
+--- a/rs/tests/plugin.rs
++++ b/rs/tests/plugin.rs
+@@ -378,19 +378,34 @@
+             "{src:?}"
+         );
+     }
+-    // An unclosed comment behind a good token: the canonical engine throws
+-    // the bad token as it is fetched, and records and skips it under
+-    // recovery; this one buffers it. The lex subscriber makes it the error
+-    // without recovery (`comments.tsv`), and steps aside under recovery,
+-    // where the engine's recovery reads the lookahead: dropping it there
+-    // doubles the recovered values that differ from the canonical port's
+-    // over the review corpus. So the first error is `unexpected` at the
+-    // property, where the canonical port's is `unterminated_comment` at 1:5.
++    // An unclosed comment behind a good token: the engine raises the bad
++    // token as it is fetched, as the canonical engine does, and under
++    // recovery records it and steps past it. So the first error is the
++    // comment's own, `unterminated_comment` at 1:5, as the canonical port
++    // reports, and the value is the empty stylesheet.
+     let got = parser.parse_recover("a{b\\\"x;\"/*");
+-    let error = Error::from(got.errors.into_iter().next().expect("an error"));
+     assert_eq!(
+-        ("unexpected", 1, 3),
+-        (error.code.as_str(), error.line, error.column)
++        r#"{"type":"stylesheet","rules":[]}"#,
++        from_tree(&got.value.expect("a partial value")).to_json()
++    );
++    let errors: Vec<Error> = got.errors.into_iter().map(Error::from).collect();
++    assert_eq!(
++        vec![("unterminated_comment", 1, 5)],
++        errors
++            .iter()
++            .map(|error| (error.code.as_str(), error.line, error.column))
++            .collect::<Vec<_>>()
++    );
++    // A recovering parse that gives up lists its error once, as the
++    // canonical port does.
++    let got = parser.parse_recover("a{b:c} d{");
++    let errors: Vec<Error> = got.errors.into_iter().map(Error::from).collect();
++    assert_eq!(
++        vec![("unexpected", 1, 10)],
++        errors
++            .iter()
++            .map(|error| (error.code.as_str(), error.line, error.column))
++            .collect::<Vec<_>>()
+     );
+     // `parse` with recovery on returns the same partial value.
+     let tree = from_tree(&parser.parse("a{b:c} d{").expect("recovers"));

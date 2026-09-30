@@ -1,0 +1,500 @@
+From f6ead370c0ea51ee4b5f75b6e337e67f7e4004b3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 30 Sep 2026 14:36:08 +0000
+Subject: [PATCH] fix(rs): a merge does not keep a fixed token either side
+ removed, as in TypeScript
+
+TypeScript's configure() deletes a fixed-token binding set to null from
+the live option tree (`clean`, ts/src/utility.ts), so the tree
+mergeOptionTrees reads holds no removal: the merge takes the binding the
+other side holds, and new Tabnas(merged) builds over the defaults, which
+puts back a default binding neither side holds. The Rust merge treated a
+missing default fixed token as a deletion that wins against the default,
+so css (which removes #OS and #CS) merged with jsonic lexed `[` as text
+where TypeScript's merge lexes it as #OS, and a removal met by a rebinding
+on the other side was refused as a conflict where TypeScript takes the
+rebinding.
+
+merge_fixed_tokens now takes every binding either side holds (picking
+between two as before), puts back the defaults neither side holds, and
+where a default put back and a held binding claim one source lets the
+later of the two in default-first order keep it, as configure()'s
+source map does. Two held bindings claiming one source are still refused
+in merge_token_space, with TypeScript's message. Every other option map
+keeps its removals, as TypeScript's null-valued keys do, and a removed
+rule is still the other side's rule.
+
+rs/tests/merge_test.rs pins it in all four merge orders (three tests fail
+before this change); ts/test/merge.test.js pins the same results on the
+canonical engine.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017YWzsjpwCJLLAsWUYqogSQ
+---
+ rs/src/merge.rs        |  79 ++++++++++++++++++-
+ rs/tests/merge_test.rs | 173 +++++++++++++++++++++++++++++++++++++++++
+ ts/test/merge.test.js  | 156 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 404 insertions(+), 4 deletions(-)
+
+diff --git a/rs/src/merge.rs b/rs/src/merge.rs
+index 6ccb38c..4217055 100644
+--- a/rs/src/merge.rs
++++ b/rs/src/merge.rs
+@@ -16,7 +16,7 @@ use crate::{
+     Value,
+ };
+ use indexmap::IndexMap;
+-use std::collections::{BTreeSet, HashMap};
++use std::collections::{BTreeSet, HashMap, HashSet};
+ use std::fmt;
+ use std::sync::Arc;
+ 
+@@ -156,6 +156,7 @@ fn merge_index_map<T: Clone>(
+             // A missing resolved default entry represents an explicit
+             // deletion. It wins against the unchanged default, while a
+             // deletion and a different replacement are both non-default.
++            // The fixed tokens do not merge so: see `merge_fixed_tokens`.
+             (Some(value), None, Some(default)) | (None, Some(value), Some(default)) => {
+                 if equal(value, default) {
+                     None
+@@ -173,6 +174,78 @@ fn merge_index_map<T: Clone>(
+     Ok(out)
+ }
+ 
++/// The fixed tokens do not merge as the other maps do: a removal of one
++/// does not survive a merge, as in TypeScript. There, `configure()`
++/// deletes a binding set to `null` from the live option tree (`clean`,
++/// `ts/src/utility.ts`), where the other maps keep the `null`, so the tree
++/// a merge reads holds no removal: the merge takes every binding either
++/// side holds, picking between two as any option is picked, and builds the
++/// merged instance over the defaults, which puts back a default binding
++/// that neither side holds. Where a default put back and a binding held
++/// claim one source, the one later in that default-first order lexes it,
++/// since `configure()` maps each source to the last name that claims it.
++/// So `css`, which removes `#OS` and `#CS`, merged with `jsonic` lexes `[`
++/// and `]` as `#OS` and `#CS`, as TypeScript's merge does.
++///
++/// Two held bindings that claim one source are left to
++/// `merge_token_space` to refuse, as TypeScript refuses them before the
++/// defaults are applied. Rust keeps no mark of an instance built without
++/// the defaults (TypeScript's `defaults$: false`, which its `empty()`
++/// sets), and `merge_options` measures every option against
++/// `Options::default()`, so two `Tabnas::empty()` instances merged get the
++/// default bindings back here, where TypeScript's merge leaves them out.
++fn merge_fixed_tokens(
++    left: &IndexMap<String, FixedToken>,
++    right: &IndexMap<String, FixedToken>,
++    default: &IndexMap<String, FixedToken>,
++) -> Result<IndexMap<String, FixedToken>, MergeError> {
++    let mut out = IndexMap::new();
++    for key in ordered_keys(left, right) {
++        let path = format!("fixed.token.{key}");
++        let value = match (left.get(&key), right.get(&key), default.get(&key)) {
++            (Some(left), Some(right), Some(default)) => {
++                pick(left, right, default, &path, &eq_fixed_token)?
++            }
++            (Some(left), Some(right), None) => {
++                pick_without_default(left, right, &path, &eq_fixed_token)?
++            }
++            (Some(value), None, _) | (None, Some(value), _) => value.clone(),
++            (None, None, _) => unreachable!(),
++        };
++        out.insert(key, value);
++    }
++
++    let mut sources = HashSet::new();
++    let distinct_sources = out.values().all(|token| sources.insert(&token.source));
++    if !distinct_sources {
++        return Ok(out);
++    }
++    for (index, (name, token)) in default.iter().enumerate() {
++        if out.contains_key(name) {
++            continue;
++        }
++        let holder = out
++            .iter()
++            .find(|(_, held)| held.source == token.source)
++            .map(|(holder, _)| holder.clone());
++        match holder {
++            // The holder comes later, a name the defaults lack or a default
++            // name after this one, and keeps the source.
++            Some(holder) if default.get_index_of(&holder).is_none_or(|at| at > index) => {}
++            // A default name before this one gives the source up, and with
++            // it the only thing it lexed.
++            Some(holder) => {
++                out.shift_remove(&holder);
++                out.insert(name.clone(), token.clone());
++            }
++            None => {
++                out.insert(name.clone(), token.clone());
++            }
++        }
++    }
++    Ok(out)
++}
++
+ fn merge_hash_map<T: Clone>(
+     left: &HashMap<String, T>,
+     right: &HashMap<String, T>,
+@@ -346,12 +419,10 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
+         "fixed.check",
+         &eq_option_check,
+     )?;
+-    out.fixed.tokens = merge_index_map(
++    out.fixed.tokens = merge_fixed_tokens(
+         &left.fixed.tokens,
+         &right.fixed.tokens,
+         &default.fixed.tokens,
+-        "fixed.token",
+-        &eq_fixed_token,
+     )?;
+ 
+     out.space.lex = pick(
+diff --git a/rs/tests/merge_test.rs b/rs/tests/merge_test.rs
+index 90789cc..704d1d5 100644
+--- a/rs/tests/merge_test.rs
++++ b/rs/tests/merge_test.rs
+@@ -443,3 +443,176 @@ fn merged_alternates_follow_token_set_overrides_on_either_side_of_the_merge() {
+     merged.grammar_json(OVERRIDE).unwrap();
+     expect(&merged, "x", "true");
+ }
++
++/// A merge side: the default options under `tag`, then each serialized
++/// grammar in turn, the door a plugin's `fixed.token` deletions come through.
++fn spec_side(tag: &str, specs: &[&str]) -> Tabnas {
++    let mut tabnas = Tabnas::with_options(Options {
++        tag: tag.into(),
++        ..Default::default()
++    });
++    for spec in specs {
++        tabnas.grammar_json(spec).unwrap();
++    }
++    tabnas
++}
++
++/// The token names `tabnas` lexes `src` into, the end token left out.
++fn lexed(tabnas: &Tabnas, src: &str) -> String {
++    let mut probe = tabnas.clone();
++    let names = Arc::new(Mutex::new(Vec::new()));
++    let seen = names.clone();
++    probe.subscribe_lex(move |token, _, _| {
++        let name = token.name.to_string();
++        if name != "#ZZ" {
++            seen.lock().unwrap().push(name);
++        }
++    });
++    let _ = probe.parse(src);
++    let names = names.lock().unwrap().join(",");
++    names
++}
++
++/// Every merge of a side built from `deleter` with one built from `other`:
++/// the side that deletes sorts first and last by tag, and each is the
++/// receiver once, so no order can hide a result.
++fn merges_of(deleter: &[&str], other: &[&str]) -> Vec<Result<Tabnas, String>> {
++    let mut out = Vec::new();
++    for (deleter_tag, other_tag) in [("A", "B"), ("B", "A")] {
++        for deleter_receives in [true, false] {
++            let deleting = spec_side(deleter_tag, deleter);
++            let keeping = spec_side(other_tag, other);
++            let merged = if deleter_receives {
++                deleting.merge(&keeping)
++            } else {
++                keeping.merge(&deleting)
++            };
++            out.push(merged.map_err(|error| error.to_string()));
++        }
++    }
++    out
++}
++
++const TOP: &str = r##"{"options":{"rule":{"start":"top"}},
++  "rule":{"top":{"open":[{"s":["#OS"]},{"s":["#OB"]},{"s":["#CA"]},{"s":["#TX"]}]}}}"##;
++
++#[test]
++fn a_fixed_token_one_side_removed_comes_back_from_the_other_side() {
++    // TypeScript's configure() deletes a fixed token set to null from the
++    // option tree a merge reads, so the merge takes the binding the other
++    // side holds: `css` removes `[` and `]`, and a css~jsonic merge lexes
++    // them as `#OS` and `#CS` again. The Rust merge used to keep the removal.
++    const REMOVE: &str = r##"{"options":{"fixed":{"token":{"#OS":null,"#CS":null}}}}"##;
++    let alone = spec_side("A", &[TOP, REMOVE]);
++    assert_eq!("#TX", lexed(&alone, "["));
++    for merged in merges_of(&[TOP, REMOVE], &[TOP]) {
++        let merged = merged.unwrap();
++        assert_eq!("#OS", lexed(&merged, "["));
++        assert_eq!("#CS", lexed(&merged, "]"));
++    }
++
++    // A `clear` removes every fixed token, and they come back the same way.
++    const CLEAR: &str = r##"{"clear":true,"options":{"rule":{"start":"top"}},
++      "rule":{"top":{"open":[{"s":["#TX"]}]}}}"##;
++    for merged in merges_of(&[CLEAR], &[TOP]) {
++        let merged = merged.unwrap();
++        assert_eq!("#OS", lexed(&merged, "["));
++        assert_eq!("#OB", lexed(&merged, "{"));
++    }
++
++    // What comes back is the other side's binding, default or not: a
++    // removal is not a value that conflicts with it.
++    const REBIND: &str = r##"{"options":{"fixed":{"token":{"#OS":"<<"}}}}"##;
++    for merged in merges_of(&[TOP, REMOVE], &[TOP, REBIND]) {
++        let merged = merged.unwrap();
++        assert_eq!("#OS", lexed(&merged, "<<"));
++        assert_eq!("#TX", lexed(&merged, "["));
++    }
++}
++
++#[test]
++fn a_default_fixed_token_neither_side_holds_comes_back() {
++    // TypeScript builds the merged instance over the defaults, so a default
++    // fixed token that both sides removed comes back too.
++    const REMOVE: &str = r##"{"options":{"fixed":{"token":{"#OS":null}}}}"##;
++    for merged in merges_of(&[TOP, REMOVE], &[TOP, REMOVE]) {
++        assert_eq!("#OS", lexed(&merged.unwrap(), "["));
++    }
++    const CLEAR: &str = r##"{"clear":true,"options":{"rule":{"start":"top"}},
++      "rule":{"top":{"open":[{"s":["#TX"]}]}}}"##;
++    for merged in merges_of(&[CLEAR], &[CLEAR]) {
++        let merged = merged.unwrap();
++        assert_eq!("#OB", lexed(&merged, "{"));
++        assert_eq!("#OS", lexed(&merged, "["));
++        assert_eq!("#CL", lexed(&merged, ":"));
++        assert_eq!("#CA", lexed(&merged, ","));
++    }
++
++    // Where a default that comes back and a binding a side holds claim one
++    // source, the later of the two in the defaults' order lexes it: a name
++    // the defaults lack, or a default name after it, keeps the source, and
++    // a default name before it gives the source up.
++    for (bind, source_lexes_as, freed, freed_lexes_as) in [
++        (r##""#LB":"[""##, "#LB", "{", "#OB"),
++        (r##""#CA":"[""##, "#CA", ",", "#TX"),
++        (r##""#OB":"[""##, "#OS", "{", "#TX"),
++    ] {
++        let spec = format!(r##"{{"options":{{"fixed":{{"token":{{"#OS":null,{bind}}}}}}}}}"##);
++        for merged in merges_of(&[TOP, &spec], &[TOP, &spec]) {
++            let merged = merged.unwrap();
++            assert_eq!(source_lexes_as, lexed(&merged, "["), "{bind}");
++            assert_eq!(freed_lexes_as, lexed(&merged, freed), "{bind}");
++        }
++    }
++}
++
++#[test]
++fn a_removed_fixed_tokens_source_bound_to_another_name_meets_the_other_sides_binding() {
++    // The other side's `#OS` comes back, so two names claim `[`, and the
++    // merge refuses them as TypeScript does, naming the canonical-first
++    // side's claim first.
++    const MOVE: &str = r##"{"options":{"fixed":{"token":{"#OS":null,"#LB":"["}}}}"##;
++    let errors = merges_of(&[TOP, MOVE], &[TOP])
++        .into_iter()
++        .map(|merged| merged.err().unwrap())
++        .collect::<Vec<_>>();
++    let deleter_first = r#"merge: fixed tokens #LB and #OS both claim source "[""#;
++    let deleter_second = r#"merge: fixed tokens #OS and #LB both claim source "[""#;
++    assert_eq!(
++        vec![deleter_first, deleter_first, deleter_second, deleter_second],
++        errors
++    );
++}
++
++#[test]
++fn a_removal_of_any_other_option_or_of_a_rule_merges_as_before() {
++    // Only the fixed tokens lose their removals to a merge. A value
++    // definition set to null stays removed against the unchanged default
++    // and conflicts with a different one, as in TypeScript, where the null
++    // stays in the option tree.
++    const VALUES: &str = r##"{"options":{"rule":{"start":"top"}},
++      "rule":{"top":{"open":[{"s":["#VL"]},{"s":["#TX"]}]}}}"##;
++    const REMOVE: &str = r##"{"options":{"value":{"def":{"true":null}}}}"##;
++    assert_eq!("#VL", lexed(&spec_side("A", &[VALUES]), "true"));
++    for merged in merges_of(&[VALUES, REMOVE], &[VALUES]) {
++        assert_eq!("#TX", lexed(&merged.unwrap(), "true"));
++    }
++    const REDEFINE: &str = r##"{"options":{"value":{"def":{"true":{"val":1}}}}}"##;
++    for merged in merges_of(&[VALUES, REMOVE], &[VALUES, REDEFINE]) {
++        assert_eq!(
++            "merge: conflicting option values at value.def.true",
++            merged.err().unwrap()
++        );
++    }
++
++    // A rule one side removed is the other side's rule in the merge.
++    const RULES: &str = r##"{"options":{"rule":{"start":"top"}},
++      "rule":{"top":{"open":[{"s":["#TX"],"p":"x"}]},"x":{"open":[{"s":["#NR"]}]}}}"##;
++    const DROP: &str = r##"{"rule":{"x":null}}"##;
++    assert!(spec_side("A", &[RULES, DROP]).parse("a 1").is_err());
++    for merged in merges_of(&[RULES, DROP], &[RULES]) {
++        let merged = merged.unwrap();
++        assert!(merged.rules.contains_key("x"));
++        assert!(merged.parse("a 1").is_ok());
++    }
++}
+diff --git a/ts/test/merge.test.js b/ts/test/merge.test.js
+index 6438876..9d0396d 100644
+--- a/ts/test/merge.test.js
++++ b/ts/test/merge.test.js
+@@ -775,3 +775,159 @@ describe('merge-permutations', () => {
+   })
+ 
+ })
++
++
++// A fixed token set to null is deleted from the option tree by
++// configure() (`clean`, src/utility.ts), so a merge never sees the
++// removal: it takes the binding the other side holds, and the merged
++// instance, built over the defaults, gets back a default binding neither
++// side holds. Other removals stay in the tree as null and merge as values.
++// rs/tests/merge_test.rs holds the Rust port to the same results.
++describe('merge-removals', () => {
++  const TOP = {
++    options: { rule: { start: 'top' } },
++    rule: {
++      top: {
++        open: [{ s: ['#OS'] }, { s: ['#OB'] }, { s: ['#CA'] }, { s: ['#TX'] }],
++      },
++    },
++  }
++
++  function side(tag, specs) {
++    const tn = new Tabnas({ tag })
++    for (const spec of specs) {
++      tn.grammar(JSON.parse(JSON.stringify(spec)))
++    }
++    return tn
++  }
++
++  // The token names `tn` lexes `src` into, the end token left out.
++  function lexed(tn, src) {
++    const names = []
++    const probe = tn.make()
++    probe.sub({ lex: (tkn) => '#ZZ' !== tkn.name && names.push(tkn.name) })
++    try {
++      probe.parse(src)
++    } catch (e) {
++      // Only the tokens are observed.
++    }
++    return names.join(',')
++  }
++
++  // The deleting side sorts first and last by tag, and each side is the
++  // receiver once.
++  function mergesOf(deleter, other) {
++    const out = []
++    for (const [dtag, otag] of [['A', 'B'], ['B', 'A']]) {
++      for (const deleterReceives of [true, false]) {
++        const d = side(dtag, deleter)
++        const o = side(otag, other)
++        out.push(() => (deleterReceives ? d.merge(o) : o.merge(d)))
++      }
++    }
++    return out
++  }
++
++  it('restores-a-fixed-token-one-side-removed', () => {
++    const REMOVE = { options: { fixed: { token: { '#OS': null, '#CS': null } } } }
++    for (const merge of mergesOf([TOP, REMOVE], [TOP])) {
++      const merged = merge()
++      assert.equal(lexed(merged, '['), '#OS')
++      assert.equal(lexed(merged, ']'), '#CS')
++    }
++    const CLEAR = {
++      clear: true,
++      options: { rule: { start: 'top' } },
++      rule: { top: { open: [{ s: ['#TX'] }] } },
++    }
++    for (const merge of mergesOf([CLEAR], [TOP])) {
++      const merged = merge()
++      assert.equal(lexed(merged, '['), '#OS')
++      assert.equal(lexed(merged, '{'), '#OB')
++    }
++    const REBIND = { options: { fixed: { token: { '#OS': '<<' } } } }
++    for (const merge of mergesOf([TOP, REMOVE], [TOP, REBIND])) {
++      const merged = merge()
++      assert.equal(lexed(merged, '<<'), '#OS')
++      assert.equal(lexed(merged, '['), '#TX')
++    }
++  })
++
++  it('restores-a-default-fixed-token-neither-side-holds', () => {
++    const REMOVE = { options: { fixed: { token: { '#OS': null } } } }
++    for (const merge of mergesOf([TOP, REMOVE], [TOP, REMOVE])) {
++      assert.equal(lexed(merge(), '['), '#OS')
++    }
++    const CLEAR = {
++      clear: true,
++      options: { rule: { start: 'top' } },
++      rule: { top: { open: [{ s: ['#TX'] }] } },
++    }
++    for (const merge of mergesOf([CLEAR], [CLEAR])) {
++      const merged = merge()
++      assert.equal(lexed(merged, '{'), '#OB')
++      assert.equal(lexed(merged, '['), '#OS')
++      assert.equal(lexed(merged, ':'), '#CL')
++      assert.equal(lexed(merged, ','), '#CA')
++    }
++    // The later of two names claiming one source, in the defaults'
++    // order, lexes it.
++    for (const [bind, lexesAs, freed, freedAs] of [
++      [{ '#LB': '[' }, '#LB', '{', '#OB'],
++      [{ '#CA': '[' }, '#CA', ',', '#TX'],
++      [{ '#OB': '[' }, '#OS', '{', '#TX'],
++    ]) {
++      const spec = { options: { fixed: { token: { '#OS': null, ...bind } } } }
++      for (const merge of mergesOf([TOP, spec], [TOP, spec])) {
++        const merged = merge()
++        assert.equal(lexed(merged, '['), lexesAs, JSON.stringify(bind))
++        assert.equal(lexed(merged, freed), freedAs, JSON.stringify(bind))
++      }
++    }
++  })
++
++  it('refuses-a-removed-fixed-tokens-source-bound-to-another-name', () => {
++    const MOVE = { options: { fixed: { token: { '#OS': null, '#LB': '[' } } } }
++    const errors = mergesOf([TOP, MOVE], [TOP]).map((merge) => {
++      try {
++        merge()
++      } catch (e) {
++        return e.message
++      }
++      return 'merged'
++    })
++    const first = 'merge: fixed tokens #LB and #OS both claim source "["'
++    const second = 'merge: fixed tokens #OS and #LB both claim source "["'
++    assert.deepEqual(errors, [first, first, second, second])
++  })
++
++  it('keeps-a-removal-of-any-other-option-and-restores-a-rule', () => {
++    const VALUES = {
++      options: { rule: { start: 'top' } },
++      rule: { top: { open: [{ s: ['#VL'] }, { s: ['#TX'] }] } },
++    }
++    const REMOVE = { options: { value: { def: { true: null } } } }
++    for (const merge of mergesOf([VALUES, REMOVE], [VALUES])) {
++      assert.equal(lexed(merge(), 'true'), '#TX')
++    }
++    const REDEFINE = { options: { value: { def: { true: { val: 1 } } } } }
++    for (const merge of mergesOf([VALUES, REMOVE], [VALUES, REDEFINE])) {
++      assert.throws(merge, /merge: conflicting option values at value\.def\.true/)
++    }
++
++    const RULES = {
++      options: { rule: { start: 'top' } },
++      rule: {
++        top: { open: [{ s: ['#TX'], p: 'x' }] },
++        x: { open: [{ s: ['#NR'] }] },
++      },
++    }
++    const DROP = { rule: { x: null } }
++    assert.throws(() => side('A', [RULES, DROP]).parse('a 1'))
++    for (const merge of mergesOf([RULES, DROP], [RULES])) {
++      const merged = merge()
++      assert.ok(merged.rule('x'))
++      merged.parse('a 1')
++    }
++  })
++})
+-- 
+2.43.0
+

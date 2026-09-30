@@ -1,0 +1,34 @@
+diff --git a/go/csv.go b/go/csv.go
+index 6911147..8dac0dc 100644
+--- a/go/csv.go
++++ b/go/csv.go
+@@ -564,6 +564,15 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
+ 	// Rules list, elem, val are modified in code rather than the grammar file,
+ 	// because in non-strict mode the default jsonic alternatives must be preserved
+ 	// to support embedded JSON values like [1,2] and {x:1}.
++	//
++	// As in TS, the csv `list` rule allocates its OWN array (the field
++	// accumulator) in its before-open phase, in both modes. A pushed child
++	// rule is seeded with the parent's node, and jsonic's list before-open
++	// only allocates when `prev.u.implist` is set, which CSV's record->list
++	// path never does; without this allocation the parsed fields would be
++	// pushed onto the inherited top-level csv array. `elem` then pushes each
++	// parsed field into that array and `@record-bc` reads it off
++	// `r.Child.Node`.
+ 
+ 	LN := j.Token("#LN")
+ 	CA := j.Token("#CA")
+@@ -661,6 +670,13 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
+ 		// Non-strict mode: prepend CSV alternates so default JSON-value
+ 		// alternates (handling [1,2], {x:1}, etc.) remain available.
+ 		j.Rule("list", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
++			// Allocate the per-record field array (jsonic's list before-open
++			// does not, since CSV's record->list path sets no
++			// prev.u.implist, and json's @array$ only runs on `[`). As in
++			// TS, appended after jsonic's own before-open action.
++			rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
++				r.Node = make([]any, 0)
++			})
+ 			rs.PrependOpen(&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1})
+ 			rs.AddOpen(&jsonic.AltSpec{P: "elem"})
+ 			rs.PrependClose(

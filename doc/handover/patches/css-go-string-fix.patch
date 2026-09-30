@@ -1,0 +1,316 @@
+From 7e985a71f08b6ddd896b17668739322376eefd3c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 30 Sep 2026 14:38:08 +0000
+Subject: [PATCH] fix(go): turn string lexing off with Lex: false, not an empty
+ Chars
+
+go/css.go wrote TS's `string: { chars: '' }` as
+`StringOptions{Chars: ""}`. In the Go engine an empty Chars means
+UNSET, not none (StringOptions.Chars, empty_chars_test.go), so the
+default quotes stayed on. A quote the cssToken matcher declines, as in
+a"b, a{b:c}' or a lone backtick, then lexed as the start of a string:
+Go raised unterminated_string, or unprintable before a newline, where
+TypeScript raises unexpected. Lex: false is how the Go engine turns
+string matching off. No other override in go/css.go has the same trap.
+
+test/spec/quotes.tsv pins 55 quote cases in all three runtimes, every
+expected value taken from the TypeScript port: stray quotes (the 28
+rows that failed in Go before this change), balanced quotes kept
+verbatim, backticks as plain text, and unterminated quotes inside a
+selector, value or block.
+
+The TS/Go probe could not see this divergence. It wrote a rejection as a
+bare ERR, and its alphabet had no lone quote. It now compares error
+codes (the Go half writes ERR:<code>) and has all three quote
+characters. With the fix reverted it reports 127 divergences; with it,
+none. The TS/Rust probe, which already compared codes, gets the same
+three characters. AGENTS.md records the closed divergence and the new
+probe count.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017YWzsjpwCJLLAsWUYqogSQ
+---
+ AGENTS.md                      | 31 ++++++++----
+ go/css.go                      | 15 +++++-
+ go/divergence_probe_test.go    | 14 +++++-
+ scripts/divergence-probe-rs.sh |  5 ++
+ scripts/divergence-probe.sh    | 11 ++++-
+ test/spec/quotes.tsv           | 87 ++++++++++++++++++++++++++++++++++
+ 6 files changed, 151 insertions(+), 12 deletions(-)
+ create mode 100644 test/spec/quotes.tsv
+
+diff --git a/AGENTS.md b/AGENTS.md
+index bf3fef1..2c059e7 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -182,7 +182,7 @@ array.
+ | [`rs/tests/`](rs/tests/) | Rust suite: `parity.rs` (the shared `test/spec/*.tsv` fixtures, every row three ways: `Css::parse`, the plugin on jsonic, the plugin on a bare engine), `divergent.rs` (the divergence register), `reworkcss.rs` (the external conformance corpus, with its own fetch), `css.rs` (what a fixture cannot express, plus the crate's API), `plugin.rs` (the plugin surface: the two result forms, options, a second install, the tree form's depth bound, recovery), `grammar.rs` (the embed vs the file on disk, the installed rules, and the `css` group on every alternate), `repeat.rs` (every repetition a replace loop: rule depth constant over 10,000 items), `debug_model.rs` (`tabnas-debug` composition, the Rust half of `debug-model.test.ts`), `memory.rs` (peak memory held under ceilings by a counting allocator), `perf.rs` (instance-reuse guard), `version.rs` (`VERSION` vs `Cargo.toml` and `ts/package.json`), `support/mod.rs` (the fixture loader, a JSON reader and the canonical compare, standing in for `@tabnas/support`). The doc examples run as doctests via `#[cfg(doctest)]` in `rs/src/lib.rs`. |
+ | [`ci/rust/run.sh`](ci/rust/run.sh) | The Rust gate, run by `.github/workflows/rust.yml` and by `make gate-rs`: the sibling checkouts, the MSRV toolchain, the lockfile checks, fmt, build, tests, doctests, clippy and rustdoc. See **Build & test**. |
+ | [`test/divergent.tsv`](test/divergent.tsv) | The executable divergence register (ADR-14): one row per input the three ports disagree on, one cell per runtime, read by `ts/test/divergent.test.ts`, `go/divergent_test.go` and `rs/tests/divergent.rs`. It sits BESIDE `test/spec/` because every runtime runs everything in that directory. |
+-| [`scripts/divergence-probe.sh`](scripts/divergence-probe.sh), [`go/divergence_probe_test.go`](go/divergence_probe_test.go) | TS/Go differential probe over a deterministic generated corpus. A GATE (exits non-zero on divergence); `.github/workflows/divergence.yml` (job `ts-go-probe`) runs it, and is the only CI job that does. The Go half is inert unless `CSS_DUMP_IN`/`CSS_DUMP_OUT` are set. Runs with the default options only. |
++| [`scripts/divergence-probe.sh`](scripts/divergence-probe.sh), [`go/divergence_probe_test.go`](go/divergence_probe_test.go) | TS/Go differential probe over a deterministic generated corpus, comparing each rejection's error code as well as the verdict. A GATE (exits non-zero on divergence); `.github/workflows/divergence.yml` (job `ts-go-probe`) runs it, and is the only CI job that does. The Go half is inert unless `CSS_DUMP_IN`/`CSS_DUMP_OUT` are set. Runs with the default options only. |
+ | [`scripts/divergence-probe-rs.sh`](scripts/divergence-probe-rs.sh), [`scripts/probe-lines.cjs`](scripts/probe-lines.cjs) | TS/Rust differential probe, same contract. It runs the corpus once per OPTION COMBINATION, all four of them, and carries newlines as the fixtures' `\n` escape rather than dropping them — the two TS/Go divergences recorded below are position-only and multi-line, and are invisible to a probe that does neither. |
+ | [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar.txt`](ts/doc/grammar.txt) | Railroad / ASCII diagram of the live grammar, generated by `@tabnas/railroad`. |
+ | [`ts/doc/`](ts/doc/), [`go/doc/`](go/doc/), [`rs/doc/`](rs/doc/) | Per-runtime 4-quadrant Diataxis docs. All three sets are in the prose gate (`ts/scripts/gated-docs.cjs`). |
+@@ -268,19 +268,34 @@ Every number here is a measurement and goes stale. Re-run the probes rather
+ than trusting the paragraphs.
+ 
+ **TS/Go, default options: none.** `scripts/divergence-probe.sh` reports NO
+-DIVERGENCE over 1686 distinct inputs. The 27 divergences this section used to
+-record — an unterminated `/*` inside an at-rule prelude, which TS accepted as
+-raw prelude text and Go rejected — are gone: both runtimes now raise
+-`unterminated_comment`, and `test/spec/comments.tsv` pins `@import/*red`,
+-`@media/*x` and `@font-face/*a` so it cannot come back.
++DIVERGENCE over 1677 distinct inputs, comparing the error code of every
++rejection as well as the verdict. Two divergences are gone:
++
++- **An unterminated `/*` inside an at-rule prelude**, which TS accepted as
++  raw prelude text and Go rejected, the 27 inputs this section used to
++  record. Both runtimes now raise `unterminated_comment`, and
++  `test/spec/comments.tsv` pins `@import/*red`, `@media/*x` and
++  `@font-face/*a` so it cannot come back.
++- **A stray quote**: one the `cssToken` matcher declines, as in `a"b`,
++  `a{b:c}'` or a lone backtick. TS raised `unexpected` and Go raised
++  `unterminated_string`, or `unprintable` where a newline follows the quote.
++  `go/css.go` wrote TS's `string: { chars: '' }` as `StringOptions{Chars:
++  ""}`, and in the Go engine an empty `Chars` means unset, not none, so the
++  default quotes stayed on. It says `Lex: false` now, which is how that
++  engine turns string matching off. No other override there has the same
++  trap. The probe never saw it: it wrote a rejection as a bare `ERR`, and
++  its alphabet had no lone quote. It compares codes and has all three quote
++  characters now, and with the fix reverted it reports 127 divergences.
++  `test/spec/quotes.tsv` pins 55 quote cases, among them the 28 that
++  failed in Go.
+ 
+ **TS/Rust, through `Css::parse`: none, under every option combination.**
+ `scripts/divergence-probe-rs.sh` drives the crate's `parse` example, which
+ calls `Css::parse`, and reports NO DIVERGENCE on all four passes (`position`
+ and `lowercaseProperties`, off and on). Measured on the plugin crate over
+ 40,006 generated inputs in each of the four modes (160,024 parses), with an
+-alphabet that includes escaped quotes and brackets, plus the shared fixtures
+-and the whole reworkcss corpus.
++alphabet that includes escaped quotes and brackets and the three quote
++characters alone, plus the shared fixtures and the whole reworkcss corpus.
+ 
+ **Rust's tree form: one bound.** A parse through the engine's own API
+ (`make()`, `plugin()` on your own instance, `Css::tabnas().parse()`) returns
+diff --git a/go/css.go b/go/css.go
+index 7ede7f1..ca67716 100644
+--- a/go/css.go
++++ b/go/css.go
+@@ -296,7 +296,20 @@ func Css(j *jsonic.Jsonic, options map[string]any) error {
+ 		TokenSet: map[string][]string{
+ 			"KEY": {"#TX"},
+ 		},
+-		String: &jsonic.StringOptions{Chars: ""},
++		// TS says `string: { chars: '' }`: no quote characters, so the
++		// string matcher never matches. Go cannot say that. Chars is a
++		// plain string whose zero value "" means UNSET, and the default
++		// quotes stay in force (StringOptions.Chars in the engine, and its
++		// empty_chars_test.go). With Chars: "" here, a quote the cssToken
++		// matcher declined, such as the one in a"b or a{b:c}`, lexed as the
++		// start of a string: unterminated_string, or unprintable before a
++		// newline, where TS raises unexpected. Lex: false is the engine's
++		// way to turn string matching off, and test/spec/quotes.tsv pins
++		// the TS verdicts. No other override here has that trap: the rest
++		// are pointers, maps, slices or non-empty strings, and none sets
++		// the engine's other empty-means-unset fields (the space, line,
++		// row, multiline-quote and escape characters).
++		String: &jsonic.StringOptions{Lex: boolPtr(false)},
+ 		Number: &jsonic.NumberOptions{Lex: boolPtr(false)},
+ 		Text:   &jsonic.TextOptions{Lex: boolPtr(false)},
+ 		Value:  &jsonic.ValueOptions{Lex: boolPtr(false)},
+diff --git a/go/divergence_probe_test.go b/go/divergence_probe_test.go
+index b434991..5e325e7 100644
+--- a/go/divergence_probe_test.go
++++ b/go/divergence_probe_test.go
+@@ -13,6 +13,7 @@ package tabnascss
+ 
+ import (
+ 	"encoding/json"
++	"errors"
+ 	"os"
+ 	"strings"
+ 	"testing"
+@@ -30,6 +31,17 @@ func probeParse(src string) (any, error) {
+ 	return j.Parse(src)
+ }
+ 
++// probeCode is a rejection's error code, which the script compares along
++// with the rejection itself: TS and Go rejecting an input with different
++// codes is a divergence. An error that is not the engine's has no code.
++func probeCode(err error) string {
++	var je *jsonic.JsonicError
++	if errors.As(err, &je) {
++		return je.Code
++	}
++	return "?"
++}
++
+ // probeNorm normalises a value through JSON so the Go and TS dumps are
+ // comparable shapes (the script sorts keys on both sides).
+ func probeNorm(v any) (any, error) {
+@@ -63,7 +75,7 @@ func TestDivergenceProbeDump(t *testing.T) {
+ 		q, _ := json.Marshal(src)
+ 		v, perr := probeParse(src)
+ 		if nil != perr {
+-			b.WriteString(string(q) + "\tERR\n")
++			b.WriteString(string(q) + "\tERR:" + probeCode(perr) + "\n")
+ 			continue
+ 		}
+ 		n, nerr := probeNorm(v)
+diff --git a/scripts/divergence-probe-rs.sh b/scripts/divergence-probe-rs.sh
+index 278699c..64c4661 100755
+--- a/scripts/divergence-probe-rs.sh
++++ b/scripts/divergence-probe-rs.sh
+@@ -86,6 +86,11 @@ const toks = [
+   // comment behind one is where the Rust engine once reported the wrong
+   // code. Without these the alphabet cannot build that sequence.
+   "\\\"","\\'"'"'","\\(","\\[",
++  // And the three quote characters alone. A quote the cssToken matcher
++  // declines reaches the grammar, and the string matcher of the engine
++  // must stay off there. The Go port once left it on (test/spec/quotes.tsv),
++  // and without a lone quote no draw can reach that path.
++  "\"","'"'"'","`",
+ ]
+ const out = []
+ for (let i = 0; i < Number(process.argv[2]); i++) {
+diff --git a/scripts/divergence-probe.sh b/scripts/divergence-probe.sh
+index 79b34ce..170cdf7 100755
+--- a/scripts/divergence-probe.sh
++++ b/scripts/divergence-probe.sh
+@@ -21,6 +21,12 @@
+ # whatever it finds as a fixture in test/spec/ once both runtimes agree: a
+ # fixture names the case forever, while the probe only says a seed found it.
+ #
++# A rejection is compared by its ERROR CODE, not only as a rejection. The
++# probe used to write a bare ERR for both, so it reported NO DIVERGENCE
++# while Go raised unterminated_string on a stray quote where TS raised
++# unexpected (test/spec/quotes.tsv): its alphabet could not build a lone
++# quote either, and now has all three.
++#
+ # Usage:  bash scripts/divergence-probe.sh [count] [--report-only]
+ #
+ #   count          how many inputs to generate (default 4000)
+@@ -55,6 +61,7 @@ const toks = [
+   "@supports","@-webkit-keyframes","screen","from","0%","\"s\"","'"'"'s'"'"'",
+   "url(x)","(",")","[","]","!important","--v","&",">","+","~",
+   "<!--","-->","\\","1px","red","e:f","g:h;","\r",
++  "\"","'"'"'","`",
+ ]
+ const out = []
+ for (let i = 0; i < Number(process.argv[2]); i++) {
+@@ -78,7 +85,7 @@ for (const src of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
+   try {
+     const v = new Tabnas().use(jsonic).use(Css).parse(src)
+     out.push(JSON.stringify(src) + "\tOK " + JSON.stringify(v === undefined ? null : v))
+-  } catch { out.push(JSON.stringify(src) + "\tERR") }
++  } catch (e) { out.push(JSON.stringify(src) + "\tERR:" + (e && e.code)) }
+ }
+ fs.writeFileSync(process.argv[2], out.join("\n") + "\n")
+ ' "$WORK/in.txt" "$WORK/ts.out")
+@@ -99,7 +106,7 @@ const load = (p) => {
+     const i = line.indexOf("\t")
+     const src = JSON.parse(line.slice(0, i))
+     const rest = line.slice(i + 1)
+-    m.set(src, rest === "ERR" ? "ERR" : "OK " + JSON.stringify(canon(JSON.parse(rest.slice(3)))))
++    m.set(src, rest.startsWith("ERR:") ? rest : "OK " + JSON.stringify(canon(JSON.parse(rest.slice(3)))))
+   }
+   return m
+ }
+diff --git a/test/spec/quotes.tsv b/test/spec/quotes.tsv
+new file mode 100644
+index 0000000..b1d358d
+--- /dev/null
++++ b/test/spec/quotes.tsv
+@@ -0,0 +1,87 @@
++input	expected	opts
++# quotes.tsv - the three quote characters: as CSS text, and stray.
++#
++# The cssToken matcher owns every quote CSS has. Its scans skip a quoted
++# run, "..." or '...', inside a selector, a value or a prelude, and the AST
++# keeps it verbatim, quotes and escapes included. A backtick is not a CSS
++# quote, so the matcher reads it as an ordinary character. The engine's own
++# string matcher is OFF (ts/src/css.ts: `string: { chars: '' }`), so a
++# quote the matcher declines, at a statement or property position or after
++# the last rule, reaches the grammar as an unexpected character:
++# ERROR:unexpected, never unterminated_string or unprintable.
++#
++# Every row in the first group used to fail in Go. go/css.go said
++# `StringOptions{Chars: ""}`, and in the Go engine an empty Chars means
++# UNSET, not none, so the default quotes stayed on: unterminated_string, or
++# unprintable where a newline follows the quote. It says `Lex: false` now,
++# the engine's way to turn string matching off.
++#
++# reworkcss/css reads an unmatched quote as an ordinary character, so it
++# accepts some inputs these rows reject (a"b\nc{d:e} is a rule there, and
++# a{b:"c} has the value "c). The rows pin the canonical port, not reworkcss.
++
++# Stray quotes: declined by the cssToken matcher, unexpected in the grammar.
++"	ERROR:unexpected
++'	ERROR:unexpected
++`	ERROR:unexpected
++a"b	ERROR:unexpected
++a'b	ERROR:unexpected
++a`b	ERROR:unexpected
++"a{b:c}	ERROR:unexpected
++'a{b:c}	ERROR:unexpected
++a{b:c}"	ERROR:unexpected
++a{b:c}'	ERROR:unexpected
++a{b:c}`	ERROR:unexpected
++a{b:c} "	ERROR:unexpected
++a{b:c}\n'	ERROR:unexpected
++a{"b:c}	ERROR:unexpected
++a{'b:c}	ERROR:unexpected
++a{`b:c}	ERROR:unexpected
++a{b:c;"}	ERROR:unexpected
++a{b:c;'}	ERROR:unexpected
++a{b:c;`}	ERROR:unexpected
++@media x{"}	ERROR:unexpected
++@media x{'a{b:c}}	ERROR:unexpected
++@media x{a{b:c}`}	ERROR:unexpected
++@keyframes x{"from{a:b}}	ERROR:unexpected
++@keyframes x{from{a:b}`}	ERROR:unexpected
++@font-face{`a:b}	ERROR:unexpected
++"\n"	ERROR:unexpected
++'\n'	ERROR:unexpected
++a"b\nc{d:e}	ERROR:unexpected
++
++# Balanced quotes: skipped by the matcher's scans and kept verbatim.
++a{b:"c"}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"\"c\""}]}]}
++a{b:'c'}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"'c'"}]}]}
++a{b:"c'd"}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"\"c'd\""}]}]}
++a{b:'c"d'}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"'c\"d'"}]}]}
++a{b:"c`d"}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"\"c`d\""}]}]}
++a{b:"c\\"d"}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"\"c\\\"d\""}]}]}
++a[x='y']{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a[x='y']"],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++a[x="y'"]{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a[x=\"y'\"]"],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++"a"{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["\"a\""],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++'a'{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["'a'"],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++
++# Backticks: text wherever the matcher reads text, unexpected where it
++# declines one. A " or ' after a backtick is not protected by it.
++a{b:`c`}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"`c`"}]}]}
++a{b:`c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"`c"}]}]}
++a{b:c`}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a"],"declarations":[{"type":"declaration","property":"b","value":"c`"}]}]}
++`a{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["`a"],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++a[x=`y]{b:c}	{"type":"stylesheet","rules":[{"type":"rule","selectors":["a[x=`y]"],"declarations":[{"type":"declaration","property":"b","value":"c"}]}]}
++@keyframes x{`from{a:b}}	{"type":"stylesheet","rules":[{"type":"keyframes","name":"x","keyframes":[{"type":"keyframe","values":["`from"],"declarations":[{"type":"declaration","property":"a","value":"b"}]}]}]}
++@font-face{a:`b}	{"type":"stylesheet","rules":[{"type":"font-face","declarations":[{"type":"declaration","property":"a","value":"`b"}]}]}
++`\n`	ERROR:unexpected
++x: `a:{	ERROR:unexpected
++a{b:`c"d`}	ERROR:unexpected
++
++# An unterminated quote inside a selector, value or block: the matcher's
++# scans skip a quoted run to its closing quote or the end of the source, so
++# nothing after the quote is read as structure.
++a{b:"c}	ERROR:unexpected
++a{b:'c}	ERROR:unexpected
++a{b:"c;d:e}	ERROR:unexpected
++a[x="y]{b:c}	ERROR:unexpected
++a[x='y]{b:c}	ERROR:unexpected
++@font-face{a:"b}	ERROR:unexpected
++@keyframes x{from{a:'b}}	ERROR:unexpected
+-- 
+2.43.0
+

@@ -1,0 +1,56 @@
+--- a/rs/src/lex.rs
++++ b/rs/src/lex.rs
+@@ -671,12 +671,6 @@
+ /// `ctx.u` key [`css_token`] records it under and [`lex_subscriber`] reads.
+ pub(crate) const OVERSHOOT: &str = "tabnas-css/overshoot";
+ 
+-/// The most of the source an `unterminated_comment` diagnostic shows. The
+-/// span runs from the scan's start to the end of the source, which for a
+-/// large stylesheet would be most of it; the message is informative, not the
+-/// contract, so it is cut here.
+-const BAD_SPAN: usize = 32;
+-
+ /// What [`plan_token`] decided for the characters at the cursor.
+ enum Plan {
+     /// Not this matcher's: the engine's builtin matchers take it.
+@@ -886,13 +880,12 @@
+         let plan = plan_token(src, s_i, rule.name.as_str(), lower, &mut brace);
+         let (chars, overshoot) = match &plan {
+             Plan::Decline => return None,
+-            Plan::Bad => (
+-                safe_slice(src, s_i, src.len())
+-                    .chars()
+-                    .take(BAD_SPAN)
+-                    .count(),
+-                0,
+-            ),
++            // The span of an unclosed comment runs from the scan's start to
++            // the end of the source, as the canonical port's does. It is
++            // not only what the diagnostic shows: recovery steps past a bad
++            // token's span, so a shorter one resumes lexing inside the
++            // comment and reads its text as rules.
++            Plan::Bad => (safe_slice(src, s_i, src.len()).chars().count(), 0),
+             Plan::Emit { end, .. } => (
+                 safe_slice(src, s_i, (*end).min(src.len())).chars().count(),
+                 end.saturating_sub(src.len()),
+--- a/rs/tests/plugin.rs
++++ b/rs/tests/plugin.rs
+@@ -339,6 +339,18 @@
+             format!(r#"{{"type":"stylesheet","rules":[{rule_a}]}}"#),
+             ("unterminated_comment", 1, 8),
+         ),
++        // Recovery steps past an unclosed comment's whole span, however
++        // long, and reads nothing inside it as rules.
++        (
++            "a{b:c} /*d{e:f} g{h:i} j{k:l} m{n:o} p{q:r}",
++            format!(r#"{{"type":"stylesheet","rules":[{rule_a}]}}"#),
++            ("unterminated_comment", 1, 8),
++        ),
++        (
++            "/*xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
++            r#"{"type":"stylesheet","rules":[]}"#.to_string(),
++            ("unterminated_comment", 1, 1),
++        ),
+         (
+             "{",
+             r#"{"type":"stylesheet","rules":[]}"#.to_string(),
