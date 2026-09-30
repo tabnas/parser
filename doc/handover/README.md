@@ -51,9 +51,10 @@ checked to apply to this branch with `git apply --check`, in order.
 | `toml-rs-divergent-tsv-DRAFT.patch`, `yaml-rs-divergence-DRAFT.patch` | each repo's main | Drafts from the fleet run: registers and tests that pinned the old Rust engine answer. |
 
 `tools/` holds the recovery differential used throughout: `recprobe/`
-(a Rust binary reading hex-encoded inputs, with absolute path
-dependencies on `/home/user/css/rs` and `/home/user/parser/rs` to
-adjust), `recprobe/cmp.cjs` (runs TypeScript and the binary over 12,000
+(a Rust binary reading hex-encoded inputs; copy it out of the repository
+and rename `Cargo.toml.example` to `Cargo.toml`, whose path dependencies
+on the css and parser checkouts are absolute and need adjusting, which is
+why it is not committed as a manifest), `recprobe/cmp.cjs` (runs TypeScript and the binary over 12,000
 inputs from `gen1.cjs` and `gen2.cjs` and counts differences; modes:
 default recovery, `--position`, `--relex`, `--plain`).
 
