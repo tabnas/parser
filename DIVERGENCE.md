@@ -391,6 +391,45 @@ fixed or quietly dropped.
   and dropping the point-move leaves the codes right and only the
   positions wrong.
 
+- **A bad token a custom matcher returns, and the error a recovering
+  parse gives up on, in Rust.** Never recorded here, and found by
+  `tabnas/css`, whose unclosed comment is a bad token its own matcher
+  returns. TypeScript's fetch in `parse_alts` raises every `#BD` token
+  it is handed at once, with the token's own code at the token's own
+  position; under recovery it records it, coalesces a run into one
+  error and steps the lexer past it; under relexing it leaves it for an
+  alternate to re-cut. Go's `Lex.Next` does the same, fail-fast and
+  under recovery. Rust did it only for its lexer's own faults: a token
+  from `Lexer::bad` or `Lexer::bad_span` was buffered like a good one,
+  failed every alternate, and the error named the first token of the
+  lookahead; under recovery nothing stepped past it, so the skip met it
+  again until `maxSkip` gave up. Separately, a recovering Rust parse
+  that gave up listed its error twice, once more without recovery
+  metadata, where TypeScript lists what it recorded (or dropped as a
+  cascade) once. With the matcher and grammars of
+  `test/spec/bad-token.tsv`, which cuts `?` as a bad token:
+
+  | grammar | input | options | TypeScript and Go | Rust before |
+  |---|---|---|---|---|
+  | `json` | `{"a"?:1}` | | `custom_bad` at 1:5 | `unexpected` at 1:2 |
+  | `json` | `[1,?,2]` | recover | `[1,2]`, `custom_bad` 1:4, a run of 1 | `[1]`, `custom_bad` 1:4, unrecovered |
+  | `nest` | `<` | recover | one `unexpected` at 1:2 | the same error twice |
+
+  Rust now handles a fetched bad token exactly as it handles its lexer's
+  own faults, and both as TypeScript does: raised, or recorded and
+  coalesced, and stepped past by TypeScript's `advanceLexPast` rule,
+  which moves past the token's span and, for a fault inside a string,
+  past the next row character after it; the check for trailing content
+  raises one without recording it first; a lexer fault reaches the lex
+  subscribers in every mode. A give-up lists nothing again, the recovery
+  cap is read after the error is recorded, and a cascade is dropped
+  before it, all in TypeScript's order. Over 4,000 generated inputs in
+  four modes (fail-fast, recovery, relexing, both), TypeScript and Rust
+  now report the same errors, positions and recovery metadata on all
+  16,000 runs, where 3,013 differed before. Pinned in all three runtimes
+  by `test/spec/bad-token.tsv`, and in Rust by
+  `rs/tests/bad_token_fetch_test.rs`.
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in

@@ -48,6 +48,15 @@ struct ParseMode<'a> {
     recovering: bool,
     errors: &'a mut Vec<TabnasError>,
     partial: Option<Value>,
+    /// Recovery gave up, and the error it gave up on is already accounted
+    /// for in `errors`: recorded there, or dropped as a cascade of the
+    /// fault before it. TypeScript records an error as it is constructed
+    /// and gives up by rethrowing the last one it recorded (`RuleSpec.bad`,
+    /// ts/src/rules.ts), or the bad token it has just recorded, coalesced
+    /// or dropped (the fetch in `parse_alts`), so the error that ends the
+    /// parse is never listed a second time. Every other terminal error is
+    /// listed once, where the parse ends.
+    gave_up: bool,
 }
 
 struct RelexUndo {
@@ -55,6 +64,20 @@ struct RelexUndo {
     token: Token,
     checkpoint: RelexCheckpoint,
     tokens: Vec<Token>,
+}
+
+/// Who is asking [`Parser::ensure_lookahead`] for a token, which decides
+/// what a bad token does under recovery.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fetch {
+    /// A rule reading its lookahead, as TypeScript's `parse_alts` does:
+    /// under recovery a bad token is recorded and skipped, and the fetch
+    /// goes on.
+    Rule,
+    /// The check for content after the parse has finished, as
+    /// TypeScript's `Parser.start` makes it: a bad token ends the parse
+    /// with its own error, recovering or not.
+    Trailing,
 }
 
 #[derive(Clone, Copy)]
@@ -1167,7 +1190,7 @@ impl Parser {
 
     fn attempt_recover(
         &self,
-        mut error: TabnasError,
+        error: TabnasError,
         current_rule: &mut Rule,
         stack: &mut Vec<Rule>,
         context: &mut Context,
@@ -1176,13 +1199,25 @@ impl Parser {
     ) -> Result<bool, TabnasError> {
         let src = error.full_source.clone();
         let recover = &self.options.parse.recover;
-        if mode.errors.len() >= recover.max_recoveries {
-            return Ok(false);
-        }
 
+        // The order is TypeScript's `attemptRecover`: the error is recorded
+        // as it is built, dropped again when it falls inside the suppress
+        // window of the recovery before it, and only then is the cap read.
+        // So a give-up leaves the error listed, once and without recovery
+        // metadata, unless it was a cascade; and a cascade at the cap still
+        // recovers, since dropping it keeps the list within the cap.
         let suppressed = context
             .recover_at
             .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
+        let recorded = (!suppressed).then(|| {
+            mode.errors.push(error.clone());
+            context.errs.push(error.clone());
+            mode.errors.len() - 1
+        });
+        if recover.max_recoveries < mode.errors.len() {
+            return Ok(false);
+        }
+
         let no_progress = context.recover_at == Some(context.v_abs);
         let last_si = context.recover_si;
         context.recover_at = Some(context.v_abs);
@@ -1255,7 +1290,7 @@ impl Parser {
                                     )
                                 })?;
                             }
-                            lexer.recover_after_error(mid_construct(&lex_error.code));
+                            lexer.skip_bad(&token, mid_construct(&lex_error.code));
                             if skipped >= recover.max_skip {
                                 break None;
                             }
@@ -1273,6 +1308,14 @@ impl Parser {
             {
                 break token;
             }
+            // A bad token is skipped like any other, but it did not move
+            // the cursor when it was cut: a custom matcher's `Lexer::bad`
+            // leaves it where it was, and so does one buffered under
+            // relexing. Step past it, as TypeScript's `advanceLexPast` does,
+            // or the next fetch would cut the same bad token again.
+            if token.tin == TIN_BD {
+                lexer.skip_bad(&token, mid_construct(&token.why));
+            }
             if skipped >= recover.max_skip {
                 return Ok(false);
             }
@@ -1286,14 +1329,18 @@ impl Parser {
             return Ok(false);
         }
         context.recover_si = Some(candidate.site.pos);
-        error.recovered = Some(crate::RecoveredAt {
-            skipped,
-            sync: Some(candidate.tin),
-            bad: false,
-        });
-        if !suppressed {
-            mode.errors.push(error.clone());
-            context.errs.push(error);
+        if let Some(index) = recorded {
+            let recovered = Some(crate::RecoveredAt {
+                skipped,
+                sync: Some(candidate.tin),
+                bad: false,
+            });
+            if let Some(entry) = context.errs.get_mut(index) {
+                entry.recovered.clone_from(&recovered);
+            }
+            if let Some(entry) = mode.errors.get_mut(index) {
+                entry.recovered = recovered;
+            }
         }
 
         context.t.push(candidate.clone());
@@ -1383,6 +1430,13 @@ impl Parser {
         if recovered {
             Ok(())
         } else {
+            // TypeScript's `RuleSpec.bad` gives up by rethrowing the last
+            // error it recorded, which `attempt_recover` has just recorded
+            // or dropped as a cascade, so the list is already complete. Only
+            // an empty list makes it raise, and record, a fresh one.
+            if mode.recovering && !mode.errors.is_empty() {
+                mode.gave_up = true;
+            }
             Err(error)
         }
     }
@@ -1485,6 +1539,7 @@ impl Parser {
             recovering,
             errors: &mut errors,
             partial: None,
+            gave_up: false,
         };
         let result = self
             .parse_inner(src, meta, owner, parent, &mut mode)
@@ -1582,12 +1637,13 @@ impl Parser {
         }
         let mut errors = Vec::new();
         let recovering = self.options.parse.recover.enabled;
-        let (result, partial) = {
+        let (result, partial, gave_up) = {
             let mut mode = ParseMode {
                 continuation: None,
                 recovering,
                 errors: &mut errors,
                 partial: None,
+                gave_up: false,
             };
             let result = self
                 .parse_inner(src, meta, owner, parent, &mut mode)
@@ -1595,7 +1651,7 @@ impl Parser {
                     self.decorate_error(&mut error);
                     error
                 });
-            (result, mode.partial)
+            (result, mode.partial, mode.gave_up)
         };
         for error in &mut errors {
             self.decorate_error(error);
@@ -1607,7 +1663,10 @@ impl Parser {
                 fatal: None,
             },
             Err(error) => {
-                if errors.last() != Some(&error) {
+                // The error that ended the parse is listed once, where the
+                // parse ended, as TypeScript's constructor lists it, unless
+                // recovery gave up on an error it had already accounted for.
+                if !gave_up {
                     errors.push(error.clone());
                 }
                 ParseRecovery {
@@ -1687,6 +1746,7 @@ impl Parser {
                 recovering: false,
                 errors: &mut errors,
                 partial: None,
+                gave_up: false,
             };
             self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
         };
@@ -1792,6 +1852,7 @@ impl Parser {
         Cow::Owned(ExpectedTins::live(alts, &self.options, slot))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_lookahead(
         &self,
         lexer: &mut Lexer,
@@ -1800,6 +1861,7 @@ impl Parser {
         count: usize,
         mode: &mut ParseMode<'_>,
         site: ParseSite<'_>,
+        fetch: Fetch,
     ) -> Result<(), TabnasError> {
         while context.t.len() < count {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
@@ -1838,39 +1900,32 @@ impl Parser {
                                 self.attach_error((*error).clone(), rule, site.stack, alts, None)
                             })
                             .unwrap_or_else(|| (*error).clone());
+                        // The fault reaches the lex subscribers as its bad
+                        // token whatever happens to it next, as every token
+                        // TypeScript's `lex.next` returns does.
+                        let mut token = error_token(&recovery_error);
+                        for subscriber in &self.lex_subscribers {
+                            let result = self.catch_callback("lex subscriber", site.source, || {
+                                subscriber(&mut token, rule, context)
+                            });
+                            result.map_err(|error| {
+                                self.attach_active_error(error, rule, site.stack, Some(&token))
+                            })?;
+                        }
                         if self.options.lex.relex {
-                            let mut token = error_token(&recovery_error);
-                            for subscriber in &self.lex_subscribers {
-                                let result =
-                                    self.catch_callback("lex subscriber", site.source, || {
-                                        subscriber(&mut token, rule, context)
-                                    });
-                                result.map_err(|error| {
-                                    self.attach_active_error(error, rule, site.stack, Some(&token))
-                                })?;
-                            }
                             break token;
                         }
-                        if mode.recovering
-                            && absorb_lex_error(
+                        if mode.recovering && fetch == Fetch::Rule {
+                            if absorb_lex_error(
                                 &recovery_error,
                                 context,
                                 &self.options,
                                 mode.errors,
-                            )
-                        {
-                            let mut token = error_token(&recovery_error);
-                            for subscriber in &self.lex_subscribers {
-                                let result =
-                                    self.catch_callback("lex subscriber", site.source, || {
-                                        subscriber(&mut token, rule, context)
-                                    });
-                                result.map_err(|error| {
-                                    self.attach_active_error(error, rule, site.stack, Some(&token))
-                                })?;
+                            ) {
+                                lexer.skip_bad(&token, mid_construct(&recovery_error.code));
+                                continue;
                             }
-                            lexer.recover_after_error(mid_construct(&recovery_error.code));
-                            continue;
+                            mode.gave_up = true;
                         }
                         if let Some(capture) = mode.continuation.as_deref_mut() {
                             capture.failure = continuation_tins(
@@ -1895,6 +1950,53 @@ impl Parser {
                     result.map_err(|error| {
                         self.attach_active_error(error, rule, site.stack, Some(&token))
                     })?;
+                }
+                // A bad token a custom matcher returned (`Lexer::bad`,
+                // `Lexer::bad_span`) is a lexer fault like any other, and
+                // is handled here exactly as the lexer's own faults are
+                // above, which is what TypeScript's fetch in `parse_alts`
+                // does with every `#BD` token it is handed: raised at once,
+                // with its own code at its own position, or under recovery
+                // recorded, coalesced with the run it continues, and
+                // stepped past. Only relexing leaves it in the lookahead,
+                // for an alternate to re-cut. Buffered, it failed every
+                // alternate it met, and the error named the first token of
+                // the lookahead instead: `unexpected`, at the good token in
+                // front of it.
+                if token.tin == TIN_BD && !self.options.lex.relex {
+                    let code = if token.why.is_empty() {
+                        "unexpected"
+                    } else {
+                        token.why.as_str()
+                    };
+                    let error = TabnasError::new(
+                        code,
+                        token.src.clone(),
+                        site.source,
+                        token.site.pos,
+                        token.site.ri,
+                        token.site.ci,
+                    );
+                    let error = self.attach_error(error, rule, site.stack, site.alts, Some(&token));
+                    if mode.recovering && fetch == Fetch::Rule {
+                        if absorb_lex_error(&error, context, &self.options, mode.errors) {
+                            lexer.skip_bad(&token, mid_construct(&error.code));
+                            continue;
+                        }
+                        mode.gave_up = true;
+                    }
+                    if let Some(capture) = mode.continuation.as_deref_mut() {
+                        capture.failure = continuation_tins(
+                            context,
+                            rule,
+                            site.stack,
+                            &self.rules,
+                            &self.options,
+                            context.t.len(),
+                            None,
+                        );
+                    }
+                    return Err(error);
                 }
                 if token.tin == TIN_ZZ {
                     if let Some(capture) = mode.continuation.as_deref_mut() {
@@ -2403,6 +2505,7 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
+                        Fetch::Rule,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
@@ -3082,6 +3185,7 @@ impl Parser {
                                     stack: &stack,
                                     alts,
                                 },
+                                Fetch::Rule,
                             ) {
                                 return Err(self.attach_error(
                                     error,
@@ -3587,6 +3691,7 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
+                        Fetch::Rule,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
@@ -3644,6 +3749,7 @@ impl Parser {
                             stack: &stack,
                             alts,
                         },
+                        Fetch::Rule,
                     ) {
                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
                     }
@@ -3717,13 +3823,12 @@ impl Parser {
                 stack: &stack,
                 alts: &[],
             },
+            Fetch::Trailing,
         ) {
             let error = self.attach_error(error, &current_rule, &stack, &[], None);
             if mode.recovering {
-                if mode.errors.last() != Some(&error) {
-                    mode.errors.push(error.clone());
-                    context.errs.push(error);
-                }
+                mode.errors.push(error.clone());
+                context.errs.push(error);
                 return Ok(res);
             }
             return Err(error);
@@ -3748,10 +3853,8 @@ impl Parser {
                     Some(t0),
                 );
                 if mode.recovering {
-                    if mode.errors.last() != Some(&error) {
-                        mode.errors.push(error.clone());
-                        context.errs.push(error);
-                    }
+                    mode.errors.push(error.clone());
+                    context.errs.push(error);
                     return Ok(res);
                 }
                 return Err(error);
@@ -3878,6 +3981,14 @@ fn mid_construct(code: &str) -> bool {
     matches!(code, "unprintable" | "invalid_unicode" | "invalid_ascii")
 }
 
+/// Record a bad token met at a rule's fetch under recovery, in the order
+/// TypeScript's `parse_alts` does it: a token inside the run the last one
+/// began grows that run's error rather than being listed again; a new run
+/// inside the suppress window of the recovery before it is a cascade of
+/// that fault and is dropped; anything else is recorded. Returns whether
+/// the fetch goes on past the token. It does not when the run outgrows
+/// `maxSkip`, or when the list has outgrown `maxRecoveries`, a cap read
+/// after recording, so the error that stops the parse is listed.
 fn absorb_lex_error(
     error: &TabnasError,
     context: &mut Context,
@@ -3885,54 +3996,44 @@ fn absorb_lex_error(
     errors: &mut Vec<TabnasError>,
 ) -> bool {
     let recover = &options.parse.recover;
-    if errors.len() >= recover.max_recoveries {
-        return false;
-    }
-
-    let end = error.pos.saturating_add(error.len.max(1));
-    if context.bad_to.is_some_and(|bad_to| error.pos <= bad_to) {
-        if let Some(index) = context.bad_error {
-            if let Some(previous) = errors.get_mut(index) {
-                let recovered = previous.recovered.get_or_insert(crate::RecoveredAt {
-                    skipped: 0,
-                    sync: None,
-                    bad: true,
-                });
-                recovered.skipped = recovered.skipped.saturating_add(1);
-                let skipped = recovered.skipped;
-                if recover.max_skip < skipped {
-                    return false;
-                }
-                if let Some(context_previous) = context.errs.get_mut(index) {
-                    *context_previous = previous.clone();
-                }
-                context.bad_to = Some(end.max(context.bad_to.unwrap_or_default()));
-                return true;
-            }
+    let run = context
+        .bad_error
+        .filter(|index| *index < errors.len())
+        .filter(|_| context.bad_to.is_some_and(|bad_to| error.pos <= bad_to));
+    if let Some(index) = run {
+        let previous = &mut errors[index];
+        let recovered = previous.recovered.get_or_insert(crate::RecoveredAt {
+            skipped: 0,
+            sync: None,
+            bad: true,
+        });
+        recovered.skipped = recovered.skipped.saturating_add(1);
+        let skipped = recovered.skipped;
+        if let Some(context_previous) = context.errs.get_mut(index) {
+            *context_previous = previous.clone();
         }
-    }
-
-    let suppressed = context
+        if recover.max_skip < skipped {
+            return false;
+        }
+    } else if context
         .recover_at
-        .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
-    if suppressed {
+        .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress)
+    {
         context.bad_error = None;
-        context.bad_to = Some(end);
-        return true;
+    } else {
+        let mut recorded = error.clone();
+        recorded.recovered = Some(crate::RecoveredAt {
+            skipped: 1,
+            sync: None,
+            bad: true,
+        });
+        errors.push(recorded.clone());
+        context.errs.push(recorded);
+        context.bad_error = Some(errors.len() - 1);
+        context.recover_at = Some(context.v_abs);
     }
-
-    let mut recorded = error.clone();
-    recorded.recovered = Some(crate::RecoveredAt {
-        skipped: 1,
-        sync: None,
-        bad: true,
-    });
-    errors.push(recorded.clone());
-    context.errs.push(recorded);
-    context.bad_error = Some(errors.len() - 1);
-    context.bad_to = Some(end);
-    context.recover_at = Some(context.v_abs);
-    true
+    context.bad_to = Some(error.pos.saturating_add(error.len.max(1)));
+    errors.len() <= recover.max_recoveries
 }
 
 fn slot_matches(slot: &[Tin], tin: Tin) -> bool {

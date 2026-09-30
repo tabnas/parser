@@ -238,6 +238,13 @@ impl<'a> Lexer<'a> {
     }
 
     /// Construct a bad token at the current cursor.
+    ///
+    /// A custom matcher that returns it reports a lexer fault, which the
+    /// parser handles as it handles its own lexer's: a rule's fetch raises
+    /// it at once with `why` as the code, at this position, or, under
+    /// recovery, records it, coalescing a run of them into one error, and
+    /// moves the cursor past its source; relexing leaves it for an
+    /// alternate to re-cut. The cursor need not be advanced here.
     pub fn bad(&self, why: impl Into<String>) -> Token {
         let point = self.current_point();
         let source = self
@@ -251,6 +258,8 @@ impl<'a> Lexer<'a> {
 
     /// Construct a bad token whose displayed source is a scalar-indexed span.
     /// As in TypeScript, the diagnostic point remains the live cursor.
+    /// Returned from a matcher it is handled as [`Lexer::bad`] describes;
+    /// recovery steps past the span, counted from that cursor.
     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
         let point = self.current_point();
         let source = if start <= end && end <= self.char_len {
@@ -592,17 +601,25 @@ impl<'a> Lexer<'a> {
         self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
     }
 
-    /// Clear a recoverable lexer fault. Compound string faults resume at the
-    /// next line boundary so the remainder of the broken string cannot be
-    /// mistaken for a new token stream.
-    pub(crate) fn recover_after_error(&mut self, to_line_end: bool) {
+    /// Step past a bad token the parser has absorbed or skipped, as
+    /// TypeScript's `advanceLexPast` does (ts/src/rules.ts): a bad token
+    /// does not advance the cursor by itself, so recovery moves it to the
+    /// end of the token's span, never backwards, and, for a fault raised
+    /// inside a compound construct, on past the next row character so
+    /// lexing resumes on a fresh row. The lexer's own faults latch until
+    /// this clears them.
+    pub(crate) fn skip_bad(&mut self, token: &Token, to_line_end: bool) {
+        let span = token.src.chars().count().max(1);
+        let mut target = self.idx.max(token.site.pos.saturating_add(span));
         if to_line_end {
-            while let Some(character) = self.peek() {
-                self.advance();
-                if matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
-                    break;
-                }
+            let mut end = target;
+            while end < self.char_len && !self.char_sets.row.contains(self.chars[end]) {
+                end += 1;
             }
+            target = target.max(self.char_len.min(end + 1));
+        }
+        while self.idx < target && self.idx < self.char_len {
+            self.advance();
         }
         self.err = None;
         if self.idx < self.char_len {
