@@ -47,7 +47,7 @@ struct ParseMode<'a> {
     continuation: Option<&'a mut ContinuationCapture>,
     recovering: bool,
     errors: &'a mut Vec<TabnasError>,
-    partial: Option<Value>,
+    partial: Partial,
     /// Recovery gave up, and the error it gave up on is already accounted
     /// for in `errors`: recorded there, or dropped as a cascade of the
     /// fault before it. TypeScript records an error as it is constructed
@@ -57,6 +57,33 @@ struct ParseMode<'a> {
     /// parse is never listed a second time. Every other terminal error is
     /// listed once, where the parse ends.
     gave_up: bool,
+}
+
+/// Where the value a failed recovering parse returns is to be found.
+///
+/// The parse loop names it at each of its `update_partial` sites and the
+/// value is read once, when the parse has ended, rather than copied at
+/// each site. See `update_partial` for why that is the same value.
+enum Partial {
+    /// No node held a usable value at the last site.
+    None,
+    /// The node that did. Its value is read when the parse has ended.
+    Node(Rc<std::cell::RefCell<Value>>),
+    /// The completed result, after the loop.
+    Value(Value),
+}
+
+impl Partial {
+    /// The value, read now: once the parse has ended.
+    fn into_value(self) -> Option<Value> {
+        let value = match self {
+            Partial::None => return None,
+            Partial::Node(node) => Rc::try_unwrap(node)
+                .map_or_else(|node| node.borrow().clone(), |node| node.into_inner()),
+            Partial::Value(value) => return Some(value),
+        };
+        partial_usable(&value).then(|| value.unwrap_undefined())
+    }
 }
 
 struct RelexUndo {
@@ -1538,7 +1565,7 @@ impl Parser {
             continuation: None,
             recovering,
             errors: &mut errors,
-            partial: None,
+            partial: Partial::None,
             gave_up: false,
         };
         let result = self
@@ -1548,7 +1575,7 @@ impl Parser {
                 error
             });
         match result {
-            Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
+            Err(_) if recovering => Ok(mode.partial.into_value().unwrap_or(Value::Undefined)),
             other => other,
         }
     }
@@ -1642,7 +1669,7 @@ impl Parser {
                 continuation: None,
                 recovering,
                 errors: &mut errors,
-                partial: None,
+                partial: Partial::None,
                 gave_up: false,
             };
             let result = self
@@ -1651,7 +1678,7 @@ impl Parser {
                     self.decorate_error(&mut error);
                     error
                 });
-            (result, mode.partial, mode.gave_up)
+            (result, mode.partial.into_value(), mode.gave_up)
         };
         for error in &mut errors {
             self.decorate_error(error);
@@ -1745,7 +1772,7 @@ impl Parser {
                 continuation: Some(&mut capture),
                 recovering: false,
                 errors: &mut errors,
-                partial: None,
+                partial: Partial::None,
                 gave_up: false,
             };
             self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
@@ -3807,7 +3834,7 @@ impl Parser {
 
         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
         if mode.recovering {
-            mode.partial = Some(res.clone());
+            mode.partial = Partial::Value(res.clone());
         }
 
         // Post-loop check: ensure no unexpected trailing tokens. Recovery
@@ -3894,11 +3921,34 @@ impl Parser {
 
 /// Keep the best partial result the recovery path would return.
 ///
-/// Ten sites in the parse loop call this, twelve times per input construct
-/// on the benchmark grammars, and outside recovery every one of them is a
-/// load and a branch wrapped in a call. The guard is inline so the call
-/// goes away; the search behind it stays out of line, because a parse that
-/// is recovering is not the one being measured.
+/// Fifteen sites in the parse loop call this, twelve times per input
+/// construct on the benchmark grammars, and outside recovery every one of
+/// them is a load and a branch wrapped in a call. The guard is inline so
+/// the call goes away; the search behind it stays out of line.
+///
+/// A site names the node whose value the parse would return if it failed
+/// now: the root, else the outermost rule on the stack, else the current
+/// rule, whichever first holds something other than undefined or null.
+/// The value itself is read once, by [`Partial::into_value`], after the
+/// parse has ended. Each site used to take it: a clone of the value, then
+/// `unwrap_undefined`, which walked all of it, and the clone, held until
+/// the next site, shared the very containers the next action appended to,
+/// so `Arc::make_mut` copied them. Both are the size of the value built so
+/// far, six times a step, which made a recovering parse of a VALID input
+/// quadratic: 14 KB of `a{b:c}` took 8 s in the css grammar with recovery
+/// on, and 0.03 s with it off. A handle on the node's cell costs a
+/// reference count on the cell, never on the value, so nothing is shared
+/// and nothing is copied (`tests/linear_time_test.rs`).
+///
+/// The value read at the end is the one the last site would have taken:
+/// the node is chosen by the same test, in the same order, and it keeps
+/// the node even when recovery then pops the rules that held it. Only a
+/// write to that node between the last site and the failure can tell the
+/// two apart -- an action or callback that changes the node and then
+/// fails, or is followed by a matched action whose error recovery gives up
+/// on -- and the value is then the node as the failure left it, which is
+/// what TypeScript returns: it reads the node in its `catch`
+/// (`ts/src/parser.ts`), not before the step that failed.
 #[inline]
 fn update_partial(
     mode: &mut ParseMode<'_>,
@@ -3907,26 +3957,26 @@ fn update_partial(
     stack: &[Rule],
 ) {
     if mode.recovering {
-        mode.partial = best_partial_value(root_node, current_rule, stack);
+        mode.partial = best_partial_node(root_node, current_rule, stack);
     }
 }
 
 #[inline(never)]
-fn best_partial_value(
+fn best_partial_node(
     root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
     current_rule: &Rule,
     stack: &[Rule],
-) -> Option<Value> {
-    let usable = |value: Value| (!matches!(value, Value::Undefined | Value::Null)).then_some(value);
+) -> Partial {
+    std::iter::once(root_node)
+        .chain(stack.iter().map(|rule| &rule.node))
+        .chain(std::iter::once(&current_rule.node))
+        .find(|node| partial_usable(&node.borrow()))
+        .map_or(Partial::None, |node| Partial::Node(Rc::clone(node)))
+}
 
-    usable(root_node.borrow().clone())
-        .or_else(|| {
-            stack
-                .iter()
-                .find_map(|rule| usable(rule.node.borrow().clone()))
-        })
-        .or_else(|| usable(current_rule.node.borrow().clone()))
-        .map(Value::unwrap_undefined)
+/// Whether a node's value is worth returning from a failed parse.
+fn partial_usable(value: &Value) -> bool {
+    !matches!(value, Value::Undefined | Value::Null)
 }
 
 fn error_token(error: &TabnasError) -> Token {

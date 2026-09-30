@@ -712,15 +712,10 @@ to peak memory (`VmHWM` 56.5 MiB and 664.8 MiB against 56.5 MiB and
   record is uniquely held. It depends on change 1 and touches link
   semantics beside the `rule-history-next-control` row; estimated at
   about 0.9%. It was not attempted.
-- Recovery. With `parse.recover.enabled`, each of the about six
-  `update_partial` calls on an ordinary step (15 sites in all) walks the
-  whole partial value (`rs/src/parser.rs:3800-3827`; the clone is a
-  shallow `Arc` bump, the walk is `unwrap_undefined` into
-  `contains_undefined`), which makes a recovering parse
-  quadratic. The benchmark does not recover, so this profile cannot size
-  it; it is a separate change with its own measurement. The same holds
-  for the error path, where `TabnasError::new` copies the whole source
-  per error.
+- Recovery, and the error path under negotiated lexing. Neither is a
+  per-rule cost and the benchmark reaches neither, but both made a valid
+  input quadratic, so both were repaired on their own, as "Recovery and
+  negotiated lexing, repaired separately" below records.
 - Costs this grammar barely exercises. These are the key clone on
   every `n`, `u` or `k` write, action names resolved per call instead of
   at install, declarative conditions evaluated on a cloned rule, and
@@ -737,6 +732,112 @@ to peak memory (`VmHWM` 56.5 MiB and 664.8 MiB against 56.5 MiB and
   helps under either allocator, rather than the cost of one allocation.
 - Downstream suites. Only `rs/` was tested against the prototypes.
   `ci/fleet/run-fleet.sh` runs with each change as it lands.
+
+## Recovery and negotiated lexing, repaired separately
+
+Two costs outside the benchmark grew with the square of a valid input,
+and TypeScript has neither. Both are repaired, and both return what the
+engine returned before, value and error, on every input the differential
+below tried. The one corner where recovery can differ is named under
+"Recovery".
+
+**Recovery.** With `parse.recover.enabled`, each `update_partial` call
+(fifteen sites in the loop, about six on an ordinary step) took the
+value a failed parse would return: a clone of the value built so far,
+then `unwrap_undefined`, which walked all of it (`contains_undefined`).
+The clone, held until the next call, also shared the container the
+next action appended to, so `Arc::make_mut` copied that container
+whole. A call now keeps a handle on the node's cell, a reference count
+on the cell and never on the value, and `Partial::into_value` reads and
+unwraps the value once, after a parse that failed (`rs/src/parser.rs`).
+The node is chosen by the same test, in the same order, and it is kept
+when recovery then pops the rules that held it, so the value is the one
+the last call would have taken. Only a write to that node between the
+last call and the failure can tell the two apart: an action or callback
+that changes the node and then fails, or that is followed by a matched
+action whose error recovery gives up on. The value is then the node as
+the failure left it, which is what TypeScript returns, because it reads
+the node in its `catch`.
+
+**Negotiated lexing.** With `lex.relex` on, an alternate whose slot the
+lookahead does not fill asks the lexer for a re-cut, and a re-cut the
+lexer rejects ends in an error nobody reads. Each such error copied the
+whole source into `full_source` three times: once in
+`TabnasError::new`, once for the copy the matcher kept as the lexer's
+error, and once for the copy `next_raw_with` kept. The matchers now
+build their errors without the source, and `next_raw_with` attaches it
+where an error leaves the lexer, which a rejected cut never does,
+because `relex` calls the matchers directly (`rs/src/lexer.rs`). A
+standing lexer error is moved into the re-cut's checkpoint instead of
+copied into it. What is left is a copy of the source per error
+reported, not per cut attempted.
+
+Measured on the release profile with the glibc allocator, as the best
+of three runs of `parse_recover` (one run where marked), on a 4-core
+container that other jobs were sharing: the 1-minute load was 5.6 to
+8.7 throughout. The engine before is `eb537df`. Old and new ran
+interleaved, row by row. The harness is not committed, unlike the rest
+of this document's tools: it links the jsonic and css crates, which this
+repository does not depend on, and adding them would be a dependency
+change. `rs/tests/linear_time_test.rs` is the part anyone can re-run.
+The css input is `a{b:c}` and a newline, repeated. The jsonic inputs are
+one array of numbers, `[1,1,...]`, or of one-element arrays,
+`[[1],[1],...]`.
+
+| Grammar | Options | Input | Bytes | Before | After |
+|---|---|---|---|---|---|
+| css | none | 2,000 rules | 14,000 | 0.028 s | 0.024 s |
+| css | recover | 1,000 rules | 7,000 | 0.97 s | 0.013 s |
+| css | recover | 2,000 rules | 14,000 | 8.03 s | 0.025 s |
+| css | recover | 4,000 rules | 28,000 | 62.4 s, one run | 0.054 s |
+| css | recover | 32,000 rules | 224,000 | not run | 0.43 s |
+| jsonic | none | 16,000 numbers | 32,003 | 0.075 s | 0.076 s |
+| jsonic | recover | 8,000 numbers | 16,003 | 0.88 s | 0.037 s |
+| jsonic | recover | 16,000 numbers | 32,003 | 4.05 s | 0.099 s |
+| jsonic | recover | 64,000 numbers | 128,003 | not run | 0.43 s |
+| jsonic | recover | 4,000 arrays | 16,003 | 4.47 s | 0.069 s |
+| jsonic | recover | 8,000 arrays | 32,003 | 44.4 s, one run | 0.097 s |
+| jsonic | recover | 64,000 arrays | 256,003 | not run | 1.17 s |
+| css | none | 32,000 rules | 224,000 | 0.48 s | 0.47 s |
+| css | relex | 8,000 rules | 56,000 | 1.57 s | 0.57 s |
+| css | relex | 16,000 rules | 112,000 | 14.4 s, one run | 1.16 s |
+| css | relex | 32,000 rules | 224,000 | 68.0 s, one run | 2.54 s |
+| css | relex | 64,000 rules | 448,000 | not run | 5.26 s |
+| jsonic | none | 64,000 numbers | 128,003 | 0.32 s | 0.33 s |
+| jsonic | relex | 16,000 numbers | 32,003 | 2.14 s | 1.07 s |
+| jsonic | relex | 32,000 numbers | 64,003 | 15.5 s, one run | 1.97 s |
+| jsonic | relex | 64,000 numbers | 128,003 | 66.2 s, one run | 4.15 s |
+| jsonic | relex | 128,000 numbers | 256,003 | not run | 7.31 s |
+| css | recover, relex | 2,000 rules | 14,000 | 9.35 s, one run | 0.16 s |
+| css | recover, relex | 32,000 rules | 224,000 | not run | 3.01 s |
+
+A recovering parse of a valid input now costs about what a plain one
+does. A relexing parse still costs five to thirteen times a plain one,
+in the rejected cuts themselves, but that factor no longer grows with
+the input.
+
+`rs/tests/linear_time_test.rs` pins both in the debug build the suite
+runs in: 10,000 items must take under 30 times what 1,000 take. The
+ratios were 10 to 13 after the repairs, and 71 (recovery, a flat array)
+and 91 (relex) before, where each test failed.
+
+The values and errors are the ones the engine returned before. The
+same harness ran `eb537df` and this change over two corpora of mostly
+invalid input, 116,265 jsonic documents and 80,000 stylesheets, built
+from the shared fixtures of `jsonic`, `json` and `css`, every prefix of
+the short ones, 6,000 documents from `ci/fuzz/gencorpus.js`, and random
+damage to all of them, each at most 2,000 characters. Every input went through
+`parse_recover` and `parse`, and the `Debug` form of every value and
+every error, `full_source` included, was compared byte for byte in 19
+configurations: recovery off and on, relex off and on, and recovery
+narrowed until it gives up (`max_recoveries` 0, 1 and 2, `max_skip` 0,
+`pop_until_valid` off). All 19 were identical. Recovery gave up, and so
+returned the value this change reads at the end, in 519,465 of the
+`parse_recover` calls: 308,373 in css and 211,092 in jsonic, 498,563 of
+them with a node to read. The jsonic grammar accepts the end of the
+source in its close states, and with the default options its recovery
+never gave up on this corpus: only the narrowed configurations reach
+that path there.
 
 ## Landing order, and what waits on the maintainer
 
