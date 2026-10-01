@@ -1421,6 +1421,66 @@ payload.
 One gap, and it closes with A2: `Forced` marks a close synthesized by
 error recovery, so it is always false in Go until Go has recovery.
 
+## Node identity in a rule-done subscriber: `NodeCell` / `SetNode` (Go only)
+
+A subscriber that streams a container while it is being built has to
+know which container a rule's node is, and may want to drop what it
+streamed already. TypeScript gets both from the object itself: every
+rule building into a list holds the same array, and
+`rule.node.length = n` truncates it for all of them. Rust gets both
+from the shared cell: `Rc::as_ptr(&rule.node)` is the identity, and a
+write through `rule.node.borrow_mut()` reaches every rule sharing the
+`Rc`.
+
+A Go slice is a value. Every rule holds its own header, a list grown
+by `@push$` or by a Go action is a new header, and the engine keeps
+track of which rule holds the authoritative copy only in the unexported
+`nodeOwner`, which the `@push$` entries earlier on this page describe.
+So Go exports two methods instead:
+
+- `(*Rule) NodeCell() *Rule` returns the rule holding the authoritative
+  copy of the container. The pointer is the container's identity, and
+  its `Node` is the current value.
+- `(*Rule) SetNode(v any)` replaces the container in the rules that
+  build into it: the cell, the rule, the unbroken run of parents
+  holding it, and the successor this pass created. `r.Node = v` changes
+  one rule's copy only.
+
+The ownership bookkeeping is exact for containers the native-value
+builtins build. A Go action that assigns `r.Node` cannot update it, so
+`NodeCell` also recognises the hand-written shapes (jsonic's among
+them): a rule that put a container of its own in place of what it was
+seeded with is its own cell, an element rule that writes its list
+back to its parent shares the parent's cell, and a replacement
+successor (`r:`) that holds the same container as the head of its
+chain (the rule its parent pushed) or as the rule it replaced shares
+that rule's cell. The last is tabnas-yaml's shape: its block sequence
+rotates `yamlBlockList` into `yamlBlockElem`, each assigning the grown
+list to its own `Node` and writing it back through `Parent.Child`, and
+`yamlElemMap` into `yamlElemPair` the same way for a map element.
+Without it each re-allocation of the list started a new cell. Lists
+are compared by backing array, and two zero-capacity lists (which share
+Go's one empty array) by whether one interface value was copied from
+the other.
+
+Two differences from Rust remain in what the cell means:
+
+- **Lifting keeps the cell in Go.** A rule that takes a child's
+  container with `@value$` or `@bubble$` reports the child's cell.
+  Rust's builtins put the lifted value in a fresh `Rc`, so the lifting
+  rule has a cell of its own there. A Go action that assigns a lifted
+  container (`r.Node = r.Child.Node`) starts a new cell, as in Rust.
+- **`SetNode` reaches the rules still building, not every holder.** It
+  does not walk a replacement chain (`r:`) back past the rule it is
+  called on, which would cost the length of the list on every call, so
+  a replaced rule other than the cell keeps the old value. In the
+  builtin and hand-written shapes `go/nodecell_test.go` pins, the parse
+  result reflects the replacement. Nor can it reach a copy a grammar
+  keeps outside `Node`: tabnas-yaml also carries its block list in `K`
+  and appends to that copy, so a truncation there does not stick.
+
+TypeScript and Rust need neither method; there is nothing to port.
+
 ## Lex-event retraction on unrelex: both runtimes
 
 Under negotiated lexing, both runtimes re-announce the RESTORED token

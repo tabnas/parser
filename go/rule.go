@@ -987,6 +987,13 @@ type Rule struct {
 	// exactly when the first push happens. TypeScript and Rust need none
 	// of this; they hand out the same list object.
 	nodeOwner *Rule
+	// ownedKind is the kind of Node (none, list or map: nodeKind) when
+	// nodeOwner was last recorded — by the seeding in MakeRule, or by a
+	// builtin that lifts a child's container. A Go action that assigns
+	// Node directly cannot update nodeOwner, so a Node whose kind no
+	// longer matches is one the rule allocated itself. Read only by
+	// NodeCell (nodecell.go); nothing in the parse depends on it.
+	ownedKind uint8
 	State     RuleState // Current phase: open ("o") or close ("c").
 	D         int       // Stack depth at which this rule was pushed.
 	Child     *Rule     // Rule pushed by this rule (NoRule if none).
@@ -1115,7 +1122,8 @@ func MakeRule(spec *RuleSpec, ctx *Context, node any) *Rule {
 	// helpers) — most rules in value-building grammars never touch them.
 	r := &Rule{
 		I: ctx.UI, Name: spec.Name, Spec: spec, Node: node,
-		State: OPEN, D: ctx.RSI,
+		ownedKind: nodeKind(node),
+		State:     OPEN, D: ctx.RSI,
 		Child: NoRule, Parent: NoRule, Prev: NoRule, Next: NoRule,
 		O: nil, ON: 0, C: nil, CN: 0,
 		O0: NoToken, O1: NoToken, C0: NoToken, C1: NoToken,
