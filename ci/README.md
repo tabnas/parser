@@ -482,22 +482,22 @@ below).
   `release.yml` that used to sit in this folder is gone. Promoting it
   meant hand-merging a second `release.yml` against the live one, and the
   bulk promotion of 2026-09-22 made it live too early. What replaces it is
-  already in `.github/workflows/` and inert: `crates-release.yml`, which
+  in `.github/workflows/`: `crates-release.yml`, which
   `release.yml`'s `crates` job calls with the dedicated `rs/v<version>` tag.
   A normal dispatch creates that tag atomically with `ts/v<version>` and the
   optional `go/v<version>` tag. `crates-release.yml` rejects the TS and Go
-  tags, so a Rust artifact always has its own release ref. Both workflows skip
-  unless the repository or organisation variable `TABNAS_CRATES` is `on`
-  (admin ADR-21, proposed).
+  tags, so a Rust artifact always has its own release ref (admin ADR-21).
+  Both run on every release: the `TABNAS_CRATES` switch that staged them is
+  retired.
 
   The trusted publisher on crates.io still names `release.yml`. crates.io
   matches the token's `workflow_ref`, which names the calling workflow, so
   renaming `release.yml` breaks crates.io publishing exactly as it breaks
   npm.
 
-  Before the switch, a maintainer must manually publish `tabnas-parser`
-  (RFC 3691 allows a trusted publisher only on a crate that exists), add its
-  trusted publisher, and only then enable the repository variable.
+  `tabnas-parser` was published manually first (RFC 3691 allows a trusted
+  publisher only on a crate that exists), and its trusted publishers name
+  `release.yml` and `crates-release.yml`.
 
   The org actions policy admits `rust-lang/crates-io-auth-action`. A probe
   run on 2026-09-23 downloaded and ran it, and a skipped job that uses it
