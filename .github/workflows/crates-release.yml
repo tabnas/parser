@@ -3,12 +3,10 @@
 # crates.io publishing for this repository's Rust crate, rs/ (admin
 # ADR-21).
 #
-# DEPLOYED AND INERT. The job runs only when the configuration variable
-# TABNAS_CRATES is 'on', at repository or organisation level. release.yml
-# checks the same variable before it calls this file. A maintainer sets
-# it only after the crate exists on crates.io and its trusted publisher
-# is configured. Until then every call and every dispatch skips the job,
-# so this file, though live, changes nothing.
+# LIVE. Every call and every dispatch runs the job. The crate's trusted
+# publishers on crates.io name release.yml (the normal path) and this
+# file (a direct dispatch). ADR-21 kept this job behind a TABNAS_CRATES
+# variable until those existed; that switch is retired.
 #
 # TWO ENTRY POINTS:
 #   workflow_call      the normal path. release.yml calls this once the
@@ -83,9 +81,6 @@ permissions:
 
 jobs:
   crates:
-    # The switch (ADR-21). If the variable is unset or not 'on', the job
-    # is skipped.
-    if: vars.TABNAS_CRATES == 'on'
     runs-on: ubuntu-latest
     # crates.io's trusted-publishing token expires after 30 minutes.
     timeout-minutes: 30
