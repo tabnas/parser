@@ -1,0 +1,1290 @@
+diff --git a/DIVERGENCE.md b/DIVERGENCE.md
+index ee4ac46..f84238d 100644
+--- a/DIVERGENCE.md
++++ b/DIVERGENCE.md
+@@ -745,6 +745,87 @@ Registered as `pusher-through-child` and `rule-history-bounded-pusher`,
+ with `pusher-through-child-control` as their control: `parent.child.name`,
+ the same pusher read directly, where the three ports agree.
+ 
++### A fixed token another name has taken the source of
++
++**Deferred, not deliberate** — a limit of how Go holds its fixed tokens,
++recorded here because a merge reaches it as well as a single instance.
++
++TypeScript holds the fixed tokens as an ordered name → source table, its
++option tree's `fixed.token`, and `configure()` builds the lexer's source
++→ token map from it front to back. Where two names claim one source the
++later one lexes it, and the earlier stays in the table, lexing nothing,
++until the later one lets the source go. Rust holds the same table and its
++lexer takes the last of equal matches. Go holds only the source → token
++map: binding a name to a source another name holds overwrites that
++entry, the most recent binding wins, and the name that lost it keeps
++nothing.
++
++| options | `[` lexes as, TypeScript | Go | Rust |
++|---|---|---|---|
++| `fixed.token: {"#CA": "["}` | `#CA` | `#CA` | `#CA` |
++| `fixed.token: {"#OB": "["}` | `#OS` | **`#OB`** | `#OS` |
++
++`#OS` is later than `#OB` in the defaults' order, so TypeScript keeps
++`#OB`'s binding behind it; Go's binding of `#OB` overwrote `#OS`'s.
++
++A merge carries the split on. All three ports now merge a removed fixed
++token as TypeScript does: a removal does not survive, the merged instance
++puts back every default neither side holds, and where a default put back
++and a binding a side holds claim one source, the later in the defaults'
++order lexes it. TypeScript and Rust keep the binding that lost; Go cannot:
++
++| sides | then | TypeScript | Go |
++|---|---|---|---|
++| A `{"#OS": null, "#OB": "["}`, B `{"#OS": null}` | `[` in A ⊕ B | `#OS` | `#OS` |
++| same | (A ⊕ B) ⊕ C `{"#OB": "("}` | refused: conflicting option values at `fixed.token.#OB` | **merges; `(` lexes as `#OB`** |
++| same | (A ⊕ B) ⊕ a default instance | refused: fixed tokens `#OB` and `#OS` both claim source `"["` | **merges** |
++| same | A ⊕ B, then `fixed.token: {"#OS": null}`; `[` | `#OB` | **`#TX`** |
++| same | A ⊕ B, then a grammar `clear`; bindings left | `#OB` on `[` | **none** |
++| A `{"#OB": "["}`, B `{"#OS": null}` | A ⊕ B | refused: fixed tokens `#OB` and `#OS` both claim source `"["` | **merges; `[` lexes as `#OS`** |
++
++The same limit puts the two names of that refusal in the other order when
++a side removed a default name and bound it again: TypeScript's tree moves
++the name to its end, and Go, which keeps no order, reads it in the
++defaults' place. Only the message differs; both refuse.
++
++Repair direction: **Go changes**, holding its fixed tokens as TypeScript
++does, as an ordered name → source table the source map is built from, so
++a binding can be shadowed and later freed. That reaches every door that
++binds a fixed token (`Make`, `SetOptions`, a grammar's `clear`,
++`Token(name, src)`, `Derive` and `Merge`), which is more than the merge
++repair that found it. Until then Go's merge gives TypeScript's result for
++every table Go can hold (`go/merge_fixed_test.go`); a randomized
++three-way differential of merges found no other split in it but the entry
++below and the instances only TypeScript's `empty()` builds
++(`go/doc/differences.md`, "Merge").
++
++Registered as `fixed-taken-earlier`, with `fixed-taken-later` as its
++control.
++
++### An instance with no fixed tokens left in Go
++
++**Deferred, not deliberate** — found by the merge differential, where a
++grammar `clear` on a merged instance reaches it, though no merge is
++needed.
++
++Go builds its text lexer's stop table from the fixed sources, and when
++there are none it falls back to the six default ones, `{}[]:,`
++(`buildLexTables`, `go/lexer.go`), a fallback meant for a hand-built
++lexer configuration. So an instance whose last fixed token went, every
++default removed or a grammar `clear`, ends text at each of the six and
++then has nothing to lex it with. TypeScript and Rust lex it as text.
++
++| options | `{` lexes as, TypeScript | Go | Rust |
++|---|---|---|---|
++| `fixed.token`: five defaults `null`, `#CA` on `=` | `#TX` | `#TX` | `#TX` |
++| `fixed.token`: all six defaults `null` | `#TX` | **`unexpected`** | `#TX` |
++
++Repair direction: **Go changes**, applying the fallback only where there
++is no fixed-token table at all rather than where the table is empty. Not
++done with the merge repair, which leaves the lexer alone.
++
++Registered as `no-fixed-left`, with `one-fixed-left` as its control.
++
+ ## Not divergences
+ 
+ Recorded here because they are regularly mistaken for divergences:
+diff --git a/go/doc/differences.md b/go/doc/differences.md
+index 140e2ac..d51cd91 100644
+--- a/go/doc/differences.md
++++ b/go/doc/differences.md
+@@ -837,6 +837,8 @@ Differences:
+ | Identical-alt / lifecycle dedupe | function reference identity, falling back to source-text equality (`fn.toString()`): each plugin run creates fresh closures, so reference identity alone would miss shared base plugins | code-pointer identity (closures from one literal share a pointer), the natural Go equivalent of source equality | 
+ | Conditioned-alt dedupe | only when the condition is reference-equal (or absent) | never (a condition cannot be proven identical across closures); unconditioned duplicates are unreachable, so both rules are behavior-safe |
+ | Option conflict paths | TS option names (`lex.match.same.make`) | lowercased Go field names, which coincide for most paths (`rule.maxmul`, `lex.match.same.make`) |
++| Removed fixed tokens | `configure()` deletes a `fixed.token` binding set to `null` from the option tree, so a removal does not survive a merge: the merge takes the binding the other side holds, and the merged instance, built over the defaults, puts back every default neither side holds, the later of two names on one source lexing it | the same, read from each side's live fixed-token table rather than from `Fixed.Token`, which records the calls that built the table: `mergeFixedTokens` in `merge.go`. The merged table is written back to `Fixed.Token`, so `Derive` rebuilds it. A binding a restored default shadows is kept by TypeScript and cannot be held here: see DIVERGENCE.md, "A fixed token another name has taken the source of" |
++| Instances built without the defaults | `empty()` sets `defaults$: false`, a merge lets a `false` win, and the merged instance is then built without the defaults, so no default fixed token comes back | no defaults-off mode (`Empty` builds over the defaults), so a merge always puts the defaults back |
+ 
+ ## Deep Option Merge (`util.deep` / `Deep`)
+ 
+diff --git a/go/merge.go b/go/merge.go
+index 9de2ddc..56e8031 100644
+--- a/go/merge.go
++++ b/go/merge.go
+@@ -193,6 +193,17 @@ func mergeOptionsCommutative(a, b *Options) (Options, error) {
+ 	bc := *b
+ 	ac.Tag = ""
+ 	bc.Tag = ""
++	// The fixed-token bindings merge from each side's live table, as
++	// TypeScript merges them from its cleaned option tree, in
++	// mergeCustomTokens: Fixed.Token records the calls that built a table,
++	// removals and all, not the table itself.
++	for _, o := range []*Options{&ac, &bc} {
++		if o.Fixed != nil && o.Fixed.Token != nil {
++			fixed := *o.Fixed
++			fixed.Token = nil
++			o.Fixed = &fixed
++		}
++	}
+ 	merged, err := mergeReflect(
+ 		reflect.ValueOf(ac),
+ 		reflect.ValueOf(bc),
+@@ -530,56 +541,104 @@ func resolveMergeAlt(t *Tabnas, pa portableAlt) *AltSpec {
+ 	return &alt
+ }
+ 
+-// mergeCustomTokens unifies the two sides' custom token and fixed
+-// token state (which lives on the instance, not in Options) into the
+-// merged instance, translating by NAME with sorted iteration so Tin
+-// allocation is deterministic. A token name mapped to two different
+-// non-default sources, or one source claimed by two names, is an
+-// error.
+-func mergeCustomTokens(out, x, y *Tabnas) error {
+-	// Default fixed sources by name (the global builtin table).
+-	defaultByName := make(map[string]string, len(FixedTokens))
+-	for src, tin := range FixedTokens {
+-		defaultByName[tinName(tin)] = src
+-	}
++// defaultFixedOrder is the default fixed tokens in the order TypeScript's
++// defaults declare them (ts/src/defaults.ts `fixed.token`), which is the
++// order its option tree keeps them in and so decides which of two names
++// claiming one source lexes it.
++var defaultFixedOrder = []struct{ name, src string }{
++	{"#OB", "{"}, {"#CB", "}"}, {"#OS", "["}, {"#CS", "]"}, {"#CL", ":"}, {"#CA", ","},
++}
+ 
+-	fixedByName := func(side *Tabnas) map[string]string {
+-		m := make(map[string]string)
+-		for src, tin := range side.parser.Config.FixedTokens {
+-			m[side.TinName(tin)] = src
+-		}
+-		return m
+-	}
+-	fx := fixedByName(x)
+-	fy := fixedByName(y)
++// fixedTree reads one side's fixed bindings as TypeScript's cleaned
++// option tree holds them: name → source, the default names first in the
++// defaults' order, then every other name in the order it was allocated,
++// which is the order it was added. A removed binding is not there, as a
++// `null` is not in TypeScript's tree once configure() cleans it. A name
++// the Go-only Token(name, src) gave a second source keeps its shortest,
++// then least, source: TypeScript's tree holds one per name.
++func fixedTree(side *Tabnas) ([]string, map[string]string) {
++	src := make(map[string]string)
++	for s, tin := range side.parser.Config.FixedTokens {
++		name := side.TinName(tin)
++		if prev, ok := src[name]; !ok || len(s) < len(prev) ||
++			(len(s) == len(prev) && s < prev) {
++			src[name] = s
++		}
++	}
++	names := make([]string, 0, len(src))
++	isDefault := make(map[string]bool, len(defaultFixedOrder))
++	for _, d := range defaultFixedOrder {
++		isDefault[d.name] = true
++		if _, ok := src[d.name]; ok {
++			names = append(names, d.name)
++		}
++	}
++	rest := make([]string, 0, len(src))
++	for name := range src {
++		if !isDefault[name] {
++			rest = append(rest, name)
++		}
++	}
++	sort.Slice(rest, func(a, b int) bool {
++		ta, tb := side.tinByName[rest[a]], side.tinByName[rest[b]]
++		if ta != tb {
++			return ta < tb
++		}
++		return rest[a] < rest[b]
++	})
++	return append(names, rest...), src
++}
+ 
+-	// Resolve the union name→src table, defaults losing to overrides.
+-	srcByName := make(map[string]string, len(fx)+len(fy))
+-	names := make([]string, 0, len(fx)+len(fy))
+-	for name := range fx {
+-		names = append(names, name)
+-	}
+-	for name := range fy {
++// mergeFixedTokens merges the two sides' fixed bindings as TypeScript's
++// merge does (ts/src/merge.ts), and returns the merged instance's table
++// in the order it lexes them: the source map is built from it front to
++// back, so the last name that claims a source keeps it.
++//
++// TypeScript's configure() deletes a binding set to null from the option
++// tree (`clean`, ts/src/utility.ts), so a removal does not survive a
++// merge: mergeOptionTrees takes every binding either side holds, picking
++// between two as any option is picked, in the canonical first side's
++// order and then the other's; checkFixedTokenSources refuses two of them
++// that claim one source, naming the earlier first; and the merged
++// instance is built over the defaults, which puts back every default
++// binding neither side holds, each default name in the defaults' order
++// and the rest after them, so where a default put back and a held
++// binding claim one source, the later lexes it.
++//
++// TypeScript keeps the binding that loses in its option tree, where a
++// later merge, an edit that frees its source or a grammar clear finds it.
++// Go's table maps each source to one token and cannot hold it, so from
++// there on the two can split: see DIVERGENCE.md, "A fixed token another
++// name has taken the source of".
++func mergeFixedTokens(x, y *Tabnas) ([]string, map[string]string, error) {
++	defaultSrc := make(map[string]string, len(defaultFixedOrder))
++	for _, d := range defaultFixedOrder {
++		defaultSrc[d.name] = d.src
++	}
++
++	xNames, fx := fixedTree(x)
++	yNames, fy := fixedTree(y)
++	held := append([]string{}, xNames...)
++	for _, name := range yNames {
+ 		if _, ok := fx[name]; !ok {
+-			names = append(names, name)
++			held = append(held, name)
+ 		}
+ 	}
+-	sort.Strings(names)
+-	for _, name := range names {
++	srcByName := make(map[string]string, len(held))
++	for _, name := range held {
+ 		sx, okx := fx[name]
+ 		sy, oky := fy[name]
+ 		switch {
+ 		case okx && oky && sx != sy:
+-			def := defaultByName[name]
++			def, isDefault := defaultSrc[name]
+ 			switch {
+-			case sx == def:
++			case isDefault && sx == def:
+ 				srcByName[name] = sy
+-			case sy == def:
++			case isDefault && sy == def:
+ 				srcByName[name] = sx
+ 			default:
+-				return fmt.Errorf(
+-					"merge: fixed token %s maps to both %q and %q",
+-					name, sx, sy)
++				return nil, nil, fmt.Errorf(
++					"merge: conflicting option values at fixed.token.%s", name)
+ 			}
+ 		case okx:
+ 			srcByName[name] = sx
+@@ -588,24 +647,56 @@ func mergeCustomTokens(out, x, y *Tabnas) error {
+ 		}
+ 	}
+ 
+-	// One source string may serve only one token name.
+ 	nameBySrc := make(map[string]string, len(srcByName))
+-	for _, name := range names {
++	for _, name := range held {
+ 		src := srcByName[name]
+-		if prev, ok := nameBySrc[src]; ok && prev != name {
+-			return fmt.Errorf(
++		if prev, ok := nameBySrc[src]; ok {
++			return nil, nil, fmt.Errorf(
+ 				"merge: fixed tokens %s and %s both claim source %q",
+ 				prev, name, src)
+ 		}
+ 		nameBySrc[src] = name
+ 	}
+ 
+-	// Allocate every custom (non-builtin) token name first, in sorted
+-	// order, so the merged Tin space is deterministic.
++	order := make([]string, 0, len(defaultFixedOrder)+len(held))
++	for _, d := range defaultFixedOrder {
++		if _, ok := srcByName[d.name]; !ok {
++			srcByName[d.name] = d.src
++		}
++		order = append(order, d.name)
++	}
++	for _, name := range held {
++		if _, isDefault := defaultSrc[name]; !isDefault {
++			order = append(order, name)
++		}
++	}
++	return order, srcByName, nil
++}
++
++// mergeCustomTokens unifies the two sides' custom token and fixed
++// token state (which lives on the instance, not in Options) into the
++// merged instance, translating by NAME so Tin allocation is
++// deterministic: the fixed names the defaults lack first, in the merged
++// table's order, as TypeScript's configure() allocates them from its
++// option tree, then every other custom name in sorted order. The fixed
++// bindings merge as mergeFixedTokens says.
++func mergeCustomTokens(out, x, y *Tabnas) error {
++	order, srcByName, err := mergeFixedTokens(x, y)
++	if err != nil {
++		return err
++	}
++
++	allocated := make(map[string]bool)
++	for _, name := range order {
++		if tin, ok := out.tinByName[name]; !ok || tin >= TinMAX {
++			out.Token(name)
++			allocated[name] = true
++		}
++	}
+ 	customSet := make(map[string]bool)
+ 	for _, side := range []*Tabnas{x, y} {
+ 		for name, tin := range side.tinByName {
+-			if tin >= TinMAX {
++			if tin >= TinMAX && !allocated[name] {
+ 				customSet[name] = true
+ 			}
+ 		}
+@@ -619,21 +710,33 @@ func mergeCustomTokens(out, x, y *Tabnas) error {
+ 		out.Token(name)
+ 	}
+ 
+-	// Apply the fixed source table: clear stale sources for each
+-	// remapped token, then bind the resolved source.
++	// The table, built front to back: the last name to claim a source
++	// keeps it, as TypeScript's configure() builds its source map.
+ 	cfg := out.parser.Config
+-	for _, name := range names {
+-		src := srcByName[name]
+-		tin := out.Token(name)
+-		for s, t := range cfg.FixedTokens {
+-			if t == tin && s != src {
+-				delete(cfg.FixedTokens, s)
+-			}
+-		}
+-		cfg.FixedTokens[src] = tin
++	cfg.FixedTokens = make(map[string]Tin, len(order))
++	for _, name := range order {
++		cfg.FixedTokens[srcByName[name]] = out.Token(name)
+ 	}
+ 	cfg.SortFixedTokens()
+ 
++	// Record the table in the options, so an instance derived from the
++	// merged one, which rebuilds its fixed tokens from them, rebuilds
++	// this table: every default name the table does not lex is removed.
++	token := make(map[string]*string, len(order))
++	for _, name := range order {
++		token[name] = nil
++	}
++	for src, tin := range cfg.FixedTokens {
++		src := src
++		token[out.TinName(tin)] = &src
++	}
++	fixed := FixedOptions{}
++	if out.options.Fixed != nil {
++		fixed = *out.options.Fixed
++	}
++	fixed.Token = token
++	out.options.Fixed = &fixed
++
+ 	return nil
+ }
+ 
+diff --git a/go/merge_fixed_test.go b/go/merge_fixed_test.go
+new file mode 100644
+index 0000000..5bf1454
+--- /dev/null
++++ b/go/merge_fixed_test.go
+@@ -0,0 +1,227 @@
++// Copyright (c) 2013-2026 Richard Rodger, MIT License
++
++// How a merge treats removed and rebound fixed tokens, mirroring the
++// merge-removals tests in ts/test/merge.test.js and the fixed-token tests
++// in rs/tests/merge_test.rs.
++
++package tabnas
++
++import (
++	"reflect"
++	"testing"
++)
++
++// fixedStep is one grammar applied to a merge side: a fixed.token map,
++// where a nil value removes the name, or a clear.
++type fixedStep map[string]any
++
++var clearStep = fixedStep{"clear$": true}
++
++// fixedSide builds a merge side under tag, applying each step through the
++// serialized-options door a plugin's fixed.token removals come through.
++func fixedSide(t *testing.T, tag string, steps ...fixedStep) *Tabnas {
++	t.Helper()
++	j := Make(Options{Tag: tag})
++	for _, step := range steps {
++		gs := &GrammarSpec{}
++		if step["clear$"] == true {
++			gs.Clear = true
++		} else {
++			gs.OptionsMap = map[string]any{
++				"fixed": map[string]any{"token": map[string]any(step)},
++			}
++		}
++		if err := j.Grammar(gs); err != nil {
++			t.Fatalf("Grammar(%v): %v", step, err)
++		}
++	}
++	return j
++}
++
++// lexedName is the name of the first token j lexes src into.
++func lexedName(j *Tabnas, src string) string {
++	lex := NewLex(src, j.Config())
++	tk := lex.Next()
++	if lex.Err != nil {
++		return "ERR"
++	}
++	if tk == nil {
++		return "ZZ"
++	}
++	return tk.Name
++}
++
++// fixedMerges is every merge of a side built from one's steps with a side
++// built from other's: the first side sorts first and last by tag, and each
++// is the receiver once, so no order can hide a result.
++func fixedMerges(t *testing.T, one, other []fixedStep) []func() (*Tabnas, error) {
++	t.Helper()
++	var out []func() (*Tabnas, error)
++	for _, tags := range [][2]string{{"A", "B"}, {"B", "A"}} {
++		for _, oneReceives := range []bool{true, false} {
++			tags, oneReceives := tags, oneReceives
++			out = append(out, func() (*Tabnas, error) {
++				a := fixedSide(t, tags[0], one...)
++				b := fixedSide(t, tags[1], other...)
++				if oneReceives {
++					return a.Merge(b)
++				}
++				return b.Merge(a)
++			})
++		}
++	}
++	return out
++}
++
++func mustMerge(t *testing.T, merge func() (*Tabnas, error)) *Tabnas {
++	t.Helper()
++	m, err := merge()
++	if err != nil {
++		t.Fatalf("Merge error: %v", err)
++	}
++	return m
++}
++
++func expectLexed(t *testing.T, j *Tabnas, want map[string]string) {
++	t.Helper()
++	for src, name := range want {
++		if got := lexedName(j, src); got != name {
++			t.Errorf("%q lexes as %s, want %s", src, got, name)
++		}
++	}
++}
++
++// A binding one side removed comes back from the other side: TypeScript's
++// configure() deletes a fixed token set to null from the option tree a
++// merge reads, so the merge takes what the other side holds, default or
++// not, and a removal met by a rebinding is no conflict.
++func TestMergeRestoresAFixedTokenOneSideRemoved(t *testing.T) {
++	remove := fixedStep{"#OS": nil, "#CS": nil}
++	if got := lexedName(fixedSide(t, "A", remove), "["); got != "#TX" {
++		t.Fatalf("a side alone lexes [ as %s, want #TX", got)
++	}
++	for _, merge := range fixedMerges(t, []fixedStep{remove}, nil) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{"[": "#OS", "]": "#CS"})
++	}
++	for _, merge := range fixedMerges(t, []fixedStep{clearStep}, nil) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{"[": "#OS", "{": "#OB"})
++	}
++	rebind := fixedStep{"#OS": "<<"}
++	for _, merge := range fixedMerges(t, []fixedStep{remove}, []fixedStep{rebind}) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{"<<": "#OS", "[": "#TX"})
++	}
++	// A side that bound a name and then cleared it holds nothing for it,
++	// so the other side's binding is no conflict, however the first side
++	// once bound it.
++	for _, merge := range fixedMerges(t,
++		[]fixedStep{{"#OB": "("}, clearStep}, []fixedStep{{"#OB": "<"}}) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{"<": "#OB", "(": "#TX"})
++	}
++}
++
++// A default binding neither side holds comes back, as TypeScript builds
++// the merged instance over the defaults.
++func TestMergeRestoresADefaultFixedTokenNeitherSideHolds(t *testing.T) {
++	remove := fixedStep{"#OS": nil}
++	for _, merge := range fixedMerges(t, []fixedStep{remove}, []fixedStep{remove}) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{"[": "#OS"})
++	}
++	for _, merge := range fixedMerges(t, []fixedStep{clearStep}, []fixedStep{clearStep}) {
++		expectLexed(t, mustMerge(t, merge), map[string]string{
++			"{": "#OB", "}": "#CB", "[": "#OS", "]": "#CS", ":": "#CL", ",": "#CA",
++		})
++	}
++
++	// Where a default put back and a binding a side holds claim one
++	// source, the later of the two in the defaults' order lexes it: a name
++	// the defaults lack, or a default name after it, keeps the source.
++	for _, c := range []struct {
++		bind         fixedStep
++		lexes, freed string
++		freedLexesAs string
++	}{
++		{fixedStep{"#OS": nil, "#LB": "["}, "#LB", "{", "#OB"},
++		{fixedStep{"#OS": nil, "#CA": "["}, "#CA", ",", "#TX"},
++		{fixedStep{"#OS": nil, "#OB": "["}, "#OS", "{", "#TX"},
++	} {
++		for _, merge := range fixedMerges(t, []fixedStep{c.bind}, []fixedStep{c.bind}) {
++			m := mustMerge(t, merge)
++			expectLexed(t, m, map[string]string{"[": c.lexes, c.freed: c.freedLexesAs})
++		}
++	}
++
++	// A binding that comes back takes its place in the defaults' order, so
++	// a later rebinding onto its source is decided as in TypeScript.
++	for _, merge := range fixedMerges(t, []fixedStep{{"#OB": nil}}, nil) {
++		m := mustMerge(t, merge)
++		if err := m.Grammar(&GrammarSpec{OptionsMap: map[string]any{
++			"fixed": map[string]any{"token": map[string]any{"#CA": "{"}},
++		}}); err != nil {
++			t.Fatal(err)
++		}
++		expectLexed(t, m, map[string]string{"{": "#CA", ",": "#TX"})
++	}
++}
++
++// Two bindings the sides hold that claim one source are refused before
++// the defaults come back, naming first the one TypeScript's merged option
++// tree holds first: the canonical-first side's names, the defaults in
++// their order, then the other side's.
++func TestMergeRefusesTwoHeldBindingsOnOneSourceInTypeScriptsOrder(t *testing.T) {
++	move := fixedStep{"#OS": nil, "#LB": "["}
++	var errs []string
++	for _, merge := range fixedMerges(t, []fixedStep{move}, nil) {
++		_, err := merge()
++		if err == nil {
++			t.Fatal("merge of a moved source with the default should fail")
++		}
++		errs = append(errs, err.Error())
++	}
++	first := `merge: fixed tokens #LB and #OS both claim source "["`
++	second := `merge: fixed tokens #OS and #LB both claim source "["`
++	if want := []string{first, first, second, second}; !reflect.DeepEqual(errs, want) {
++		t.Fatalf("errors = %q, want %q", errs, want)
++	}
++
++	// Between two default names the tree's order decides, not the names'
++	// spelling: the side that removed #CB holds #CA first, and the default
++	// side holds #CB before #CA.
++	errs = nil
++	for _, merge := range fixedMerges(t, []fixedStep{{"#CA": "}", "#CB": nil}}, nil) {
++		_, err := merge()
++		if err == nil {
++			t.Fatal("merge of #CA on } with the default should fail")
++		}
++		errs = append(errs, err.Error())
++	}
++	ca := `merge: fixed tokens #CA and #CB both claim source "}"`
++	cb := `merge: fixed tokens #CB and #CA both claim source "}"`
++	if want := []string{ca, ca, cb, cb}; !reflect.DeepEqual(errs, want) {
++		t.Fatalf("errors = %q, want %q", errs, want)
++	}
++
++	// Two different bindings of one name conflict, as any option does.
++	for _, merge := range fixedMerges(t, []fixedStep{{"#OB": "("}}, []fixedStep{{"#OB": "<"}}) {
++		_, err := merge()
++		if err == nil || err.Error() != "merge: conflicting option values at fixed.token.#OB" {
++			t.Fatalf("expected a fixed.token.#OB conflict, got %v", err)
++		}
++	}
++}
++
++// An instance derived from a merged one lexes as the merged one does:
++// Derive rebuilds the fixed tokens from the options, which record the
++// merged table, removals and all.
++func TestMergeDerivedInstanceKeepsTheMergedFixedTokens(t *testing.T) {
++	for _, merge := range fixedMerges(t,
++		[]fixedStep{{"#OB": "(", "#OS": nil}}, []fixedStep{{"#XA": "="}}) {
++		m := mustMerge(t, merge)
++		want := map[string]string{"(": "#OB", "{": "#TX", "[": "#OS", "=": "#XA"}
++		expectLexed(t, m, want)
++		child, err := m.Derive()
++		if err != nil {
++			t.Fatal(err)
++		}
++		expectLexed(t, child, want)
++	}
++}
+diff --git a/rs/src/grammar.rs b/rs/src/grammar.rs
+index ff49762..cfaf241 100644
+--- a/rs/src/grammar.rs
++++ b/rs/src/grammar.rs
+@@ -319,8 +319,8 @@ impl Tabnas {
+         }
+         if grammar.clear {
+             self.rules.clear();
+-            self.options.fixed.tokens.clear();
+-            self.raw_options.fixed.tokens.clear();
++            clear_fixed_tokens(&mut self.options.fixed.tokens);
++            clear_fixed_tokens(&mut self.raw_options.fixed.tokens);
+         }
+         if let Some(options) = root.get("options") {
+             apply_options(&mut self.raw_options, object(options, "options")?, &refs)?;
+@@ -1161,6 +1161,24 @@ fn reject_reserved_names(map: &Map<String, JsonValue>) -> Result<(), GrammarErro
+     Ok(())
+ }
+ 
++/// What a grammar's `clear` takes from the fixed tokens: every binding that
++/// lexes its source, which is the last to claim it. A binding a later one
++/// shadows lexes nothing, so it stays, and lexes its source from then on,
++/// as in TypeScript, whose `clear` removes the names its source map holds
++/// and leaves the rest of the option tree.
++fn clear_fixed_tokens(tokens: &mut IndexMap<String, crate::options::FixedToken>) {
++    let mut sources = std::collections::HashSet::new();
++    let lexing = tokens
++        .iter()
++        .rev()
++        .filter(|(_, token)| sources.insert(token.source.clone()))
++        .map(|(name, _)| name.clone())
++        .collect::<Vec<_>>();
++    for name in lexing {
++        tokens.shift_remove(&name);
++    }
++}
++
+ fn apply_options(
+     options: &mut crate::Options,
+     map: &Map<String, JsonValue>,
+diff --git a/rs/src/lib.rs b/rs/src/lib.rs
+index bf198e7..229b806 100644
+--- a/rs/src/lib.rs
++++ b/rs/src/lib.rs
+@@ -545,8 +545,11 @@ impl Tabnas {
+         Self::with_options(Options::empty())
+     }
+ 
+-    /// `empty` with an explicit typed option set.
+-    pub fn empty_with_options(&self, options: Options) -> Self {
++    /// `empty` with an explicit typed option set, marked, as TypeScript's
++    /// `empty(options)` marks it with `defaults$: false`, as built without
++    /// the defaults ([`Options::defaults`]).
++    pub fn empty_with_options(&self, mut options: Options) -> Self {
++        options.defaults = false;
+         Self::with_options(options)
+     }
+ 
+@@ -825,24 +828,31 @@ impl Tabnas {
+         self
+     }
+ 
+-    /// Resolve the token claimed by one fixed source string.
++    /// Resolve the token claimed by one fixed source string. Where several
++    /// bindings claim it, the last lexes it, as TypeScript's `configure()`
++    /// maps each source to the last name that claims it, and that is the one
++    /// named here.
+     pub fn fixed(&self, source: &str) -> Option<Tin> {
+         self.options
+             .fixed
+             .tokens
+             .values()
++            .rev()
+             .find(|token| token.source == source)
+             .map(|token| token.tin)
+     }
+ 
+     /// Resolve the source literal associated with a fixed token identity.
++    /// A binding that a later one claiming the same source shadows lexes
++    /// nothing, and has no source here, as in TypeScript's `fixed(tin)`.
+     pub fn fixed_source(&self, tin: Tin) -> Option<&str> {
+-        self.options
++        let token = self
++            .options
+             .fixed
+             .tokens
+             .values()
+-            .find(|token| token.tin == tin)
+-            .map(|token| token.source.as_str())
++            .find(|token| token.tin == tin)?;
++        (self.fixed(&token.source) == Some(tin)).then_some(token.source.as_str())
+     }
+ 
+     pub fn token_name(&self, tin: Tin) -> String {
+diff --git a/rs/src/merge.rs b/rs/src/merge.rs
+index 4217055..8b50f5a 100644
+--- a/rs/src/merge.rs
++++ b/rs/src/merge.rs
+@@ -16,7 +16,7 @@ use crate::{
+     Value,
+ };
+ use indexmap::IndexMap;
+-use std::collections::{BTreeSet, HashMap, HashSet};
++use std::collections::{BTreeSet, HashMap};
+ use std::fmt;
+ use std::sync::Arc;
+ 
+@@ -156,7 +156,7 @@ fn merge_index_map<T: Clone>(
+             // A missing resolved default entry represents an explicit
+             // deletion. It wins against the unchanged default, while a
+             // deletion and a different replacement are both non-default.
+-            // The fixed tokens do not merge so: see `merge_fixed_tokens`.
++            // The fixed tokens do not merge so: see `merge_held_fixed_tokens`.
+             (Some(value), None, Some(default)) | (None, Some(value), Some(default)) => {
+                 if equal(value, default) {
+                     None
+@@ -178,28 +178,17 @@ fn merge_index_map<T: Clone>(
+ /// does not survive a merge, as in TypeScript. There, `configure()`
+ /// deletes a binding set to `null` from the live option tree (`clean`,
+ /// `ts/src/utility.ts`), where the other maps keep the `null`, so the tree
+-/// a merge reads holds no removal: the merge takes every binding either
+-/// side holds, picking between two as any option is picked, and builds the
+-/// merged instance over the defaults, which puts back a default binding
+-/// that neither side holds. Where a default put back and a binding held
+-/// claim one source, the one later in that default-first order lexes it,
+-/// since `configure()` maps each source to the last name that claims it.
+-/// So `css`, which removes `#OS` and `#CS`, merged with `jsonic` lexes `[`
+-/// and `]` as `#OS` and `#CS`, as TypeScript's merge does.
+-///
+-/// Two held bindings that claim one source are left to
+-/// `merge_token_space` to refuse, as TypeScript refuses them before the
+-/// defaults are applied. Rust keeps no mark of an instance built without
+-/// the defaults (TypeScript's `defaults$: false`, which its `empty()`
+-/// sets), and `merge_options` measures every option against
+-/// `Options::default()`, so two `Tabnas::empty()` instances merged get the
+-/// default bindings back here, where TypeScript's merge leaves them out.
+-fn merge_fixed_tokens(
++/// a merge reads holds no removal: `mergeOptionTrees` takes every binding
++/// either side holds, picking between two as any option is picked, and the
++/// merged instance is built over the defaults (`with_default_fixed_tokens`).
++/// These are the held bindings, in the merged tree's order: the canonical
++/// first side's, then those only the other side holds.
++fn merge_held_fixed_tokens(
+     left: &IndexMap<String, FixedToken>,
+     right: &IndexMap<String, FixedToken>,
+     default: &IndexMap<String, FixedToken>,
+ ) -> Result<IndexMap<String, FixedToken>, MergeError> {
+-    let mut out = IndexMap::new();
++    let mut held = IndexMap::new();
+     for key in ordered_keys(left, right) {
+         let path = format!("fixed.token.{key}");
+         let value = match (left.get(&key), right.get(&key), default.get(&key)) {
+@@ -212,38 +201,64 @@ fn merge_fixed_tokens(
+             (Some(value), None, _) | (None, Some(value), _) => value.clone(),
+             (None, None, _) => unreachable!(),
+         };
+-        out.insert(key, value);
++        held.insert(key, value);
+     }
++    Ok(held)
++}
+ 
+-    let mut sources = HashSet::new();
+-    let distinct_sources = out.values().all(|token| sources.insert(&token.source));
+-    if !distinct_sources {
+-        return Ok(out);
+-    }
+-    for (index, (name, token)) in default.iter().enumerate() {
+-        if out.contains_key(name) {
+-            continue;
++/// Two held bindings that claim one source are refused, as TypeScript's
++/// `checkFixedTokenSources` refuses them: over the merged tree, before the
++/// defaults go back in, naming first the binding earlier in that tree.
++/// One side may hold two such bindings, a default name and a later one
++/// that took its source, and a merge refuses those too.
++fn check_fixed_token_sources(held: &IndexMap<String, FixedToken>) -> Result<(), MergeError> {
++    let mut by_source: HashMap<&str, &str> = HashMap::new();
++    for (name, token) in held {
++        if let Some(existing) = by_source.insert(&token.source, name) {
++            return Err(MergeError(format!(
++                "merge: fixed tokens {existing} and {name} both claim source {:?}",
++                token.source
++            )));
+         }
+-        let holder = out
+-            .iter()
+-            .find(|(_, held)| held.source == token.source)
+-            .map(|(holder, _)| holder.clone());
+-        match holder {
+-            // The holder comes later, a name the defaults lack or a default
+-            // name after this one, and keeps the source.
+-            Some(holder) if default.get_index_of(&holder).is_none_or(|at| at > index) => {}
+-            // A default name before this one gives the source up, and with
+-            // it the only thing it lexed.
+-            Some(holder) => {
+-                out.shift_remove(&holder);
+-                out.insert(name.clone(), token.clone());
+-            }
+-            None => {
+-                out.insert(name.clone(), token.clone());
+-            }
++    }
++    Ok(())
++}
++
++/// The merged instance's fixed tokens, as `new Tabnas(merged)` builds them
++/// in TypeScript, over the defaults: each default name in the defaults'
++/// order, with the binding a side holds or else the default one, then the
++/// held names the defaults lack, in the merged tree's order. A default put
++/// back and a held binding can claim one source; both stay, and the later
++/// lexes it, since the lexer takes the last of equal matches as
++/// `configure()` maps each source to the last name that claims it. The one
++/// that loses lexes nothing but stays in the table, as in TypeScript's
++/// option tree, so a later merge, an edit that frees the source, or a
++/// `clear` finds it where TypeScript does. So `css`, which removes `#OS`
++/// and `#CS`, merged with `jsonic` lexes `[` and `]` as `#OS` and `#CS`, as
++/// TypeScript's merge does.
++///
++/// An instance built without the defaults (`Options::defaults`, which
++/// `Tabnas::empty` clears, TypeScript's `defaults$: false`) makes a merge
++/// built without them too, which puts nothing back.
++fn with_default_fixed_tokens(
++    held: &IndexMap<String, FixedToken>,
++    default: &IndexMap<String, FixedToken>,
++    defaults: bool,
++) -> IndexMap<String, FixedToken> {
++    if !defaults {
++        return held.clone();
++    }
++    let mut out = IndexMap::with_capacity(default.len() + held.len());
++    for (name, token) in default {
++        let token = held.get(name).unwrap_or(token);
++        out.insert(name.clone(), token.clone());
++    }
++    for (name, token) in held {
++        if !default.contains_key(name) {
++            out.insert(name.clone(), token.clone());
+         }
+     }
+-    Ok(out)
++    out
+ }
+ 
+ fn merge_hash_map<T: Clone>(
+@@ -419,7 +434,7 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
+         "fixed.check",
+         &eq_option_check,
+     )?;
+-    out.fixed.tokens = merge_fixed_tokens(
++    let held_fixed_tokens = merge_held_fixed_tokens(
+         &left.fixed.tokens,
+         &right.fixed.tokens,
+         &default.fixed.tokens,
+@@ -1103,7 +1118,15 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
+         &ConfigModifier::same_callback,
+     )?;
+ 
++    out.defaults = left.defaults && right.defaults;
++    out.fixed.tokens =
++        with_default_fixed_tokens(&held_fixed_tokens, &default.fixed.tokens, out.defaults);
++
+     merge_token_space(left, right, &default, &mut out)?;
++    // TypeScript refuses two names on one source once every other option,
++    // the token sets among them, has merged, and over the bindings the
++    // sides hold, before the merged instance puts the defaults back.
++    check_fixed_token_sources(&held_fixed_tokens)?;
+     Ok(out)
+ }
+ 
+@@ -1178,18 +1201,6 @@ fn merge_token_space(
+             (name, members)
+         })
+         .collect();
+-
+-    let mut by_source: HashMap<&str, &str> = HashMap::new();
+-    for (name, token) in &out.fixed.tokens {
+-        if let Some(existing) = by_source.insert(&token.source, name) {
+-            if existing != name {
+-                return Err(MergeError(format!(
+-                    "merge: fixed tokens {existing} and {name} both claim source {:?}",
+-                    token.source
+-                )));
+-            }
+-        }
+-    }
+     Ok(())
+ }
+ 
+diff --git a/rs/src/options.rs b/rs/src/options.rs
+index a17bc89..3f2214f 100644
+--- a/rs/src/options.rs
++++ b/rs/src/options.rs
+@@ -1261,6 +1261,16 @@ pub struct Options {
+     pub color: ColorOptions,
+     pub config_modify: IndexMap<String, ConfigModifier>,
+     pub tag: String,
++    /// Whether this option set was built over the defaults: `true` for
++    /// [`Options::default`], `false` for [`Options::empty`] and for every
++    /// instance [`crate::Tabnas::empty`] or
++    /// [`crate::Tabnas::empty_with_options`] makes. It is TypeScript's
++    /// `defaults$`, which `empty()` sets to `false`. A derived instance
++    /// keeps it, and a merge is built without the defaults when either side
++    /// was, as TypeScript's `mergeOptionTrees` lets a `false` win: the
++    /// merged instance then puts back no default fixed token that neither
++    /// side holds.
++    pub defaults: bool,
+ }
+ 
+ impl Default for Options {
+@@ -1304,6 +1314,7 @@ impl Default for Options {
+             color: ColorOptions::default(),
+             config_modify: IndexMap::new(),
+             tag: "-".to_string(),
++            defaults: true,
+         }
+     }
+ }
+@@ -1355,8 +1366,10 @@ impl Options {
+     /// Baseline for `Tabnas::empty`: no standard token producers or token
+     /// sets. Structural and diagnostic fields retain typed values so plugins
+     /// can opt individual facilities back in without handling missing data.
++    /// It is marked as built without the defaults ([`Options::defaults`]).
+     pub fn empty() -> Self {
+         let mut options = Self::default();
++        options.defaults = false;
+         options.fixed.lex = false;
+         options.fixed.tokens.clear();
+         options.space.lex = false;
+@@ -1456,12 +1469,17 @@ impl Options {
+         tin
+     }
+ 
++    /// The next token identity after every one registered here, and never
++    /// one of the built-in identities below `TIN_MAX`: an instance built
++    /// from [`Options::empty`] registers a built-in name such as `#OS` at
++    /// its own identity, and the next name must not take `#CS`'s.
+     pub fn next_tin(&self) -> Tin {
+         self.match_tokens
+             .values()
+             .map(|matcher| matcher.tin)
+             .chain(self.fixed.tokens.values().map(|token| token.tin))
+             .chain(self.tokens.values().copied())
++            .chain(std::iter::once(TIN_MAX - 1))
+             .max()
+             .unwrap_or(TIN_MAX - 1)
+             + 1
+diff --git a/rs/tests/merge_test.rs b/rs/tests/merge_test.rs
+index 704d1d5..8eb6b8b 100644
+--- a/rs/tests/merge_test.rs
++++ b/rs/tests/merge_test.rs
+@@ -616,3 +616,193 @@ fn a_removal_of_any_other_option_or_of_a_rule_merges_as_before() {
+         assert!(merged.parse("a 1").is_ok());
+     }
+ }
++
++/// The name of the first token `tabnas` lexes `src` into, read off the
++/// lexer alone, so an instance with no rules left can still be asked.
++fn first_token(tabnas: &Tabnas, src: &str) -> String {
++    let mut lexer = tabnas::Lexer::new(src, tabnas.config());
++    match lexer.next_raw_token() {
++        Ok(token) => token.name.to_string(),
++        Err(error) => format!("ERROR:{}", error.code),
++    }
++}
++
++/// The names of the fixed tokens `tabnas` holds, in the order it holds them.
++fn fixed_names(tabnas: &Tabnas) -> Vec<String> {
++    tabnas.options.fixed.tokens.keys().cloned().collect()
++}
++
++fn fixed_step(token: &str) -> String {
++    format!(r##"{{"options":{{"fixed":{{"token":{{{token}}}}}}}}}"##)
++}
++
++#[test]
++fn a_binding_a_default_put_back_shadows_stays_in_the_merged_table() {
++    // One side moves `[` from #OS to #OB and the other removes #OS: the
++    // merged instance puts #OS back over the defaults, and #OS, later in
++    // the defaults' order, lexes `[`. TypeScript keeps #OB's binding in its
++    // option tree all the same, where later merges and edits find it, and
++    // so does the merged table here. The first attempt deleted it.
++    let moved = fixed_step(r##""#OS":null,"#OB":"[""##);
++    let removed = fixed_step(r##""#OS":null"##);
++    for merged in merges_of(&[&moved], &[&removed]) {
++        let merged = merged.unwrap();
++        assert_eq!("#OS", first_token(&merged, "["));
++        assert_eq!("#TX", first_token(&merged, "{"));
++        assert_eq!("[", merged.options.fixed.tokens["#OB"].source);
++        let os = merged.options.fixed.tokens["#OS"].tin;
++        let ob = merged.options.fixed.tokens["#OB"].tin;
++        assert_eq!(Some(os), merged.fixed("["));
++        assert_eq!(Some("["), merged.fixed_source(os));
++        assert_eq!(None, merged.fixed_source(ob));
++
++        // A third side's #OB is a second value for a name the merged tree
++        // holds, and conflicts, as in TypeScript.
++        let rebound = spec_side("C", &[&fixed_step(r##""#OB":"(""##)]);
++        for result in [merged.merge(&rebound), rebound.merge(&merged)] {
++            assert_eq!(
++                "merge: conflicting option values at fixed.token.#OB",
++                result.err().unwrap().to_string()
++            );
++        }
++
++        // A default side holds #OS on `[` as well, and the merged tree's
++        // #OB claims it before #OS does.
++        let default = spec_side("D", &[]);
++        for result in [merged.merge(&default), default.merge(&merged)] {
++            assert_eq!(
++                r#"merge: fixed tokens #OB and #OS both claim source "[""#,
++                result.err().unwrap().to_string()
++            );
++        }
++
++        // Removing #OS frees `[` for the binding it shadowed.
++        let mut edited = merged.clone();
++        edited.grammar_json(&removed).unwrap();
++        assert_eq!("#OB", first_token(&edited, "["));
++
++        // A clear takes every binding that lexes a source, and the
++        // shadowed one then lexes its own, as TypeScript's clear leaves it.
++        let mut cleared = merged.clone();
++        cleared.grammar_json(r#"{"clear":true}"#).unwrap();
++        assert_eq!(vec!["#OB".to_string()], fixed_names(&cleared));
++        assert_eq!("#OB", first_token(&cleared, "["));
++
++        // A derived instance holds the same table.
++        let derived = merged.derive(|_| {}).unwrap();
++        assert_eq!(fixed_names(&merged), fixed_names(&derived));
++        assert_eq!("#OS", first_token(&derived, "["));
++    }
++}
++
++#[test]
++fn a_binding_that_comes_back_takes_its_place_in_the_defaults_order() {
++    // TypeScript builds the merged instance over the defaults, so a
++    // default binding that comes back, from the other side or from the
++    // defaults, sits where the defaults put it, and a later rebinding onto
++    // its source is decided by that order: #CA, after #OB, takes `{`. The
++    // first attempt appended the binding after the rest, and #OB kept `{`.
++    let removed = fixed_step(r##""#OB":null"##);
++    let rebind = fixed_step(r##""#CA":"{""##);
++    for merged in merges_of(&[&removed], &[])
++        .into_iter()
++        .chain(merges_of(&[&removed], &[&removed]))
++    {
++        let mut merged = merged.unwrap();
++        assert_eq!(
++            vec!["#OB", "#CB", "#OS", "#CS", "#CL", "#CA"],
++            fixed_names(&merged)
++        );
++        merged.grammar_json(&rebind).unwrap();
++        assert_eq!("#CA", first_token(&merged, "{"));
++        assert_eq!("#TX", first_token(&merged, ","));
++    }
++}
++
++/// An instance built as TypeScript's `empty()` builds one, under `tag`,
++/// with fixed-token lexing on and `token` bound.
++fn empty_side(tag: &str, token: &str) -> Tabnas {
++    let mut tabnas = Tabnas::new().empty_with_options(Options {
++        tag: tag.into(),
++        ..Options::empty()
++    });
++    tabnas
++        .grammar_json(&format!(
++            r##"{{"options":{{"fixed":{{"lex":true,"token":{{{token}}}}}}}}}"##
++        ))
++        .unwrap();
++    tabnas
++}
++
++#[test]
++fn a_merge_of_instances_built_without_the_defaults_puts_none_back() {
++    // TypeScript's empty() sets `defaults$: false`, a merge lets a false
++    // win, and the merged instance is then built without the defaults: it
++    // holds the fixed tokens the sides hold and none of the six defaults.
++    // The first attempt put all six back.
++    assert!(!Tabnas::new().empty().options.defaults);
++    assert!(Tabnas::new().options.defaults);
++    for (left_tag, right_tag) in [("A", "B"), ("B", "A")] {
++        let left = empty_side(left_tag, r##""#X":"x""##);
++        let right = empty_side(right_tag, r##""#Y":"y""##);
++        for merged in [left.merge(&right), right.merge(&left)] {
++            let merged = merged.unwrap();
++            assert!(!merged.options.defaults);
++            let mut names = fixed_names(&merged);
++            names.sort();
++            assert_eq!(vec!["#X", "#Y"], names);
++            assert_eq!("#X", first_token(&merged, "x"));
++            assert_eq!("#Y", first_token(&merged, "y"));
++            assert_eq!(None, merged.fixed("["));
++            assert_ne!("#OS", first_token(&merged, "["));
++
++            // A derived instance is built without the defaults as well.
++            let derived = merged.derive(|_| {}).unwrap();
++            assert!(!derived.options.defaults);
++            assert_eq!(fixed_names(&merged), fixed_names(&derived));
++        }
++
++        // One side built without the defaults is enough: a default the
++        // other side removed stays removed, as in TypeScript.
++        let empty = empty_side(left_tag, r##""#X":"x""##);
++        let removed = spec_side(right_tag, &[&fixed_step(r##""#OS":null"##)]);
++        for merged in [empty.merge(&removed), removed.merge(&empty)] {
++            let merged = merged.unwrap();
++            assert!(!merged.options.defaults);
++            assert_eq!(None, merged.fixed("["));
++            assert_eq!(Some("{"), merged.fixed("{").and_then(|tin| merged.fixed_source(tin)));
++        }
++    }
++}
++
++#[test]
++fn a_custom_token_in_an_instance_without_the_defaults_has_its_own_identity() {
++    // An empty instance registers #OS at its built-in identity, and the next
++    // name took the identity after it, #CS's, so `(` was named #CS through
++    // `fixed`. A name the built-ins lack is numbered after all of them.
++    let tabnas = empty_side("A", r##""#OS":"]","#XB":"(""##);
++    let xb = tabnas.fixed("(").unwrap();
++    assert!(xb >= tabnas::TIN_MAX);
++    assert_eq!("#XB", tabnas.token_name(xb));
++    assert_eq!("#XB", first_token(&tabnas, "("));
++    assert_eq!("#OS", first_token(&tabnas, "]"));
++}
++
++#[test]
++fn a_grammar_clear_leaves_a_binding_another_shadows() {
++    // Binding #OB to `[` leaves #OS on it too, later in the defaults'
++    // order, so #OS lexes `[`, `fixed("[")` names it, and #OB has no source
++    // of its own. A clear removes what lexes, and #OB is left to lex `[`,
++    // as TypeScript's clear leaves it.
++    let mut tabnas = spec_side("A", &[&fixed_step(r##""#OB":"[""##)]);
++    let os = tabnas.options.fixed.tokens["#OS"].tin;
++    let ob = tabnas.options.fixed.tokens["#OB"].tin;
++    assert_eq!("#OS", first_token(&tabnas, "["));
++    assert_eq!(Some(os), tabnas.fixed("["));
++    assert_eq!(None, tabnas.fixed_source(ob));
++    assert_eq!(Some("["), tabnas.fixed_source(os));
++    tabnas.grammar_json(r#"{"clear":true}"#).unwrap();
++    assert_eq!(vec!["#OB".to_string()], fixed_names(&tabnas));
++    assert_eq!("#OB", first_token(&tabnas, "["));
++    assert_eq!(Some("["), tabnas.fixed_source(ob));
++}
+diff --git a/test/spec/divergent.tsv b/test/spec/divergent.tsv
+index ca128a0..9d454ce 100644
+--- a/test/spec/divergent.tsv
++++ b/test/spec/divergent.tsv
+@@ -186,3 +186,11 @@ rule-history-past-the-cap	spec	{"spec":"history17"}	abcde	OK:{"kids":[{"kids":[]
+ pusher-through-child-control	spec	{"spec":"pusherctl"}	abcde	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	Control row, not a divergence: a child pushed from its pusher's close phase reads `parent.child.name`, its pusher's child, as itself in all three ports. A change here means the `parent` or `child` link itself broke, not the snapshot the rows below are about.
+ pusher-through-child	spec	{"spec":"pusher0"}	abcde	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"IS-first","src":""}],"rule":"top","src":""}	Rust links a pushed child's own snapshot, the one its pusher keeps as `child`, to a snapshot of the pusher taken before the pusher linked the child; TypeScript and Go link live rules. So `parent.child.parent` is the pusher as it stands in TypeScript and Go, whose `child` is the child itself, and in Rust the pusher before the push, whose `child` is the child it pushed before (`first`), or nothing for its first push. Repair direction: Rust changes, linking the child's snapshot to the pusher once it has linked the child, as the canonical engine reads it. No grammar in the fleet reads a four-hop path through `parent.child.parent`.
+ rule-history-bounded-pusher	spec	{"spec":"pusher1"}	abcde	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"IS-second","src":""}],"rule":"top","src":""}	OK:{"kids":[{"kids":[],"rule":"NONE","src":""}],"rule":"top","src":""}	The same path under `options.rule.history: 1`. Rust's bounded copy of the pusher taken before it links the child keeps no `child` or `next` (doc/rule-history-bound.md): kept, a rule that pushes again from its close phase linked every child it pushed through the one before, and the bound kept nothing bounded. So the path resolves to nothing. TypeScript and Go do not carry the option and read the live pusher. Repair direction: as the row above, and the bound's own entry, `A bounded rule history in Rust`.
++#
++# @divergence: A fixed token another name has taken the source of
++fixed-taken-later	lex	{"opts":{"fixed":{"token":{"#CA":"["}}},"find":"[","show":["name"]}	[	#CA	#CA	#CA	Control row, not a divergence: a name later than #OS in the defaults' order takes `[` in every port, TypeScript's and Rust's because the later of two names claiming one source lexes it, Go's because its most recent binding overwrites the source's entry. A change here means binding a source broke, not the shadowing the row below is about.
++fixed-taken-earlier	lex	{"opts":{"fixed":{"token":{"#OB":"["}}},"find":"[","show":["name"]}	[	#OB	#OS	#OS	TypeScript holds fixed tokens as an ordered name -> source table and lexes a source as the LAST name claiming it, so #OS, later than #OB in the defaults' order, keeps `[` and #OB's binding waits behind it; Rust holds the same table. Go holds only a source -> token map, so binding #OB overwrites #OS's entry and #OS keeps nothing. Merges inherit it: Go cannot keep a binding a restored default shadows, so a later merge or edit that TypeScript refuses or resolves through that binding goes the other way in Go (DIVERGENCE.md). Repair: Go holds the ordered table, which reaches every door that binds a fixed token.
++#
++# @divergence: An instance with no fixed tokens left in Go
++one-fixed-left	lex	{"opts":{"fixed":{"token":{"#OB":null,"#CB":null,"#OS":null,"#CS":null,"#CL":null,"#CA":"="}}},"find":"{","show":["name"]}	{	#TX	#TX	#TX	Control row, not a divergence: with one fixed token left, on a source that is not one of the six defaults, every port lexes `{` as text. A change here means text lexing broke, not the empty-table fallback the row below is about.
++no-fixed-left	lex	{"opts":{"fixed":{"token":{"#OB":null,"#CB":null,"#OS":null,"#CS":null,"#CL":null,"#CA":null}}},"find":"{","show":["name"]}	{	ERROR:unexpected:1:{	#TX	#TX	Go builds its text stop table from the fixed sources and, when there are none, falls back to the six default ones (buildLexTables in go/lexer.go), a fallback meant for a hand-built lexer configuration. An instance whose last fixed token went -- every default removed, or a grammar clear -- then ends text at `{` and has nothing to lex it with. TypeScript and Rust lex it as text. Found by the merge differential, where a clear on a merged instance reaches it; no merge is needed. Repair: Go applies the fallback only where there is no fixed-token table at all.
+diff --git a/ts/test/merge.test.js b/ts/test/merge.test.js
+index 9d0396d..eee5614 100644
+--- a/ts/test/merge.test.js
++++ b/ts/test/merge.test.js
+@@ -8,7 +8,7 @@
+ const { describe, it } = require('node:test')
+ const assert = require('node:assert')
+ 
+-const { Tabnas } = require('..')
++const { Tabnas, makeLex } = require('..')
+ const { json } = require('../dist-test/json-plugin')
+ 
+ 
+@@ -901,6 +901,105 @@ describe('merge-removals', () => {
+     assert.deepEqual(errors, [first, first, second, second])
+   })
+ 
++  // The first token `tn` lexes `src` into, off the lexer alone, so an
++  // instance a clear left with no rules can still be asked.
++  function firstToken(tn, src) {
++    const lex = makeLex({
++      src: () => src,
++      cfg: tn.internal().config,
++      opts: tn.options,
++      sub: {},
++    })
++    return lex.next().name
++  }
++
++  function fixedStep(token) {
++    return { options: { fixed: { token } } }
++  }
++
++  // A binding that a default put back shadows lexes nothing, and stays in
++  // the merged option tree all the same, where a later merge or edit finds
++  // it. rs/tests/merge_test.rs and go/merge_fixed_test.go pin the same.
++  it('keeps-a-binding-a-default-put-back-shadows', () => {
++    const MOVE = fixedStep({ '#OS': null, '#OB': '[' })
++    const REMOVE = fixedStep({ '#OS': null })
++    for (const merge of mergesOf([MOVE], [REMOVE])) {
++      const merged = merge()
++      assert.equal(firstToken(merged, '['), '#OS')
++      assert.equal(firstToken(merged, '{'), '#TX')
++      assert.equal(merged.options().fixed.token['#OB'], '[')
++      assert.equal(merged.token(merged.fixed('[')), '#OS')
++      assert.equal(merged.fixed(merged.token('#OB')), undefined)
++
++      const rebound = side('C', [fixedStep({ '#OB': '(' })])
++      for (const both of [() => merged.merge(rebound), () => rebound.merge(merged)]) {
++        assert.throws(both, /^Error: merge: conflicting option values at fixed\.token\.#OB$/)
++      }
++      const plain = side('D', [])
++      for (const both of [() => merged.merge(plain), () => plain.merge(merged)]) {
++        assert.throws(
++          both,
++          /^Error: merge: fixed tokens #OB and #OS both claim source "\["$/,
++        )
++      }
++
++      const edited = merge()
++      edited.grammar(REMOVE)
++      assert.equal(firstToken(edited, '['), '#OB')
++
++      const cleared = merge()
++      cleared.grammar({ clear: true })
++      assert.deepEqual(cleared.options().fixed.token, { '#OB': '[' })
++      assert.equal(firstToken(cleared, '['), '#OB')
++    }
++  })
++
++  // The merged instance is built over the defaults, so a default binding
++  // that comes back sits where the defaults put it, and a later rebinding
++  // onto its source is decided by that order.
++  it('puts-a-binding-that-comes-back-in-the-defaults-order', () => {
++    const REMOVE = fixedStep({ '#OB': null })
++    for (const merge of [...mergesOf([REMOVE], []), ...mergesOf([REMOVE], [REMOVE])]) {
++      const merged = merge()
++      assert.deepEqual(Object.keys(merged.options().fixed.token), [
++        '#OB', '#CB', '#OS', '#CS', '#CL', '#CA',
++      ])
++      merged.grammar(fixedStep({ '#CA': '{' }))
++      assert.equal(firstToken(merged, '{'), '#CA')
++      assert.equal(firstToken(merged, ','), '#TX')
++    }
++  })
++
++  // empty() sets defaults$: false, a merge lets a false win, and the merged
++  // instance is built without the defaults, so none comes back. An empty
++  // instance carries no lexer matchers, so its fixed tokens are read off
++  // its configuration rather than lexed.
++  it('builds-a-merge-of-empty-instances-without-the-defaults', () => {
++    const empty = (tag, token) => {
++      const tn = new Tabnas().empty({ tag })
++      tn.grammar({ options: { fixed: { lex: true, token } } })
++      return tn
++    }
++    for (const [ltag, rtag] of [['A', 'B'], ['B', 'A']]) {
++      const left = empty(ltag, { '#X': 'x' })
++      const right = empty(rtag, { '#Y': 'y' })
++      for (const merged of [left.merge(right), right.merge(left)]) {
++        assert.equal(merged.options().defaults$, false)
++        assert.deepEqual(Object.keys(merged.options().fixed.token).sort(), ['#X', '#Y'])
++        assert.equal(merged.token(merged.fixed('x')), '#X')
++        assert.equal(merged.fixed('['), undefined)
++        assert.equal(merged.make().options().defaults$, false)
++      }
++      const one = empty(ltag, { '#X': 'x' })
++      const removed = side(rtag, [fixedStep({ '#OS': null })])
++      for (const merged of [one.merge(removed), removed.merge(one)]) {
++        assert.equal(merged.options().defaults$, false)
++        assert.equal(merged.fixed('['), undefined)
++        assert.equal(merged.token(merged.fixed('{')), '#OB')
++      }
++    }
++  })
++
+   it('keeps-a-removal-of-any-other-option-and-restores-a-rule', () => {
+     const VALUES = {
+       options: { rule: { start: 'top' } },

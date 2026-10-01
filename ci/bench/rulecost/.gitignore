@@ -1,0 +1,2 @@
+# The inputs gen.py writes; SHA256SUMS records what they must hash to.
+*.json

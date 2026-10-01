@@ -1,0 +1,1673 @@
+From c32ebfa75bac95d297ce0874465e4da902deba60 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 30 Sep 2026 15:06:22 +0000
+Subject: [PATCH] fix(rs): raise a fetched bad token as TypeScript does, and
+ list a give-up once
+
+A bad token a custom lex matcher returns (Lexer::bad, Lexer::bad_span) was
+buffered in the lookahead like a good token. It failed every alternate it
+met, so the error named the first token of the lookahead instead:
+`unexpected` at the good token in front of it, where TypeScript's fetch in
+parse_alts raises the bad token at once with its own code at its own
+position. tabnas-css met this with an unclosed comment returned as the
+second token of an alternate. Under recovery nothing recorded or stepped
+past it, and the skip loop met the same token again until maxSkip gave up.
+
+ensure_lookahead now handles a custom bad token exactly as it handles the
+lexer's own faults, and both as TypeScript does:
+
+- fail-fast, raised at the fetch with `why` (or `unexpected`) as the code,
+  at the token, whichever alternate position asked for it;
+- under recovery, recorded, coalesced with the run it continues, and
+  stepped past with TypeScript's advanceLexPast rule (Lexer::skip_bad,
+  replacing recover_after_error): past the token's span, and for a fault
+  inside a string past the next row character after it, so the line after
+  an unprintable newline is skipped whole;
+- under relexing, left in the lookahead for an alternate to re-cut, and
+  stepped past when recovery skips it;
+- the trailing-content check raises it without recording it first, as
+  Parser.start does (it used to absorb a lexer fault there);
+- a lexer fault reaches the lex subscribers in every mode, as every token
+  lex.next returns does.
+
+A recovering parse that gave up could list its terminal error twice:
+parse_recover_uncaught pushed it unless errors.last() == Some(&error), and
+the recorded copy carried `recovered` metadata or had been dropped as a
+cascade, so `a{b:c} d{` in tabnas-css listed `unexpected` 1:10 twice.
+TypeScript records an error as it is constructed and gives up by
+rethrowing the last one it recorded, so nothing is listed twice.
+attempt_recover and absorb_lex_error now follow TypeScript's order (record,
+drop a cascade, then read the maxRecoveries cap), a give-up marks the
+parse, and only an error nothing recorded is listed where the parse ends.
+The equality test is gone, so two distinct failures at one token (suppress
+0) are still two errors.
+
+Over 4,000 generated inputs in four modes (fail-fast, recovery, relexing,
+both) on the shared json-builder grammar with a bad-token matcher,
+TypeScript and Rust now report the same errors, positions and recovery
+metadata on all 16,000 runs; 3,013 differed before.
+
+test/spec/bad-token.tsv pins the behaviour in all three runtimes
+(ts/test/bad-token.test.js, go/bad_token_spec_test.go,
+rs/tests/bad_token_spec_test.rs); rs/tests/bad_token_fetch_test.rs adds
+the API-level checks and the two cases Go answers differently (relexing
+with recovery, a cascade at the recovery cap). DIVERGENCE.md records the
+repair; test/AGENTS.md lists the new runners.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017YWzsjpwCJLLAsWUYqogSQ
+---
+ DIVERGENCE.md                    |  39 ++++
+ go/bad_token_spec_test.go        | 200 +++++++++++++++++++
+ rs/src/lexer.rs                  |  35 +++-
+ rs/src/parser.rs                 | 287 ++++++++++++++++++---------
+ rs/tests/bad_token_fetch_test.rs | 329 +++++++++++++++++++++++++++++++
+ rs/tests/bad_token_spec_test.rs  | 175 ++++++++++++++++
+ test/AGENTS.md                   |   8 +
+ test/spec/bad-token.tsv          | 112 +++++++++++
+ ts/test/bad-token.test.js        | 121 ++++++++++++
+ 9 files changed, 1204 insertions(+), 102 deletions(-)
+ create mode 100644 go/bad_token_spec_test.go
+ create mode 100644 rs/tests/bad_token_fetch_test.rs
+ create mode 100644 rs/tests/bad_token_spec_test.rs
+ create mode 100644 test/spec/bad-token.tsv
+ create mode 100644 ts/test/bad-token.test.js
+
+diff --git a/DIVERGENCE.md b/DIVERGENCE.md
+index ee4ac46..10ac708 100644
+--- a/DIVERGENCE.md
++++ b/DIVERGENCE.md
+@@ -391,6 +391,45 @@ fixed or quietly dropped.
+   and dropping the point-move leaves the codes right and only the
+   positions wrong.
+ 
++- **A bad token a custom matcher returns, and the error a recovering
++  parse gives up on, in Rust.** Never recorded here, and found by
++  `tabnas/css`, whose unclosed comment is a bad token its own matcher
++  returns. TypeScript's fetch in `parse_alts` raises every `#BD` token
++  it is handed at once, with the token's own code at the token's own
++  position; under recovery it records it, coalesces a run into one
++  error and steps the lexer past it; under relexing it leaves it for an
++  alternate to re-cut. Go's `Lex.Next` does the same, fail-fast and
++  under recovery. Rust did it only for its lexer's own faults: a token
++  from `Lexer::bad` or `Lexer::bad_span` was buffered like a good one,
++  failed every alternate, and the error named the first token of the
++  lookahead; under recovery nothing stepped past it, so the skip met it
++  again until `maxSkip` gave up. Separately, a recovering Rust parse
++  that gave up listed its error twice, once more without recovery
++  metadata, where TypeScript lists what it recorded (or dropped as a
++  cascade) once. With the matcher and grammars of
++  `test/spec/bad-token.tsv`, which cuts `?` as a bad token:
++
++  | grammar | input | options | TypeScript and Go | Rust before |
++  |---|---|---|---|---|
++  | `json` | `{"a"?:1}` | | `custom_bad` at 1:5 | `unexpected` at 1:2 |
++  | `json` | `[1,?,2]` | recover | `[1,2]`, `custom_bad` 1:4, a run of 1 | `[1]`, `custom_bad` 1:4, unrecovered |
++  | `nest` | `<` | recover | one `unexpected` at 1:2 | the same error twice |
++
++  Rust now handles a fetched bad token exactly as it handles its lexer's
++  own faults, and both as TypeScript does: raised, or recorded and
++  coalesced, and stepped past by TypeScript's `advanceLexPast` rule,
++  which moves past the token's span and, for a fault inside a string,
++  past the next row character after it; the check for trailing content
++  raises one without recording it first; a lexer fault reaches the lex
++  subscribers in every mode. A give-up lists nothing again, the recovery
++  cap is read after the error is recorded, and a cascade is dropped
++  before it, all in TypeScript's order. Over 4,000 generated inputs in
++  four modes (fail-fast, recovery, relexing, both), TypeScript and Rust
++  now report the same errors, positions and recovery metadata on all
++  16,000 runs, where 3,013 differed before. Pinned in all three runtimes
++  by `test/spec/bad-token.tsv`, and in Rust by
++  `rs/tests/bad_token_fetch_test.rs`.
++
+ ### Rule-iteration budget: a fractional `rule.maxmul`
+ 
+ The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
+diff --git a/go/bad_token_spec_test.go b/go/bad_token_spec_test.go
+new file mode 100644
+index 0000000..0811606
+--- /dev/null
++++ b/go/bad_token_spec_test.go
+@@ -0,0 +1,200 @@
++/* Copyright (c) 2026 Richard Rodger, MIT License */
++
++package tabnas
++
++// test/spec/bad-token.tsv, the Go runner: what the parser does with a bad
++// token the lexer hands it, fail-fast, under recovery and under relexing,
++// and the error a recovering parse ends on. The TypeScript
++// (ts/test/bad-token.test.js) and Rust (rs/tests/bad_token_spec_test.rs)
++// runners assert the same rows; the fixture's header says what every column
++// means, and what the custom matcher all three build must do.
++
++import (
++	"encoding/json"
++	"fmt"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strings"
++	"testing"
++)
++
++// badTokenMatcher is the custom matcher the fixture header specifies: a
++// bad token at `?`, and one running to the end of the source at `%`,
++// neither moving the cursor.
++func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
++	return func(lex *Lex, rule *Rule) *Token {
++		pnt := lex.Cursor()
++		if pnt.SI >= len(lex.Src) {
++			return nil
++		}
++		switch lex.Src[pnt.SI] {
++		case '?':
++			tkn := lex.Token("#BD", TinBD, nil, "?")
++			tkn.Why = "custom_bad"
++			return tkn
++		case '%':
++			tkn := lex.Token("#BD", TinBD, nil, lex.Src[pnt.SI:])
++			tkn.Why = "custom_unterminated"
++			return tkn
++		}
++		return nil
++	}
++}
++
++func badTokenParser(t *testing.T, grammar string, grammars map[string]string, opts string) *Tabnas {
++	t.Helper()
++	j := Make(Options{Lex: &LexOptions{Match: map[string]*MatchSpec{
++		"bad": {Order: 1500000, Make: badTokenMatcher},
++	}}})
++	install := func(gs *GrammarSpec) {
++		t.Helper()
++		if err := j.Grammar(gs); err != nil {
++			t.Fatalf("install %s: %v", grammar, err)
++		}
++	}
++	optionsOnly := func(text string) *GrammarSpec {
++		t.Helper()
++		var m map[string]any
++		if err := json.Unmarshal([]byte(text), &m); err != nil {
++			t.Fatalf("options %s: %v", text, err)
++		}
++		return &GrammarSpec{OptionsMap: m}
++	}
++	if "json" == grammar {
++		install(fixtureSpec(t, "json-builder.fixture.json"))
++		install(optionsOnly(`{"rule":{"start":"val"}}`))
++	} else {
++		text, ok := grammars[grammar]
++		if !ok {
++			t.Fatalf("no @grammar named %s", grammar)
++		}
++		gs, err := GrammarSpecFromJSON([]byte(text))
++		if err != nil {
++			t.Fatalf("grammar %s: %v", grammar, err)
++		}
++		install(gs)
++	}
++	if "-" != opts {
++		install(optionsOnly(opts))
++	}
++	return j
++}
++
++// badTokenCanon is the shared canonical value: sorted keys, integral
++// numbers without a fraction, and an absent value as null.
++func badTokenCanon(v any) string {
++	switch x := v.(type) {
++	case nil:
++		return "null"
++	case []any:
++		parts := make([]string, 0, len(x))
++		for _, e := range x {
++			parts = append(parts, badTokenCanon(e))
++		}
++		return "[" + strings.Join(parts, ",") + "]"
++	case *OrderedMap:
++		keys := append([]string(nil), x.Keys...)
++		sort.Strings(keys)
++		parts := make([]string, 0, len(keys))
++		for _, k := range keys {
++			kb, _ := json.Marshal(k)
++			parts = append(parts, string(kb)+":"+badTokenCanon(x.Vals[k]))
++		}
++		return "{" + strings.Join(parts, ",") + "}"
++	case map[string]any:
++		om := &OrderedMap{Vals: x}
++		for k := range x {
++			om.Keys = append(om.Keys, k)
++		}
++		return badTokenCanon(om)
++	case float64:
++		if x == float64(int64(x)) {
++			return fmt.Sprintf("%d", int64(x))
++		}
++		b, _ := json.Marshal(x)
++		return string(b)
++	case int64:
++		return fmt.Sprintf("%d", x)
++	case int:
++		return fmt.Sprintf("%d", x)
++	}
++	if IsUndefined(v) {
++		return "null"
++	}
++	b, _ := json.Marshal(v)
++	return string(b)
++}
++
++func badTokenError(e *TabnasError) string {
++	meta := ""
++	if r := e.Recovered; r != nil {
++		if r.Bad {
++			meta = fmt.Sprintf("+bad%d", r.Skipped)
++		} else {
++			meta = fmt.Sprintf("+skip%d", r.Skipped)
++		}
++	}
++	return fmt.Sprintf("%s@%d:%d%s", e.Code, e.Row, e.Col, meta)
++}
++
++func TestBadTokenSpec(t *testing.T) {
++	rows, err := loadTSV(filepath.Join(specDir(), "bad-token.tsv"))
++	if err != nil {
++		t.Fatalf("load bad-token.tsv: %v", err)
++	}
++	at := regexp.MustCompile(`^#\s*@grammar\s+(\S+)\s+(.*)$`)
++	grammars := map[string]string{}
++	ran := 0
++	for _, row := range rows {
++		cols := row.cols
++		if m := at.FindStringSubmatch(cols[0]); m != nil {
++			grammars[m[1]] = m[2]
++			continue
++		}
++		if strings.HasPrefix(cols[0], "#") || len(cols) < 5 {
++			continue
++		}
++		for i := range cols {
++			cols[i] = preprocessEscapes(cols[i])
++		}
++		grammar, opts, input, value, errors := cols[0], cols[1], cols[2], cols[3], cols[4]
++		j := badTokenParser(t, grammar, grammars, opts)
++		var gotValue, gotErrors string
++		if j.Config().Recover.Enabled {
++			v, errs, perr := j.ParseRecover(input)
++			if perr != nil {
++				t.Errorf("row %d %q %s: recovery returned an error: %v", row.lineNo, input, opts, perr)
++				continue
++			}
++			parts := make([]string, 0, len(errs))
++			for _, e := range errs {
++				parts = append(parts, badTokenError(e))
++			}
++			gotValue, gotErrors = badTokenCanon(v), strings.Join(parts, ",")
++			if "" == gotErrors {
++				gotErrors = "-"
++			}
++		} else {
++			v, perr := j.Parse(input)
++			if perr != nil {
++				je, ok := perr.(*TabnasError)
++				if !ok {
++					t.Errorf("row %d %q: not a TabnasError: %v", row.lineNo, input, perr)
++					continue
++				}
++				gotValue, gotErrors = "-", badTokenError(je)
++			} else {
++				gotValue, gotErrors = badTokenCanon(v), "-"
++			}
++		}
++		if gotValue != value || gotErrors != errors {
++			t.Errorf("row %d %q %s\n  value:  got %s, want %s\n  errors: got %s, want %s",
++				row.lineNo, input, opts, gotValue, value, gotErrors, errors)
++		}
++		ran++
++	}
++	if ran <= 20 {
++		t.Fatalf("bad-token.tsv ran only %d rows", ran)
++	}
++}
+diff --git a/rs/src/lexer.rs b/rs/src/lexer.rs
+index 92b2670..3e950d1 100644
+--- a/rs/src/lexer.rs
++++ b/rs/src/lexer.rs
+@@ -238,6 +238,13 @@ impl<'a> Lexer<'a> {
+     }
+ 
+     /// Construct a bad token at the current cursor.
++    ///
++    /// A custom matcher that returns it reports a lexer fault, which the
++    /// parser handles as it handles its own lexer's: a rule's fetch raises
++    /// it at once with `why` as the code, at this position, or, under
++    /// recovery, records it, coalescing a run of them into one error, and
++    /// moves the cursor past its source; relexing leaves it for an
++    /// alternate to re-cut. The cursor need not be advanced here.
+     pub fn bad(&self, why: impl Into<String>) -> Token {
+         let point = self.current_point();
+         let source = self
+@@ -251,6 +258,8 @@ impl<'a> Lexer<'a> {
+ 
+     /// Construct a bad token whose displayed source is a scalar-indexed span.
+     /// As in TypeScript, the diagnostic point remains the live cursor.
++    /// Returned from a matcher it is handled as [`Lexer::bad`] describes;
++    /// recovery steps past the span, counted from that cursor.
+     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
+         let point = self.current_point();
+         let source = if start <= end && end <= self.char_len {
+@@ -592,17 +601,25 @@ impl<'a> Lexer<'a> {
+         self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
+     }
+ 
+-    /// Clear a recoverable lexer fault. Compound string faults resume at the
+-    /// next line boundary so the remainder of the broken string cannot be
+-    /// mistaken for a new token stream.
+-    pub(crate) fn recover_after_error(&mut self, to_line_end: bool) {
++    /// Step past a bad token the parser has absorbed or skipped, as
++    /// TypeScript's `advanceLexPast` does (ts/src/rules.ts): a bad token
++    /// does not advance the cursor by itself, so recovery moves it to the
++    /// end of the token's span, never backwards, and, for a fault raised
++    /// inside a compound construct, on past the next row character so
++    /// lexing resumes on a fresh row. The lexer's own faults latch until
++    /// this clears them.
++    pub(crate) fn skip_bad(&mut self, token: &Token, to_line_end: bool) {
++        let span = token.src.chars().count().max(1);
++        let mut target = self.idx.max(token.site.pos.saturating_add(span));
+         if to_line_end {
+-            while let Some(character) = self.peek() {
+-                self.advance();
+-                if matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+-                    break;
+-                }
++            let mut end = target;
++            while end < self.char_len && !self.char_sets.row.contains(self.chars[end]) {
++                end += 1;
+             }
++            target = target.max(self.char_len.min(end + 1));
++        }
++        while self.idx < target && self.idx < self.char_len {
++            self.advance();
+         }
+         self.err = None;
+         if self.idx < self.char_len {
+diff --git a/rs/src/parser.rs b/rs/src/parser.rs
+index 5feaa10..a712315 100644
+--- a/rs/src/parser.rs
++++ b/rs/src/parser.rs
+@@ -48,6 +48,15 @@ struct ParseMode<'a> {
+     recovering: bool,
+     errors: &'a mut Vec<TabnasError>,
+     partial: Option<Value>,
++    /// Recovery gave up, and the error it gave up on is already accounted
++    /// for in `errors`: recorded there, or dropped as a cascade of the
++    /// fault before it. TypeScript records an error as it is constructed
++    /// and gives up by rethrowing the last one it recorded (`RuleSpec.bad`,
++    /// ts/src/rules.ts), or the bad token it has just recorded, coalesced
++    /// or dropped (the fetch in `parse_alts`), so the error that ends the
++    /// parse is never listed a second time. Every other terminal error is
++    /// listed once, where the parse ends.
++    gave_up: bool,
+ }
+ 
+ struct RelexUndo {
+@@ -57,6 +66,20 @@ struct RelexUndo {
+     tokens: Vec<Token>,
+ }
+ 
++/// Who is asking [`Parser::ensure_lookahead`] for a token, which decides
++/// what a bad token does under recovery.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum Fetch {
++    /// A rule reading its lookahead, as TypeScript's `parse_alts` does:
++    /// under recovery a bad token is recorded and skipped, and the fetch
++    /// goes on.
++    Rule,
++    /// The check for content after the parse has finished, as
++    /// TypeScript's `Parser.start` makes it: a bad token ends the parse
++    /// with its own error, recovering or not.
++    Trailing,
++}
++
+ #[derive(Clone, Copy)]
+ struct ParseSite<'a> {
+     source: &'a str,
+@@ -1167,7 +1190,7 @@ impl Parser {
+ 
+     fn attempt_recover(
+         &self,
+-        mut error: TabnasError,
++        error: TabnasError,
+         current_rule: &mut Rule,
+         stack: &mut Vec<Rule>,
+         context: &mut Context,
+@@ -1176,13 +1199,25 @@ impl Parser {
+     ) -> Result<bool, TabnasError> {
+         let src = error.full_source.clone();
+         let recover = &self.options.parse.recover;
+-        if mode.errors.len() >= recover.max_recoveries {
+-            return Ok(false);
+-        }
+ 
++        // The order is TypeScript's `attemptRecover`: the error is recorded
++        // as it is built, dropped again when it falls inside the suppress
++        // window of the recovery before it, and only then is the cap read.
++        // So a give-up leaves the error listed, once and without recovery
++        // metadata, unless it was a cascade; and a cascade at the cap still
++        // recovers, since dropping it keeps the list within the cap.
+         let suppressed = context
+             .recover_at
+             .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
++        let recorded = (!suppressed).then(|| {
++            mode.errors.push(error.clone());
++            context.errs.push(error.clone());
++            mode.errors.len() - 1
++        });
++        if recover.max_recoveries < mode.errors.len() {
++            return Ok(false);
++        }
++
+         let no_progress = context.recover_at == Some(context.v_abs);
+         let last_si = context.recover_si;
+         context.recover_at = Some(context.v_abs);
+@@ -1255,7 +1290,7 @@ impl Parser {
+                                     )
+                                 })?;
+                             }
+-                            lexer.recover_after_error(mid_construct(&lex_error.code));
++                            lexer.skip_bad(&token, mid_construct(&lex_error.code));
+                             if skipped >= recover.max_skip {
+                                 break None;
+                             }
+@@ -1273,6 +1308,14 @@ impl Parser {
+             {
+                 break token;
+             }
++            // A bad token is skipped like any other, but it did not move
++            // the cursor when it was cut: a custom matcher's `Lexer::bad`
++            // leaves it where it was, and so does one buffered under
++            // relexing. Step past it, as TypeScript's `advanceLexPast` does,
++            // or the next fetch would cut the same bad token again.
++            if token.tin == TIN_BD {
++                lexer.skip_bad(&token, mid_construct(&token.why));
++            }
+             if skipped >= recover.max_skip {
+                 return Ok(false);
+             }
+@@ -1286,14 +1329,18 @@ impl Parser {
+             return Ok(false);
+         }
+         context.recover_si = Some(candidate.site.pos);
+-        error.recovered = Some(crate::RecoveredAt {
+-            skipped,
+-            sync: Some(candidate.tin),
+-            bad: false,
+-        });
+-        if !suppressed {
+-            mode.errors.push(error.clone());
+-            context.errs.push(error);
++        if let Some(index) = recorded {
++            let recovered = Some(crate::RecoveredAt {
++                skipped,
++                sync: Some(candidate.tin),
++                bad: false,
++            });
++            if let Some(entry) = context.errs.get_mut(index) {
++                entry.recovered.clone_from(&recovered);
++            }
++            if let Some(entry) = mode.errors.get_mut(index) {
++                entry.recovered = recovered;
++            }
+         }
+ 
+         context.t.push(candidate.clone());
+@@ -1383,6 +1430,13 @@ impl Parser {
+         if recovered {
+             Ok(())
+         } else {
++            // TypeScript's `RuleSpec.bad` gives up by rethrowing the last
++            // error it recorded, which `attempt_recover` has just recorded
++            // or dropped as a cascade, so the list is already complete. Only
++            // an empty list makes it raise, and record, a fresh one.
++            if mode.recovering && !mode.errors.is_empty() {
++                mode.gave_up = true;
++            }
+             Err(error)
+         }
+     }
+@@ -1485,6 +1539,7 @@ impl Parser {
+             recovering,
+             errors: &mut errors,
+             partial: None,
++            gave_up: false,
+         };
+         let result = self
+             .parse_inner(src, meta, owner, parent, &mut mode)
+@@ -1582,12 +1637,13 @@ impl Parser {
+         }
+         let mut errors = Vec::new();
+         let recovering = self.options.parse.recover.enabled;
+-        let (result, partial) = {
++        let (result, partial, gave_up) = {
+             let mut mode = ParseMode {
+                 continuation: None,
+                 recovering,
+                 errors: &mut errors,
+                 partial: None,
++                gave_up: false,
+             };
+             let result = self
+                 .parse_inner(src, meta, owner, parent, &mut mode)
+@@ -1595,7 +1651,7 @@ impl Parser {
+                     self.decorate_error(&mut error);
+                     error
+                 });
+-            (result, mode.partial)
++            (result, mode.partial, mode.gave_up)
+         };
+         for error in &mut errors {
+             self.decorate_error(error);
+@@ -1607,7 +1663,10 @@ impl Parser {
+                 fatal: None,
+             },
+             Err(error) => {
+-                if errors.last() != Some(&error) {
++                // The error that ended the parse is listed once, where the
++                // parse ended, as TypeScript's constructor lists it, unless
++                // recovery gave up on an error it had already accounted for.
++                if !gave_up {
+                     errors.push(error.clone());
+                 }
+                 ParseRecovery {
+@@ -1687,6 +1746,7 @@ impl Parser {
+                 recovering: false,
+                 errors: &mut errors,
+                 partial: None,
++                gave_up: false,
+             };
+             self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
+         };
+@@ -1792,6 +1852,7 @@ impl Parser {
+         Cow::Owned(ExpectedTins::live(alts, &self.options, slot))
+     }
+ 
++    #[allow(clippy::too_many_arguments)]
+     fn ensure_lookahead(
+         &self,
+         lexer: &mut Lexer,
+@@ -1800,6 +1861,7 @@ impl Parser {
+         count: usize,
+         mode: &mut ParseMode<'_>,
+         site: ParseSite<'_>,
++        fetch: Fetch,
+     ) -> Result<(), TabnasError> {
+         while context.t.len() < count {
+             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
+@@ -1838,39 +1900,32 @@ impl Parser {
+                                 self.attach_error((*error).clone(), rule, site.stack, alts, None)
+                             })
+                             .unwrap_or_else(|| (*error).clone());
++                        // The fault reaches the lex subscribers as its bad
++                        // token whatever happens to it next, as every token
++                        // TypeScript's `lex.next` returns does.
++                        let mut token = error_token(&recovery_error);
++                        for subscriber in &self.lex_subscribers {
++                            let result = self.catch_callback("lex subscriber", site.source, || {
++                                subscriber(&mut token, rule, context)
++                            });
++                            result.map_err(|error| {
++                                self.attach_active_error(error, rule, site.stack, Some(&token))
++                            })?;
++                        }
+                         if self.options.lex.relex {
+-                            let mut token = error_token(&recovery_error);
+-                            for subscriber in &self.lex_subscribers {
+-                                let result =
+-                                    self.catch_callback("lex subscriber", site.source, || {
+-                                        subscriber(&mut token, rule, context)
+-                                    });
+-                                result.map_err(|error| {
+-                                    self.attach_active_error(error, rule, site.stack, Some(&token))
+-                                })?;
+-                            }
+                             break token;
+                         }
+-                        if mode.recovering
+-                            && absorb_lex_error(
++                        if mode.recovering && fetch == Fetch::Rule {
++                            if absorb_lex_error(
+                                 &recovery_error,
+                                 context,
+                                 &self.options,
+                                 mode.errors,
+-                            )
+-                        {
+-                            let mut token = error_token(&recovery_error);
+-                            for subscriber in &self.lex_subscribers {
+-                                let result =
+-                                    self.catch_callback("lex subscriber", site.source, || {
+-                                        subscriber(&mut token, rule, context)
+-                                    });
+-                                result.map_err(|error| {
+-                                    self.attach_active_error(error, rule, site.stack, Some(&token))
+-                                })?;
++                            ) {
++                                lexer.skip_bad(&token, mid_construct(&recovery_error.code));
++                                continue;
+                             }
+-                            lexer.recover_after_error(mid_construct(&recovery_error.code));
+-                            continue;
++                            mode.gave_up = true;
+                         }
+                         if let Some(capture) = mode.continuation.as_deref_mut() {
+                             capture.failure = continuation_tins(
+@@ -1896,6 +1951,53 @@ impl Parser {
+                         self.attach_active_error(error, rule, site.stack, Some(&token))
+                     })?;
+                 }
++                // A bad token a custom matcher returned (`Lexer::bad`,
++                // `Lexer::bad_span`) is a lexer fault like any other, and
++                // is handled here exactly as the lexer's own faults are
++                // above, which is what TypeScript's fetch in `parse_alts`
++                // does with every `#BD` token it is handed: raised at once,
++                // with its own code at its own position, or under recovery
++                // recorded, coalesced with the run it continues, and
++                // stepped past. Only relexing leaves it in the lookahead,
++                // for an alternate to re-cut. Buffered, it failed every
++                // alternate it met, and the error named the first token of
++                // the lookahead instead: `unexpected`, at the good token in
++                // front of it.
++                if token.tin == TIN_BD && !self.options.lex.relex {
++                    let code = if token.why.is_empty() {
++                        "unexpected"
++                    } else {
++                        token.why.as_str()
++                    };
++                    let error = TabnasError::new(
++                        code,
++                        token.src.clone(),
++                        site.source,
++                        token.site.pos,
++                        token.site.ri,
++                        token.site.ci,
++                    );
++                    let error = self.attach_error(error, rule, site.stack, site.alts, Some(&token));
++                    if mode.recovering && fetch == Fetch::Rule {
++                        if absorb_lex_error(&error, context, &self.options, mode.errors) {
++                            lexer.skip_bad(&token, mid_construct(&error.code));
++                            continue;
++                        }
++                        mode.gave_up = true;
++                    }
++                    if let Some(capture) = mode.continuation.as_deref_mut() {
++                        capture.failure = continuation_tins(
++                            context,
++                            rule,
++                            site.stack,
++                            &self.rules,
++                            &self.options,
++                            context.t.len(),
++                            None,
++                        );
++                    }
++                    return Err(error);
++                }
+                 if token.tin == TIN_ZZ {
+                     if let Some(capture) = mode.continuation.as_deref_mut() {
+                         capture.have_end = true;
+@@ -2403,6 +2505,7 @@ impl Parser {
+                             stack: &stack,
+                             alts,
+                         },
++                        Fetch::Rule,
+                     ) {
+                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
+                     }
+@@ -3082,6 +3185,7 @@ impl Parser {
+                                     stack: &stack,
+                                     alts,
+                                 },
++                                Fetch::Rule,
+                             ) {
+                                 return Err(self.attach_error(
+                                     error,
+@@ -3587,6 +3691,7 @@ impl Parser {
+                             stack: &stack,
+                             alts,
+                         },
++                        Fetch::Rule,
+                     ) {
+                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
+                     }
+@@ -3644,6 +3749,7 @@ impl Parser {
+                             stack: &stack,
+                             alts,
+                         },
++                        Fetch::Rule,
+                     ) {
+                         return Err(self.attach_error(error, &current_rule, &stack, alts, None));
+                     }
+@@ -3717,13 +3823,12 @@ impl Parser {
+                 stack: &stack,
+                 alts: &[],
+             },
++            Fetch::Trailing,
+         ) {
+             let error = self.attach_error(error, &current_rule, &stack, &[], None);
+             if mode.recovering {
+-                if mode.errors.last() != Some(&error) {
+-                    mode.errors.push(error.clone());
+-                    context.errs.push(error);
+-                }
++                mode.errors.push(error.clone());
++                context.errs.push(error);
+                 return Ok(res);
+             }
+             return Err(error);
+@@ -3748,10 +3853,8 @@ impl Parser {
+                     Some(t0),
+                 );
+                 if mode.recovering {
+-                    if mode.errors.last() != Some(&error) {
+-                        mode.errors.push(error.clone());
+-                        context.errs.push(error);
+-                    }
++                    mode.errors.push(error.clone());
++                    context.errs.push(error);
+                     return Ok(res);
+                 }
+                 return Err(error);
+@@ -3878,6 +3981,14 @@ fn mid_construct(code: &str) -> bool {
+     matches!(code, "unprintable" | "invalid_unicode" | "invalid_ascii")
+ }
+ 
++/// Record a bad token met at a rule's fetch under recovery, in the order
++/// TypeScript's `parse_alts` does it: a token inside the run the last one
++/// began grows that run's error rather than being listed again; a new run
++/// inside the suppress window of the recovery before it is a cascade of
++/// that fault and is dropped; anything else is recorded. Returns whether
++/// the fetch goes on past the token. It does not when the run outgrows
++/// `maxSkip`, or when the list has outgrown `maxRecoveries`, a cap read
++/// after recording, so the error that stops the parse is listed.
+ fn absorb_lex_error(
+     error: &TabnasError,
+     context: &mut Context,
+@@ -3885,54 +3996,44 @@ fn absorb_lex_error(
+     errors: &mut Vec<TabnasError>,
+ ) -> bool {
+     let recover = &options.parse.recover;
+-    if errors.len() >= recover.max_recoveries {
+-        return false;
+-    }
+-
+-    let end = error.pos.saturating_add(error.len.max(1));
+-    if context.bad_to.is_some_and(|bad_to| error.pos <= bad_to) {
+-        if let Some(index) = context.bad_error {
+-            if let Some(previous) = errors.get_mut(index) {
+-                let recovered = previous.recovered.get_or_insert(crate::RecoveredAt {
+-                    skipped: 0,
+-                    sync: None,
+-                    bad: true,
+-                });
+-                recovered.skipped = recovered.skipped.saturating_add(1);
+-                let skipped = recovered.skipped;
+-                if recover.max_skip < skipped {
+-                    return false;
+-                }
+-                if let Some(context_previous) = context.errs.get_mut(index) {
+-                    *context_previous = previous.clone();
+-                }
+-                context.bad_to = Some(end.max(context.bad_to.unwrap_or_default()));
+-                return true;
+-            }
++    let run = context
++        .bad_error
++        .filter(|index| *index < errors.len())
++        .filter(|_| context.bad_to.is_some_and(|bad_to| error.pos <= bad_to));
++    if let Some(index) = run {
++        let previous = &mut errors[index];
++        let recovered = previous.recovered.get_or_insert(crate::RecoveredAt {
++            skipped: 0,
++            sync: None,
++            bad: true,
++        });
++        recovered.skipped = recovered.skipped.saturating_add(1);
++        let skipped = recovered.skipped;
++        if let Some(context_previous) = context.errs.get_mut(index) {
++            *context_previous = previous.clone();
+         }
+-    }
+-
+-    let suppressed = context
++        if recover.max_skip < skipped {
++            return false;
++        }
++    } else if context
+         .recover_at
+-        .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress);
+-    if suppressed {
++        .is_some_and(|at| context.v_abs.saturating_sub(at) < recover.suppress)
++    {
+         context.bad_error = None;
+-        context.bad_to = Some(end);
+-        return true;
++    } else {
++        let mut recorded = error.clone();
++        recorded.recovered = Some(crate::RecoveredAt {
++            skipped: 1,
++            sync: None,
++            bad: true,
++        });
++        errors.push(recorded.clone());
++        context.errs.push(recorded);
++        context.bad_error = Some(errors.len() - 1);
++        context.recover_at = Some(context.v_abs);
+     }
+-
+-    let mut recorded = error.clone();
+-    recorded.recovered = Some(crate::RecoveredAt {
+-        skipped: 1,
+-        sync: None,
+-        bad: true,
+-    });
+-    errors.push(recorded.clone());
+-    context.errs.push(recorded);
+-    context.bad_error = Some(errors.len() - 1);
+-    context.bad_to = Some(end);
+-    context.recover_at = Some(context.v_abs);
+-    true
++    context.bad_to = Some(error.pos.saturating_add(error.len.max(1)));
++    errors.len() <= recover.max_recoveries
+ }
+ 
+ fn slot_matches(slot: &[Tin], tin: Tin) -> bool {
+diff --git a/rs/tests/bad_token_fetch_test.rs b/rs/tests/bad_token_fetch_test.rs
+new file mode 100644
+index 0000000..fbc889f
+--- /dev/null
++++ b/rs/tests/bad_token_fetch_test.rs
+@@ -0,0 +1,329 @@
++//! A bad token handed to the parser, and the error a recovering parse ends
++//! on, as the canonical engine treats them.
++//!
++//! TypeScript raises a `#BD` token the moment its fetch in `parse_alts`
++//! (ts/src/rules.ts) is handed one: with the token's own code at the
++//! token's own position, whichever position of an alternate asked for it.
++//! Under recovery it records it instead, coalesces a run of them into one
++//! error, and steps the lexer past it; under relexing it leaves it in the
++//! lookahead for an alternate to re-cut. This port treated only the
++//! lexer's OWN faults that way. A bad token a custom matcher returned
++//! (`Lexer::bad`, `Lexer::bad_span`) was buffered like a good one, so it
++//! failed every alternate it met and the error named the first token of
++//! the lookahead instead; under recovery nothing stepped past it.
++//!
++//! A recovering parse that gives up lists each error once. This port
++//! listed the error it gave up on a second time, without its recovery
++//! metadata, whenever the copy it had recorded carried some, or had been
++//! dropped as a cascade.
++//!
++//! `test/spec/bad-token.tsv` holds the rows all three runtimes agree on;
++//! this file adds what only the API shows, and the two cases where Go
++//! parts from TypeScript (relexing with recovery; a cascade at the
++//! `maxRecoveries` cap), whose TypeScript answers were measured.
++
++use std::sync::{Arc, Mutex};
++
++use tabnas::{
++    ImperativeLexMatcher, LexMatcher, ParseRecovery, RecoveredAt, Tabnas, TabnasError, Value,
++    TIN_BD, TIN_CA,
++};
++
++/// At `?`, a bad token `custom_bad` over the `?`; at `%`, a bad token
++/// `custom_unterminated` over the rest of the source. The cursor is not
++/// moved, as `lex.bad` in TypeScript does not move it.
++fn with_bad_matcher(mut parser: Tabnas) -> Tabnas {
++    let matcher: ImperativeLexMatcher = Arc::new(|lexer, _rule, _context| {
++        let at = lexer.point().site.pos;
++        let rest = lexer.remaining();
++        if rest.starts_with('?') {
++            Some(lexer.bad_span("custom_bad", at, at + 1))
++        } else if rest.starts_with('%') {
++            let end = at + rest.chars().count();
++            Some(lexer.bad_span("custom_unterminated", at, end))
++        } else {
++            None
++        }
++    });
++    parser.options.lex.matchers.insert(
++        "bad".into(),
++        LexMatcher {
++            name: "bad".into(),
++            order: 1.5e6,
++            matcher: None,
++            imperative: Some(matcher),
++            factory: None,
++        },
++    );
++    parser
++}
++
++fn grammar(spec: &str) -> Tabnas {
++    let mut parser = Tabnas::new();
++    parser.grammar_json(spec).expect("grammar installs");
++    parser
++}
++
++/// The serialized strict-JSON grammar every runtime loads.
++fn json() -> Tabnas {
++    let mut parser = grammar(include_str!("../../ts/test/json-builder.fixture.json"));
++    parser.options.rule.start = "val".into();
++    parser
++}
++
++fn recovering(mut parser: Tabnas) -> Tabnas {
++    parser.options.parse.recover.enabled = true;
++    parser
++}
++
++fn relexing(mut parser: Tabnas) -> Tabnas {
++    parser.options.lex.relex = true;
++    parser
++}
++
++fn value(json: &str) -> Option<Value> {
++    Some(Value::from_json(&serde_json::from_str(json).unwrap()))
++}
++
++fn summary(error: &TabnasError) -> (&str, usize, usize, Option<RecoveredAt>) {
++    (
++        error.code.as_str(),
++        error.row,
++        error.col,
++        error.recovered.clone(),
++    )
++}
++
++fn summaries(out: &ParseRecovery) -> Vec<(&str, usize, usize, Option<RecoveredAt>)> {
++    out.errors.iter().map(summary).collect()
++}
++
++fn bad_run(skipped: usize) -> Option<RecoveredAt> {
++    Some(RecoveredAt {
++        skipped,
++        sync: None,
++        bad: true,
++    })
++}
++
++const TWO_NUMBERS: &str = r##"{"options":{"rule":{"start":"top"}},
++  "rule":{"top":{"open":[{"s":"#NR #NR"}]}}}"##;
++
++const ONE_NUMBER: &str = r##"{"options":{"rule":{"start":"top"}},
++  "rule":{"top":{"open":[{"s":"#NR","a":"@value$"}]}}}"##;
++
++const NEST: &str = r##"{"options":{"rule":{"start":"top"},"fixed":{"token":{"#LB":"<","#RB":">"}}},
++  "rule":{"top":{"open":[{"s":"#LB","p":"body"}],"close":[{"s":"#RB"}]},
++          "body":{"open":[{"s":"#NR"}],"close":[{"s":"#RB","b":1},{"s":"#ZZ","b":1}]}}}"##;
++
++#[test]
++fn a_bad_token_behind_a_good_one_is_raised_where_it_is_fetched() {
++    // The second token of an alternate, the shape tabnas-css met with an
++    // unclosed comment behind a property: the error is the bad token's own,
++    // at the bad token, not `unexpected` at the good token in front of it.
++    let parser = with_bad_matcher(grammar(TWO_NUMBERS));
++    let error = parser.parse("1 ?").expect_err("fails");
++    assert_eq!(
++        ("custom_bad", 1, 3),
++        (error.code.as_str(), error.row, error.col)
++    );
++    assert_eq!(
++        ("#BD", "?"),
++        (error.token.name.as_str(), error.token.src.as_str())
++    );
++    assert_eq!(1, error.len);
++    assert_eq!("top", error.rule);
++
++    let error = with_bad_matcher(json())
++        .parse(r#"{"a"?:1}"#)
++        .expect_err("fails");
++    assert_eq!(
++        ("custom_bad", 1, 5),
++        (error.code.as_str(), error.row, error.col)
++    );
++}
++
++#[test]
++fn recovery_records_a_custom_bad_token_and_steps_past_it() {
++    let parser = recovering(with_bad_matcher(json()));
++
++    let out = parser.parse_recover("[1,?,2]");
++    assert_eq!(value("[1,2]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, bad_run(1))], summaries(&out));
++
++    // A run of bad tokens is one error, whose metadata counts the run.
++    let out = parser.parse_recover("[1,??,2]");
++    assert_eq!(value("[1,2]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, bad_run(2))], summaries(&out));
++
++    // One that runs to the end of the source is stepped past whole.
++    let out = parser.parse_recover("[1,% 2]");
++    assert_eq!(value("[1]"), out.value);
++    assert_eq!(
++        vec![("custom_unterminated", 1, 4, bad_run(1))],
++        summaries(&out)
++    );
++
++    // The parse goes on past it, and meets what follows.
++    let out = parser.parse_recover("[1]?2");
++    assert_eq!(value("[1]"), out.value);
++    assert_eq!(
++        vec![("custom_bad", 1, 4, bad_run(1)), ("unexpected", 1, 5, None)],
++        summaries(&out)
++    );
++}
++
++#[test]
++fn a_run_past_its_caps_is_listed_once_with_its_metadata() {
++    let mut parser = recovering(with_bad_matcher(json()));
++    parser.options.parse.recover.max_skip = 1;
++    let out = parser.parse_recover("[1,???,2]");
++    assert_eq!(value("[1]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, bad_run(2))], summaries(&out));
++
++    let mut parser = recovering(with_bad_matcher(json()));
++    parser.options.parse.recover.max_recoveries = 0;
++    let out = parser.parse_recover("[1,??,2]");
++    assert_eq!(value("[1]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, bad_run(1))], summaries(&out));
++}
++
++#[test]
++fn relexing_leaves_a_custom_bad_token_for_the_alternates() {
++    // Nothing here re-cuts it, so fail-fast names the first token of the
++    // lookahead, as the canonical engine does, and as this port did before.
++    let error = relexing(with_bad_matcher(json()))
++        .parse(r#"{"a"?:1}"#)
++        .expect_err("fails");
++    assert_eq!(
++        ("unexpected", 1, 2),
++        (error.code.as_str(), error.row, error.col)
++    );
++}
++
++#[test]
++fn relexing_and_recovery_together_recover_from_a_custom_bad_token() {
++    // The token fails the alternates and recovery skips it to the next sync
++    // token, stepping the lexer past it. It is listed once. TypeScript's
++    // answers; Go lists each of these errors twice, once unrecovered.
++    let parser = recovering(relexing(with_bad_matcher(json())));
++    let skipped = |skipped| {
++        Some(RecoveredAt {
++            skipped,
++            sync: Some(TIN_CA),
++            bad: false,
++        })
++    };
++
++    let out = parser.parse_recover("[1,?,2]");
++    assert_eq!(value("[1,2]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, skipped(1))], summaries(&out));
++
++    let out = parser.parse_recover("[1,??,2]");
++    assert_eq!(value("[1,2]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, skipped(2))], summaries(&out));
++
++    let out = parser.parse_recover("[1,? 2,3]");
++    assert_eq!(value("[1,3]"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 4, skipped(2))], summaries(&out));
++}
++
++#[test]
++fn the_trailing_check_raises_a_bad_token_without_recording_it() {
++    // A grammar that stops reading after one number: whatever follows meets
++    // only the check for trailing content, which raises a bad token with
++    // its own code, recovering or not, and does not step past it.
++    let parser = recovering(with_bad_matcher(grammar(ONE_NUMBER)));
++
++    let out = parser.parse_recover("1 ? 2");
++    assert_eq!(value("1"), out.value);
++    assert_eq!(vec![("custom_bad", 1, 3, None)], summaries(&out));
++
++    // The lexer's own faults the same way: this one used to be recorded
++    // and skipped, and the next line reported as well.
++    let out = parser.parse_recover("1 \"x\n2");
++    assert_eq!(value("1"), out.value);
++    assert_eq!(vec![("unprintable", 1, 5, None)], summaries(&out));
++}
++
++#[test]
++fn a_fault_inside_a_string_resumes_past_the_next_row() {
++    // The canonical skip moves past the bad token and then past the next
++    // row character after it, so the line after an unprintable newline is
++    // skipped whole rather than lexed from the middle of a string.
++    let out = recovering(json()).parse_recover("{\"a\":1,\"b\n\":[truex,null]}");
++    assert_eq!(value(r#"{"a":1}"#), out.value);
++    assert_eq!(vec![("unprintable", 1, 10, bad_run(1))], summaries(&out));
++}
++
++#[test]
++fn lex_subscribers_see_the_lexers_own_faults() {
++    // Every token the canonical `lex.next` returns reaches the lex
++    // subscribers before the parser decides what to do with it, a fault's
++    // bad token included, recovering or not.
++    let seen = Arc::new(Mutex::new(Vec::new()));
++    let mut parser = json();
++    let log = seen.clone();
++    parser.subscribe_lex(move |token, _rule, _context| {
++        if token.tin == TIN_BD {
++            log.lock().unwrap().push(token.why.to_string());
++        }
++    });
++    let error = parser.parse("[\"abc").expect_err("fails");
++    assert_eq!("unterminated_string", error.code);
++    assert_eq!(
++        vec!["unterminated_string".to_string()],
++        *seen.lock().unwrap()
++    );
++
++    seen.lock().unwrap().clear();
++    let error = with_bad_matcher(parser).parse("[?]").expect_err("fails");
++    assert_eq!("custom_bad", error.code);
++    assert_eq!(vec!["custom_bad".to_string()], *seen.lock().unwrap());
++}
++
++#[test]
++fn a_recovering_parse_that_gives_up_lists_each_error_once() {
++    let parser = recovering(grammar(NEST));
++    let resumed_at_the_end = Some(RecoveredAt {
++        skipped: 0,
++        sync: Some(tabnas::TIN_ZZ),
++        bad: false,
++    });
++
++    // Recovery reaches the end of the source, resumes, and fails there
++    // again with nothing consumed: the second failure is a cascade of the
++    // first, dropped, and the parse gives up on the error it recorded.
++    let out = parser.parse_recover("<");
++    assert_eq!(
++        vec![("unexpected", 1, 2, resumed_at_the_end.clone())],
++        summaries(&out)
++    );
++    let out = parser.parse_recover("<1 2");
++    assert_eq!(1, out.errors.len(), "{:?}", summaries(&out));
++
++    // A failure that is not a cascade is a second error, and is listed.
++    let mut parser = recovering(grammar(NEST));
++    parser.options.parse.recover.suppress = 0;
++    let out = parser.parse_recover("<");
++    assert_eq!(
++        vec![
++            ("unexpected", 1, 2, resumed_at_the_end),
++            ("unexpected", 1, 2, None)
++        ],
++        summaries(&out)
++    );
++}
++
++#[test]
++fn a_cascade_at_the_recovery_cap_still_recovers() {
++    // The cap is read after the error is recorded and, for a cascade,
++    // dropped again: a cascade does not grow the list, so it does not stop
++    // the parse at the cap. TypeScript's answer; Go reads the cap before
++    // recording, and gives up here with `[1]`.
++    let mut parser = recovering(json());
++    parser.options.parse.recover.max_recoveries = 1;
++    let out = parser.parse_recover("[1,,,2]");
++    assert_eq!(value("[1,2]"), out.value);
++    assert_eq!(1, out.errors.len(), "{:?}", summaries(&out));
++}
+diff --git a/rs/tests/bad_token_spec_test.rs b/rs/tests/bad_token_spec_test.rs
+new file mode 100644
+index 0000000..70b54e7
+--- /dev/null
++++ b/rs/tests/bad_token_spec_test.rs
+@@ -0,0 +1,175 @@
++//! `test/spec/bad-token.tsv`, the Rust runner: what the parser does with a
++//! bad token the lexer hands it, fail-fast, under recovery and under
++//! relexing, and the error a recovering parse ends on. The TypeScript
++//! (`ts/test/bad-token.test.js`) and Go (`go/bad_token_spec_test.go`)
++//! runners assert the same rows; the fixture's header says what each column
++//! means and what the custom matcher all three build must do.
++
++use std::collections::HashMap;
++use std::sync::Arc;
++
++use tabnas::{ImperativeLexMatcher, LexMatcher, Tabnas, TabnasError, Value};
++
++const FIXTURE: &str = "../test/spec/bad-token.tsv";
++
++fn decode(field: &str) -> String {
++    field
++        .replace("\\r\\n", "\r\n")
++        .replace("\\n", "\n")
++        .replace("\\r", "\r")
++        .replace("\\t", "\t")
++}
++
++/// The custom matcher the fixture header specifies: a bad token at `?`, and
++/// one running to the end of the source at `%`, neither moving the cursor.
++fn bad_matcher() -> LexMatcher {
++    let matcher: ImperativeLexMatcher = Arc::new(|lexer, _rule, _context| {
++        let at = lexer.point().site.pos;
++        let rest = lexer.remaining();
++        if rest.starts_with('?') {
++            Some(lexer.bad_span("custom_bad", at, at + 1))
++        } else if rest.starts_with('%') {
++            let end = at + rest.chars().count();
++            Some(lexer.bad_span("custom_unterminated", at, end))
++        } else {
++            None
++        }
++    });
++    LexMatcher {
++        name: "bad".into(),
++        order: 1.5e6,
++        matcher: None,
++        imperative: Some(matcher),
++        factory: None,
++    }
++}
++
++fn make(grammar: &str, grammars: &HashMap<String, String>, opts: &str) -> Tabnas {
++    let mut parser = Tabnas::new();
++    if grammar == "json" {
++        let source = std::fs::read_to_string("../ts/test/json-builder.fixture.json")
++            .expect("json builder fixture");
++        parser.grammar_json(&source).expect("install json");
++        parser
++            .grammar_json(r#"{"options":{"rule":{"start":"val"}}}"#)
++            .expect("start at val");
++    } else {
++        let spec = grammars
++            .get(grammar)
++            .unwrap_or_else(|| panic!("no @grammar named {grammar}"));
++        parser.grammar_json(spec).expect("install grammar");
++    }
++    if opts != "-" {
++        parser
++            .grammar_json(&format!(r#"{{"options":{opts}}}"#))
++            .expect("install options");
++    }
++    parser
++        .options
++        .lex
++        .matchers
++        .insert("bad".into(), bad_matcher());
++    parser
++}
++
++/// The shared canonical value: sorted keys, integral numbers without a
++/// fraction, and an absent value as `null`.
++fn canon(value: &serde_json::Value) -> String {
++    match value {
++        serde_json::Value::Array(items) => {
++            let items: Vec<String> = items.iter().map(canon).collect();
++            format!("[{}]", items.join(","))
++        }
++        serde_json::Value::Object(map) => {
++            let mut keys: Vec<&String> = map.keys().collect();
++            keys.sort();
++            let members: Vec<String> = keys
++                .into_iter()
++                .map(|key| {
++                    format!(
++                        "{}:{}",
++                        serde_json::Value::from(key.as_str()),
++                        canon(&map[key])
++                    )
++                })
++                .collect();
++            format!("{{{}}}", members.join(","))
++        }
++        serde_json::Value::Number(number) => match number.as_f64() {
++            Some(float) if float.fract() == 0.0 && float.abs() < 1e15 => {
++                format!("{}", float as i64)
++            }
++            _ => number.to_string(),
++        },
++        other => other.to_string(),
++    }
++}
++
++fn render_value(value: Option<&Value>) -> String {
++    match value {
++        None | Some(Value::Undefined) => "null".into(),
++        Some(value) => canon(&value.to_json()),
++    }
++}
++
++fn render_error(error: &TabnasError) -> String {
++    let meta = match &error.recovered {
++        None => String::new(),
++        Some(at) if at.bad => format!("+bad{}", at.skipped),
++        Some(at) => format!("+skip{}", at.skipped),
++    };
++    format!("{}@{}:{}{}", error.code, error.row, error.col, meta)
++}
++
++fn run(parser: &Tabnas, input: &str) -> (String, String) {
++    if parser.options.parse.recover.enabled {
++        let out = parser.parse_recover(input);
++        assert!(out.fatal.is_none(), "recovery returned a fatal error");
++        let errors: Vec<String> = out.errors.iter().map(render_error).collect();
++        let errors = if errors.is_empty() {
++            "-".to_string()
++        } else {
++            errors.join(",")
++        };
++        (render_value(out.value.as_ref()), errors)
++    } else {
++        match parser.parse(input) {
++            Ok(value) => (render_value(Some(&value)), "-".into()),
++            Err(error) => ("-".into(), render_error(&error)),
++        }
++    }
++}
++
++#[test]
++fn bad_token_fixture() {
++    let text = std::fs::read_to_string(FIXTURE).expect("bad-token.tsv");
++    let mut grammars = HashMap::new();
++    let mut ran = 0;
++    let mut failures = Vec::new();
++    for (index, line) in text.lines().enumerate().skip(1) {
++        let row = index + 1;
++        if let Some(definition) = line.strip_prefix("# @grammar ") {
++            let (name, spec) = definition
++                .split_once(' ')
++                .unwrap_or_else(|| panic!("row {row}: malformed @grammar"));
++            grammars.insert(name.to_string(), spec.trim().to_string());
++            continue;
++        }
++        if line.is_empty() || line.starts_with('#') {
++            continue;
++        }
++        let cols: Vec<String> = line.split('\t').map(decode).collect();
++        let [grammar, opts, input, value, errors] = cols.as_slice() else {
++            panic!("row {row}: expected five columns, got {}", cols.len());
++        };
++        let (got_value, got_errors) = run(&make(grammar, &grammars, opts), input);
++        if (&got_value, &got_errors) != (value, errors) {
++            failures.push(format!(
++                "row {row} {input:?} {opts}\n  value:  got {got_value}, want {value}\n  errors: got {got_errors}, want {errors}"
++            ));
++        }
++        ran += 1;
++    }
++    assert!(ran > 20, "bad-token.tsv ran only {ran} rows");
++    assert!(failures.is_empty(), "{}", failures.join("\n"));
++}
+diff --git a/test/AGENTS.md b/test/AGENTS.md
+index 92de17f..e87d500 100644
+--- a/test/AGENTS.md
++++ b/test/AGENTS.md
+@@ -64,6 +64,7 @@ Every fixture here, and the runner that executes it:
+ | `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` | `rs/tests/utility_spec_test.rs` |
+ | `lex-string-control.tsv`, `lex-text-line-terminator.tsv`, `lex-text-quote.tsv`, `lex-ender-array.tsv` | `ts/test/lex.test.js` | Go lexer tests | `rs/tests/lexer_spec_test.rs` |
+ | `diagnostic.tsv` | `ts/test/diagnostic.test.js` | `go/diagnostic_spec_test.go` | `rs/tests/diagnostic_spec_test.rs` |
++| `bad-token.tsv` | `ts/test/bad-token.test.js` | `go/bad_token_spec_test.go` | `rs/tests/bad_token_spec_test.rs` |
+ | `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — | — |
+ | `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |
+ 
+@@ -71,6 +72,13 @@ Both strict-JSON runners go through the strict-JSON grammar that lives as
+ a test fixture in each runtime (`ts/test/json-plugin.ts`,
+ `go/jsonplugin_test.go`) — the engine itself ships no grammar.
+ 
++`bad-token.tsv` is the one fixture whose rows need code a serialized
++grammar cannot carry: a custom lex matcher that returns bad tokens. Its
++header specifies that matcher, and each runner builds it natively; the
++grammars are serialized (`ts/test/json-builder.fixture.json`, and the
++`# @grammar` lines in the file), so all three runtimes install the same
++ones.
++
+ Both loaders (`ts/test/utility.js`, `go/spec_test.go`) must stay in step
+ on escape handling and on what counts as a row; a divergence there makes
+ the two runtimes read the same file differently, which is worse than not
+diff --git a/test/spec/bad-token.tsv b/test/spec/bad-token.tsv
+new file mode 100644
+index 0000000..e87ed64
+--- /dev/null
++++ b/test/spec/bad-token.tsv
+@@ -0,0 +1,112 @@
++grammar	opts	input	value	errors
++# A bad token (#BD) the lexer hands the parser, and the error that ends a
++# recovering parse: parsed by every runtime, fail-fast, under recovery and
++# under relexing, and asserted field for field.
++#
++# FIVE tab-separated columns:
++#
++#   grammar  `json`, or the name of an `# @grammar` definition below
++#   opts     serialized engine options, installed as a second grammar
++#            carrying nothing but `options`, or `-` for none
++#   input    the source; \n, \r and \t are decoded, as in every file here
++#   value    the parse result: `-` when a fail-fast parse throws, else the
++#            value in the shared canonical form (map keys sorted, and an
++#            absent value -- TS undefined, Go nil, Rust None -- as `null`;
++#            DIVERGENCE.md "A parse that sets no value")
++#   errors   `-` for none, else every error, in order, as `code@row:col`,
++#            with the recovery metadata the engine attached to it:
++#            `+bad<n>` for a bad token recorded at fetch time as a run of n
++#            tokens, `+skip<n>` for a recovery that skipped n tokens to its
++#            sync token, and nothing for an error the parse ended on
++#            unrecovered. A fail-fast parse lists the error it threw.
++#
++# `json` is ts/test/json-builder.fixture.json, the serialized strict-JSON
++# grammar all three runtimes already load, installed on a default engine
++# with `rule.start` set to `val`. Every grammar here runs with ONE custom
++# lex matcher, which each runner builds natively because a serialized spec
++# cannot carry code, and which must behave identically in all three:
++#
++#   name `bad`, order 1.5e6 (after `match`, before `fixed`). At `?` it
++#   returns a bad token with why `custom_bad` whose source is the `?`; at
++#   `%`, one with why `custom_unterminated` whose source runs to the end of
++#   the source. Neither advances the cursor, as TS `lex.bad`, Go
++#   `lex.Token` on the cursor and Rust `Lexer::bad_span` do not. Anything
++#   else it declines.
++#
++# The canonical engine raises such a token the moment it is fetched, with
++# its own code at its own position; under recovery it records it,
++# coalesces a run of them into one error, and steps past it; under
++# relexing it leaves it in the lookahead for an alternate to re-cut. The
++# check for content after the parse raises it without recording it first.
++# A recovering parse that gives up lists every error once: the one it
++# gave up on is the last one it recorded, or a cascade it dropped.
++#
++# Two cases are not here because Go answers them differently. With
++# relexing and recovery TOGETHER, Go lists a bad token no alternate
++# re-cuts twice, once unrecovered and once recovered, where TypeScript
++# and Rust list it once. And Go reads the `maxRecoveries` cap before it
++# records an error, so a cascade at the cap ends its parse where the
++# other two drop the cascade and go on. The canonical answers are pinned
++# by a second test in ts/test/bad-token.test.js and by
++# rs/tests/bad_token_fetch_test.rs.
++#
++# Runners: ts/test/bad-token.test.js, go/bad_token_spec_test.go,
++# rs/tests/bad_token_spec_test.rs.
++#
++# @grammar nest {"options":{"rule":{"start":"top"},"fixed":{"token":{"#LB":"<","#RB":">"}}},"rule":{"top":{"open":[{"s":"#LB","p":"body"}],"close":[{"s":"#RB"}]},"body":{"open":[{"s":"#NR"}],"close":[{"s":"#RB","b":1},{"s":"#ZZ","b":1}]}}}
++#   `top` reads `<`, pushes `body` and closes on `>`; `body` reads a number
++#   and closes on `>` or the end, leaving either to its parent.
++# @grammar one {"options":{"rule":{"start":"top"}},"rule":{"top":{"open":[{"s":"#NR","a":"@value$"}]}}}
++#   One number, and nothing to close: the parse loop ends without reading
++#   past it, so what follows meets only the trailing-content check.
++#
++# Fail-fast. A bad token is raised where it is fetched, with its own code,
++# whichever position of an alternate asked for it.
++json	-	[?]	-	custom_bad@1:2
++json	-	{"a"?:1}	-	custom_bad@1:5
++json	-	[1,?,2]	-	custom_bad@1:4
++json	-	[1,% 2]	-	custom_unterminated@1:4
++json	-	[1] ?	-	custom_bad@1:5
++json	-	[1,\n?\n,2]	-	custom_bad@2:1
++json	-	[1,x,2]	-	unexpected@1:4
++json	-	"abc	-	unterminated_string@1:1
++json	-	[1,2]	[1,2]	-
++#
++# Recovery. The token is recorded, a run of them is one error, and the
++# parse steps past it and goes on.
++json	{"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+bad1
++json	{"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+bad2
++json	{"parse":{"recover":{"enabled":true}}}	{"a"?:1}	{"a":1}	custom_bad@1:5+bad1
++json	{"parse":{"recover":{"enabled":true}}}	[1,% 2]	[1]	custom_unterminated@1:4+bad1
++json	{"parse":{"recover":{"enabled":true}}}	[1,?],[2]	[1]	custom_bad@1:4+bad1,unexpected@1:6
++json	{"parse":{"recover":{"enabled":true}}}	[1]?2	[1]	custom_bad@1:4+bad1,unexpected@1:5
++json	{"parse":{"recover":{"enabled":true}}}	[1,\n?\n,2]	[1,2]	custom_bad@2:1+bad1
++json	{"parse":{"recover":{"enabled":true}}}	[1 2	[]	unexpected@1:4+skip1
++json	{"parse":{"recover":{"enabled":true}}}	[1,2,	[1,2]	unexpected@1:6+skip0
++# The lexer's own fault inside a string resumes past the next row character
++# after the bad token, so the line after it is skipped whole.
++json	{"parse":{"recover":{"enabled":true}}}	{"a":1,"b\n":[truex,null]}	{"a":1}	unprintable@1:10+bad1
++# The caps. Past `maxSkip` a run gives up, and past `maxRecoveries` the parse
++# does; either way the error it stops on is listed once.
++json	{"parse":{"recover":{"enabled":true,"maxSkip":1}}}	[1,???,2]	[1]	custom_bad@1:4+bad2
++json	{"parse":{"recover":{"enabled":true,"maxRecoveries":0}}}	[1,??,2]	[1]	custom_bad@1:4+bad1
++#
++# Relexing. The bad token stays in the lookahead for an alternate to re-cut;
++# when none can, the first token of the lookahead is the error.
++json	{"lex":{"relex":true}}	{"a"?:1}	-	unexpected@1:2
++json	{"lex":{"relex":true}}	[1,?]	-	custom_bad@1:4
++#
++# Giving up. The error recovery gave up on is listed once: recorded, when it
++# was news, or dropped, when it was a cascade of the one before it.
++nest	{"parse":{"recover":{"enabled":true}}}	<	null	unexpected@1:2+skip0
++nest	{"parse":{"recover":{"enabled":true}}}	<1 2	null	unexpected@1:4+skip1
++nest	{"parse":{"recover":{"enabled":true}}}	<<	null	unexpected@1:2+skip1
++# With no suppression window, two failures at one token are two errors.
++nest	{"parse":{"recover":{"enabled":true,"suppress":0}}}	<	null	unexpected@1:2+skip0,unexpected@1:2
++#
++# Trailing content. A bad token after the parse is raised, not recorded and
++# skipped, recovering or not.
++one	-	1 ? 2	-	custom_bad@1:3
++one	{"parse":{"recover":{"enabled":true}}}	1 ? 2	1	custom_bad@1:3
++one	{"parse":{"recover":{"enabled":true}}}	1 "x\n2	1	unprintable@1:5
++one	{"parse":{"recover":{"enabled":true}}}	1	1	-
+diff --git a/ts/test/bad-token.test.js b/ts/test/bad-token.test.js
+new file mode 100644
+index 0000000..f27e5c0
+--- /dev/null
++++ b/ts/test/bad-token.test.js
+@@ -0,0 +1,121 @@
++/* Copyright (c) 2026 Richard Rodger, MIT License */
++'use strict'
++
++// test/spec/bad-token.tsv: what the parser does with a bad token the lexer
++// hands it, fail-fast, under recovery and under relexing, and the error a
++// recovering parse ends on. The Go (go/bad_token_spec_test.go) and Rust
++// (rs/tests/bad_token_spec_test.rs) runners assert the same rows; the
++// fixture's header says what every column means, and what the custom
++// matcher all three build must do.
++
++const { describe, it } = require('node:test')
++const assert = require('node:assert')
++
++const { Tabnas } = require('..')
++const { loadTSV } = require('./utility')
++
++const JSON_GRAMMAR = require('./json-builder.fixture.json')
++
++// The custom matcher the fixture header specifies: a bad token at `?`, and
++// one running to the end of the source at `%`, neither moving the cursor.
++const bad = {
++  order: 1.5e6,
++  make: () => (lex) => {
++    const sI = lex.pnt.sI
++    const c = lex.src[sI]
++    if ('?' === c) return lex.bad('custom_bad', sI, sI + 1)
++    if ('%' === c) return lex.bad('custom_unterminated', sI, lex.src.length)
++    return undefined
++  },
++}
++
++function make(grammar, grammars, opts) {
++  const tn = new Tabnas({ lex: { match: { bad } } })
++  if ('json' === grammar) {
++    tn.grammar(JSON_GRAMMAR)
++    tn.grammar({ options: { rule: { start: 'val' } } })
++  } else {
++    assert.ok(null != grammars[grammar], 'no @grammar named ' + grammar)
++    tn.grammar(grammars[grammar])
++  }
++  if ('-' !== opts) {
++    tn.grammar({ options: JSON.parse(opts) })
++  }
++  return tn
++}
++
++// The shared canonical value: sorted keys, and an absent value as null.
++function canon(v) {
++  if (undefined === v || null === v) return 'null'
++  if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']'
++  if ('object' === typeof v) {
++    return (
++      '{' +
++      Object.keys(v)
++        .sort()
++        .map((k) => JSON.stringify(k) + ':' + canon(v[k]))
++        .join(',') +
++      '}'
++    )
++  }
++  return JSON.stringify(v)
++}
++
++function renderError(e) {
++  const d = e.toJSON()
++  const r = e.recovered
++  const meta =
++    null == r ? '' : (r.bad ? '+bad' : '+skip') + r.skipped
++  return d.code + '@' + d.row + ':' + d.col + meta
++}
++
++function run(tn, input) {
++  const recovering = tn.internal().config.parse.recover.enabled
++  try {
++    const out = tn.parse(input)
++    if (!recovering) return [canon(out), '-']
++    const errors = out.errors.map(renderError)
++    return [canon(out.value), 0 === errors.length ? '-' : errors.join(',')]
++  } catch (e) {
++    if (recovering) throw e
++    return ['-', renderError(e)]
++  }
++}
++
++describe('bad-token', () => {
++  it('spec-fixture', () => {
++    const grammars = {}
++    let ran = 0
++    for (const { cols, row } of loadTSV('bad-token')) {
++      const at = /^#\s*@grammar\s+(\S+)\s+(.*)$/.exec(cols[0])
++      if (null != at) {
++        grammars[at[1]] = JSON.parse(at[2])
++        continue
++      }
++      if (cols[0].startsWith('#') || cols.length < 5) continue
++      const [grammar, opts, input, value, errors] = cols
++      const [gotValue, gotErrors] = run(make(grammar, grammars, opts), input)
++      const where = 'bad-token.tsv row ' + row + ' ' + JSON.stringify(input) + ' ' + opts
++      assert.equal(gotErrors, errors, where + ': errors')
++      assert.equal(gotValue, value, where + ': value')
++      ran++
++    }
++    assert.ok(20 < ran, 'bad-token.tsv ran only ' + ran + ' rows')
++  })
++
++  // Two answers Go does not give, so they are not in the shared fixture:
++  // with relexing and recovery together Go lists a bad token no alternate
++  // re-cuts twice, once unrecovered, and Go reads the maxRecoveries cap
++  // before recording an error, so a cascade at the cap ends its parse.
++  // rs/tests/bad_token_fetch_test.rs pins the same answers in Rust.
++  it('relexing-with-recovery-and-a-cascade-at-the-cap', () => {
++    const answer = (opts, input) => run(make('json', {}, JSON.stringify(opts)), input)
++    const both = { lex: { relex: true }, parse: { recover: { enabled: true } } }
++    assert.deepEqual(answer(both, '[1,?,2]'), ['[1,2]', 'custom_bad@1:4+skip1'])
++    assert.deepEqual(answer(both, '[1,??,2]'), ['[1,2]', 'custom_bad@1:4+skip2'])
++    assert.deepEqual(answer(both, '[1,? 2,3]'), ['[1,3]', 'custom_bad@1:4+skip2'])
++
++    const capped = { parse: { recover: { enabled: true, maxRecoveries: 1 } } }
++    assert.deepEqual(answer(capped, '[1,,,2]'), ['[1,2]', 'unexpected@1:4+skip0'])
++  })
++})
+-- 
+2.43.0
+

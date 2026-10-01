@@ -1,0 +1,297 @@
+diff -ruN a/rs/src/builtins.rs b/rs/src/builtins.rs
+--- a/rs/src/builtins.rs
++++ b/rs/src/builtins.rs
+@@ -200,7 +200,18 @@
+     let Some(token) = rule.o.get(index).cloned() else {
+         return Value::Undefined;
+     };
++    // Under the parse loop's `lazy_rule` a builtin runs with nothing
++    // published, so a lazy value is published for here: the same record the
++    // action's own publish used to hand it, since no builtin writes the rule
++    // before it asks for a token's value.
++    let publish = token.val_fn.is_some() && context.lazy_rule && context.rule.is_none();
++    if publish {
++        context.set_rule(rule);
++    }
+     let value = token.resolve_val(rule, context);
++    if publish {
++        context.rule = None;
++    }
+     if info.text && matches!(token.tin, TIN_ST | TIN_TX) {
+         let string = match &value {
+             Value::String(value) => value.clone(),
+diff -ruN a/rs/src/context.rs b/rs/src/context.rs
+--- a/rs/src/context.rs
++++ b/rs/src/context.rs
+@@ -205,6 +205,12 @@
+     pub(crate) recover_si: Option<usize>,
+     pub(crate) bad_to: Option<usize>,
+     pub(crate) bad_error: Option<usize>,
++    /// Set by the parse loop when nothing outside a callback's own publish
++    /// can read `rule`: no lex or ruleDone subscriber, no imperative lexer
++    /// matcher or text modifier. The loop then holds `rule` only while a
++    /// callback runs, so the engine's own writes to the live rule do not
++    /// copy its record behind a snapshot nobody will read.
++    pub(crate) lazy_rule: bool,
+ }
+ 
+ impl Context {
+@@ -237,6 +243,7 @@
+             recover_si: None,
+             bad_to: None,
+             bad_error: None,
++            lazy_rule: false,
+         }
+     }
+ 
+@@ -359,6 +366,15 @@
+         self.rule = Some(rule.snapshot());
+     }
+ 
++    /// Let go of the published record once the callback it was published
++    /// for has returned. A no-op unless the parse runs with `lazy_rule`.
++    #[inline]
++    pub(crate) fn unpublish_rule(&mut self) {
++        if self.lazy_rule {
++            self.rule = None;
++        }
++    }
++
+     pub(crate) fn apply_seed(&mut self, seed: &ContextSeed) {
+         if let Some(meta) = &seed.meta {
+             self.meta = merge_seed_value(self.meta.clone(), meta.clone());
+diff -ruN a/rs/src/parser.rs b/rs/src/parser.rs
+--- a/rs/src/parser.rs
++++ b/rs/src/parser.rs
+@@ -833,7 +833,9 @@
+         context: &mut Context,
+     ) -> Result<(), TabnasError> {
+         context.set_rule(rule);
+-        match catch_unwind(AssertUnwindSafe(|| callback(rule, context))) {
++        let outcome = catch_unwind(AssertUnwindSafe(|| callback(rule, context)));
++        context.unpublish_rule();
++        match outcome {
+             Ok(result) => result.map_err(|action_error| {
+                 let token = match rule.state {
+                     RuleState::Open => rule.o0().or_else(|| rule.c0()),
+@@ -864,7 +866,9 @@
+         out: Option<Token>,
+     ) -> Result<Option<Token>, TabnasError> {
+         context.set_rule(rule);
+-        match catch_unwind(AssertUnwindSafe(|| callback(rule, context, next, out))) {
++        let outcome = catch_unwind(AssertUnwindSafe(|| callback(rule, context, next, out)));
++        context.unpublish_rule();
++        match outcome {
+             Ok(result) => result.map_err(|action_error| {
+                 let token = match rule.state {
+                     RuleState::Open => rule.o0().or_else(|| rule.c0()),
+@@ -932,7 +936,15 @@
+         context: &mut Context,
+         config: Option<&Value>,
+     ) -> Result<(), TabnasError> {
+-        context.set_rule(rule);
++        // A builtin reads nothing through `context.rule`, and a plain action
++        // is handed the rule alone; a context action publishes its own
++        // record. So under `lazy_rule` nothing here is published, and a
++        // builtin's write to the rule lands in place. The one piece of user
++        // code a builtin can reach, a token's lazy value, is published for
++        // in `token_value`.
++        if !context.lazy_rule {
++            context.set_rule(rule);
++        }
+         match catch_unwind(AssertUnwindSafe(|| {
+             run_builtin_action_with_info(name, rule, context, config, &self.options.info)
+         })) {
+@@ -2033,6 +2045,27 @@
+         // gets its own, which is why this is a local and not a field.
+         let mut matched = AltMatch::default();
+ 
++        // Whether anything can read `context.rule` other than the callbacks
++        // that publish it for themselves. Lex subscribers, imperative lexer
++        // matchers (and their factories), imperative text modifiers and
++        // ruleDone subscribers are handed the context with no publish of
++        // their own and read whatever the last one left there, so with any
++        // of them installed the record stays published as it always was.
++        context.lazy_rule = self.lex_subscribers.is_empty()
++            && self.rule_done_subscribers.is_empty()
++            && self
++                .options
++                .lex
++                .matchers
++                .values()
++                .all(|matcher| matcher.imperative.is_none() && matcher.factory.is_none())
++            && self
++                .options
++                .text
++                .modify
++                .iter()
++                .all(|modifier| matches!(modifier, crate::options::TextModifier::Value(_)));
++
+         'parse: loop {
+             context.set_active(&current_rule, &stack);
+             update_partial(mode, &root_node, &current_rule, &stack);
+@@ -2150,6 +2183,9 @@
+                     )
+                 })?;
+             }
++            // The step head's readers -- guards, the budget check and rule
++            // subscribers -- have run.
++            context.unpublish_rule();
+             update_partial(mode, &root_node, &current_rule, &stack);
+ 
+             // 1. Run before-actions. Recovery can retry a failed close pass;
+@@ -2188,7 +2224,14 @@
+                 } else {
+                     "before-close action"
+                 };
+-                let next = is_open.then(|| current_rule.snapshot());
++                // Only a state callback is handed `next`; holding it while
++                // a builtin writes the rule would copy the rule's record.
++                let wants_next = before_bindings.iter().any(|binding| match binding {
++                    ActionBinding::State(_) => true,
++                    ActionBinding::Named(action) => self.state_actions.contains_key(action),
++                    ActionBinding::Callback(_) => false,
++                });
++                let next = (is_open && wants_next).then(|| current_rule.snapshot());
+                 let site = ParseSite {
+                     source: src,
+                     stack: &stack,
+@@ -2478,6 +2521,10 @@
+                         }
+                     }
+                     if alt_matches {
++                        debug_assert!(
++                            !context.lazy_rule || context.rule.is_none(),
++                            "a record is still published where the engine writes the rule"
++                        );
+                         if is_open {
+                             current_rule.o = Rc::clone(&tokens);
+                         } else {
+@@ -2488,6 +2535,7 @@
+                             let result = self.catch_callback("alternate condition", src, || {
+                                 condition(&mut current_rule, &mut context)
+                             });
++                            context.unpublish_rule();
+                             alt_matches = result.map_err(|error| {
+                                 self.attach_error(
+                                     error,
+@@ -2506,6 +2554,7 @@
+                                     self.catch_callback("matched alternate condition", src, || {
+                                         condition(&mut current_rule, &mut context, &mut matched)
+                                     });
++                                context.unpublish_rule();
+                                 alt_matches = result.map_err(|error| {
+                                     self.attach_error(
+                                         error,
+@@ -2533,6 +2582,7 @@
+                                         )
+                                     },
+                                 );
++                                context.unpublish_rule();
+                                 alt_matches = result.map_err(|error| {
+                                     self.attach_error(
+                                         error,
+@@ -2551,6 +2601,7 @@
+                                     self.catch_callback("alternate lexer condition", src, || {
+                                         condition(&mut current_rule, &mut context, &mut lexer)
+                                     });
++                                context.unpublish_rule();
+                                 alt_matches = result.map_err(|error| {
+                                     self.attach_error(
+                                         error,
+@@ -2634,6 +2685,7 @@
+                     let result = self.catch_callback("alternate modifier", src, || {
+                         modifier(source, &mut current_rule, &mut context)
+                     });
++                    context.unpublish_rule();
+                     rewritten = result.map_err(|error| {
+                         self.attach_error(
+                             error,
+@@ -2722,6 +2774,7 @@
+                             )
+                         })?
+                         .filter(|name| !name.is_empty());
++                    context.unpublish_rule();
+                 }
+                 if let Some(route) = &alt.p_match {
+                     context.set_rule(&current_rule);
+@@ -2739,6 +2792,7 @@
+                             )
+                         })?
+                         .filter(|name| !name.is_empty());
++                    context.unpublish_rule();
+                 } else if alt.p_fn.is_none() {
+                     if let Some(route) = alt.p.clone() {
+                         matched.p = (!route.is_empty()).then_some(route);
+@@ -2760,6 +2814,7 @@
+                             )
+                         })?
+                         .filter(|name| !name.is_empty());
++                    context.unpublish_rule();
+                 }
+                 if let Some(route) = &alt.r_match {
+                     context.set_rule(&current_rule);
+@@ -2777,6 +2832,7 @@
+                             )
+                         })?
+                         .filter(|name| !name.is_empty());
++                    context.unpublish_rule();
+                 } else if alt.r_fn.is_none() {
+                     if let Some(route) = alt.r.clone() {
+                         matched.r = (!route.is_empty()).then_some(route);
+@@ -2797,6 +2853,7 @@
+                                 Self::phase_token(&current_rule),
+                             )
+                         })?;
++                    context.unpublish_rule();
+                 }
+                 if let Some(backtrack) = &alt.b_match {
+                     context.set_rule(&current_rule);
+@@ -2813,6 +2870,7 @@
+                                 Self::phase_token(&current_rule),
+                             )
+                         })?;
++                    context.unpublish_rule();
+                 } else if alt.b_fn.is_none() && alt.b != 0 {
+                     matched.b = alt.b;
+                 }
+@@ -2838,6 +2896,7 @@
+                                 Self::phase_token(&current_rule),
+                             )
+                         })?;
++                    context.unpublish_rule();
+                 }
+ 
+                 // The alternate's error hook runs AFTER the routing forms
+@@ -2851,6 +2910,7 @@
+                     let result = self.catch_callback("alternate error", src, || {
+                         error_hook(&mut current_rule, &mut context)
+                     });
++                    context.unpublish_rule();
+                     matched.e = result
+                         .map_err(|error| {
+                             self.attach_error(
+@@ -2868,6 +2928,7 @@
+                     let result = self.catch_callback("matched alternate error", src, || {
+                         error_hook(&mut current_rule, &mut context, &mut matched)
+                     });
++                    context.unpublish_rule();
+                     matched.e = result
+                         .map_err(|error| {
+                             self.attach_error(
+@@ -2989,6 +3050,7 @@
+                                         alts,
+                                     )
+                                 })?;
++                            context.unpublish_rule();
+                             let token = result.map_err(|action_error| {
+                                 self.attach_action_error(
+                                     action_error.into(),
+@@ -3024,6 +3086,7 @@
+                             .map_err(|error| {
+                                 self.attach_action_error(error, src, &current_rule, &stack, alts)
+                             })?;
++                        context.unpublish_rule();
+                         let token = result.map_err(|action_error| {
+                             self.attach_action_error(
+                                 action_error.into(),

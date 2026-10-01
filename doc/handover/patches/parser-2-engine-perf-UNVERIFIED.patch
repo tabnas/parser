@@ -1,0 +1,742 @@
+From 36d6f76cc976fc6ce9aa4382c6c90f27c49a9e32 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 30 Sep 2026 16:05:32 +0000
+Subject: [PATCH] rs: a recovering or relexing parse of a valid input is linear
+
+Two costs TypeScript does not have made a valid input quadratic in the
+Rust engine.
+
+Recovery. With parse.recover.enabled, each update_partial call (fifteen
+sites, about six a step) took the value a failed parse would return: a
+clone of the value built so far, walked by unwrap_undefined, and held
+until the next call, so the next action's append copied the container
+it went into. A call now keeps a handle on the chosen node's cell (a
+reference count on the cell, not on the value), and Partial::into_value
+reads and unwraps the value once, after the parse has failed. The node
+is chosen by the same test in the same order and survives recovery's
+pops, so the value is the one the last call would have taken; only a
+callback that writes the node and then fails before the next call can
+tell the two apart, and there the value is the node as the failure left
+it, which is what TypeScript returns.
+
+Relex. Every re-cut the lexer rejects ended in an error nobody reads,
+and each copied the whole source into full_source three times. The
+matchers now build their errors without the source; next_raw_with
+attaches it where an error leaves the lexer, and relex calls the
+matchers directly, so a rejected cut never pays it. A standing lexer
+error is moved into the re-cut's checkpoint rather than copied.
+
+Release build, best of three, old and new interleaved (load 5.6-8.7):
+  css      recover  a{b:c} x 2,000 (14 KB)    8.03 s  -> 0.025 s
+  css      recover  a{b:c} x 4,000 (28 KB)   62.4 s   -> 0.054 s
+  jsonic   recover  [[1],...] 8,000 (32 KB)  44.4 s   -> 0.097 s
+  css      relex    a{b:c} x 32,000 (224 KB) 68.0 s   -> 2.54 s
+  jsonic   relex    [1,...] 64,000 (128 KB)  66.2 s   -> 4.15 s
+
+rs/tests/linear_time_test.rs pins both (10x the items in under 30x the
+time): 10x to 13x now, 71x and 91x on the old code, where it fails.
+
+A differential of the old and new engines over 116,265 jsonic and
+80,000 css inputs, mostly invalid, in 19 configurations (recovery and
+relex on and off, and recovery narrowed until it gives up) printed the
+same values and errors, full_source included, byte for byte; recovery
+gave up, and so returned the partial value, in 519,465 of those parses.
+doc/per-rule-cost.md records the measurements and the method.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017YWzsjpwCJLLAsWUYqogSQ
+---
+ doc/per-rule-cost.md               | 119 ++++++++++++++++++--
+ doc/rust-callback-contract-spec.md |   4 +-
+ rs/src/lexer.rs                    |  56 ++++++----
+ rs/src/parser.rs                   |  98 ++++++++++++----
+ rs/tests/linear_time_test.rs       | 173 +++++++++++++++++++++++++++++
+ 5 files changed, 393 insertions(+), 57 deletions(-)
+ create mode 100644 rs/tests/linear_time_test.rs
+
+diff --git a/doc/per-rule-cost.md b/doc/per-rule-cost.md
+index 3966767..2afa7cc 100644
+--- a/doc/per-rule-cost.md
++++ b/doc/per-rule-cost.md
+@@ -712,15 +712,10 @@ to peak memory (`VmHWM` 56.5 MiB and 664.8 MiB against 56.5 MiB and
+   record is uniquely held. It depends on change 1 and touches link
+   semantics beside the `rule-history-next-control` row; estimated at
+   about 0.9%. It was not attempted.
+-- Recovery. With `parse.recover.enabled`, each of the about six
+-  `update_partial` calls on an ordinary step (15 sites in all) walks the
+-  whole partial value (`rs/src/parser.rs:3800-3827`; the clone is a
+-  shallow `Arc` bump, the walk is `unwrap_undefined` into
+-  `contains_undefined`), which makes a recovering parse
+-  quadratic. The benchmark does not recover, so this profile cannot size
+-  it; it is a separate change with its own measurement. The same holds
+-  for the error path, where `TabnasError::new` copies the whole source
+-  per error.
++- Recovery, and the error path under negotiated lexing. Neither is a
++  per-rule cost and the benchmark reaches neither, but both made a valid
++  input quadratic, so both were repaired on their own, as "Recovery and
++  negotiated lexing, repaired separately" below records.
+ - Costs this grammar barely exercises. These are the key clone on
+   every `n`, `u` or `k` write, action names resolved per call instead of
+   at install, declarative conditions evaluated on a cloned rule, and
+@@ -738,6 +733,112 @@ to peak memory (`VmHWM` 56.5 MiB and 664.8 MiB against 56.5 MiB and
+ - Downstream suites. Only `rs/` was tested against the prototypes.
+   `ci/fleet/run-fleet.sh` runs with each change as it lands.
+ 
++## Recovery and negotiated lexing, repaired separately
++
++Two costs outside the benchmark grew with the square of a valid input,
++and TypeScript has neither. Both are repaired, and both return what the
++engine returned before, value and error, on every input the differential
++below tried. The one corner where recovery can differ is named under
++"Recovery".
++
++**Recovery.** With `parse.recover.enabled`, each `update_partial` call
++(fifteen sites in the loop, about six on an ordinary step) took the
++value a failed parse would return: a clone of the value built so far,
++then `unwrap_undefined`, which walked all of it (`contains_undefined`).
++The clone, held until the next call, also shared the container the
++next action appended to, so `Arc::make_mut` copied that container
++whole. A call now keeps a handle on the node's cell, a reference count
++on the cell and never on the value, and `Partial::into_value` reads and
++unwraps the value once, after a parse that failed (`rs/src/parser.rs`).
++The node is chosen by the same test, in the same order, and it is kept
++when recovery then pops the rules that held it, so the value is the one
++the last call would have taken. Only a write to that node between the
++last call and the failure can tell the two apart: an action or callback
++that changes the node and then fails, or that is followed by a matched
++action whose error recovery gives up on. The value is then the node as
++the failure left it, which is what TypeScript returns, because it reads
++the node in its `catch`.
++
++**Negotiated lexing.** With `lex.relex` on, an alternate whose slot the
++lookahead does not fill asks the lexer for a re-cut, and a re-cut the
++lexer rejects ends in an error nobody reads. Each such error copied the
++whole source into `full_source` three times: once in
++`TabnasError::new`, once for the copy the matcher kept as the lexer's
++error, and once for the copy `next_raw_with` kept. The matchers now
++build their errors without the source, and `next_raw_with` attaches it
++where an error leaves the lexer, which a rejected cut never does,
++because `relex` calls the matchers directly (`rs/src/lexer.rs`). A
++standing lexer error is moved into the re-cut's checkpoint instead of
++copied into it. What is left is a copy of the source per error
++reported, not per cut attempted.
++
++Measured on the release profile with the glibc allocator, as the best
++of three runs of `parse_recover` (one run where marked), on a 4-core
++container that other jobs were sharing: the 1-minute load was 5.6 to
++8.7 throughout. The engine before is `eb537df`. Old and new ran
++interleaved, row by row. The harness is not committed, unlike the rest
++of this document's tools: it links the jsonic and css crates, which this
++repository does not depend on, and adding them would be a dependency
++change. `rs/tests/linear_time_test.rs` is the part anyone can re-run.
++The css input is `a{b:c}` and a newline, repeated. The jsonic inputs are
++one array of numbers, `[1,1,...]`, or of one-element arrays,
++`[[1],[1],...]`.
++
++| Grammar | Options | Input | Bytes | Before | After |
++|---|---|---|---|---|---|
++| css | none | 2,000 rules | 14,000 | 0.028 s | 0.024 s |
++| css | recover | 1,000 rules | 7,000 | 0.97 s | 0.013 s |
++| css | recover | 2,000 rules | 14,000 | 8.03 s | 0.025 s |
++| css | recover | 4,000 rules | 28,000 | 62.4 s, one run | 0.054 s |
++| css | recover | 32,000 rules | 224,000 | not run | 0.43 s |
++| jsonic | none | 16,000 numbers | 32,003 | 0.075 s | 0.076 s |
++| jsonic | recover | 8,000 numbers | 16,003 | 0.88 s | 0.037 s |
++| jsonic | recover | 16,000 numbers | 32,003 | 4.05 s | 0.099 s |
++| jsonic | recover | 64,000 numbers | 128,003 | not run | 0.43 s |
++| jsonic | recover | 4,000 arrays | 16,003 | 4.47 s | 0.069 s |
++| jsonic | recover | 8,000 arrays | 32,003 | 44.4 s, one run | 0.097 s |
++| jsonic | recover | 64,000 arrays | 256,003 | not run | 1.17 s |
++| css | none | 32,000 rules | 224,000 | 0.48 s | 0.47 s |
++| css | relex | 8,000 rules | 56,000 | 1.57 s | 0.57 s |
++| css | relex | 16,000 rules | 112,000 | 14.4 s, one run | 1.16 s |
++| css | relex | 32,000 rules | 224,000 | 68.0 s, one run | 2.54 s |
++| css | relex | 64,000 rules | 448,000 | not run | 5.26 s |
++| jsonic | none | 64,000 numbers | 128,003 | 0.32 s | 0.33 s |
++| jsonic | relex | 16,000 numbers | 32,003 | 2.14 s | 1.07 s |
++| jsonic | relex | 32,000 numbers | 64,003 | 15.5 s, one run | 1.97 s |
++| jsonic | relex | 64,000 numbers | 128,003 | 66.2 s, one run | 4.15 s |
++| jsonic | relex | 128,000 numbers | 256,003 | not run | 7.31 s |
++| css | recover, relex | 2,000 rules | 14,000 | 9.35 s, one run | 0.16 s |
++| css | recover, relex | 32,000 rules | 224,000 | not run | 3.01 s |
++
++A recovering parse of a valid input now costs about what a plain one
++does. A relexing parse still costs five to thirteen times a plain one,
++in the rejected cuts themselves, but that factor no longer grows with
++the input.
++
++`rs/tests/linear_time_test.rs` pins both in the debug build the suite
++runs in: 10,000 items must take under 30 times what 1,000 take. The
++ratios were 10 to 13 after the repairs, and 71 (recovery, a flat array)
++and 91 (relex) before, where each test failed.
++
++The values and errors are the ones the engine returned before. The
++same harness ran `eb537df` and this change over two corpora of mostly
++invalid input, 116,265 jsonic documents and 80,000 stylesheets, built
++from the shared fixtures of `jsonic`, `json` and `css`, every prefix of
++the short ones, 6,000 documents from `ci/fuzz/gencorpus.js`, and random
++damage to all of them, each at most 2,000 characters. Every input went through
++`parse_recover` and `parse`, and the `Debug` form of every value and
++every error, `full_source` included, was compared byte for byte in 19
++configurations: recovery off and on, relex off and on, and recovery
++narrowed until it gives up (`max_recoveries` 0, 1 and 2, `max_skip` 0,
++`pop_until_valid` off). All 19 were identical. Recovery gave up, and so
++returned the value this change reads at the end, in 519,465 of the
++`parse_recover` calls: 308,373 in css and 211,092 in jsonic, 498,563 of
++them with a node to read. The jsonic grammar accepts the end of the
++source in its close states, and with the default options its recovery
++never gave up on this corpus: only the narrowed configurations reach
++that path there.
++
+ ## Landing order, and what waits on the maintainer
+ 
+ Changes 1 to 7 are internal to the Rust port, so each lands in Rust
+diff --git a/doc/rust-callback-contract-spec.md b/doc/rust-callback-contract-spec.md
+index ae94650..98cc643 100644
+--- a/doc/rust-callback-contract-spec.md
++++ b/doc/rust-callback-contract-spec.md
+@@ -1050,7 +1050,7 @@ Size arithmetic (informational; the invariants a test pins are in §6 test 12 **
+     ```
+     `clear_unrun_link` runs on the FIRST rule the loop moves, which is the rule that failed; every later one is an ancestor whose `Child` tag names the child it really pushed and which this loop has just retired into its `child_rule`. Four shared reborrows of `current_rule`/`context` now reach the `notify_forced_close` call — `&**current_rule` and `context.ancestors()` through `forced_next`, then `current_rule` and `&*context` in the call itself, plus `context.ancestors().last()` — and every one of them is shared, so they coexist; `forced_next` returns an owned `Option<&Rule>` that holds no `&mut`. `child()` is the iterative `prev_rule` walk of §2. **[V3]**
+ - `ensure_lookahead` (:1203-…): `site.stack` → `context.ancestors()` in the `map_err`s and at :1246; the two `continuation_tins` calls (:1284, :1310) become `continuation_tins(context, rule, context.ancestors(), &self.rules, &self.options, context.t.len(), None)` — three shared reborrows of the same `&mut Context` (`&*context` by coercion, `context.ancestors()`, `context.t.len()`) in one expression, no `&mut` among them, so it compiles **[R5]**.
+-- `update_partial`/`best_partial_value` (:2934-…), `compute_sync_tins` (:3154), `continuation_tins` (:3223), `conditions_match` (:3346): `stack: &[Rule]` → `Ancestors<'_>`.
++- `update_partial`/`best_partial_node` (:2934-…), `compute_sync_tins` (:3154), `continuation_tins` (:3223), `conditions_match` (:3346): `stack: &[Rule]` → `Ancestors<'_>`.
+ - The four walkers (:3387-:3534) collapse into one (§4).
+ 
+ **The parse loop**
+@@ -1586,7 +1586,7 @@ All arithmetic is against the verified adder-512 profile (155,148,899 Ir, 20 par
+ | the `candidate` swap | 0 (no declarative conditions) | two `Rc` moves per alternate with a declarative condition; today a whole-rule clone |
+ | lazy `next` for before/after state actions, **including `NextOf::Pending`** | **0** — neither grammar binds a lifecycle action | **0 new** — `@val-bo`/`@map-bo`/`@list-bo`/`@val-bc`/`@pair-bc`/`@elem-bc` are builtins (builtins.rs:28-34): the `Named` arm's single `state_actions.get` misses (one SipHash today, one after — no pre-scan, no second lookup) and `owned` never materialises. Today's :1540 `snapshot()` was an `Rc` bump that made the builtin's first write (builtins.rs:310) a 152 B copy; both go. A grammar that binds a lifecycle **state** action pays one `to_snapshot()` (~120 B + 9 refcount bumps, 2 atomic) on the first bound state action of that pass — for a self, a parent **or a pending** `next` **[P1]** — where today it paid an `Rc` bump plus a full-record copy on the next write |
+ | the `child`-hop chain walk in the declarative walker and in `Rule::child()` | 0 (no `child.*`/`next.*` condition; `child()` is called only from the walker, the forced-close loop and the recovery reader) | 0 (none declared) |
+-| `Vec<Box<Rule>>` on the `Context` where a `Vec<Rule>` loop local used to be: one pointer hop per frame on the stack scans, and a hot local becomes a field load **[n]** | not measured, and not claimed to be zero. The scans are `best_partial_value`, `compute_sync_tins`, `continuation_tins` and `conditions_match`; all of them are recovery or continuation paths except `update_partial`, which is gated on `mode.recovering`. Neither benchmark recovers, so this should not appear in either profile — if stage A comes in **under** its band, this is the second thing to look at after a surviving publish | same |
++| `Vec<Box<Rule>>` on the `Context` where a `Vec<Rule>` loop local used to be: one pointer hop per frame on the stack scans, and a hot local becomes a field load **[n]** | not measured, and not claimed to be zero. The scans are `best_partial_node`, `compute_sync_tins`, `continuation_tins` and `conditions_match`; all of them are recovery or continuation paths except `update_partial`, which is gated on `mode.recovering`. Neither benchmark recovers, so this should not appear in either profile — if stage A comes in **under** its band, this is the second thing to look at after a surviving publish | same |
+ | `debug_u_copies` counter | debug builds only | debug builds only |
+ | **Total new (adder)** | **~0.35M** | |
+ 
+diff --git a/rs/src/lexer.rs b/rs/src/lexer.rs
+index 92b2670..fa919c4 100644
+--- a/rs/src/lexer.rs
++++ b/rs/src/lexer.rs
+@@ -624,7 +624,14 @@ impl<'a> Lexer<'a> {
+         if from.src.is_empty() || from.site.pos > self.char_len || wanted.is_empty() {
+             return None;
+         }
+-        let saved = self.state();
++        // The standing error, if any, is moved into the checkpoint rather
++        // than copied: the cut below clears it anyway, and a copy is the
++        // length of the source (`full_source`) for every cut attempted.
++        let err = self.err.take();
++        let saved = LexerState {
++            err,
++            ..self.state()
++        };
+         // TypeScript temporarily replaces the lexer's pending-token queue
+         // with an empty queue for a negotiated cut. Rust keeps that queue on
+         // Context, so hide it explicitly and preserve it in the checkpoint.
+@@ -635,7 +642,12 @@ impl<'a> Lexer<'a> {
+         self.err = None;
+         self.end_reached = false;
+         self.want = Some(wanted.to_vec());
+-        let recut = self.next_raw_with(None, Some((rule, context))).ok();
++        // Straight to the matchers, past `next_raw_with`: an error here only
++        // rejects the cut, and the restore below puts back the lexer's own,
++        // so the source it would attach, and the copy it would keep, are
++        // never seen. With them, every rejected cut cost the length of the
++        // source, and a flat stylesheet parsed in quadratic time.
++        let recut = self.next_raw_inner(None, Some((rule, context))).ok();
+         self.want = None;
+         match recut.filter(|token| wanted.contains(&token.tin)) {
+             Some(mut token) => {
+@@ -718,6 +730,12 @@ impl<'a> Lexer<'a> {
+         match result {
+             Ok(token) => Ok(token),
+             Err(mut error) => {
++                // The matchers build their errors without the source, and it
++                // is attached here, where an error leaves the lexer: a
++                // negotiated cut (`relex`) rejects many candidates, each an
++                // error nobody sees, and a copy of the whole source apiece
++                // made that quadratic.
++                error.full_source = self.src.to_string();
+                 error.apply_options(&self.options);
+                 self.err = Some((*error).clone());
+                 Err(error)
+@@ -1107,7 +1125,7 @@ impl<'a> Lexer<'a> {
+             let err = TabnasError::new(
+                 "unexpected",
+                 bad_char.to_string(),
+-                self.src,
++                "",
+                 pnt.site.pos,
+                 pnt.site.ri,
+                 pnt.site.ci,
+@@ -1347,7 +1365,7 @@ impl<'a> Lexer<'a> {
+         let err = TabnasError::new(
+             "unexpected",
+             bad_char.to_string(),
+-            self.src,
++            "",
+             pnt.site.pos,
+             pnt.site.ri,
+             pnt.site.ci,
+@@ -1444,7 +1462,7 @@ impl<'a> Lexer<'a> {
+             let err = TabnasError::new(
+                 "unterminated_comment",
+                 src,
+-                self.src,
++                "",
+                 pnt.site.pos,
+                 pnt.site.ri,
+                 pnt.site.ci,
+@@ -1788,14 +1806,8 @@ impl<'a> Lexer<'a> {
+                 // reporting that put every embedded newline at the start
+                 // of its string.
+                 let site = self.current_point().site;
+-                let err = TabnasError::new(
+-                    "unprintable",
+-                    c.to_string(),
+-                    self.src,
+-                    site.pos,
+-                    site.ri,
+-                    site.ci,
+-                );
++                let err =
++                    TabnasError::new("unprintable", c.to_string(), "", site.pos, site.ri, site.ci);
+                 self.err = Some(err.clone());
+                 return Err(Box::new(err));
+             }
+@@ -1805,7 +1817,7 @@ impl<'a> Lexer<'a> {
+                 let err = TabnasError::new(
+                     "unprintable",
+                     c.to_string(),
+-                    self.src,
++                    "",
+                     self.current_point().site.pos,
+                     self.current_point().site.ri,
+                     self.current_point().site.ci,
+@@ -1857,7 +1869,7 @@ impl<'a> Lexer<'a> {
+                                     let err = TabnasError::new(
+                                         "invalid_unicode",
+                                         self.source_span(esc_point.site.pos - 1, self.idx),
+-                                        self.src,
++                                        "",
+                                         esc_point.site.pos - 1,
+                                         esc_point.site.ri,
+                                         esc_point.site.ci - 1,
+@@ -1872,7 +1884,7 @@ impl<'a> Lexer<'a> {
+                                         let err = TabnasError::new(
+                                             "invalid_unicode",
+                                             self.source_span(esc_point.site.pos - 1, self.idx),
+-                                            self.src,
++                                            "",
+                                             esc_point.site.pos - 1,
+                                             esc_point.site.ri,
+                                             esc_point.site.ci - 1,
+@@ -1910,7 +1922,7 @@ impl<'a> Lexer<'a> {
+                                             esc_point.site.pos - 1,
+                                             esc_point.site.pos + 5,
+                                         ),
+-                                        self.src,
++                                        "",
+                                         esc_point.site.pos - 1,
+                                         esc_point.site.ri,
+                                         esc_point.site.ci - 1,
+@@ -1926,7 +1938,7 @@ impl<'a> Lexer<'a> {
+                                             esc_point.site.pos - 1,
+                                             esc_point.site.pos + 5,
+                                         ),
+-                                        self.src,
++                                        "",
+                                         esc_point.site.pos - 1,
+                                         esc_point.site.ri,
+                                         esc_point.site.ci - 1,
+@@ -1961,7 +1973,7 @@ impl<'a> Lexer<'a> {
+                                         esc_point.site.pos - 1,
+                                         esc_point.site.pos + 3,
+                                     ),
+-                                    self.src,
++                                    "",
+                                     esc_point.site.pos - 1,
+                                     esc_point.site.ri,
+                                     esc_point.site.ci - 1,
+@@ -1984,7 +1996,7 @@ impl<'a> Lexer<'a> {
+                                 let err = TabnasError::new(
+                                     "unexpected",
+                                     other.to_string(),
+-                                    self.src,
++                                    "",
+                                     esc_point.site.pos,
+                                     esc_point.site.ri,
+                                     esc_point.site.ci,
+@@ -2000,7 +2012,7 @@ impl<'a> Lexer<'a> {
+                     let err = TabnasError::new(
+                         "unterminated_string",
+                         raw_src,
+-                        self.src,
++                        "",
+                         pnt.site.pos,
+                         pnt.site.ri,
+                         pnt.site.ci,
+@@ -2018,7 +2030,7 @@ impl<'a> Lexer<'a> {
+         let err = TabnasError::new(
+             "unterminated_string",
+             raw_src,
+-            self.src,
++            "",
+             pnt.site.pos,
+             pnt.site.ri,
+             pnt.site.ci,
+diff --git a/rs/src/parser.rs b/rs/src/parser.rs
+index 5feaa10..1ea5709 100644
+--- a/rs/src/parser.rs
++++ b/rs/src/parser.rs
+@@ -47,7 +47,34 @@ struct ParseMode<'a> {
+     continuation: Option<&'a mut ContinuationCapture>,
+     recovering: bool,
+     errors: &'a mut Vec<TabnasError>,
+-    partial: Option<Value>,
++    partial: Partial,
++}
++
++/// Where the value a failed recovering parse returns is to be found.
++///
++/// The parse loop names it at each of its `update_partial` sites and the
++/// value is read once, when the parse has ended, rather than copied at
++/// each site. See `update_partial` for why that is the same value.
++enum Partial {
++    /// No node held a usable value at the last site.
++    None,
++    /// The node that did. Its value is read when the parse has ended.
++    Node(Rc<std::cell::RefCell<Value>>),
++    /// The completed result, after the loop.
++    Value(Value),
++}
++
++impl Partial {
++    /// The value, read now: once the parse has ended.
++    fn into_value(self) -> Option<Value> {
++        let value = match self {
++            Partial::None => return None,
++            Partial::Node(node) => Rc::try_unwrap(node)
++                .map_or_else(|node| node.borrow().clone(), |node| node.into_inner()),
++            Partial::Value(value) => return Some(value),
++        };
++        partial_usable(&value).then(|| value.unwrap_undefined())
++    }
+ }
+ 
+ struct RelexUndo {
+@@ -1484,7 +1511,7 @@ impl Parser {
+             continuation: None,
+             recovering,
+             errors: &mut errors,
+-            partial: None,
++            partial: Partial::None,
+         };
+         let result = self
+             .parse_inner(src, meta, owner, parent, &mut mode)
+@@ -1493,7 +1520,7 @@ impl Parser {
+                 error
+             });
+         match result {
+-            Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
++            Err(_) if recovering => Ok(mode.partial.into_value().unwrap_or(Value::Undefined)),
+             other => other,
+         }
+     }
+@@ -1587,7 +1614,7 @@ impl Parser {
+                 continuation: None,
+                 recovering,
+                 errors: &mut errors,
+-                partial: None,
++                partial: Partial::None,
+             };
+             let result = self
+                 .parse_inner(src, meta, owner, parent, &mut mode)
+@@ -1595,7 +1622,7 @@ impl Parser {
+                     self.decorate_error(&mut error);
+                     error
+                 });
+-            (result, mode.partial)
++            (result, mode.partial.into_value())
+         };
+         for error in &mut errors {
+             self.decorate_error(error);
+@@ -1686,7 +1713,7 @@ impl Parser {
+                 continuation: Some(&mut capture),
+                 recovering: false,
+                 errors: &mut errors,
+-                partial: None,
++                partial: Partial::None,
+             };
+             self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
+         };
+@@ -3701,7 +3728,7 @@ impl Parser {
+ 
+         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
+         if mode.recovering {
+-            mode.partial = Some(res.clone());
++            mode.partial = Partial::Value(res.clone());
+         }
+ 
+         // Post-loop check: ensure no unexpected trailing tokens. Recovery
+@@ -3791,11 +3818,34 @@ impl Parser {
+ 
+ /// Keep the best partial result the recovery path would return.
+ ///
+-/// Ten sites in the parse loop call this, twelve times per input construct
+-/// on the benchmark grammars, and outside recovery every one of them is a
+-/// load and a branch wrapped in a call. The guard is inline so the call
+-/// goes away; the search behind it stays out of line, because a parse that
+-/// is recovering is not the one being measured.
++/// Fifteen sites in the parse loop call this, twelve times per input
++/// construct on the benchmark grammars, and outside recovery every one of
++/// them is a load and a branch wrapped in a call. The guard is inline so
++/// the call goes away; the search behind it stays out of line.
++///
++/// A site names the node whose value the parse would return if it failed
++/// now: the root, else the outermost rule on the stack, else the current
++/// rule, whichever first holds something other than undefined or null.
++/// The value itself is read once, by [`Partial::into_value`], after the
++/// parse has ended. Each site used to take it: a clone of the value, then
++/// `unwrap_undefined`, which walked all of it, and the clone, held until
++/// the next site, shared the very containers the next action appended to,
++/// so `Arc::make_mut` copied them. Both are the size of the value built so
++/// far, six times a step, which made a recovering parse of a VALID input
++/// quadratic: 14 KB of `a{b:c}` took 8 s in the css grammar with recovery
++/// on, and 0.03 s with it off. A handle on the node's cell costs a
++/// reference count on the cell, never on the value, so nothing is shared
++/// and nothing is copied (`tests/linear_time_test.rs`).
++///
++/// The value read at the end is the one the last site would have taken:
++/// the node is chosen by the same test, in the same order, and it keeps
++/// the node even when recovery then pops the rules that held it. Only a
++/// write to that node between the last site and the failure can tell the
++/// two apart -- an action or callback that changes the node and then
++/// fails, or is followed by a matched action whose error recovery gives up
++/// on -- and the value is then the node as the failure left it, which is
++/// what TypeScript returns: it reads the node in its `catch`
++/// (`ts/src/parser.ts`), not before the step that failed.
+ #[inline]
+ fn update_partial(
+     mode: &mut ParseMode<'_>,
+@@ -3804,26 +3854,26 @@ fn update_partial(
+     stack: &[Rule],
+ ) {
+     if mode.recovering {
+-        mode.partial = best_partial_value(root_node, current_rule, stack);
++        mode.partial = best_partial_node(root_node, current_rule, stack);
+     }
+ }
+ 
+ #[inline(never)]
+-fn best_partial_value(
++fn best_partial_node(
+     root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
+     current_rule: &Rule,
+     stack: &[Rule],
+-) -> Option<Value> {
+-    let usable = |value: Value| (!matches!(value, Value::Undefined | Value::Null)).then_some(value);
++) -> Partial {
++    std::iter::once(root_node)
++        .chain(stack.iter().map(|rule| &rule.node))
++        .chain(std::iter::once(&current_rule.node))
++        .find(|node| partial_usable(&node.borrow()))
++        .map_or(Partial::None, |node| Partial::Node(Rc::clone(node)))
++}
+ 
+-    usable(root_node.borrow().clone())
+-        .or_else(|| {
+-            stack
+-                .iter()
+-                .find_map(|rule| usable(rule.node.borrow().clone()))
+-        })
+-        .or_else(|| usable(current_rule.node.borrow().clone()))
+-        .map(Value::unwrap_undefined)
++/// Whether a node's value is worth returning from a failed parse.
++fn partial_usable(value: &Value) -> bool {
++    !matches!(value, Value::Undefined | Value::Null)
+ }
+ 
+ fn error_token(error: &TabnasError) -> Token {
+diff --git a/rs/tests/linear_time_test.rs b/rs/tests/linear_time_test.rs
+new file mode 100644
+index 0000000..05db344
+--- /dev/null
++++ b/rs/tests/linear_time_test.rs
+@@ -0,0 +1,173 @@
++//! A valid input parses in time linear in its length with recovery on and
++//! with negotiated lexing (`lex.relex`) on, as it does with both off.
++//!
++//! Neither is a cost TypeScript has, and both were quadratic here:
++//!
++//! - Recovery named its partial value at every step by taking it: a clone
++//!   of the value built so far, walked for `undefined`, and held until the
++//!   next step, so the grammar's next append copied the container it went
++//!   into. 14 KB of css took 8 s in a release build.
++//! - A negotiated cut the lexer rejects ends in an error nobody sees, and
++//!   each one copied the whole source into it, three times over.
++//!
++//! Ten times the input takes about ten times as long. Quadratic work takes
++//! a hundred; the bound is generous so a busy machine cannot fail it. In
++//! the debug build the suite runs in, the ratios below were 10 to 13, and
++//! before the repairs 71 (recovery, the flat array) and 91 (relex).
++
++use std::time::{Duration, Instant};
++use tabnas::{RecoverOptions, Tabnas, Value};
++
++/// The fastest of a few parses of `src`, to keep a loaded machine's stalls
++/// and a coarse clock out of the comparison. Every one must succeed.
++fn fastest(parser: &Tabnas, src: &str) -> Duration {
++    (0..3)
++        .map(|_| {
++            let start = Instant::now();
++            let parsed = parser.parse_recover(src);
++            let elapsed = start.elapsed();
++            assert!(
++                parsed.errors.is_empty() && parsed.fatal.is_none() && parsed.value.is_some(),
++                "{:?}",
++                parsed.errors.first().or(parsed.fatal.as_ref())
++            );
++            elapsed
++        })
++        .min()
++        .expect("three runs")
++}
++
++fn assert_linear(what: &str, parser: &Tabnas, document: impl Fn(usize) -> String) {
++    let small = fastest(parser, &document(1_000));
++    let large = fastest(parser, &document(10_000));
++    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
++    assert!(
++        ratio < 30.0,
++        "{what}: 1,000 items took {small:?} and 10,000 took {large:?}: {ratio:.1}x"
++    );
++}
++
++fn recovering_json() -> Tabnas {
++    let mut parser = Tabnas::make_json();
++    parser.options.parse.recover = RecoverOptions {
++        enabled: true,
++        ..Default::default()
++    };
++    parser
++}
++
++type Document = fn(usize) -> String;
++
++const DOCUMENTS: [(&str, Document); 3] = [
++    ("a flat array", |n| format!("[{}1]", "1,".repeat(n))),
++    ("an array of arrays", |n| {
++        format!("[{}[1]]", "[1],".repeat(n))
++    }),
++    ("an object", |n| {
++        let pairs: String = (0..n).map(|i| format!("\"k{i}\":{{\"v\":{i}}},")).collect();
++        format!("{{{pairs}\"z\":1}}")
++    }),
++];
++
++#[test]
++fn a_recovering_parse_of_a_valid_input_is_linear() {
++    let parser = recovering_json();
++    for (what, document) in DOCUMENTS {
++        assert_linear(what, &parser, document);
++    }
++}
++
++/// What the recovering parse returns is still the value the plain parse
++/// builds, and a failure still returns the partial value the last step
++/// named, container and all.
++#[test]
++fn a_recovering_parse_returns_the_same_values() {
++    let parser = recovering_json();
++    let plain = Tabnas::make_json();
++    for (what, document) in DOCUMENTS {
++        let src = document(100);
++        assert_eq!(
++            parser.parse_recover(&src).value,
++            Some(plain.parse(&src).expect("valid")),
++            "{what}"
++        );
++        // Cut short, recovery gives up at the end of the source and the
++        // value is the outer container as far as it got.
++        let cut = &src[..src.len() / 2];
++        let recovered = parser.parse_recover(cut);
++        assert!(!recovered.errors.is_empty(), "{what}: {cut}");
++        match recovered.value {
++            Some(Value::Array(items)) => assert!(!items.is_empty(), "{what}"),
++            Some(Value::Object(entries)) => assert!(!entries.is_empty(), "{what}"),
++            other => panic!("{what}: {other:?}"),
++        }
++    }
++}
++
++/// The letters of the tokens every item is offered to before `#A` takes it.
++const REJECTED: [&str; 2] = ["B", "C"];
++
++/// Every `a` is offered first to two alternates that want `#B` and `#C`,
++/// so under relex each item is two re-cuts the lexer rejects before `#A`
++/// takes it, each an `unexpected` error that nobody sees. The padding
++/// makes the source long without adding steps or cuts: lexing it is
++/// cheap, and a cut that costs the length of the source pays for every
++/// byte of it.
++fn relexing(relex: bool) -> Tabnas {
++    let fixed: String = REJECTED
++        .iter()
++        .map(|t| format!(r##","#{t}":"{}""##, t.to_lowercase()))
++        .collect();
++    let alternates: String = REJECTED
++        .iter()
++        .map(|t| format!(r##"{{"s":"#{t}"}},"##))
++        .collect();
++    let mut parser = Tabnas::new();
++    parser
++        .grammar_json(&format!(
++            r##"{{
++              "clear":true,
++              "options":{{
++                "lex":{{"relex":{relex}}},
++                "rule":{{"start":"top"}},
++                "fixed":{{"token":{{"#A":"a"{fixed}}}}}
++              }},
++              "rule":{{"top":{{"open":[
++                {alternates}
++                {{"s":"#A","r":"top"}},
++                {{"s":"#ZZ"}}
++              ]}}}}
++            }}"##
++        ))
++        .expect("the grammar installs");
++    parser
++}
++
++fn padded(n: usize) -> String {
++    format!("a{}", " ".repeat(400)).repeat(n)
++}
++
++#[test]
++fn a_relexing_parse_of_a_valid_input_is_linear() {
++    // The same input parses the same way without relex, so every one of
++    // the re-cuts below is one the lexer rejects.
++    let src = padded(3);
++    assert_eq!(
++        relexing(false).parse(&src).expect("parses"),
++        relexing(true).parse(&src).expect("parses")
++    );
++    assert_linear("rejected re-cuts", &relexing(true), padded);
++}
++
++/// A rejected cut is still rejected, and an error that leaves the lexer
++/// still carries the whole source, attached where it leaves.
++#[test]
++fn a_lexer_error_still_carries_the_source() {
++    let src = "a a \"x";
++    for relex in [false, true] {
++        let error = relexing(relex).parse(src).expect_err("the string is open");
++        assert_eq!(error.code, "unterminated_string", "relex={relex}");
++        assert_eq!(error.full_source, src, "relex={relex}");
++        assert_eq!((error.row, error.col), (1, 5), "relex={relex}");
++    }
++}
+-- 
+2.43.0
+
