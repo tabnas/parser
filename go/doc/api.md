@@ -466,6 +466,46 @@ grammar.
 `Forced` is always false until Go gains error recovery: only recovery
 synthesizes a close.
 
+### `(*Rule) NodeCell() *Rule` / `(*Rule) SetNode(v any)`
+
+Container identity and in-place replacement, for a rule-done
+subscriber that streams or prunes a container during the parse.
+
+```go
+func (r *Rule) NodeCell() *Rule // the rule holding the container r.Node belongs to
+func (r *Rule) SetNode(v any)   // replace that container in every rule building into it
+```
+
+`NodeCell` returns the same `*Rule` for every rule building into one
+container, so the pointer is the container's identity, and its `Node`
+field is the container's current value. A rule whose node is a scalar,
+or a container it allocated itself, returns itself. `NoRule` and nil
+return themselves.
+
+`SetNode` writes `v` to the cell, to the rule, to the unbroken run of
+`Parent` rules holding the same container, and to `r.Next`. Use it to
+truncate a list in place: the rule that appends next grows the
+truncated list, and the parse result is the truncated list.
+
+```go
+j.SubRuleDone(func(rule *tabnas.Rule, ctx *tabnas.Context, done tabnas.RuleDone) {
+	if tabnas.CLOSE != done.State {
+		return
+	}
+	if items, ok := rule.NodeCell().Node.([]any); ok && 0 < len(items) {
+		emit(items)            // stream what this pass added
+		rule.SetNode(items[:0]) // and drop it from the tree
+	}
+})
+```
+
+Assigning `rule.Node = items[:0]` instead changes that rule's copy
+only, and the next append restores the dropped elements. Maps are
+pointers, so editing one in place needs no `SetNode`. Both methods are
+Go-only; see `differences.md`, "Node identity in a rule-done
+subscriber", for the TypeScript and Rust equivalents and the cases
+`SetNode` does not reach.
+
 ## Completion
 
 ### `(*Tabnas) Continuations(src string) ([]Tin, []string)`

@@ -187,6 +187,7 @@ func builtinBubble(r *Rule, _ *Context) {
 		// from deeper in the chain would leave that rule with a stale
 		// header.
 		r.nodeOwner = r.Child.nodeHolder()
+		r.ownedKind = nodeKind(r.Node)
 	}
 }
 
@@ -534,6 +535,7 @@ func builtinValueCfg(r *Rule, ctx *Context, cfg map[string]any) {
 		r.Node = r.Child.Node
 		// Same as @bubble$: a lifted container keeps its owner.
 		r.nodeOwner = r.Child.nodeHolder()
+		r.ownedKind = nodeKind(r.Node)
 		return
 	}
 	from := cfgInt(cfg["from"])
