@@ -3,7 +3,7 @@
 #![doc = include_str!("../README.md")]
 #![allow(clippy::result_large_err)]
 
-pub const VERSION: &str = "0.12.7";
+pub const VERSION: &str = "0.12.8";
 
 pub mod builtins;
 pub mod context;
