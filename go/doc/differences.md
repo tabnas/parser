@@ -1450,10 +1450,18 @@ The ownership bookkeeping is exact for containers the native-value
 builtins build. A Go action that assigns `r.Node` cannot update it, so
 `NodeCell` also recognises the hand-written shapes (jsonic's among
 them): a rule that put a container of its own in place of what it was
-seeded with is its own cell, and an element rule that writes its list
-back to its parent shares the parent's cell. Lists are compared by
-backing array, and two zero-capacity lists (which share Go's one empty
-array) by whether one interface value was copied from the other.
+seeded with is its own cell, an element rule that writes its list
+back to its parent shares the parent's cell, and a replacement
+successor (`r:`) that holds the same container as the head of its
+chain (the rule its parent pushed) or as the rule it replaced shares
+that rule's cell. The last is tabnas-yaml's shape: its block sequence
+rotates `yamlBlockList` into `yamlBlockElem`, each assigning the grown
+list to its own `Node` and writing it back through `Parent.Child`, and
+`yamlElemMap` into `yamlElemPair` the same way for a map element.
+Without it each re-allocation of the list started a new cell. Lists
+are compared by backing array, and two zero-capacity lists (which share
+Go's one empty array) by whether one interface value was copied from
+the other.
 
 Two differences from Rust remain in what the cell means:
 
@@ -1467,7 +1475,9 @@ Two differences from Rust remain in what the cell means:
   called on, which would cost the length of the list on every call, so
   a replaced rule other than the cell keeps the old value. In the
   builtin and hand-written shapes `go/nodecell_test.go` pins, the parse
-  result reflects the replacement.
+  result reflects the replacement. Nor can it reach a copy a grammar
+  keeps outside `Node`: tabnas-yaml also carries its block list in `K`
+  and appends to that copy, so a truncation there does not stick.
 
 TypeScript and Rust need neither method; there is nothing to port.
 

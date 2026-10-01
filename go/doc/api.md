@@ -480,7 +480,11 @@ func (r *Rule) SetNode(v any)   // replace that container in every rule building
 container, so the pointer is the container's identity, and its `Node`
 field is the container's current value. A rule whose node is a scalar,
 or a container it allocated itself, returns itself. `NoRule` and nil
-return themselves.
+return themselves. Across a replacement chain (`r:`) the cell follows
+the container: a successor holding the same container as the head of
+its chain, or as the rule it replaced, reports that rule's cell, even
+when Go actions assign `Node` and write the list back through
+`Parent.Child` themselves, as tabnas-yaml's block sequences do.
 
 `SetNode` writes `v` to the cell, to the rule, to the unbroken run of
 `Parent` rules holding the same container, and to `r.Next`. Use it to

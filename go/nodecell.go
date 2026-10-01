@@ -42,11 +42,57 @@ import (
 // outdated copy of a list (one a later append re-allocated elsewhere)
 // can no longer be matched to it and returns itself.
 //
-// Read-only, O(depth) at worst. NoRule and nil return themselves.
+// A replacement chain (`r:`) hands one container from rule to rule, and
+// a Go grammar that grows a list there assigns each successor's Node
+// itself and writes the grown list back to the chain's head through
+// `Parent.Child` (tabnas-yaml's yamlBlockList and yamlBlockElem rotation,
+// and its yamlElemMap and yamlElemPair). The engine's bookkeeping never
+// sees that hand-over, so NodeCell recognises it: a successor that holds
+// the same container as the head of its chain (its parent's Child) or
+// that head's cell, or as the rule it replaced, reports that rule's cell.
+// A successor that put a container of a new kind in place of the one it
+// was seeded with allocated it, and stays its own cell.
+//
+// Read-only. O(depth) at worst under a parent; a replacement chain with
+// no parent (the start rule's own) is followed one predecessor at a time
+// while each still holds the container. NoRule and nil return themselves.
 func (r *Rule) NodeCell() *Rule {
 	if r == nil || r == NoRule {
 		return r
 	}
+	for cur := r; ; {
+		if c := cur.ownCell(); c != cur {
+			return c
+		}
+		prev := cur.Prev
+		if prev == nil || prev == NoRule || prev == cur {
+			return cur
+		}
+		kind := nodeKind(cur.Node)
+		if kind == nodeNone || kind != cur.ownedKind {
+			// Not a container, or one the successor allocated itself.
+			return cur
+		}
+		if p := cur.Parent; p != nil && p != NoRule {
+			// The rule the parent pushed: the head of cur's chain, which
+			// the parent reads and a write-back keeps current.
+			if head := p.Child; head != nil && head != NoRule && head != cur {
+				hc := head.NodeCell()
+				if sameNode(hc.Node, cur.Node) || sameNode(head.Node, cur.Node) {
+					return hc
+				}
+			}
+		}
+		if !sameNode(prev.Node, cur.Node) {
+			return cur
+		}
+		cur = prev
+	}
+}
+
+// ownCell is NodeCell without the replacement chain: the ownership
+// bookkeeping, the kind guard and the unbroken Parent run.
+func (r *Rule) ownCell() *Rule {
 	h := r.nodeHolder()
 	if h == r {
 		return r
@@ -84,12 +130,18 @@ func (r *Rule) NodeCell() *Rule {
 // Assigning `r.Node = v` instead changes r's own copy only; the rule that
 // appends next still holds the old header and the change is lost.
 //
-// SetNode does not change ownership, so the cell stays the same rule.
-// Rules it does not reach keep the old value: in particular the rules a
-// replacement chain (`r:`) left behind, other than the cell itself. It
-// does not walk that chain, which would cost the length of the list on
-// every call. A rule whose node is not a container has nothing to share,
-// and SetNode then sets r.Node alone.
+// In a replacement chain (`r:`) whose rules write the grown list back to
+// its head, the cell is that head, the rule the parent reads, and r.Next
+// is the successor that appends next, so a truncation from any link
+// sticks. SetNode does not change ownership, so the cell stays the same
+// rule. Rules it does not reach keep the old value: in particular the
+// links of a replacement chain between the cell and r, which nothing
+// reads again. It does not walk that chain, which would cost the length
+// of the list on every call. Nor can it reach a copy a grammar keeps
+// outside Node (tabnas-yaml carries its list in K as well): a grammar
+// that appends to such a copy discards the truncation. A rule whose node
+// is not a container has nothing to share, and SetNode then sets r.Node
+// alone.
 func (r *Rule) SetNode(v any) {
 	if r == nil || r == NoRule {
 		return

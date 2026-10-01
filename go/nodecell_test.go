@@ -473,3 +473,212 @@ func TestSameNode(t *testing.T) {
 		}
 	}
 }
+
+// makeBlockList is a Go-action grammar in tabnas-yaml's shape for a
+// block sequence: `blist` allocates the list in its before-open action
+// and REPLACES itself with `belem` per element (yamlBlockList and
+// yamlBlockElem), and an element that is a map is built the same way by
+// `emap`, replaced by `epair` per further pair (yamlElemMap and
+// yamlElemPair). Every list rule appends in its before-close action,
+// assigns the grown list to its own Node and writes it back through
+// `Parent.Child` (yaml's pushBack), so the head of the chain, the rule
+// the parent reads, stays current. With viaK the list is carried in K,
+// as yaml does (`yamlBlockArr`), and each successor's before-open action
+// assigns it to Node; otherwise a successor keeps the Node the engine
+// seeded it with.
+func makeBlockList(t *testing.T, viaK bool) *Tabnas {
+	t.Helper()
+	j := Make(Options{Rule: &RuleOptions{Start: "top"}})
+	grow := StateAction(func(r *Rule, _ *Context) {
+		var arr []any
+		if viaK {
+			arr, _ = r.K["arr"].([]any)
+		} else {
+			arr, _ = r.Node.([]any)
+		}
+		arr = append(arr, r.Child.Node)
+		if viaK {
+			r.EnsureK()["arr"] = arr
+		}
+		r.Node = arr
+		if r.Parent != NoRule && r.Parent.Child != NoRule {
+			r.Parent.Child.Node = arr
+		}
+	})
+	set := StateAction(func(r *Rule, _ *Context) {
+		r.Node.(*OrderedMap).Set(r.U["key"].(string), r.Child.Node)
+	})
+	ref := map[FuncRef]any{
+		"@top-bc": StateAction(func(r *Rule, _ *Context) { r.Node = r.Child.Node }),
+		"@blist-bo": StateAction(func(r *Rule, _ *Context) {
+			r.Node = make([]any, 0)
+			if viaK {
+				r.EnsureK()["arr"] = r.Node
+			}
+		}),
+		"@blist-bc": grow,
+		"@belem-bo": StateAction(func(r *Rule, _ *Context) {
+			if viaK {
+				r.Node = r.K["arr"]
+			}
+		}),
+		"@belem-bc": grow,
+		"@emap-bo":  StateAction(func(r *Rule, _ *Context) { r.Node = NewOrderedMap() }),
+		"@emap-bc":  set,
+		"@epair-bc": set,
+		"@key":      AltAction(func(r *Rule, _ *Context) { r.EnsureU()["key"] = r.O0.Val }),
+		"@num":      AltAction(func(r *Rule, _ *Context) { r.Node = r.O0.Val }),
+	}
+	elemOpen := func() []*GrammarAltSpec {
+		return []*GrammarAltSpec{{S: "#OB", P: "emap"}, {P: "val"}}
+	}
+	elemClose := func() []*GrammarAltSpec {
+		return []*GrammarAltSpec{{S: "#CA", R: "belem"}, {S: "#CS", B: 1}}
+	}
+	pairOpen := func() []*GrammarAltSpec {
+		return []*GrammarAltSpec{{S: "#ST #CL", P: "val", A: "@key"}}
+	}
+	pairClose := func() []*GrammarAltSpec {
+		return []*GrammarAltSpec{{S: "#CA", R: "epair"}, {S: "#CB"}}
+	}
+	err := j.Grammar(&GrammarSpec{Ref: ref, Rule: map[string]*GrammarRuleSpec{
+		"top": {
+			Open:  []*GrammarAltSpec{{S: "#OS", P: "blist"}},
+			Close: []*GrammarAltSpec{{S: "#CS"}},
+		},
+		"blist": {Open: elemOpen(), Close: elemClose()},
+		"belem": {Open: elemOpen(), Close: elemClose()},
+		"emap":  {Open: pairOpen(), Close: pairClose()},
+		"epair": {Open: pairOpen(), Close: pairClose()},
+		"val":   {Open: []*GrammarAltSpec{{S: "#NR", A: "@num"}}},
+	}})
+	if err != nil {
+		t.Fatalf("grammar: %v", err)
+	}
+	return j
+}
+
+// Ten elements, so the list is re-allocated several times while the
+// chain grows it, and a map element built by its own chain.
+const blockListSrc = `[1,{"a":1,"b":2,"c":3},3,4,5,6,7,8,9,10]`
+
+// Every rule of a replacement chain building one container reports the
+// chain head's cell: the list rules report `blist` (the rule that
+// allocated the list) and the map rules report `emap`, however often the
+// list was re-allocated, and the cell holds the container the parse
+// returns.
+func TestNodeCellReplacementChainWriteBack(t *testing.T) {
+	for _, viaK := range []bool{false, true} {
+		name := "node"
+		if viaK {
+			name = "k"
+		}
+		t.Run(name, func(t *testing.T) {
+			j := makeBlockList(t, viaK)
+			var blist, emap, lastListCell *Rule
+			listCells := map[*Rule]bool{}
+			mapCells := map[*Rule]bool{}
+			listEvents, mapEvents := 0, 0
+			j.SubRuleDone(func(r *Rule, _ *Context, _ RuleDone) {
+				switch r.Name {
+				case "blist", "belem":
+					if r.Name == "blist" && blist == nil {
+						blist = r
+					}
+					listEvents++
+					lastListCell = r.NodeCell()
+					listCells[lastListCell] = true
+				case "emap", "epair":
+					if r.Name == "emap" && emap == nil {
+						emap = r
+					}
+					mapEvents++
+					mapCells[r.NodeCell()] = true
+				}
+			})
+			out, err := j.Parse(blockListSrc)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			l, ok := out.([]any)
+			if !ok || 10 != len(l) {
+				t.Fatalf("result: %#v", out)
+			}
+			if m, ok := l[1].(*OrderedMap); !ok || 3 != m.Len() {
+				t.Fatalf("map element: %#v", l[1])
+			}
+			if blist == nil || emap == nil || 20 != listEvents || 6 != mapEvents {
+				t.Fatalf("blist=%v emap=%v list events=%d map events=%d",
+					blist, emap, listEvents, mapEvents)
+			}
+			if 1 != len(listCells) || !listCells[blist] {
+				t.Errorf("list chain reports %d cells, want one: the blist rule", len(listCells))
+			}
+			if 1 != len(mapCells) || !mapCells[emap] {
+				t.Errorf("map chain reports %d cells, want one: the emap rule", len(mapCells))
+			}
+			if !sameNode(lastListCell.Node, out) {
+				t.Errorf("the cell does not hold the returned list")
+			}
+		})
+	}
+}
+
+// SetNode from the rule-done subscriber of any rule in the chain writes
+// through to the head the parent reads and to the successor that appends
+// next, so the truncation sticks.
+func TestSetNodeTruncatesReplacementChain(t *testing.T) {
+	t.Run("prune-all", func(t *testing.T) {
+		j := makeBlockList(t, false)
+		var blist *Rule
+		var lens []int
+		streamed := 0
+		j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
+			if r.Name == "blist" && blist == nil {
+				blist = r
+			}
+			if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
+				return
+			}
+			cell := r.NodeCell()
+			if cell != blist {
+				t.Errorf("%s rule %d: cell is rule %d, want blist", r.Name, r.I, cell.I)
+			}
+			l, _ := cell.Node.([]any)
+			lens = append(lens, len(l))
+			streamed += len(l)
+			r.SetNode(l[:0])
+		})
+		out, err := j.Parse(blockListSrc)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if !reflect.DeepEqual(out, []any{}) {
+			t.Errorf("result: %#v, want []", out)
+		}
+		if !reflect.DeepEqual(lens, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}) {
+			t.Errorf("lengths at each close: %v, want ten 1s", lens)
+		}
+		if 10 != streamed {
+			t.Errorf("streamed %d elements, want 10", streamed)
+		}
+	})
+	t.Run("keep-first", func(t *testing.T) {
+		j := makeBlockList(t, false)
+		j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
+			if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
+				return
+			}
+			if l, _ := r.NodeCell().Node.([]any); 1 < len(l) {
+				r.SetNode(l[:1])
+			}
+		})
+		out, err := j.Parse(blockListSrc)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if !reflect.DeepEqual(out, []any{1.0}) {
+			t.Errorf("result: %#v, want [1]", out)
+		}
+	})
+}
