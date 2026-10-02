@@ -79,6 +79,28 @@ describe('options-validate', () => {
     }))
   })
 
+  it('refuses a block comment definition without a non-empty end marker', () => {
+    for (const end of [undefined, '']) {
+      const hash = { line: false }
+      if (undefined !== end) hash.end = end
+      const opts = { comment: { def: { hash } } }
+      const expected = /options\.comment\.def\.hash\.end: block comments require a non-empty end marker/
+      assert.throws(() => new Tabnas(opts), expected, 'constructor')
+      assert.throws(() => new Tabnas().options(opts), expected, 'options()')
+      assert.throws(() => new Tabnas().grammar({ options: opts }), expected, 'grammar()')
+    }
+
+    // The rule is applied to the effective overlay: omitting `line` while
+    // editing the built-in block definition keeps it a block definition.
+    assert.throws(
+      () => new Tabnas({ comment: { def: { multi: { end: '' } } } }),
+      /options\.comment\.def\.multi\.end: block comments require a non-empty end marker/,
+    )
+    assert.doesNotThrow(() => new Tabnas({
+      comment: { def: { hash: { line: true, end: '' } } },
+    }))
+  })
+
   // #143's validator was stricter than the readers it was meant to
   // describe, and 0.11.0 shipped that: a string `ender` is documented,
   // read and split into characters by configure(), and the validator

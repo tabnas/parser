@@ -168,6 +168,7 @@ function configure(
   incfg: Config | undefined,
   opts: TabnasOptions,
 ): Config {
+  validateCommentDefinitions(opts)
   const cfg = incfg || ({} as Config)
 
   cfg.t = cfg.t || {}
@@ -1610,6 +1611,27 @@ function rejectReservedNames(options: any) {
 const COMMENT_DEF_SHAPE = { line: true, start: '#', end: '*/', lex: true, eatline: false }
 
 
+// A block comment without a terminator previously reached three different
+// lexer behaviours: TypeScript mostly ran to EOF (and could throw on the
+// literal word "undefined"), Go closed immediately, and Rust ran to EOF.
+// Refuse the configuration after overlays have been resolved, so a partial
+// edit of a built-in line-comment definition is judged by its effective
+// shape rather than by the fields present in the edit.
+function validateCommentDefinitions(opts: TabnasOptions): void {
+  const definitions = opts.comment?.def
+  if (null == definitions) return
+  for (const [name, definition] of entries(definitions)) {
+    if (null == definition || false === definition || definition.line) continue
+    if ('string' !== typeof definition.end || 0 === definition.end.length) {
+      throw new Error(
+        `Tabnas: options.comment.def.${name}.end: block comments require ` +
+        `a non-empty end marker`,
+      )
+    }
+  }
+}
+
+
 // Recursively resolve FuncRef strings in an options object to actual functions,
 // and `@/pattern/flags` strings to RegExp instances.
 // resolveFuncRefs({r:'@/a/i'}) // => {r: /a/i};  resolveFuncRefs('@@x') // => '@x'
@@ -1750,6 +1772,7 @@ export {
   modlist,
   resolveFuncRefs,
   validateOptions,
+  validateCommentDefinitions,
   rejectReservedNames,
   WIDENINGS,
   isMatcherToken,

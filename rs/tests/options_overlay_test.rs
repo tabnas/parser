@@ -3,7 +3,9 @@
 //! position and a shorter array keeps the tail. Twin of
 //! go/options_overlay_test.go and ts/test/options-overlay.test.js.
 
-use tabnas::Tabnas;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use tabnas::{Options, Tabnas};
 
 fn parses(set: &str) -> bool {
     let mut parser = Tabnas::new();
@@ -74,6 +76,59 @@ fn a_null_whole_value_is_a_load_error() {
             "{name}: the set changed although the load failed"
         );
     }
+}
+
+#[test]
+fn a_block_comment_without_an_end_is_a_configuration_error() {
+    for document in [
+        r##"{"options":{"comment":{"def":{"hash":{"line":false}}}}}"##,
+        r##"{"options":{"comment":{"def":{"hash":{"line":false,"end":""}}}}}"##,
+        // This is a partial overlay of the built-in block definition, so
+        // validation must use the effective definition after the merge.
+        r##"{"options":{"comment":{"def":{"multi":{"end":""}}}}}"##,
+    ] {
+        let mut parser = Tabnas::new();
+        let error = match parser.grammar_json(document) {
+            Ok(_) => panic!("block comment without an end loaded"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("block comments require a non-empty end marker"),
+            "{error}"
+        );
+    }
+
+    let mut parser = Tabnas::new();
+    let error = match parser.set_options(|options| {
+        let hash = options.comment.definitions.get_mut("hash").unwrap();
+        hash.line = false;
+        hash.end.clear();
+    }) {
+        Ok(_) => panic!("typed options accepted a block comment without an end"),
+        Err(error) => error,
+    };
+    assert!(error.0.contains("options.comment.def.hash.end"), "{error}");
+
+    let mut invalid = Options::default();
+    let hash = invalid.comment.definitions.get_mut("hash").unwrap();
+    hash.line = false;
+    hash.end.clear();
+    let panic = catch_unwind(AssertUnwindSafe(|| Tabnas::with_options(invalid)));
+    assert!(
+        panic.is_err(),
+        "infallible constructor accepted invalid options"
+    );
+
+    let mut line = Options::default();
+    line.comment
+        .definitions
+        .get_mut("hash")
+        .unwrap()
+        .end
+        .clear();
+    assert!(catch_unwind(AssertUnwindSafe(|| Tabnas::with_options(line))).is_ok());
 }
 
 /// The three names the canonical deep merge will not carry, refused in

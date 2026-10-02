@@ -1309,6 +1309,22 @@ impl Default for Options {
 }
 
 impl Options {
+    /// Refuse block-comment definitions that cannot close.
+    ///
+    /// The three engines historically disagreed on an empty terminator;
+    /// making it a configuration error keeps that malformed state out of
+    /// every lexer and names the exact definition that must be repaired.
+    pub(crate) fn validate_comment_definitions(&self) -> Result<(), String> {
+        for (name, definition) in &self.comment.definitions {
+            if !definition.line && definition.end.is_empty() {
+                return Err(format!(
+                    "options.comment.def.{name}.end: block comments require a non-empty end marker"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Rebuild the resolved configuration callbacks from this option tree.
     /// Config modifiers run before matcher factories, matching canonical
     /// `configure`: factories must observe the modifier's final values.
@@ -1325,6 +1341,7 @@ impl Options {
             }))
             .map_err(|_| format!("config modifier {name} panicked"))?;
         }
+        self.validate_comment_definitions()?;
         self.refresh_lex_matchers()
     }
 
