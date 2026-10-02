@@ -401,7 +401,8 @@ function configure(
     start: null == opts.rule?.start ? 'val' : opts.rule.start,
     maxmul: null == opts.rule?.maxmul ? 3 : opts.rule.maxmul,
     finish: !!opts.rule?.finish,
-    history: null == opts.rule?.history ? null : opts.rule.history,
+    history: null == opts.rule?.history || false === opts.rule.history
+      ? null : opts.rule.history,
     include: opts.rule?.include
       ? opts.rule.include.split(/\s*,+\s*/).filter((g) => '' !== g)
       : [],
@@ -1402,9 +1403,10 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     const d = dflt?.[key]
     const at = path + '.' + key
     if ('options.rule.history' === at && null != val) {
+      if (false === val) continue
       if ('number' !== typeof val || !Number.isSafeInteger(val) || val < 1) {
         throw new Error(
-          `Tabnas: ${at} must be an integer of at least 1 or null`,
+          `Tabnas: ${at} must be an integer of at least 1, null, or false`,
         )
       }
       if (MAX_RULE_HISTORY < val) {

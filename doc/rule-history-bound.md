@@ -70,7 +70,7 @@ links:
 
 ## The design
 
-An option, `options.rule.history`, an integer from 1 to 16 or `null`
+An option, `options.rule.history`, an integer from 1 to 16, `null`, or `false`
 (today's behaviour, and the default until every runtime carries the
 option): the number of predecessor snapshots a rule can reach through
 `prev`. Under it, the snapshot a replace or a push links is a bounded
@@ -139,7 +139,9 @@ TypeScript and Go also parse 10,000 items under `history: 3` while a
 rule subscriber counts the reachable graph, which must stay constant.
 The former "A bounded rule history in Rust" divergence was removed when
 the two ports landed. The option remains `null`/nil by default for
-compatibility; callers opt into the bound explicitly.
+compatibility; serialized grammars may also use `false` for unbounded
+history, matching the other history options. Callers opt into the bound
+explicitly.
 
 ## Measurements
 

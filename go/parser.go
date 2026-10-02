@@ -782,7 +782,9 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	// Follow replacement chain: when val is replaced by list (implicit list),
 	// root.Node is stale. Follow Next/Prev links to find the actual result.
 	resRule := root
-	for resRule.Next != NoRule && resRule.Next != nil && resRule.Next.Prev == resRule {
+	for resRule.Next != NoRule && resRule.Next != nil &&
+		resRule.Next.Prev != NoRule && resRule.Next.Prev != nil &&
+		resRule.Next.Prev.I == resRule.I {
 		resRule = resRule.Next
 	}
 

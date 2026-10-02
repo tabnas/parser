@@ -173,10 +173,13 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 		return
 	}
 	if path == "options.rule.history" {
+		if disabled, ok := val.(bool); ok && !disabled {
+			return
+		}
 		history, ok := mapWholeInt(val)
 		if !ok || history < 1 {
 			*errs = append(*errs,
-				path+": must be an integer of at least 1 or null")
+				path+": must be an integer of at least 1, null, or false")
 			return
 		}
 		if history > MaxRuleHistory {

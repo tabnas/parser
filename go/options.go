@@ -42,6 +42,12 @@ type Options struct {
 	Property *PropertyOptions    // Go-specific options not present in the TypeScript version.
 	Color    *ColorOptions       // ANSI colour codes in formatted error messages (TS options.color).
 	Tag      string              // Instance identifier tag. Default: DefaultTag.
+
+	// ruleHistorySet is an overlay-only presence bit. RuleOptions.History
+	// deliberately uses nil for the public unbounded value, so a decoded
+	// `history: null` needs this bit to remain distinguishable from an omitted
+	// field until the overlay has been applied.
+	ruleHistorySet bool
 }
 
 // DefaultTag is the instance tag applied when Options.Tag is unset. It
@@ -94,6 +100,19 @@ const DefaultRewindHistory = 64
 // honours. Each transition copies at most this many rule records, so keeping
 // the cap finite preserves linear parse time for untrusted documents.
 const MaxRuleHistory = 16
+
+func effectiveRuleHistory(history *int) *int {
+	if history == nil {
+		return nil
+	}
+	effective := *history
+	if effective < 1 {
+		effective = 1
+	} else if effective > MaxRuleHistory {
+		effective = MaxRuleHistory
+	}
+	return &effective
+}
 
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
@@ -571,10 +590,29 @@ func DefaultOptions() Options {
 	}
 }
 
+// mergeOptionsOverlay applies the ordinary structural overlay and then the
+// one nullable scalar for which nil is a value rather than "omitted". The
+// presence bit is consumed here and never retained on a configured parser.
+func mergeOptionsOverlay(base, over Options) Options {
+	merged := Deep(base, over).(Options)
+	if over.ruleHistorySet {
+		if merged.Rule == nil {
+			merged.Rule = &RuleOptions{}
+		}
+		if over.Rule == nil {
+			merged.Rule.History = nil
+		} else {
+			merged.Rule.History = over.Rule.History
+		}
+	}
+	merged.ruleHistorySet = false
+	return merged
+}
+
 func Make(opts ...Options) *Tabnas {
 	o := DefaultOptions()
 	if len(opts) > 0 {
-		o = Deep(o, opts[0]).(Options)
+		o = mergeOptionsOverlay(o, opts[0])
 	}
 	if err := checkCommentDefinitions(&o); err != nil {
 		panic(err.Error())
@@ -1162,12 +1200,7 @@ func buildConfig(o *Options) *LexConfig {
 	}
 	cfg.RuleHistory = 0
 	if o.Rule != nil && o.Rule.History != nil {
-		cfg.RuleHistory = *o.Rule.History
-		if cfg.RuleHistory < 1 {
-			cfg.RuleHistory = 1
-		} else if cfg.RuleHistory > MaxRuleHistory {
-			cfg.RuleHistory = MaxRuleHistory
-		}
+		cfg.RuleHistory = *effectiveRuleHistory(o.Rule.History)
 	}
 
 	// Safe

@@ -133,6 +133,9 @@ func mergeReflect(av, bv reflect.Value, path string) (reflect.Value, error) {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {
+				if f.Name == "ruleHistorySet" && path == "" {
+					continue
+				}
 				return av, fmt.Errorf(
 					"merge: cannot merge option struct %s (unexported fields)", path)
 			}
@@ -191,6 +194,16 @@ func mergeReflect(av, bv reflect.Value, path string) (reflect.Value, error) {
 func mergeOptionsCommutative(a, b *Options) (Options, error) {
 	ac := *a
 	bc := *b
+	if ac.Rule != nil {
+		rule := *ac.Rule
+		rule.History = effectiveRuleHistory(rule.History)
+		ac.Rule = &rule
+	}
+	if bc.Rule != nil {
+		rule := *bc.Rule
+		rule.History = effectiveRuleHistory(rule.History)
+		bc.Rule = &rule
+	}
 	ac.Tag = ""
 	bc.Tag = ""
 	merged, err := mergeReflect(

@@ -59,7 +59,7 @@ function reach(parser, src) {
 describe('rule history', () => {
   it('validates and exports the supported bound', () => {
     assert.equal(MAX_RULE_HISTORY, 16)
-    for (const history of [1, 3, MAX_RULE_HISTORY, null]) {
+    for (const history of [1, 3, MAX_RULE_HISTORY, null, false]) {
       for (const install of [
         () => new Tabnas({ rule: { history } }),
         () => new Tabnas().options({ rule: { history } }),
@@ -71,7 +71,7 @@ describe('rule history', () => {
     for (const history of [0, -3, 2.5, true, '3']) {
       assert.throws(
         () => new Tabnas({ rule: { history } }),
-        /options\.rule\.history must be an integer of at least 1 or null/,
+        /options\.rule\.history must be an integer of at least 1, null, or false/,
         String(history),
       )
     }
@@ -79,6 +79,16 @@ describe('rule history', () => {
       () => new Tabnas({ rule: { history: MAX_RULE_HISTORY + 1 } }),
       /options\.rule\.history is outside the supported range \(at most 16\)/,
     )
+  })
+
+  it('lets null and false reset an existing bound to unbounded', () => {
+    for (const history of [null, false]) {
+      const parser = new Tabnas({ rule: { history: 3 } })
+      parser.options({ rule: { history } })
+      assert.equal(parser.options.rule.history, history)
+      const measured = reach(jsonParser(history), flatArray(500))
+      assert.ok(100 < measured.longest, String(history))
+    }
   })
 
   it('bounds a 10,000-item sequence without changing its value', () => {
@@ -98,6 +108,34 @@ describe('rule history', () => {
     const bounded = reach(jsonParser(1), flatArray(500))
     assert.equal(bounded.longest, 1)
     assert.ok(bounded.largest <= 16, `bounded reach: ${bounded.largest}`)
+  })
+
+  it('refreshes the live pusher without changing the frozen parent view', () => {
+    const parser = new Tabnas({
+      rule: { start: 'top', history: 1 },
+      fixed: { token: { '#A': 'a', '#B': 'b', '#C': 'c' } },
+    })
+    let frozenCounter
+    let completed
+    parser.rule('top', (rs) => rs
+      .open([{ s: '#A', p: 'child' }])
+      .close([{ s: '#C', a: (rule) => {
+        completed = rule.child
+        rule.node = 'ok'
+      } }]))
+    parser.rule('child', (rs) => rs.open([{
+      s: '#B', n: { done: 1 }, r: 'tail',
+    }]))
+    parser.rule('tail', (rs) => rs.open([{ a: (rule) => {
+      frozenCounter = rule.parent.child.n.done
+    } }]))
+
+    assert.equal(parser.parse('abc'), 'ok')
+    assert.equal(frozenCounter, undefined)
+    assert.equal(completed.name, 'child')
+    assert.equal(completed.state, 'c')
+    assert.equal(completed.n.done, 1)
+    assert.equal(completed.o[0].src, 'b')
   })
 
   it('merges on the effective history setting', () => {

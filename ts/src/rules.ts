@@ -105,6 +105,11 @@ class Rule {
   // Internal tracing field — set by the parser when a rule fails.
   why?: string
 
+  // The live rule that pushed this one. Bounded public links are snapshots,
+  // so this private pointer is the only place a completed first child is
+  // published back to its suspended pusher.
+  historyPusher?: Rule
+
   constructor(spec: RuleSpec, ctx: Context, node?: any, snapshotI?: number) {
     // A history snapshot keeps the id of the rule it records and must not
     // consume an id of its own. Live rules still receive the next parse-local
@@ -262,6 +267,19 @@ function boundedRuleHistory(
     prev = copy
   }
   return prev
+}
+
+// Publish the completed first pushed rule to the live pusher. The snapshot
+// reachable through the child's own `parent` stays frozen at push time; only
+// the suspended live parent receives this completed record.
+function freezeHistoryChild(rule: Rule, ctx: Context): void {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return
+  const frozen = boundedRuleHistory(
+    rule, ctx, ctx.cfg.rule.history, 'prev',
+  )
+  pusher.child = frozen
+  if (pusher.next.i === rule.i) pusher.next = frozen
 }
 
 // Result of matching one parse alternate against the current tokens (built from current tokens and AltSpec).
@@ -778,6 +796,7 @@ class RuleSpec {
 
     let boundedPush = false
     let boundedReplace = false
+    let popped = false
 
     // Push a new rule onto the stack...
     if (alt.p) {
@@ -807,6 +826,7 @@ class RuleSpec {
           // the pre-link pusher copy, so a close-phase push cannot retain all
           // earlier children through alternating child/parent links.
           rule.child = next.snapshot(ctx)
+          next.historyPusher = rule
         }
         else {
           next.parent = rule
@@ -827,6 +847,7 @@ class RuleSpec {
         next.parent = rule.parent
         boundedReplace = null != ctx.cfg.rule.history
         if (!boundedReplace) next.prev = rule
+        else next.historyPusher = rule.historyPusher
         const pn = rule.rawn()
         if (undefined !== pn) {
           let nn: Counters | undefined = undefined
@@ -846,6 +867,7 @@ class RuleSpec {
 
     // Pop closed rule off stack.
     else if (!is_open) {
+      popped = true
       next = ctx.rs[--ctx.rsI] || ctx.NORULE
     }
 
@@ -888,6 +910,10 @@ class RuleSpec {
       next.prev = boundedRuleHistory(
         rule, ctx, ctx.cfg.rule.history, 'prev',
       )
+      freezeHistoryChild(rule, ctx)
+    }
+    else if (popped && null != ctx.cfg.rule.history) {
+      freezeHistoryChild(rule, ctx)
     }
 
     // Shift by the count computed before the action (see above).

@@ -73,14 +73,14 @@ func historyReach(t *testing.T, parser *Tabnas, src string) (int, int, any) {
 }
 
 func TestRuleHistorySerializedAndDirectBounds(t *testing.T) {
-	for _, value := range []any{float64(1), float64(3), float64(MaxRuleHistory), nil} {
+	for _, value := range []any{float64(1), float64(3), float64(MaxRuleHistory), nil, false} {
 		opts, err := OptionsFromMap(map[string]any{
 			"rule": map[string]any{"history": value},
 		})
 		if err != nil {
 			t.Fatalf("history %v: %v", value, err)
 		}
-		if value == nil {
+		if value == nil || value == false {
 			if opts.Rule == nil || opts.Rule.History != nil {
 				t.Fatalf("null history = %#v", opts.Rule)
 			}
@@ -108,6 +108,29 @@ func TestRuleHistorySerializedAndDirectBounds(t *testing.T) {
 	}
 	if got := Make(Options{Rule: &RuleOptions{History: &huge}}).Config().RuleHistory; got != MaxRuleHistory {
 		t.Fatalf("direct huge clamps to %d, want %d", got, MaxRuleHistory)
+	}
+}
+
+func TestRuleHistoryNullAndFalseResetAnExistingBound(t *testing.T) {
+	for _, value := range []any{nil, false} {
+		three := 3
+		parser := historyJSONParser(t, &three)
+		opts, err := OptionsFromMap(map[string]any{
+			"rule": map[string]any{"history": value},
+		})
+		if err != nil {
+			t.Fatalf("history %v: %v", value, err)
+		}
+		if err := parser.ApplyOptions(opts); err != nil {
+			t.Fatalf("apply history %v: %v", value, err)
+		}
+		if parser.Config().RuleHistory != 0 {
+			t.Fatalf("history %v left bound %d", value, parser.Config().RuleHistory)
+		}
+		chain, _, _ := historyReach(t, parser, historyFlatArray(500))
+		if chain < 100 {
+			t.Fatalf("history %v retained only %d predecessors", value, chain)
+		}
 	}
 }
 
@@ -148,6 +171,59 @@ func TestRuleHistoryOneRetainsOnePredecessor(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryRefreshesLivePusherButKeepsFrozenParent(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	var frozenCounter int
+	var completed *Rule
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+			completed = rule.Child
+			rule.Node = "ok"
+		}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, N: map[string]int{"done": 1}, R: "tail"})
+	})
+	parser.Rule("tail", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{A: func(rule *Rule, _ *Context) {
+			frozenCounter = rule.Parent.Child.N["done"]
+		}})
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "ok" {
+		t.Fatalf("parse = %v, %v", value, err)
+	}
+	if frozenCounter != 0 {
+		t.Fatalf("frozen parent child counter = %d, want 0", frozenCounter)
+	}
+	if completed == nil || completed.Name != "child" || completed.State != CLOSE ||
+		completed.N["done"] != 1 || len(completed.O) == 0 || completed.O[0].Src != "b" {
+		t.Fatalf("live pusher child was not completed: %#v", completed)
+	}
+}
+
+func TestRuleHistoryKeepsRootReplacementResult(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta := parser.Token("#A", "a")
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, R: "tail", A: func(rule *Rule, _ *Context) {
+			rule.Node = "old"
+		}})
+	})
+	parser.Rule("tail", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{A: func(rule *Rule, _ *Context) { rule.Node = "new" }})
+	})
+	value, err := parser.Parse("a")
+	if err != nil || value != "new" {
+		t.Fatalf("bounded root replacement = %v, %v; want new", value, err)
+	}
+}
+
 func TestRuleHistoryMerge(t *testing.T) {
 	three, four := 3, 4
 	left := Make(Options{Tag: "L", Rule: &RuleOptions{History: &three}})
@@ -167,5 +243,18 @@ func TestRuleHistoryMerge(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "rule.history") {
 		t.Fatalf("history conflict: %v", err)
+	}
+	zero, one := 0, 1
+	seventeen, sixteen := 17, MaxRuleHistory
+	for _, bounds := range [][2]*int{{&zero, &one}, {&seventeen, &sixteen}} {
+		left := Make(Options{Tag: "L", Rule: &RuleOptions{History: bounds[0]}})
+		right := Make(Options{Tag: "R", Rule: &RuleOptions{History: bounds[1]}})
+		merged, err := left.Merge(right)
+		if err != nil {
+			t.Fatalf("effective bounds %d and %d conflict: %v", *bounds[0], *bounds[1], err)
+		}
+		if merged.Config().RuleHistory != *effectiveRuleHistory(bounds[0]) {
+			t.Fatalf("merged effective history = %d", merged.Config().RuleHistory)
+		}
 	}
 }

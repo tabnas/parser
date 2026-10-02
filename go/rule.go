@@ -1037,8 +1037,6 @@ type Rule struct {
 	// lets the engine replace the live pusher's Child/Next with the completed
 	// child record when that child first replaces or pops.
 	historyPusher *Rule
-	historyParent *Rule
-	historyChild  *Rule
 }
 
 type ruleHistoryLink uint8
@@ -1057,8 +1055,6 @@ func ruleSnapshot(r *Rule) *Rule {
 	copy := *r
 	copy.nodeOwner = nil
 	copy.historyPusher = nil
-	copy.historyParent = nil
-	copy.historyChild = nil
 	copy.O = append([]*Token(nil), r.O...)
 	copy.C = append([]*Token(nil), r.C...)
 	if r.N != nil {
@@ -1123,25 +1119,6 @@ func freezeHistoryChild(r, successor *Rule, history int) {
 	pusher.Child = frozen
 	if pusher.Next == r {
 		pusher.Next = frozen
-	}
-	if view := r.historyParent; view != nil && view != NoRule {
-		if child := r.historyChild; child != nil && child != NoRule {
-			// The child record retained inside its parent's observable
-			// snapshot keeps the pusher-before link. Refresh its completed
-			// fields in place without changing that deliberately cut parent.
-			before := child.Parent
-			*child = *ruleSnapshot(frozen)
-			child.Parent = before
-			child.Child = NoRule
-			child.Next = NoRule
-			view.Child = child
-			view.Next = child
-		} else {
-			view.Child = frozen
-			if view.Next == r {
-				view.Next = frozen
-			}
-		}
 	}
 }
 
@@ -1506,7 +1483,6 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 					next.Prev = r
 				}
 				next.historyPusher = r.historyPusher
-				next.historyParent = r.historyParent
 				if len(r.N) > 0 {
 					nn := next.EnsureN()
 					for k, v := range r.N {
@@ -1573,13 +1549,10 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		parent.Child = child
 		parent.Next = child
 		next.Parent = parent
-		next.historyParent = parent
-		next.historyChild = child
 	} else if boundedReplace {
 		next.Prev = boundedRuleHistory(
 			r, ctx.Cfg.RuleHistory, historyPrevLink)
 		freezeHistoryChild(r, next, ctx.Cfg.RuleHistory)
-		next.historyChild = r.historyChild
 	} else if popped {
 		freezeHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 	}
