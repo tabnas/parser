@@ -282,6 +282,38 @@ fn lex_subscribers_see_the_lexers_own_faults() {
     assert_eq!(vec!["custom_bad".to_string()], *seen.lock().unwrap());
 }
 
+/// `continuations()` after a complete document, and at a bad token a rule
+/// fetched. Go answers both differently (the last rule's closers; and what
+/// alternates still waiting on a later position want), so neither is in
+/// the shared fixture; ts/test/bad-token.test.js pins the same answers.
+#[test]
+fn continuations_after_a_complete_document_are_the_start_openers() {
+    // The trailing-content check has no rule, and TypeScript's
+    // `continuations` answers a failure with no rule, or a prefix no rule
+    // ever ran on, with the start rule's openers. Before, the check's
+    // fetch recorded the last rule's close alternates, `#RB` here.
+    let nest = r##"{"options":{"rule":{"start":"top"},"fixed":{"token":{"#LB":"<","#RB":">"}}},
+      "rule":{"top":{"open":[{"s":"#LB","p":"body"}],"close":[{"s":"#RB"}]},
+              "body":{"open":[{"s":"#NR"}],"close":[{"s":"#RB","b":1},{"s":"#ZZ","b":1}]}}}"##;
+    let parser = with_bad_matcher(grammar(nest));
+    assert_eq!(parser.continuations("<1>?").tokens, ["#LB"]);
+    assert_eq!(parser.continuations("<1> ?").tokens, ["#LB"]);
+    assert_eq!(parser.continuations("<1>>").tokens, ["#LB"]);
+    // The end alone is legal after a complete document: the check's fetch
+    // of the end token says nothing about what else could follow.
+    assert_eq!(parser.continuations("<1>").tokens, ["#ZZ"]);
+
+    // At a bad token a rule fetched, nothing is recorded (TypeScript's
+    // `parse_alts` throws before it writes `_contTins`), so the answer is
+    // computed from the buffer at the first position of the fetching
+    // rule's alternates: what `[` hands over to, not the `]` that the
+    // two-token alternate `#OS #CS` still wanted.
+    let parser = with_bad_matcher(json());
+    let openers = ["#NR", "#ST", "#VL", "#OB", "#OS"];
+    assert_eq!(parser.continuations("[?").tokens, openers);
+    assert_eq!(parser.continuations(r#"{"a"?"#).tokens, openers);
+}
+
 #[test]
 fn a_recovering_parse_that_gives_up_lists_each_error_once() {
     let parser = recovering(grammar(NEST));

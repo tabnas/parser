@@ -29,6 +29,9 @@ const bad = {
   },
 }
 
+// The `opts` cell that asks for `continuations(input)` instead of a parse.
+const CONTINUATIONS = 'continuations'
+
 function make(grammar, grammars, opts) {
   const tn = new Tabnas({ lex: { match: { bad } } })
   if ('json' === grammar) {
@@ -38,7 +41,7 @@ function make(grammar, grammars, opts) {
     assert.ok(null != grammars[grammar], 'no @grammar named ' + grammar)
     tn.grammar(grammars[grammar])
   }
-  if ('-' !== opts) {
+  if ('-' !== opts && CONTINUATIONS !== opts) {
     tn.grammar({ options: JSON.parse(opts) })
   }
   return tn
@@ -69,7 +72,10 @@ function renderError(e) {
   return d.code + '@' + d.row + ':' + d.col + meta
 }
 
-function run(tn, input) {
+function run(tn, input, opts) {
+  if (CONTINUATIONS === opts) {
+    return [tn.continuations(input).tokens.join(','), '-']
+  }
   const recovering = tn.internal().config.parse.recover.enabled
   try {
     const out = tn.parse(input)
@@ -94,7 +100,7 @@ describe('bad-token', () => {
       }
       if (cols[0].startsWith('#') || cols.length < 5) continue
       const [grammar, opts, input, value, errors] = cols
-      const [gotValue, gotErrors] = run(make(grammar, grammars, opts), input)
+      const [gotValue, gotErrors] = run(make(grammar, grammars, opts), input, opts)
       const where = 'bad-token.tsv row ' + row + ' ' + JSON.stringify(input) + ' ' + opts
       assert.equal(gotErrors, errors, where + ': errors')
       assert.equal(gotValue, value, where + ': value')
@@ -117,5 +123,32 @@ describe('bad-token', () => {
 
     const capped = { parse: { recover: { enabled: true, maxRecoveries: 1 } } }
     assert.deepEqual(answer(capped, '[1,,,2]'), ['[1,2]', 'unexpected@1:4+skip0'])
+  })
+
+  // The third answer Go does not give. After a complete document, a bad
+  // token (or any trailing content) is met by the trailing-content check,
+  // which has no rule: continuations() answers with the start rule's
+  // openers, as it does for a prefix no rule ever ran on. At a bad token a
+  // rule fetched, nothing is recorded, and the answer is computed from the
+  // buffer at the first position of that rule's alternates: `[?` offers
+  // what `[` hands over to, not the `]` an alternate two tokens long still
+  // wanted. rs/tests/bad_token_fetch_test.rs pins the same answers in Rust.
+  it('continuations-after-a-complete-document-and-at-a-fetched-bad-token', () => {
+    const nest = {
+      options: { rule: { start: 'top' }, fixed: { token: { '#LB': '<', '#RB': '>' } } },
+      rule: {
+        top: { open: [{ s: '#LB', p: 'body' }], close: [{ s: '#RB' }] },
+        body: { open: [{ s: '#NR' }], close: [{ s: '#RB', b: 1 }, { s: '#ZZ', b: 1 }] },
+      },
+    }
+    const after = (src) => make('nest', { nest }, '-').continuations(src).tokens
+    assert.deepEqual(after('<1>?'), ['#LB'])
+    assert.deepEqual(after('<1> ?'), ['#LB'])
+    assert.deepEqual(after('<1>>'), ['#LB'])
+    assert.deepEqual(after('<1>'), ['#ZZ'])
+
+    const json = (src) => make('json', {}, '-').continuations(src).tokens
+    assert.deepEqual(json('[?'), ['#NR', '#ST', '#VL', '#OB', '#OS'])
+    assert.deepEqual(json('{"a"?'), ['#NR', '#ST', '#VL', '#OB', '#OS'])
   })
 })

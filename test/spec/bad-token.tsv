@@ -7,7 +7,11 @@ grammar	opts	input	value	errors
 #
 #   grammar  `json`, or the name of an `# @grammar` definition below
 #   opts     serialized engine options, installed as a second grammar
-#            carrying nothing but `options`, or `-` for none
+#            carrying nothing but `options`, or `-` for none; or the word
+#            `continuations`, and the row asks the engine what could
+#            follow the input (`continuations(input)`) instead of parsing
+#            it: `value` is then the token names it answers, in its order,
+#            joined by `,`, and `errors` is `-`
 #   input    the source; \n, \r and \t are decoded, as in every file here
 #   value    the parse result: `-` when a fail-fast parse throws, else the
 #            value in the shared canonical form (map keys sorted, and an
@@ -41,14 +45,18 @@ grammar	opts	input	value	errors
 # A recovering parse that gives up lists every error once: the one it
 # gave up on is the last one it recorded, or a cascade it dropped.
 #
-# Two cases are not here because Go answers them differently. With
+# Three cases are not here because Go answers them differently. With
 # relexing and recovery TOGETHER, Go lists a bad token no alternate
 # re-cuts twice, once unrecovered and once recovered, where TypeScript
-# and Rust list it once. And Go reads the `maxRecoveries` cap before it
+# and Rust list it once. Go reads the `maxRecoveries` cap before it
 # records an error, so a cascade at the cap ends its parse where the
-# other two drop the cascade and go on. The canonical answers are pinned
-# by a second test in ts/test/bad-token.test.js and by
-# rs/tests/bad_token_fetch_test.rs.
+# other two drop the cascade and go on. And asked what could follow a
+# document that is complete before a bad token (`<1>?` in `nest`), or
+# before any trailing content, Go answers with the last rule's closers
+# where TypeScript answers with the start rule's openers; at a bad token
+# a rule fetched (`[?`), Go also lists what the alternates still waiting
+# on a later position want. The canonical answers are pinned by a second
+# test in ts/test/bad-token.test.js and by rs/tests/bad_token_fetch_test.rs.
 #
 # Runners: ts/test/bad-token.test.js, go/bad_token_spec_test.go,
 # rs/tests/bad_token_spec_test.rs.
@@ -110,3 +118,18 @@ one	-	1 ? 2	-	custom_bad@1:3
 one	{"parse":{"recover":{"enabled":true}}}	1 ? 2	1	custom_bad@1:3
 one	{"parse":{"recover":{"enabled":true}}}	1 "x\n2	1	unprintable@1:5
 one	{"parse":{"recover":{"enabled":true}}}	1	1	-
+#
+# Continuations. What `continuations()` says could follow the input, which
+# the canonical engine computes from the rule that fetched a bad token, at
+# the first position of its alternates (`continuationTins(ctx, rule)` in
+# ts/src/tabnas.ts: nothing is recorded at the fetch itself), and from the
+# start rule's openers when no rule fetched it, the trailing-content check
+# having no rule. The end of the source is legal after a complete document.
+nest	continuations	<	#NR	-
+nest	continuations	<1	#RB	-
+nest	continuations	<?	#NR	-
+nest	continuations	<1>	#ZZ	-
+one	continuations	1	#ZZ	-
+one	continuations	1 ?	#NR	-
+json	continuations	[1] ?	#ZZ	-
+json	continuations	[1,?	#NR,#ST,#VL,#OB,#OS,#CS,#CA	-

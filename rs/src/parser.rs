@@ -1880,6 +1880,36 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Record, for `continuations()`, what could have followed where a
+    /// fetch raised a bad token: the lexer's own fault, or a `#BD` token a
+    /// custom matcher returned.
+    ///
+    /// TypeScript records nothing at such a fetch (`_contTins` is cleared
+    /// when `parse_alts` begins and written only when every alternate has
+    /// failed on a buffered token), so `Tabnas.continuations` computes the
+    /// answer from the buffer for the rule that fetched, at position 0
+    /// (`continuationTins(ctx, rule)`), or, when that rule is `NORULE`
+    /// because the check for trailing content fetched, answers with the
+    /// start rule's openers. Here a rule's fetch records the same set, and
+    /// the trailing check records nothing, which `continuations_uncaught`
+    /// turns into the start openers.
+    fn capture_fetch_failure(
+        &self,
+        context: &Context,
+        rule: &Rule,
+        stack: &[Rule],
+        mode: &mut ParseMode<'_>,
+        fetch: Fetch,
+    ) {
+        if fetch != Fetch::Rule {
+            return;
+        }
+        if let Some(capture) = mode.continuation.as_deref_mut() {
+            capture.failure =
+                continuation_tins(context, rule, stack, &self.rules, &self.options, 0, None);
+        }
+    }
+
     fn ensure_lookahead(
         &self,
         lexer: &mut Lexer,
@@ -1954,17 +1984,7 @@ impl Parser {
                             }
                             mode.gave_up = true;
                         }
-                        if let Some(capture) = mode.continuation.as_deref_mut() {
-                            capture.failure = continuation_tins(
-                                context,
-                                rule,
-                                site.stack,
-                                &self.rules,
-                                &self.options,
-                                context.t.len(),
-                                None,
-                            );
-                        }
+                        self.capture_fetch_failure(context, rule, site.stack, mode, fetch);
                         // The lexer boxes its error internally; this is
                         // the boundary back to the parser's own result.
                         return Err(*error);
@@ -2012,31 +2032,30 @@ impl Parser {
                         }
                         mode.gave_up = true;
                     }
-                    if let Some(capture) = mode.continuation.as_deref_mut() {
-                        capture.failure = continuation_tins(
-                            context,
-                            rule,
-                            site.stack,
-                            &self.rules,
-                            &self.options,
-                            context.t.len(),
-                            None,
-                        );
-                    }
+                    self.capture_fetch_failure(context, rule, site.stack, mode, fetch);
                     return Err(error);
                 }
                 if token.tin == TIN_ZZ {
                     if let Some(capture) = mode.continuation.as_deref_mut() {
+                        // The end is a legal continuation of a prefix that
+                        // parses, whoever fetched it. What else is legal
+                        // there is what the fetching rule's alternates could
+                        // still take; the check for trailing content has no
+                        // rule, and TypeScript's capture (the lex subscriber
+                        // in `Tabnas.continuations`) answers it with nothing,
+                        // since its `rule` is then `NORULE`.
                         capture.have_end = true;
-                        capture.at_end.extend(continuation_tins(
-                            context,
-                            rule,
-                            site.stack,
-                            &self.rules,
-                            &self.options,
-                            context.t.len(),
-                            None,
-                        ));
+                        if fetch == Fetch::Rule {
+                            capture.at_end.extend(continuation_tins(
+                                context,
+                                rule,
+                                site.stack,
+                                &self.rules,
+                                &self.options,
+                                context.t.len(),
+                                None,
+                            ));
+                        }
                     }
                 }
                 if !self.ignore_tins.contains(&token.tin) {

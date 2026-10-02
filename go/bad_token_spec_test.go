@@ -75,11 +75,15 @@ func badTokenParser(t *testing.T, grammar string, grammars map[string]string, op
 		}
 		install(gs)
 	}
-	if "-" != opts {
+	if "-" != opts && badTokenContinuations != opts {
 		install(optionsOnly(opts))
 	}
 	return j
 }
+
+// badTokenContinuations is the `opts` cell that asks for Continuations(input)
+// instead of a parse.
+const badTokenContinuations = "continuations"
 
 // badTokenCanon is the shared canonical value: sorted keys, integral
 // numbers without a fraction, and an absent value as null.
@@ -161,7 +165,10 @@ func TestBadTokenSpec(t *testing.T) {
 		grammar, opts, input, value, errors := cols[0], cols[1], cols[2], cols[3], cols[4]
 		j := badTokenParser(t, grammar, grammars, opts)
 		var gotValue, gotErrors string
-		if j.Config().Recover.Enabled {
+		if badTokenContinuations == opts {
+			_, names := j.Continuations(input)
+			gotValue, gotErrors = strings.Join(names, ","), "-"
+		} else if j.Config().Recover.Enabled {
 			v, errs, perr := j.ParseRecover(input)
 			if perr != nil {
 				t.Errorf("row %d %q %s: recovery returned an error: %v", row.lineNo, input, opts, perr)

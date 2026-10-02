@@ -12,6 +12,9 @@ use tabnas::{ImperativeLexMatcher, LexMatcher, Tabnas, TabnasError, Value};
 
 const FIXTURE: &str = "../test/spec/bad-token.tsv";
 
+/// The `opts` cell that asks for `continuations(input)` instead of a parse.
+const CONTINUATIONS: &str = "continuations";
+
 fn decode(field: &str) -> String {
     field
         .replace("\\r\\n", "\r\n")
@@ -59,7 +62,7 @@ fn make(grammar: &str, grammars: &HashMap<String, String>, opts: &str) -> Tabnas
             .unwrap_or_else(|| panic!("no @grammar named {grammar}"));
         parser.grammar_json(spec).expect("install grammar");
     }
-    if opts != "-" {
+    if opts != "-" && opts != CONTINUATIONS {
         parser
             .grammar_json(&format!(r#"{{"options":{opts}}}"#))
             .expect("install options");
@@ -121,7 +124,10 @@ fn render_error(error: &TabnasError) -> String {
     format!("{}@{}:{}{}", error.code, error.row, error.col, meta)
 }
 
-fn run(parser: &Tabnas, input: &str) -> (String, String) {
+fn run(parser: &Tabnas, input: &str, opts: &str) -> (String, String) {
+    if opts == CONTINUATIONS {
+        return (parser.continuations(input).tokens.join(","), "-".into());
+    }
     if parser.options.parse.recover.enabled {
         let out = parser.parse_recover(input);
         assert!(out.fatal.is_none(), "recovery returned a fatal error");
@@ -162,7 +168,7 @@ fn bad_token_fixture() {
         let [grammar, opts, input, value, errors] = cols.as_slice() else {
             panic!("row {row}: expected five columns, got {}", cols.len());
         };
-        let (got_value, got_errors) = run(&make(grammar, &grammars, opts), input);
+        let (got_value, got_errors) = run(&make(grammar, &grammars, opts), input, opts);
         if (&got_value, &got_errors) != (value, errors) {
             failures.push(format!(
                 "row {row} {input:?} {opts}\n  value:  got {got_value}, want {value}\n  errors: got {got_errors}, want {errors}"
