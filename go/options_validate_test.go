@@ -8,6 +8,7 @@ package tabnas
 // ts/test/options-validate.test.js, over the same leaves.
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -74,6 +75,51 @@ func TestOptionsFromMapNamesAnIllTypedLeaf(t *testing.T) {
 		if strings.Contains(err.Error(), "internal") {
 			t.Errorf("%s: a caller's mistake is reported as internal: %v", c.spec, err)
 		}
+	}
+}
+
+func TestBlockCommentWithoutEndIsRejectedAtConfiguration(t *testing.T) {
+	for _, end := range []any{nil, ""} {
+		definition := map[string]any{"line": false}
+		if end != nil {
+			definition["end"] = end
+		}
+		spec := map[string]any{
+			"comment": map[string]any{
+				"def": map[string]any{"hash": definition},
+			},
+		}
+		opts, err := OptionsFromMap(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "options.comment.def.hash.end: block comments require a non-empty end marker"
+
+		j := Make()
+		if err := j.ApplyOptions(opts); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("ApplyOptions end=%v: want %q, got %v", end, want, err)
+		}
+		grammar := Make()
+		if err := grammar.Grammar(&GrammarSpec{Options: &opts}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Grammar end=%v: want %q, got %v", end, want, err)
+		}
+
+		func() {
+			defer func() {
+				got := recover()
+				if got == nil || !strings.Contains(fmt.Sprint(got), want) {
+					t.Errorf("Make end=%v: want panic containing %q, got %v", end, want, got)
+				}
+			}()
+			Make(opts)
+		}()
+	}
+
+	line := Options{Comment: &CommentOptions{Def: map[string]*CommentDef{
+		"hash": {Line: Bool(true), End: ""},
+	}}}
+	if err := Make().ApplyOptions(line); err != nil {
+		t.Fatalf("line comment with an unused empty end was refused: %v", err)
 	}
 }
 

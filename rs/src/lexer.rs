@@ -83,6 +83,9 @@ pub(crate) fn compile_number_exclude(options: &Options) -> Option<Arc<Regex>> {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
+        if let Err(error) = options.validate_comment_definitions() {
+            panic!("invalid options: {error}");
+        }
         // A lexer built directly may be handed options nobody has
         // ordered yet. The parser's own lexer comes through
         // `with_shared`, whose options were ordered when they were

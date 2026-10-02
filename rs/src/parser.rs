@@ -18,6 +18,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
@@ -47,7 +48,32 @@ struct ParseMode<'a> {
     continuation: Option<&'a mut ContinuationCapture>,
     recovering: bool,
     errors: &'a mut Vec<TabnasError>,
-    partial: Option<Value>,
+    partial: Option<PartialValue>,
+}
+
+/// A recovery result that stays borrowed from the live parse until needed.
+///
+/// Holding a cloned `Value` while its container was still being built kept a
+/// second `Arc` handle alive. Every following append then made
+/// `Arc::make_mut` copy the whole prefix. A node cell follows TypeScript's
+/// recovery path instead: keep the live node and read it once when parsing
+/// ends. `Complete` is the already-finalized value retained for a post-loop
+/// trailing-content failure.
+enum PartialValue {
+    Node(Rc<RefCell<Value>>),
+    Complete(Value),
+}
+
+impl PartialValue {
+    fn into_value(self) -> Option<Value> {
+        match self {
+            Self::Complete(value) => Some(value),
+            Self::Node(node) => {
+                let value = node.borrow().clone();
+                (!matches!(value, Value::Undefined | Value::Null)).then(|| value.unwrap_undefined())
+            }
+        }
+    }
 }
 
 struct RelexUndo {
@@ -473,6 +499,9 @@ impl Parser {
     /// Parse against a configuration that is already prepared and
     /// ordered, shared with every other parse of the same grammar.
     pub fn from_shared(options: Arc<Options>) -> Self {
+        if let Err(error) = options.validate_comment_definitions() {
+            panic!("invalid options: {error}");
+        }
         Parser {
             ignore_tins: options.ignore_tins(),
             exclude_regex: compile_number_exclude(&options),
@@ -1493,7 +1522,10 @@ impl Parser {
                 error
             });
         match result {
-            Err(_) if recovering => Ok(mode.partial.unwrap_or(Value::Undefined)),
+            Err(_) if recovering => Ok(mode
+                .partial
+                .and_then(PartialValue::into_value)
+                .unwrap_or(Value::Undefined)),
             other => other,
         }
     }
@@ -1595,7 +1627,7 @@ impl Parser {
                     self.decorate_error(&mut error);
                     error
                 });
-            (result, mode.partial)
+            (result, mode.partial.and_then(PartialValue::into_value))
         };
         for error in &mut errors {
             self.decorate_error(error);
@@ -3701,7 +3733,7 @@ impl Parser {
 
         let res = final_value.unwrap_or(Value::Null).unwrap_undefined();
         if mode.recovering {
-            mode.partial = Some(res.clone());
+            mode.partial = Some(PartialValue::Complete(res.clone()));
         }
 
         // Post-loop check: ensure no unexpected trailing tokens. Recovery
@@ -3789,41 +3821,40 @@ impl Parser {
     }
 }
 
-/// Keep the best partial result the recovery path would return.
+/// Keep a handle to the best partial node the recovery path would return.
 ///
 /// Ten sites in the parse loop call this, twelve times per input construct
 /// on the benchmark grammars, and outside recovery every one of them is a
 /// load and a branch wrapped in a call. The guard is inline so the call
-/// goes away; the search behind it stays out of line, because a parse that
-/// is recovering is not the one being measured.
+/// goes away. Inside recovery this deliberately clones only an `Rc` node
+/// handle, never the `Value` being built: a `Value` snapshot keeps its
+/// container shared and turns the next mutation into a copy of the entire
+/// accumulated prefix.
 #[inline]
 fn update_partial(
     mode: &mut ParseMode<'_>,
-    root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
+    root_node: &Rc<RefCell<Value>>,
     current_rule: &Rule,
     stack: &[Rule],
 ) {
     if mode.recovering {
-        mode.partial = best_partial_value(root_node, current_rule, stack);
+        mode.partial = best_partial_node(root_node, current_rule, stack).map(PartialValue::Node);
     }
 }
 
 #[inline(never)]
-fn best_partial_value(
-    root_node: &std::rc::Rc<std::cell::RefCell<Value>>,
+fn best_partial_node(
+    root_node: &Rc<RefCell<Value>>,
     current_rule: &Rule,
     stack: &[Rule],
-) -> Option<Value> {
-    let usable = |value: Value| (!matches!(value, Value::Undefined | Value::Null)).then_some(value);
+) -> Option<Rc<RefCell<Value>>> {
+    let usable = |node: &Rc<RefCell<Value>>| {
+        (!matches!(*node.borrow(), Value::Undefined | Value::Null)).then(|| Rc::clone(node))
+    };
 
-    usable(root_node.borrow().clone())
-        .or_else(|| {
-            stack
-                .iter()
-                .find_map(|rule| usable(rule.node.borrow().clone()))
-        })
-        .or_else(|| usable(current_rule.node.borrow().clone()))
-        .map(Value::unwrap_undefined)
+    usable(root_node)
+        .or_else(|| stack.iter().find_map(|rule| usable(&rule.node)))
+        .or_else(|| usable(&current_rule.node))
 }
 
 fn error_token(error: &TabnasError) -> Token {
