@@ -8,6 +8,7 @@ package tabnas
 // ts/test/options-validate.test.js, over the same leaves.
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -144,6 +145,86 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 	}
 	if err := Make().Grammar(gs); err != nil {
 		t.Fatalf("documented idioms refused: %v", err)
+	}
+}
+
+// A null (or false) entry in a map of definitions DELETES that
+// definition, in every runtime: TypeScript's makeCommentMatcher and
+// configure skip an entry that is `null == om || false === om`, so the
+// default is gone from the config. The serialized door here read a
+// definition only when it was an object and dropped anything else, so
+// the default survived and a grammar document could not turn one off in
+// Go (#240; tabnas/ini#77 and the abnf port carried typed-nil
+// workarounds). The typed door was never affected: Deep already treats
+// a nil *Def entry as the delete marker, so the reader's job is to
+// produce that entry rather than skip it.
+func TestOptionsFromMapNullDefinitionDeletes(t *testing.T) {
+	gs, err := GrammarSpecFromJSON([]byte(`{"options":{
+		"comment":{"def":{"slash":null,"multi":false}},
+		"value":{"def":{"null":null}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := Make()
+	if err := j.Grammar(gs); err != nil {
+		t.Fatal(err)
+	}
+	cfg := j.Config()
+	if len(cfg.CommentLine) != 1 || cfg.CommentLine[0] != "#" {
+		t.Errorf("comment.def.slash: null left the line comments at %v, want [#]", cfg.CommentLine)
+	}
+	if len(cfg.CommentBlock) != 0 {
+		t.Errorf("comment.def.multi: false left the block comments at %v, want none", cfg.CommentBlock)
+	}
+	if _, has := cfg.ValueDef["null"]; has {
+		t.Errorf("value.def.null: null left the keyword in %v", cfg.ValueDef)
+	}
+	if _, has := cfg.ValueDef["true"]; !has {
+		t.Errorf("value.def.true should survive an unrelated deletion: %v", cfg.ValueDef)
+	}
+
+	// The reader's own output is the typed delete marker: the key is
+	// present and its definition nil, which is what Deep removes.
+	opts, err := OptionsFromMap(map[string]any{
+		"comment": map[string]any{"def": map[string]any{"slash": nil, "multi": false}},
+		"value":   map[string]any{"def": map[string]any{"null": nil, "no": false}},
+		"match":   map[string]any{"value": map[string]any{"x": nil, "y": false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"slash": true, "multi": true} {
+		if cd, ok := opts.Comment.Def[name]; !ok || cd != nil || !want {
+			t.Errorf("comment.def.%s: want a present nil entry, got present=%v value=%v", name, ok, cd)
+		}
+	}
+	for _, name := range []string{"null", "no"} {
+		if vd, ok := opts.Value.Def[name]; !ok || vd != nil {
+			t.Errorf("value.def.%s: want a present nil entry, got present=%v value=%v", name, ok, vd)
+		}
+	}
+	for _, name := range []string{"x", "y"} {
+		if mv, ok := opts.Match.Value[name]; !ok || mv != nil {
+			t.Errorf("match.value.%s: want a present nil entry, got present=%v value=%v", name, ok, mv)
+		}
+	}
+
+	// match.value has no defaults, so the deletion is of an entry set
+	// earlier: a typed matcher value, then nulled through the serialized
+	// door, is gone from the config.
+	k := Make(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{
+		"at": {Match: regexp.MustCompile(`^@\w+`)},
+	}}})
+	if len(k.Config().MatchValues) != 1 {
+		t.Fatalf("setup: want one match value, got %d", len(k.Config().MatchValues))
+	}
+	if err := k.Grammar(&GrammarSpec{OptionsMap: map[string]any{
+		"match": map[string]any{"value": map[string]any{"at": nil}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(k.Config().MatchValues); n != 0 {
+		t.Errorf("match.value.at: null left %d match values", n)
 	}
 }
 
