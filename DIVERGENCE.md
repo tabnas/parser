@@ -821,7 +821,42 @@ Registered as `string-raw-ls` and `string-raw-ps`, with
 `string-row-char-control` as their control: the same option and a
 string with no line terminator in it, where the three ports agree. The
 `line.chars` path is `string-raw-ls-line-char` and
-`string-raw-ps-line-char`, with both options set.
+`string-raw-ps-line-char`, with both options set. Inside a multi-line
+string the same two characters split the other way, with Go apart: the
+next entry.
+
+### No row counted at a raw U+2028 or U+2029 inside a multi-line string in Go
+
+**Deferred, not deliberate** — the Go half of the same line-terminator
+split, measured while #263 was registered, and the third way the three
+ports read a raw U+2028 or U+2029 in a string.
+
+Under json5's line configuration, LF, U+2028 and U+2029 in both
+`line.chars` and `line.rowChars`, and with the double quote in
+`string.multiChars`, a raw LF inside the string counts a row in every
+port. A raw U+2028 or U+2029 counts a row in TypeScript, whose
+`buildStringBodySpec` classifies a line character in a multi-line string
+as a row character when `line.rowChars` holds it, and in Rust, which
+counts a row for any row character its cursor steps over. Go's
+`BuildStringBodySpec` (`go/scan.go`) tests `LineChars` and `RowChars`
+only for a character below code point 32, so U+2028 and U+2029 fall
+through to plain body, and the token after the string sits on row 1
+where the other two put it on row 2.
+
+| input, position of `y` | TypeScript | Go | Rust |
+|---|---|---|---|
+| `"a<LF>b" y` | 2:4 | 2:4 | 2:4 |
+| `"a<U+2028>b" y` | 2:4 | **1:7** | 2:4 |
+| `"a<U+2029>b" y` | 2:4 | **1:7** | 2:4 |
+
+Repair direction: **Go changes.** TypeScript defines the language and
+Rust agrees with it here: the multi-line test in `BuildStringBodySpec`
+should apply to every character in `LineChars`, not only to the control
+characters.
+
+Registered as `string-multi-raw-ls` and `string-multi-raw-ps`, with
+`string-multi-row-char-control` as their control: a raw LF in the same
+multi-line string, where the three ports agree.
 
 ### An escaped non-ASCII character read as one byte in Go
 
