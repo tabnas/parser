@@ -279,11 +279,17 @@ func (j *Tabnas) registerMatchSpecs(opts *Options) {
 			byName[name] = len(j.parser.Config.CustomMatchers) - 1
 		}
 	}
-	// Tie-break equal priorities by name: map iteration order is random,
-	// so without this the order of same-priority matchers would vary
-	// between runs (and between merge directions in (*Tabnas).Merge).
-	sort.SliceStable(j.parser.Config.CustomMatchers, func(i, k int) bool {
-		mi, mk := j.parser.Config.CustomMatchers[i], j.parser.Config.CustomMatchers[k]
+	j.parser.Config.sortCustomMatchers()
+}
+
+// sortCustomMatchers orders CustomMatchers by priority, tie-breaking equal
+// priorities by name: map iteration order is random, so without this the
+// order of same-priority matchers would vary between runs (and between
+// merge directions in (*Tabnas).Merge). Lex.Next walks the slice in
+// priority bands, so it must be sorted whenever an entry is added.
+func (c *LexConfig) sortCustomMatchers() {
+	sort.SliceStable(c.CustomMatchers, func(i, k int) bool {
+		mi, mk := c.CustomMatchers[i], c.CustomMatchers[k]
 		if mi.Priority != mk.Priority {
 			return mi.Priority < mk.Priority
 		}
@@ -728,9 +734,28 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		}
 	}
 
-	// Copy parent's custom matchers.
-	for _, m := range j.parser.Config.CustomMatchers {
-		child.parser.Config.CustomMatchers = append(child.parser.Config.CustomMatchers, m)
+	// Copy parent's custom matchers. Make(o) above already registered
+	// every matcher the merged options carry (lex.match), so a matcher the
+	// child holds by name is not added again (#242): TS rebuilds
+	// cfg.lex.match from the merged options alone, one matcher per name in
+	// every generation. What remains are matchers a plugin put on the
+	// parent's Config directly, which the child inherits on the same terms.
+	if 0 < len(j.parser.Config.CustomMatchers) {
+		have := make(map[string]bool, len(child.parser.Config.CustomMatchers))
+		for _, m := range child.parser.Config.CustomMatchers {
+			have[m.Name] = true
+		}
+		added := false
+		for _, m := range j.parser.Config.CustomMatchers {
+			if !have[m.Name] {
+				child.parser.Config.CustomMatchers = append(child.parser.Config.CustomMatchers, m)
+				have[m.Name] = true
+				added = true
+			}
+		}
+		if added {
+			child.parser.Config.sortCustomMatchers()
+		}
 	}
 
 	// Copy parent's ender chars.
