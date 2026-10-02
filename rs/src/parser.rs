@@ -499,6 +499,9 @@ impl Parser {
     /// Parse against a configuration that is already prepared and
     /// ordered, shared with every other parse of the same grammar.
     pub fn from_shared(options: Arc<Options>) -> Self {
+        if let Err(error) = options.validate_comment_definitions() {
+            panic!("invalid options: {error}");
+        }
         Parser {
             ignore_tins: options.ignore_tins(),
             exclude_regex: compile_number_exclude(&options),
