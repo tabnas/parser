@@ -77,6 +77,25 @@ type Context struct {
 	contTins []Tin
 	contRule *Rule
 
+	// Set when the trailing-content check, which runs with no rule once
+	// the rule loop has ended, is what failed the parse. Continuations
+	// answers such a failure with the start rule's openers, as
+	// TypeScript does for an error raised with NORULE.
+	trailingFault bool
+
+	// Set at the first fetch that returned a bad token with relexing
+	// off, with the continuation set computed there: where TypeScript
+	// throws, and what its continuations() computes for the fetching
+	// rule from the buffer as it stood (Rule.ParseAlts).
+	fetchFault     bool
+	fetchFaultTins []Tin
+
+	// Set when the fetch-time absorber recorded a bad token and gave up
+	// on it, at maxSkip or maxRecoveries: the parse ends on that error
+	// without attemptRecover listing the token again, as TypeScript's
+	// absorber throws the recorded error itself.
+	absorbGaveUp bool
+
 	// Unlexable-run coalescing (TS: ctx._badTo / _badErr). badTo is the
 	// source offset just past the last absorbed bad token, so a token
 	// starting at or before it belongs to the SAME run and grows the
@@ -611,11 +630,13 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// observed — so it is where recovery hooks, mirroring the
 			// single raise site TS recovers at inside bad().
 			if p.Config.Recover.Enabled && !noRecover {
-				if resumed := attemptRecover(
-					ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
-					rule = resumed
-					kI++
-					continue
+				if !ctx.absorbGaveUp {
+					if resumed := attemptRecover(
+						ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
+						rule = resumed
+						kI++
+						continue
+					}
 				}
 				// Recovery gave up — the skip cap was hit, or no rule on
 				// the stack could accept the sync token. The parse still
@@ -724,6 +745,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 	trailing := !gaveUp && ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ
 	if trailing && !soft {
+		ctx.trailingFault = true
 		// Prefer lex errors over generic unexpected for unconsumed tokens too.
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
@@ -750,6 +772,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		ctx.Rule = curRule
 		if endTkn.Tin != TinZZ {
 			if !soft {
+				ctx.trailingFault = true
 				if lex.Err != nil {
 					return nil, p.finishErr(lex.Err, ctx, meta, nil)
 				}
@@ -770,6 +793,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// Check lexer errors from that final Next() call.
 		if lex.Err != nil {
 			if !soft {
+				ctx.trailingFault = true
 				return nil, p.finishErr(lex.Err, ctx, meta, nil)
 			}
 			if je, ok := lex.Err.(*TabnasError); ok && !ctx.alreadyRecorded(je) {
@@ -1000,6 +1024,17 @@ func diagTinName(ctx *Context, tin Tin) string {
 // deliberately nil-safe: a Lex built without a Context (NewLex) has no
 // list to record into, and recording must never be the thing that
 // breaks a parse.
+// recovering reports whether this parse recovers from errors: the
+// instance's setting, unless the parse's meta switched it off, as
+// Continuations does for its own parse.
+func (ctx *Context) recovering() bool {
+	if ctx == nil || ctx.Cfg == nil || !ctx.Cfg.Recover.Enabled {
+		return false
+	}
+	off, _ := ctx.Meta[contNoRecoverMeta].(bool)
+	return !off
+}
+
 func (ctx *Context) recordErr(je *TabnasError) *TabnasError {
 	if ctx != nil && je != nil {
 		ctx.Errs = append(ctx.Errs, je)

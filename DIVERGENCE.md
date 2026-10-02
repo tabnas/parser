@@ -430,6 +430,30 @@ fixed or quietly dropped.
   by `test/spec/bad-token.tsv`, and in Rust by
   `rs/tests/bad_token_fetch_test.rs`.
 
+- **Three answers Go gave differently under recovery and from
+  `continuations()`.** Found while the fixture above was written, and
+  kept out of it until Go followed TypeScript. With relexing and recovery
+  together, Go listed a bad token no alternate re-cut twice, once
+  unrecovered from the relexing pass and once from the recovery, where
+  TypeScript leaves the token to its recovery and lists it once with the
+  tokens skipped (#266). Go read `maxRecoveries` before recording an
+  error, so a cascade at the cap ended its parse (`[1,,,2]` under a cap
+  of one gave `[1]`), where TypeScript records, drops the cascade and
+  reads the cap after, and goes on to `[1,2]`; and when its fetch-time
+  absorber gave up at a cap, Go's recovery recorded the same token a
+  second time. From `continuations()`, Go answered a bad token after a
+  complete document with the last rule's closers (`<1>?` in the
+  fixture's `nest` grammar gave `#RB`) and a bad token a rule fetched
+  with what alternates still waiting on a later position wanted (`[?`
+  gave `#CS` among its answer), where TypeScript throws at the fetch and
+  computes from the buffer as it stood, for the fetching rule, and
+  answers a failure of the trailing-content check, which has no rule,
+  with the start rule's openers (`#LB`, and `#NR,#ST,#VL,#OB,#OS`). Go
+  now does the same on every count, and the rows are in
+  `test/spec/bad-token.tsv` under "Relexing with recovery", the cap rows
+  and the continuations rows; ts/test/bad-token.test.js and
+  rs/tests/bad_token_fetch_test.rs pin the same answers a second time.
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in

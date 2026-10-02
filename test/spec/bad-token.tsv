@@ -45,18 +45,10 @@ grammar	opts	input	value	errors
 # A recovering parse that gives up lists every error once: the one it
 # gave up on is the last one it recorded, or a cascade it dropped.
 #
-# Three cases are not here because Go answers them differently. With
-# relexing and recovery TOGETHER, Go lists a bad token no alternate
-# re-cuts twice, once unrecovered and once recovered, where TypeScript
-# and Rust list it once. Go reads the `maxRecoveries` cap before it
-# records an error, so a cascade at the cap ends its parse where the
-# other two drop the cascade and go on. And asked what could follow a
-# document that is complete before a bad token (`<1>?` in `nest`), or
-# before any trailing content, Go answers with the last rule's closers
-# where TypeScript answers with the start rule's openers; at a bad token
-# a rule fetched (`[?`), Go also lists what the alternates still waiting
-# on a later position want. The canonical answers are pinned by a second
-# test in ts/test/bad-token.test.js and by rs/tests/bad_token_fetch_test.rs.
+# ts/test/bad-token.test.js and rs/tests/bad_token_fetch_test.rs pin the
+# rows under "Relexing with recovery", the cascade at the cap and the
+# continuations after a complete document a second time, as the canonical
+# engine's own statement of them: Go once answered each differently.
 #
 # Runners: ts/test/bad-token.test.js, go/bad_token_spec_test.go,
 # rs/tests/bad_token_spec_test.rs.
@@ -94,15 +86,30 @@ json	{"parse":{"recover":{"enabled":true}}}	[1,2,	[1,2]	unexpected@1:6+skip0
 # The lexer's own fault inside a string resumes past the next row character
 # after the bad token, so the line after it is skipped whole.
 json	{"parse":{"recover":{"enabled":true}}}	{"a":1,"b\n":[truex,null]}	{"a":1}	unprintable@1:10+bad1
+# The row character is `line.rowChars`: a lone CR is not one by default, so
+# the skip runs on to the end of the source, and is one when the option
+# names it, so the skip stops after the next CR. The option spells CR and LF
+# as \u escapes because the loaders decode \r and \n in every column.
+json	{"parse":{"recover":{"enabled":true}}}	{"a":1,"b\r":2,\r"c":3}	{"a":1}	unprintable@1:10+bad1
+json	{"parse":{"recover":{"enabled":true}},"line":{"rowChars":"\u000d\u000a"}}	{"a":1,"b\r":2,\r"c":3}	{"a":1,"c":3}	unprintable@1:10+bad1
 # The caps. Past `maxSkip` a run gives up, and past `maxRecoveries` the parse
 # does; either way the error it stops on is listed once.
 json	{"parse":{"recover":{"enabled":true,"maxSkip":1}}}	[1,???,2]	[1]	custom_bad@1:4+bad2
 json	{"parse":{"recover":{"enabled":true,"maxRecoveries":0}}}	[1,??,2]	[1]	custom_bad@1:4+bad1
+# The cap is read after an error is recorded and after a cascade of the one
+# before it is dropped, so a cascade at the cap does not end the parse.
+json	{"parse":{"recover":{"enabled":true,"maxRecoveries":1}}}	[1,,,2]	[1,2]	unexpected@1:4+skip0
 #
 # Relexing. The bad token stays in the lookahead for an alternate to re-cut;
 # when none can, the first token of the lookahead is the error.
 json	{"lex":{"relex":true}}	{"a"?:1}	-	unexpected@1:2
 json	{"lex":{"relex":true}}	[1,?]	-	custom_bad@1:4
+#
+# Relexing with recovery. A bad token no alternate re-cut is recovered from
+# as any failure is, and listed once, with the tokens the recovery skipped.
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+skip1
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+skip2
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,? 2,3]	[1,3]	custom_bad@1:4+skip2
 #
 # Giving up. The error recovery gave up on is listed once: recorded, when it
 # was news, or dropped, when it was a cascade of the one before it.
@@ -133,3 +140,13 @@ one	continuations	1	#ZZ	-
 one	continuations	1 ?	#NR	-
 json	continuations	[1] ?	#ZZ	-
 json	continuations	[1,?	#NR,#ST,#VL,#OB,#OS,#CS,#CA	-
+# After a complete document, a bad token or any trailing content meets the
+# trailing-content check, which has no rule: the start rule's openers.
+nest	continuations	<1>?	#LB	-
+nest	continuations	<1> ?	#LB	-
+nest	continuations	<1>>	#LB	-
+# At a bad token a rule fetched, the answer comes from the buffer at the
+# first position of that rule's alternates: what `[` hands over to, not the
+# `]` the two-token alternate `#OS #CS` still wanted.
+json	continuations	[?	#NR,#ST,#VL,#OB,#OS	-
+json	continuations	{"a"?	#NR,#ST,#VL,#OB,#OS	-

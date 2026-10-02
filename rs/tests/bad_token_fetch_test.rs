@@ -205,7 +205,8 @@ fn relexing_leaves_a_custom_bad_token_for_the_alternates() {
 fn relexing_and_recovery_together_recover_from_a_custom_bad_token() {
     // The token fails the alternates and recovery skips it to the next sync
     // token, stepping the lexer past it. It is listed once. TypeScript's
-    // answers; Go lists each of these errors twice, once unrecovered.
+    // answers, in the shared fixture too; Go once listed each of these
+    // errors twice, once unrecovered.
     let parser = recovering(relexing(with_bad_matcher(json())));
     let skipped = |skipped| {
         Some(RecoveredAt {
@@ -396,8 +397,8 @@ fn a_recovering_parse_that_gives_up_lists_each_error_once() {
 fn a_cascade_at_the_recovery_cap_still_recovers() {
     // The cap is read after the error is recorded and, for a cascade,
     // dropped again: a cascade does not grow the list, so it does not stop
-    // the parse at the cap. TypeScript's answer; Go reads the cap before
-    // recording, and gives up here with `[1]`.
+    // the parse at the cap. TypeScript's answer, in the shared fixture too;
+    // Go once read the cap before recording, and gave up here with `[1]`.
     let mut parser = recovering(json());
     parser.options.parse.recover.max_recoveries = 1;
     let out = parser.parse_recover("[1,,,2]");

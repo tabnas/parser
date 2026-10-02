@@ -109,11 +109,12 @@ describe('bad-token', () => {
     assert.ok(20 < ran, 'bad-token.tsv ran only ' + ran + ' rows')
   })
 
-  // Two answers Go does not give, so they are not in the shared fixture:
-  // with relexing and recovery together Go lists a bad token no alternate
-  // re-cuts twice, once unrecovered, and Go reads the maxRecoveries cap
-  // before recording an error, so a cascade at the cap ends its parse.
-  // rs/tests/bad_token_fetch_test.rs pins the same answers in Rust.
+  // Two answers the shared fixture also pins, under "Relexing with
+  // recovery" and in the cap rows, kept here as the canonical engine's own
+  // statement of them: Go once listed a bad token no alternate re-cut
+  // twice under relexing with recovery, once unrecovered, and read the
+  // maxRecoveries cap before recording an error, so a cascade at the cap
+  // ended its parse. rs/tests/bad_token_fetch_test.rs pins them in Rust.
   it('relexing-with-recovery-and-a-cascade-at-the-cap', () => {
     const answer = (opts, input) => run(make('json', {}, JSON.stringify(opts)), input)
     const both = { lex: { relex: true }, parse: { recover: { enabled: true } } }
@@ -125,14 +126,16 @@ describe('bad-token', () => {
     assert.deepEqual(answer(capped, '[1,,,2]'), ['[1,2]', 'unexpected@1:4+skip0'])
   })
 
-  // The third answer Go does not give. After a complete document, a bad
+  // The third, also in the shared fixture. After a complete document, a bad
   // token (or any trailing content) is met by the trailing-content check,
   // which has no rule: continuations() answers with the start rule's
   // openers, as it does for a prefix no rule ever ran on. At a bad token a
   // rule fetched, nothing is recorded, and the answer is computed from the
   // buffer at the first position of that rule's alternates: `[?` offers
   // what `[` hands over to, not the `]` an alternate two tokens long still
-  // wanted. rs/tests/bad_token_fetch_test.rs pins the same answers in Rust.
+  // wanted. Go once answered the last rule's closers, and what alternates
+  // still waiting on a later position wanted.
+  // rs/tests/bad_token_fetch_test.rs pins the same answers in Rust.
   it('continuations-after-a-complete-document-and-at-a-fetched-bad-token', () => {
     const nest = {
       options: { rule: { start: 'top' }, fixed: { token: { '#LB': '<', '#RB': '>' } } },
