@@ -47,7 +47,7 @@ Controls line ending handling.
 | `Lex` | `*bool` | `true` | Enable line recognition |
 | `Chars` | `string` | `"\r\n"` | Line ending characters. **`""` means UNSET, not "none"**. See `Space.Chars`. Set `Lex` to `false` to turn line lexing off |
 | `RowChars` | `string` | `"\n"` | Characters that increment the row counter. **`""` means UNSET, not "none"**. See `String.Chars`. Affects reported positions |
-| `Single` | `*bool` | `false` | Separate token per newline |
+| `Single` | `*bool` | `false` | One token per line end: a run of line characters up to the first repeated one (`\r\n` and `\n\r` are each one token; `\n\n` is two), instead of one token for the whole run |
 
 ## `Text`
 
