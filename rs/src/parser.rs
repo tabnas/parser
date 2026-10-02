@@ -1953,51 +1953,16 @@ impl Parser {
                 };
                 let mut token = match next {
                     Ok(token) => token,
-                    Err(error) => {
-                        let recovery_error = self
-                            .rules
-                            .get(&*rule.name)
-                            .map(|spec| {
-                                let alts = if rule.state == RuleState::Open {
-                                    &spec.open
-                                } else {
-                                    &spec.close
-                                };
-                                self.attach_error((*error).clone(), rule, site.stack, alts, None)
-                            })
-                            .unwrap_or_else(|| (*error).clone());
-                        // The fault reaches the lex subscribers as its bad
-                        // token whatever happens to it next, as every token
-                        // TypeScript's `lex.next` returns does.
-                        let mut token = error_token(&recovery_error);
-                        for subscriber in &self.lex_subscribers {
-                            let result = self.catch_callback("lex subscriber", site.source, || {
-                                subscriber(&mut token, rule, context)
-                            });
-                            result.map_err(|error| {
-                                self.attach_active_error(error, rule, site.stack, Some(&token))
-                            })?;
-                        }
-                        if self.options.lex.relex {
-                            break token;
-                        }
-                        if mode.recovering && fetch == Fetch::Rule {
-                            if absorb_lex_error(
-                                &recovery_error,
-                                context,
-                                &self.options,
-                                mode.errors,
-                            ) {
-                                lexer.skip_bad(&token, mid_construct(&recovery_error.code));
-                                continue;
-                            }
-                            mode.gave_up = true;
-                        }
-                        self.capture_fetch_failure(context, rule, site.stack, mode, fetch);
-                        // The lexer boxes its error internally; this is
-                        // the boundary back to the parser's own result.
-                        return Err(*error);
-                    }
+                    // The lexer's own fault is a `#BD` token from here on,
+                    // as it is in TypeScript, where `lex.next` builds the
+                    // token, hands it to the lex subscribers and returns
+                    // it, and `parse_alts` reads what came back. A
+                    // subscriber may rewrite it, its code and position
+                    // included, and the parse sees what it left: so the
+                    // fault takes the path below, the one a `#BD` token a
+                    // custom matcher returned takes, and the lexer's error
+                    // itself goes no further than this token.
+                    Err(error) => error_token(&error),
                 };
                 for subscriber in &self.lex_subscribers {
                     let result = self.catch_callback("lex subscriber", site.source, || {

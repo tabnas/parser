@@ -25,8 +25,8 @@
 use std::sync::{Arc, Mutex};
 
 use tabnas::{
-    ImperativeLexMatcher, LexMatcher, ParseRecovery, RecoveredAt, Tabnas, TabnasError, Value,
-    TIN_BD, TIN_CA,
+    ImperativeLexMatcher, LexMatcher, ParseRecovery, RecoveredAt, Tabnas, TabnasError, TokenCode,
+    Value, TIN_BD, TIN_CA,
 };
 
 /// At `?`, a bad token `custom_bad` over the `?`; at `%`, a bad token
@@ -282,10 +282,55 @@ fn lex_subscribers_see_the_lexers_own_faults() {
     assert_eq!(vec!["custom_bad".to_string()], *seen.lock().unwrap());
 }
 
+#[test]
+fn a_lex_subscriber_may_rewrite_the_lexers_own_fault() {
+    // What a subscriber leaves on the token is what the parse sees, as in
+    // TypeScript, where `parse_alts` reads the token `lex.next` returned
+    // once the subscribers have run: the code raised or recorded, and the
+    // position. Before, the lexer's own fault was raised and recorded from
+    // the lexer's error, whatever a subscriber had done to its token, and
+    // only a custom matcher's bad token followed the subscriber.
+    fn rewriting(mut parser: Tabnas, shift: usize) -> Tabnas {
+        parser.subscribe_lex(move |token, _rule, _context| {
+            if token.tin == TIN_BD && token.why.as_str() == "unterminated_string" {
+                token.why = TokenCode::from("string_left_open");
+                token.site.ci += shift;
+            }
+        });
+        parser
+    }
+    let error = rewriting(json(), 0).parse("[\"abc").expect_err("fails");
+    assert_eq!(("string_left_open", 1, 2, None), summary(&error));
+    let error = rewriting(json(), 10).parse("[\"abc").expect_err("fails");
+    assert_eq!(("string_left_open", 1, 12, None), summary(&error));
+
+    let out = rewriting(recovering(json()), 0).parse_recover("[1,\"abc");
+    assert_eq!(value("[1]"), out.value);
+    assert_eq!(
+        vec![("string_left_open", 1, 4, bad_run(1))],
+        summaries(&out)
+    );
+    let out = rewriting(recovering(json()), 10).parse_recover("[1,\"abc");
+    assert_eq!(
+        vec![("string_left_open", 1, 14, bad_run(1))],
+        summaries(&out)
+    );
+
+    // A custom matcher's bad token follows the subscriber the same way.
+    let mut parser = with_bad_matcher(json());
+    parser.subscribe_lex(|token, _rule, _context| {
+        if token.tin == TIN_BD && token.why.as_str() == "custom_bad" {
+            token.why = TokenCode::from("question_mark");
+        }
+    });
+    let error = parser.parse("[?]").expect_err("fails");
+    assert_eq!(("question_mark", 1, 2, None), summary(&error));
+}
+
 /// `continuations()` after a complete document, and at a bad token a rule
-/// fetched. Go answers both differently (the last rule's closers; and what
-/// alternates still waiting on a later position want), so neither is in
-/// the shared fixture; ts/test/bad-token.test.js pins the same answers.
+/// fetched. Both are in the shared fixture too, and ts/test/bad-token.test.js
+/// pins the same answers; Go once answered the last rule's closers, and
+/// what alternates still waiting on a later position wanted.
 #[test]
 fn continuations_after_a_complete_document_are_the_start_openers() {
     // The trailing-content check has no rule, and TypeScript's
