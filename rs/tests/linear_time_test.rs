@@ -15,6 +15,7 @@
 //! the debug build the suite runs in, the ratios below were 10 to 13, and
 //! before the repairs 71 (recovery, the flat array) and 91 (relex).
 
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 use tabnas::{RecoverOptions, Tabnas, Value};
 
@@ -64,7 +65,10 @@ const DOCUMENTS: [(&str, Document); 3] = [
         format!("[{}[1]]", "[1],".repeat(n))
     }),
     ("an object", |n| {
-        let pairs: String = (0..n).map(|i| format!("\"k{i}\":{{\"v\":{i}}},")).collect();
+        let pairs = (0..n).fold(String::new(), |mut pairs, i| {
+            let _ = write!(pairs, "\"k{i}\":{{\"v\":{i}}},");
+            pairs
+        });
         format!("{{{pairs}\"z\":1}}")
     }),
 ];
@@ -114,14 +118,14 @@ const REJECTED: [&str; 2] = ["B", "C"];
 /// cheap, and a cut that costs the length of the source pays for every
 /// byte of it.
 fn relexing(relex: bool) -> Tabnas {
-    let fixed: String = REJECTED
-        .iter()
-        .map(|t| format!(r##","#{t}":"{}""##, t.to_lowercase()))
-        .collect();
-    let alternates: String = REJECTED
-        .iter()
-        .map(|t| format!(r##"{{"s":"#{t}"}},"##))
-        .collect();
+    let fixed = REJECTED.iter().fold(String::new(), |mut fixed, t| {
+        let _ = write!(fixed, r##","#{t}":"{}""##, t.to_lowercase());
+        fixed
+    });
+    let alternates = REJECTED.iter().fold(String::new(), |mut alternates, t| {
+        let _ = write!(alternates, r##"{{"s":"#{t}"}},"##);
+        alternates
+    });
     let mut parser = Tabnas::new();
     parser
         .grammar_json(&format!(

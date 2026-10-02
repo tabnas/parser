@@ -285,6 +285,9 @@ impl Tabnas {
     }
 
     pub fn with_options(options: Options) -> Self {
+        if let Err(error) = options.validate_comment_definitions() {
+            panic!("invalid options: {error}");
+        }
         let sequence = NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
         let id = format!(
             "Tabnas/{sequence}{}",

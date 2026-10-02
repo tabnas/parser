@@ -570,6 +570,9 @@ func Make(opts ...Options) *Tabnas {
 	if len(opts) > 0 {
 		o = Deep(o, opts[0]).(Options)
 	}
+	if err := checkCommentDefinitions(&o); err != nil {
+		panic(err.Error())
+	}
 
 	// An unset tag defaults to "-", matching the TS default
 	// (ts/src/defaults.ts `tag: '-'`). The tag is printed verbatim — in
