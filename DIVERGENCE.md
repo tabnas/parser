@@ -745,6 +745,156 @@ Registered as `pusher-through-child` and `rule-history-bounded-pusher`,
 with `pusher-through-child-control` as their control: `parent.child.name`,
 the same pusher read directly, where the three ports agree.
 
+### A row counted at a raw U+2028 or U+2029 inside a string in Rust
+
+**Deferred, not deliberate** — a Rust defect found by the cross-runtime
+differential run that fixed tabnas/json5#80 (tabnas/json5#82), and
+reported here as [#263](https://github.com/tabnas/parser/issues/263).
+
+A string body is not multi-line unless its quote is in
+`string.multiChars`, and in TypeScript and Go a line character inside
+such a body is ordinary content: `buildStringBodySpec` in
+`ts/src/lexer.ts` classifies a line character as body unless the string
+is multi-line (`if (isMultiLine && lineChars[c]) return rowChars[c] ? 3
+: 2`), and Go's `stringBodySpec` is its port. Rust counts rows in one
+place, `advance` in `rs/src/lexer.rs`: every character the cursor steps
+over that is in `line.rowChars` adds a row and resets the column, string
+body or not. With the default row character, LF, the three agree,
+because a raw LF inside a single-line string is `unprintable` in all of
+them before any row is counted. With U+2028 or U+2029 as a row character
+they part: TypeScript and Go count a column, Rust a row, and every
+position after the string differs by a row.
+
+| input | `line.rowChars` | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `"ab" y`, position of `y` | LF, U+2028, U+2029 | 1:6 | 1:6 | 1:6 |
+| `"a<U+2028>b" y`, position of `y` | same | 1:7 | 1:7 | **2:4** |
+| `"a<U+2029>b" y`, position of `y` | same | 1:7 | 1:7 | **2:4** |
+
+json5 is the live configuration: JSON5 admits an unescaped U+2028 or
+U+2029 inside a string literal, and all three json5 ports set
+`line.rowChars` to LF, U+2028 and U+2029 (`JSON5_ROW_CHARS` in
+`ts/src/json5.ts`, `go/json5.go` and `rs/src/lib.rs` of tabnas/json5).
+The rows above use only that option, which is the part of json5's
+configuration the three ports share. (json5's TypeScript and Go ports
+also put U+2028 and U+2029 in `line.chars`; its Rust port puts them in
+`line.fixed` instead, because under `line.chars` the Rust engine reports
+a raw U+2028 inside a single-line string as `unprintable`, measured here
+as well. That is the same defect seen from the other side, not a second
+one, and the register pins the row count because that is what the
+differential run found.)
+
+Repair direction: **Rust changes.** TypeScript defines the language and
+Go agrees with it. The string matcher's body loop should step over a
+row character without counting a row unless the string is multi-line,
+as `buildStringBodySpec` does.
+
+Registered as `string-raw-ls` and `string-raw-ps`, with
+`string-row-char-control` as their control: the same option and a
+string with no line terminator in it, where the three ports agree.
+
+### Columns after an escaped non-ASCII character in Go
+
+**Deferred, not deliberate** — a Go defect from the same differential
+run, the second half of [#263](https://github.com/tabnas/parser/issues/263).
+
+In the Go string matcher the character after the escape character is
+read as one byte: `esc := src[sI]` in `go/lexer.go`, after `sI +=
+csize; cI++` has stepped past the backslash. The unknown-escape branch
+writes that byte (`sb.WriteByte(esc)`) and steps one byte past it, so
+the remaining bytes of a multi-byte character fall to the body scan and
+are counted as columns of their own. The value is right, because the
+bytes are appended in order and reassemble into the character, but the
+column runs ahead by the character's UTF-8 length minus one. TypeScript
+counts the escaped character as one UTF-16 unit (`buf.push(ec); sI++;
+cI++` in `ts/src/lexer.ts`) and Rust as one character.
+
+| input, position of `y` | TypeScript | Go | Rust |
+|---|---|---|---|
+| `"\a" y` | 6 | 6 | 6 |
+| `"\é" y` (U+00E9, two bytes) | 6 | **7** | 6 |
+| `"\€" y` (U+20AC, three bytes) | 6 | **8** | 6 |
+| `"\😀" y` (U+1F600, four bytes) | 7 | **9** | 6 |
+
+The last line is not registered: the astral character brings in the
+scan-unit split recorded under "Column positions for astral characters",
+so TypeScript's 7 is its own count of two UTF-16 units and the row would
+pin two divergences at once. The two registered rows are inside the BMP,
+where TypeScript and Rust agree and only Go differs.
+
+Repair direction: **Go changes.** Decode the rune after the escape
+character with `utf8.DecodeRuneInString`, write it whole and step past
+its full width, counting one column, as every other branch of that
+matcher already does for a multi-byte character.
+
+Registered as `escape-two-byte` and `escape-three-byte`, with
+`escape-ascii-control` as their control: an escape followed by an ASCII
+character, where the three ports agree.
+
+### A block comment with no end marker
+
+**Ruling pending** — a three-way split, reported as
+[#218](https://github.com/tabnas/parser/issues/218), where none of the
+three answers is clearly the language.
+
+A comment definition with `line: false` (or `line` unset, which is
+false) and no `end` is a block comment with nothing to close it. Each
+runtime reads that differently:
+
+- **Go** stores `CommentDef.End` as a plain `string` (`go/options.go`),
+  so an unset end is `""`, and `strings.HasPrefix(fwd[fI:], end)` in
+  `go/lexer.go` is true at once: the comment closes right after its
+  start marker, and the rest of the line lexes as ordinary tokens.
+- **TypeScript** keeps `end` undefined (`let end = mc.end as string` in
+  `ts/src/lexer.ts`), and `src.startsWith(end, aI)` coerces it to the
+  string `"undefined"`. The comment therefore runs to the end of the
+  source and reports `unterminated_comment`, by accident. If the body
+  contains the word `undefined` the loop stops there and `cI +=
+  end.length` throws a TypeError, which `guardedMatcher` turns into a
+  `#BD` with code `unexpected`. With `end: ''` written out,
+  `startsWith('')` is true at once and TypeScript gives Go's answer.
+- **Rust** closes a block comment only when `!definition.end.is_empty()`
+  (`rs/src/lexer.rs`), so with no end, or an empty one, the comment
+  never closes and the lexer reports `unterminated_comment`.
+
+| `comment.def.hash` | input, token after `a` | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{line: false, end: '@'}` | `a # x @ b` | `#CM` `# x @` | `#CM` `# x @` | `#CM` `# x @` |
+| `{line: false}` | `a # x` | `unterminated_comment` at column 3 | `#CM` `#` | `unterminated_comment` at column 3 |
+| `{line: false, end: ''}` | `a # x` | `#CM` `#` | `#CM` `#` | `unterminated_comment` at column 3 |
+
+Repair direction: **ruling pending.** ADR-13 decides the direction per
+defect, and here each of the three is doubtful:
+
+- Go's answer makes a block comment that spans nothing, so `# x` is a
+  comment `#` followed by text `x`, and it cannot tell a definition with
+  no end from one with `end: ""`, which is the capability gap recorded
+  under "An explicitly empty option cannot be expressed in Go".
+- TypeScript's answer is an accident of string coercion. It is not the
+  behaviour of a decision, it changes to `unexpected` when the body
+  happens to contain the word `undefined`, and it contradicts its own
+  `end: ''` case. Under ADR-13 TypeScript is itself defective here, so
+  "Go follows TypeScript" is not available until TypeScript decides what
+  it means.
+- Rust's answer is the only deliberate one, a comment that never closes,
+  but it also treats `end: ''` as no end, where TypeScript honours the
+  empty string, and whether a definition that can never close should
+  lex at all, rather than be refused when the configuration is built,
+  is the question the issue leaves open.
+
+Until the ruling, a grammar must give every block comment definition a
+non-empty `end`, which every grammar in the fleet does; jsonic's
+`go/doc/differences.md` records the same split from downstream.
+
+Registered as `block-comment-no-end` and `block-comment-empty-end`,
+with `block-comment-end-control` as their control: the same definition
+with a one-character end, where the three ports agree. A one-character
+end is used because Rust cuts a block comment with a multi-character
+end marker one character short (`a # x @@ b` under `end: '@@'` lexes
+to `# x @` in Rust and `# x @@` in TypeScript and Go, measured while
+registering this entry), which is a separate finding and not what this
+group records.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
