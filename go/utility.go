@@ -1092,13 +1092,18 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		if bin, ok := nm["bin"].(bool); ok {
 			opts.Number.Bin = &bin
 		}
-		// A serialized `"sep": null` is TS's "no separator" and arrives
-		// as String(""); an absent key leaves Sep nil, keeping the base.
+		// TS switches the separator off for `"sep": null` and for
+		// `"sep": ""`, so both arrive as NumberSepNone. An absent key
+		// leaves Sep empty, which keeps the default or the base (#241).
 		if raw, present := nm["sep"]; present {
-			if raw == nil {
-				opts.Number.Sep = String("")
-			} else if sep, ok := raw.(string); ok {
-				opts.Number.Sep = String(sep)
+			switch sep := raw.(type) {
+			case nil:
+				opts.Number.Sep = NumberSepNone
+			case string:
+				if sep == "" {
+					sep = NumberSepNone
+				}
+				opts.Number.Sep = sep
 			}
 		}
 		if fn, ok := nm["exclude"].(func(string) bool); ok {

@@ -200,17 +200,27 @@ type NumberOptions struct {
 	Hex *bool // Support 0x hex format. Default: true.
 	Oct *bool // Support 0o octal format. Default: true.
 	Bin *bool // Support 0b binary format. Default: true.
-	// Sep is a POINTER for the reason CommentDef.Line is one: the options
-	// overlay keeps the base wherever the overlay's field is zero, so a
-	// plain string could not tell "not supplied" from "no separator",
-	// and any Number options without a Sep switched `_` off (#241).
-	// nil keeps the default `_` or the base value, as TS keeps its
-	// merged `sep`; String("") disables the separator, as TS `sep: null`
-	// does; String("~") sets another character.
-	Sep     *string           // Number separator character. Default: "_". String("") disables.
+
+	// Sep is the digit separator character. Default: "_".
+	//
+	// AN EMPTY STRING MEANS "UNSET", as it does for StringOptions.Chars:
+	// the options overlay keeps the base wherever an overlay field is
+	// zero, so Number options without a Sep keep the default `_` or the
+	// base value, as TS keeps its merged `sep`. To switch the separator
+	// off, which TS spells `sep: null`, set NumberSepNone. An empty Sep
+	// used to switch it off, so turning number lexing on, or installing
+	// a number Check, silently disabled `1_000` in Go only (#241).
+	Sep     string
 	Exclude func(string) bool // Exclude certain number-like strings from number matching.
 	Check   LexCheck          // Hook invoked before the number matcher runs (TS options.number.check).
 }
+
+// NumberSepNone is the NumberOptions.Sep value that switches the digit
+// separator off, as TS `sep: null` or an empty TS `sep` does. It is the
+// NUL character, which is what LexConfig.NumberSep holds for "no
+// separator", so the lexer then pays no separator comparisons. A
+// serialized `"sep": null` or `"sep": ""` arrives as this value.
+const NumberSepNone = "\x00"
 
 // CommentDef defines a single comment type.
 type CommentDef struct {
@@ -847,13 +857,6 @@ func Bool(b bool) *bool {
 	return &b
 }
 
-// String returns a pointer to s, for the *string option fields whose nil
-// means "not supplied": `Sep: String("")` switches the digit separator
-// off where a plain "" would keep the base value.
-func String(s string) *string {
-	return &s
-}
-
 // boolVal returns the value of a *bool, or the default if nil.
 func boolVal(p *bool, def bool) bool {
 	if p != nil {
@@ -968,19 +971,16 @@ func buildConfig(o *Options) *LexConfig {
 	cfg.NumberHex = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Hex }), true)
 	cfg.NumberOct = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Oct }), true)
 	cfg.NumberBin = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Bin }), true)
-	// A nil Sep is "not supplied" and keeps the default, as every other
-	// unset field of the overlay does and as TS keeps its merged `sep`
-	// (ts/src/utility.ts: `sep: null != opts.number?.sep && '' !==
-	// opts.number.sep`). Only a supplied empty string switches the
-	// separator off, which is how the strict-JSON grammars spell TS's
-	// `sep: null`; the lexer then pays no separator comparisons (#241).
+	// An empty Sep is "not supplied" and keeps the default, as every
+	// other unset field of the overlay does and as TS keeps its merged
+	// `sep` (ts/src/utility.ts: `sep: null != opts.number?.sep && '' !==
+	// opts.number.sep`). Only NumberSepNone switches the separator off:
+	// it is the NUL character, so it lands here as NumberSep 0, which the
+	// lexer reads as no separator. An empty Sep used to mean "off", so
+	// Number options without one disabled `1_000` in Go only (#241).
 	cfg.NumberSep = '_'
-	if o.Number != nil && o.Number.Sep != nil {
-		if sep := *o.Number.Sep; sep == "" {
-			cfg.NumberSep = 0
-		} else {
-			cfg.NumberSep = rune(sep[0])
-		}
+	if o.Number != nil && o.Number.Sep != "" {
+		cfg.NumberSep = rune(o.Number.Sep[0])
 	}
 
 	// Comment

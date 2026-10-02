@@ -45,7 +45,7 @@ func jsonOptions() Options {
 		Text: &TextOptions{Lex: &f},
 		Number: &NumberOptions{
 			Hex: &f, Oct: &f, Bin: &f,
-			Sep: String(""),
+			Sep: NumberSepNone,
 			Exclude: func(s string) bool {
 				return len(s) >= 2 && s[0] == '0' && s[1] == '0'
 			},

@@ -70,7 +70,7 @@ Controls numeric literal parsing.
 | `Hex` | `*bool` | `true` | Support `0x` hexadecimal |
 | `Oct` | `*bool` | `true` | Support `0o` octal |
 | `Bin` | `*bool` | `true` | Support `0b` binary |
-| `Sep` | `*string` | `"_"` | Separator character. `nil` keeps the default or the base value; `String("")` disables it, as TS `sep: null` does |
+| `Sep` | `string` | `"_"` | Separator character. Empty keeps the default or the base value, and `NumberSepNone` switches it off |
 | `Exclude` | `func(string) bool` | `nil` | Return true to reject a number-like string |
 
 ## `Comment`
