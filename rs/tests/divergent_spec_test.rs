@@ -18,9 +18,11 @@ fn valhex(value: &Value) -> String {
     let Value::String(value) = value else {
         return "NOT-A-STRING".into();
     };
+    // Four digits a unit, as the TypeScript and Go runners print them: a
+    // unit below U+1000 printed bare would read as a different row.
     value
         .encode_utf16()
-        .map(|unit| format!("{unit:x}"))
+        .map(|unit| format!("{unit:04x}"))
         .collect::<Vec<_>>()
         .join(".")
 }
