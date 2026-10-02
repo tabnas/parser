@@ -894,6 +894,19 @@ The third row is the one that decides the design: TS falls back for
 fields the caller omits, so merging a supplied definition as a whole
 record would zero four fields TS demonstrably keeps.
 
+`NumberOptions.Sep` is a `*string` for the same reason. TS deep-merges
+`number: {...}` over its defaults, so `make({number: {lex: true}})`
+keeps `sep: '_'` and reads `1_000` as 1000, and only `sep: null` (or
+`''`) switches the separator off. While `Sep` was a plain string the
+overlay could not tell "not supplied" from "no separator", and
+`buildConfig` resolved any non-nil `Number` with an empty `Sep` to no
+separator: turning number lexing on, or installing a number `Check`,
+silently disabled `1_000` in Go only (#241). Now a nil `Sep` keeps the
+default or the base value, `String("")` is TS's `sep: null`, and
+`String("~")` sets another character; on the serialized door an absent
+`sep` leaves the field nil and a `"sep": null` arrives as `String("")`.
+`go/number_sep_test.go` pins all three against the lexer's token.
+
 Go cannot spell TS's `undefined` inside a typed slice, so there is no
 "keep this index" element: **an empty name in a `TokenSet` slice is the
 removed position**, which is what TS's `null` does, and a serialized

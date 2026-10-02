@@ -196,11 +196,18 @@ type TextOptions struct {
 
 // NumberOptions controls numeric literal lexing.
 type NumberOptions struct {
-	Lex     *bool             // Enable number matching. Default: true.
-	Hex     *bool             // Support 0x hex format. Default: true.
-	Oct     *bool             // Support 0o octal format. Default: true.
-	Bin     *bool             // Support 0b binary format. Default: true.
-	Sep     string            // Number separator character. Default: "_". Empty string disables.
+	Lex *bool // Enable number matching. Default: true.
+	Hex *bool // Support 0x hex format. Default: true.
+	Oct *bool // Support 0o octal format. Default: true.
+	Bin *bool // Support 0b binary format. Default: true.
+	// Sep is a POINTER for the reason CommentDef.Line is one: the options
+	// overlay keeps the base wherever the overlay's field is zero, so a
+	// plain string could not tell "not supplied" from "no separator",
+	// and any Number options without a Sep switched `_` off (#241).
+	// nil keeps the default `_` or the base value, as TS keeps its
+	// merged `sep`; String("") disables the separator, as TS `sep: null`
+	// does; String("~") sets another character.
+	Sep     *string           // Number separator character. Default: "_". String("") disables.
 	Exclude func(string) bool // Exclude certain number-like strings from number matching.
 	Check   LexCheck          // Hook invoked before the number matcher runs (TS options.number.check).
 }
@@ -840,6 +847,13 @@ func Bool(b bool) *bool {
 	return &b
 }
 
+// String returns a pointer to s, for the *string option fields whose nil
+// means "not supplied": `Sep: String("")` switches the digit separator
+// off where a plain "" would keep the base value.
+func String(s string) *string {
+	return &s
+}
+
 // boolVal returns the value of a *bool, or the default if nil.
 func boolVal(p *bool, def bool) bool {
 	if p != nil {
@@ -954,18 +968,19 @@ func buildConfig(o *Options) *LexConfig {
 	cfg.NumberHex = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Hex }), true)
 	cfg.NumberOct = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Oct }), true)
 	cfg.NumberBin = boolVal(optBool(o.Number, func(n *NumberOptions) *bool { return n.Bin }), true)
-	if o.Number != nil && o.Number.Sep != "" {
-		cfg.NumberSep = rune(o.Number.Sep[0])
-	} else if o.Number != nil {
-		// Number options present with an empty Sep: separator disabled,
-		// as the NumberOptions.Sep doc promises ("Empty string disables").
-		// This branch previously also required Number.Lex to be set, so a
-		// plugin passing {Sep: ""} alone (the strict-JSON grammars do)
-		// silently kept the '_' default and paid separator comparisons
-		// on every number byte plus ReplaceAll scans per number token.
-		cfg.NumberSep = 0
-	} else {
-		cfg.NumberSep = '_'
+	// A nil Sep is "not supplied" and keeps the default, as every other
+	// unset field of the overlay does and as TS keeps its merged `sep`
+	// (ts/src/utility.ts: `sep: null != opts.number?.sep && '' !==
+	// opts.number.sep`). Only a supplied empty string switches the
+	// separator off, which is how the strict-JSON grammars spell TS's
+	// `sep: null`; the lexer then pays no separator comparisons (#241).
+	cfg.NumberSep = '_'
+	if o.Number != nil && o.Number.Sep != nil {
+		if sep := *o.Number.Sep; sep == "" {
+			cfg.NumberSep = 0
+		} else {
+			cfg.NumberSep = rune(sep[0])
+		}
 	}
 
 	// Comment

@@ -423,7 +423,7 @@ func TestMapToOptionsAllKeys(t *testing.T) {
 	if opts.Text == nil || !*opts.Text.Lex {
 		t.Error("text")
 	}
-	if opts.Number == nil || !*opts.Number.Hex || *opts.Number.Oct || opts.Number.Sep != "_" || opts.Number.Exclude == nil {
+	if opts.Number == nil || !*opts.Number.Hex || *opts.Number.Oct || opts.Number.Sep == nil || *opts.Number.Sep != "_" || opts.Number.Exclude == nil {
 		t.Error("number")
 	}
 	if !opts.Number.Exclude("x1") || opts.Number.Exclude("y") {

@@ -226,7 +226,7 @@ func TestSetOptionsTextApplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := j.Options()
-	if after.Number == nil || after.Number.Sep != "_" {
+	if after.Number == nil || after.Number.Sep == nil || *after.Number.Sep != "_" {
 		t.Errorf("SetOptionsText should apply parsed options (before %+v), got %+v", before.Number, after.Number)
 	}
 }
