@@ -1338,7 +1338,6 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 	// rule
 	if rm, ok := m["rule"].(map[string]any); ok {
 		opts.Rule = &RuleOptions{}
-		_, opts.ruleHistorySet = rm["history"]
 		if start, ok := rm["start"].(string); ok {
 			opts.Rule.Start = start
 		}
@@ -1360,10 +1359,18 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		if maxmul, ok := mapInt(rm["maxmul"]); ok {
 			opts.Rule.MaxMul = &maxmul
 		}
-		if raw := rm["history"]; raw != nil && raw != false {
-			if history, ok := mapWholeInt(raw); ok &&
-				history >= 1 && history <= MaxRuleHistory {
-				opts.Rule.History = &history
+		if raw, present := rm["history"]; present {
+			switch value := raw.(type) {
+			case nil:
+				opts.ruleHistorySet = true
+			case bool:
+				opts.ruleHistorySet = !value
+			default:
+				if history, ok := mapWholeInt(value); ok &&
+					history >= 1 && history <= MaxRuleHistory {
+					opts.Rule.History = &history
+					opts.ruleHistorySet = true
+				}
 			}
 		}
 	}

@@ -206,6 +206,54 @@ func TestRuleHistoryRefreshesLivePusherButKeepsFrozenParent(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryAfterPushActionsSeeOnlyTheFrozenChild(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	var snapshot *Rule
+	liveSawSnapshotWrite := false
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+		rs.AddAO(func(rule *Rule, _ *Context) {
+			snapshot = rule.Child
+			rule.Child.EnsureU()["snapshot-only"] = true
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+			rule.Node = "ok"
+		}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, _ *Context) {
+			_, liveSawSnapshotWrite = rule.U["snapshot-only"]
+		}})
+		rs.AddClose(&AltSpec{})
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "ok" {
+		t.Fatalf("parse = %v, %v", value, err)
+	}
+	if snapshot == nil || snapshot.U["snapshot-only"] != true {
+		t.Fatalf("after-push action did not receive the snapshot: %#v", snapshot)
+	}
+	if liveSawSnapshotWrite {
+		t.Fatal("after-push action mutated the live child")
+	}
+}
+
+func TestRuleHistoryInvalidMapEntryDoesNotResetBound(t *testing.T) {
+	history := 3
+	parser := Make(Options{Rule: &RuleOptions{History: &history}})
+	if err := parser.ApplyOptions(MapToOptions(map[string]any{
+		"rule": map[string]any{"history": "bad"},
+	})); err != nil {
+		t.Fatalf("apply decoded subset: %v", err)
+	}
+	if parser.Config().RuleHistory != history {
+		t.Fatalf("invalid history reset bound to %d", parser.Config().RuleHistory)
+	}
+}
+
 func TestRuleHistoryKeepsRootReplacementResult(t *testing.T) {
 	history := 1
 	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})

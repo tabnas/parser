@@ -51,8 +51,7 @@ class Rule {
   // the child ran still sees the completed primitive value, just as it sees
   // mutations to a shared array/object. The rest of the rule record freezes.
   #node = { value: null as any }
-  get node(): any { return this.#node.value }
-  set node(value: any) { this.#node.value = value }
+  node: any
   state: RuleState = OPEN                 // Current phase: open ('o') or close ('c').
   d = -1                                  // Stack depth at which this rule was pushed.
   bo = false                              // Has before-open actions.
@@ -117,6 +116,16 @@ class Rule {
     this.i = undefined === snapshotI ? ctx.uI++ : snapshotI
     this.name = spec.name
     this.spec = spec
+
+    // Keep node an own enumerable property, as it was before snapshots
+    // shared a backing cell. Error and hint injection spreads the rule into
+    // its placeholder bag, so a prototype accessor would silently omit it.
+    defprop(this, 'node', {
+      configurable: true,
+      enumerable: true,
+      get: () => this.#node.value,
+      set: (value: any) => { this.#node.value = value },
+    })
 
     this.child = ctx.NORULE
     this.parent = ctx.NORULE
@@ -1364,6 +1373,7 @@ function attemptRecover(
       }
       return rule
     }
+    if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
     // The erroring rule itself is being abandoned (its close cannot
     // accept the sync token, and it is not on ctx.rs): synthesize its
     // close notification first so the structural stream stays balanced.
@@ -1376,6 +1386,7 @@ function attemptRecover(
       if (null != r && acceptsClose(r.spec, cand.tin, rec.syncGroups, sig)) {
         return r
       }
+      if (null != r) freezeHistoryChild(r, ctx)
       // Force-popped without a close pass: synthesize the close
       // notification so structural consumers (outline/folding) see a
       // balanced event stream even through recovery.
@@ -1388,6 +1399,7 @@ function attemptRecover(
   }
 
   // Fixed-depth pop: one rule.
+  if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
   if (0 < ctx.rsI) return ctx.rs[--ctx.rsI]
   return undefined
 }

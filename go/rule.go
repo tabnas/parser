@@ -1037,6 +1037,7 @@ type Rule struct {
 	// lets the engine replace the live pusher's Child/Next with the completed
 	// child record when that child first replaces or pops.
 	historyPusher *Rule
+	historyChild  *Rule
 }
 
 type ruleHistoryLink uint8
@@ -1055,6 +1056,7 @@ func ruleSnapshot(r *Rule) *Rule {
 	copy := *r
 	copy.nodeOwner = nil
 	copy.historyPusher = nil
+	copy.historyChild = nil
 	copy.O = append([]*Token(nil), r.O...)
 	copy.C = append([]*Token(nil), r.C...)
 	if r.N != nil {
@@ -1108,7 +1110,7 @@ func boundedRuleHistory(r *Rule, history int, link ruleHistoryLink) *Rule {
 // successors that publish a shared Go slice are redirected to the frozen
 // record as its authoritative owner.
 func freezeHistoryChild(r, successor *Rule, history int) {
-	if history == 0 || r.historyPusher == nil || r.historyPusher.Child != r {
+	if history == 0 || r.historyPusher == nil || r.historyPusher.historyChild != r {
 		return
 	}
 	frozen := boundedRuleHistory(r, history, historyPrevLink)
@@ -1117,9 +1119,10 @@ func freezeHistoryChild(r, successor *Rule, history int) {
 	}
 	pusher := r.historyPusher
 	pusher.Child = frozen
-	if pusher.Next == r {
+	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == r.I {
 		pusher.Next = frozen
 	}
+	pusher.historyChild = nil
 }
 
 // EnsureN returns the rule's named-counter map, allocating it on first
@@ -1449,15 +1452,25 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 					next.Parent = boundedRuleHistory(
 						r, ctx.Cfg.RuleHistory, historyPusherBeforeLink)
 					next.historyPusher = r
+					r.historyChild = next
 				} else {
 					next.Parent = r
 				}
-				r.Child = next
 				if len(r.N) > 0 {
 					nn := next.EnsureN()
 					for k, v := range r.N {
 						nn[k] = v
 					}
+				}
+				if boundedPush {
+					before := next.Parent
+					child := ruleSnapshot(next)
+					child.Parent = before
+					child.Child = NoRule
+					child.Next = NoRule
+					r.Child = child
+				} else {
+					r.Child = next
 				}
 				if len(r.K) > 0 {
 					nk := next.EnsureK()
@@ -1520,7 +1533,11 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		}
 	}
 
-	r.Next = next
+	if boundedPush {
+		r.Next = r.Child
+	} else {
+		r.Next = next
+	}
 
 	// After actions
 	if isOpen && len(def.ao) > 0 {
@@ -1539,15 +1556,8 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	if boundedPush {
-		before := next.Parent
-		child := ruleSnapshot(next)
-		child.Parent = before
-		child.Child = NoRule
-		child.Next = NoRule
 		parent := boundedRuleHistory(
 			r, ctx.Cfg.RuleHistory, historyParentLink)
-		parent.Child = child
-		parent.Next = child
 		next.Parent = parent
 	} else if boundedReplace {
 		next.Prev = boundedRuleHistory(

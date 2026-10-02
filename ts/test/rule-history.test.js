@@ -143,6 +143,11 @@ describe('rule history', () => {
     const right = new Tabnas({ tag: 'R' })
     assert.equal(left.merge(right).options.rule.history, 3)
     assert.equal(right.merge(left).options.rule.history, 3)
+    const disabled = new Tabnas({ tag: 'U', rule: { history: false } })
+    assert.equal(left.merge(disabled).options.rule.history, 3)
+    assert.equal(disabled.merge(left).options.rule.history, 3)
+    const unset = new Tabnas({ tag: 'N', rule: { history: null } })
+    assert.equal(disabled.merge(unset).options.rule.history, null)
     assert.throws(
       () => left.merge(new Tabnas({ tag: 'R', rule: { history: 4 } })),
       /conflicting option values at rule\.history/,
