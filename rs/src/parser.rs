@@ -1879,7 +1879,6 @@ impl Parser {
         Cow::Owned(ExpectedTins::live(alts, &self.options, slot))
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Record, for `continuations()`, what could have followed where a
     /// fetch raised a bad token: the lexer's own fault, or a `#BD` token a
     /// custom matcher returned.
@@ -1910,6 +1909,7 @@ impl Parser {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ensure_lookahead(
         &self,
         lexer: &mut Lexer,
