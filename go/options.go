@@ -90,6 +90,11 @@ type InfoOptions struct {
 // RewindOptions.History is unset, and what a serialized `null` means.
 const DefaultRewindHistory = 64
 
+// MaxRuleHistory is the largest predecessor-history bound the parser
+// honours. Each transition copies at most this many rule records, so keeping
+// the cap finite preserves linear parse time for untrusted documents.
+const MaxRuleHistory = 16
+
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
 	// History caps the consumed tokens retained for ctx.Rewind. Nil is
@@ -340,6 +345,7 @@ type RuleOptions struct {
 	Start   string // Starting rule name. Default: "val".
 	Finish  *bool  // Auto-close unclosed structures at EOF. Default: true.
 	MaxMul  *int   // Max rule occurrence multiplier. Default: 3.
+	History *int   // Retained predecessor snapshots. Nil is unbounded; values are clamped to 1..16.
 	Include string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
 	Exclude string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
 }
@@ -1153,6 +1159,15 @@ func buildConfig(o *Options) *LexConfig {
 		cfg.RuleStart = o.Rule.Start
 	} else {
 		cfg.RuleStart = "val"
+	}
+	cfg.RuleHistory = 0
+	if o.Rule != nil && o.Rule.History != nil {
+		cfg.RuleHistory = *o.Rule.History
+		if cfg.RuleHistory < 1 {
+			cfg.RuleHistory = 1
+		} else if cfg.RuleHistory > MaxRuleHistory {
+			cfg.RuleHistory = MaxRuleHistory
+		}
 	}
 
 	// Safe

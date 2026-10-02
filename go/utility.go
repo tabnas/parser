@@ -5,6 +5,7 @@ package tabnas
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -944,6 +945,37 @@ func mapInt(v any) (int, bool) {
 	return 0, false
 }
 
+// mapWholeInt is the strict integer reader used by bounded resource options.
+// Unlike mapInt (whose truncation is retained for rule.maxmul compatibility),
+// it refuses fractions, non-finite JSON numbers and values outside int.
+func mapWholeInt(v any) (int, bool) {
+	var n64 int64
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n ||
+			n < float64(math.MinInt64) || n > float64(math.MaxInt64) {
+			return 0, false
+		}
+		n64 = int64(n)
+	case float32:
+		f := float64(n)
+		if math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f {
+			return 0, false
+		}
+		n64 = int64(n)
+	case int:
+		return n, true
+	case int64:
+		n64 = n
+	case int32:
+		n64 = int64(n)
+	default:
+		return 0, false
+	}
+	out := int(n64)
+	return out, int64(out) == n64
+}
+
 func MapToOptions(m map[string]any) Options {
 	opts, _ := OptionsFromMap(m)
 	return opts
@@ -1326,6 +1358,10 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		// "Rule-iteration budget: a fractional `rule.maxmul`".
 		if maxmul, ok := mapInt(rm["maxmul"]); ok {
 			opts.Rule.MaxMul = &maxmul
+		}
+		if history, ok := mapWholeInt(rm["history"]); ok &&
+			history >= 1 && history <= MaxRuleHistory {
+			opts.Rule.History = &history
 		}
 	}
 

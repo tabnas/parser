@@ -1031,6 +1031,118 @@ type Rule struct {
 	U   map[string]any // Custom user props. Per-rule scratch: does NOT propagate.
 	K   map[string]any // Custom "keep" props — kept as the parse descends. PROPAGATES via push/replace.
 	Why string         // Internal tracing field; set when a rule fails.
+
+	// Bounded-history bookkeeping is deliberately separate from the public
+	// Parent link, which is a frozen observable snapshot under a bound. It
+	// lets the engine replace the live pusher's Child/Next with the completed
+	// child record when that child first replaces or pops.
+	historyPusher *Rule
+	historyParent *Rule
+	historyChild  *Rule
+}
+
+type ruleHistoryLink uint8
+
+const (
+	historyParentLink ruleHistoryLink = iota
+	historyPusherBeforeLink
+	historyPrevLink
+)
+
+// ruleSnapshot freezes the mutable parts of a rule record. Grammar, tokens
+// and node values remain shared; maps and slices that a suspended live rule
+// can mutate receive their own small copies. nodeOwner is an engine-only live
+// pointer and must not retain an otherwise cut chain.
+func ruleSnapshot(r *Rule) *Rule {
+	copy := *r
+	copy.nodeOwner = nil
+	copy.historyPusher = nil
+	copy.historyParent = nil
+	copy.historyChild = nil
+	copy.O = append([]*Token(nil), r.O...)
+	copy.C = append([]*Token(nil), r.C...)
+	if r.N != nil {
+		copy.N = make(map[string]int, len(r.N))
+		for key, value := range r.N {
+			copy.N[key] = value
+		}
+	}
+	if r.U != nil {
+		copy.U = make(map[string]any, len(r.U))
+		for key, value := range r.U {
+			copy.U[key] = value
+		}
+	}
+	if r.K != nil {
+		copy.K = make(map[string]any, len(r.K))
+		for key, value := range r.K {
+			copy.K[key] = value
+		}
+	}
+	return &copy
+}
+
+// boundedRuleHistory copies the nearest rule and up to history-1 of its
+// predecessors. Predecessors, replacements and a pre-link pusher lose their
+// Child/Next links; those links otherwise form a second unbounded ladder.
+func boundedRuleHistory(r *Rule, history int, link ruleHistoryLink) *Rule {
+	if history == 0 {
+		return r
+	}
+	links := make([]*Rule, 0, history)
+	for current := r; current != nil && current != NoRule && len(links) < history; current = current.Prev {
+		links = append(links, current)
+	}
+	prev := NoRule
+	for depth := len(links) - 1; depth >= 0; depth-- {
+		copy := ruleSnapshot(links[depth])
+		if depth != 0 || link != historyParentLink {
+			copy.Child = NoRule
+			copy.Next = NoRule
+		}
+		copy.Prev = prev
+		prev = copy
+	}
+	return prev
+}
+
+// freezeHistoryChild replaces the active first child retained by a pusher
+// with its completed bounded record. Delaying this freeze until replace/pop
+// keeps direct Node assignments observable while the child runs; replacement
+// successors that publish a shared Go slice are redirected to the frozen
+// record as its authoritative owner.
+func freezeHistoryChild(r, successor *Rule, history int) {
+	if history == 0 || r.historyPusher == nil || r.historyPusher.Child != r {
+		return
+	}
+	frozen := boundedRuleHistory(r, history, historyPrevLink)
+	if successor != nil && successor.nodeOwner == r {
+		successor.nodeOwner = frozen
+	}
+	pusher := r.historyPusher
+	pusher.Child = frozen
+	if pusher.Next == r {
+		pusher.Next = frozen
+	}
+	if view := r.historyParent; view != nil && view != NoRule {
+		if child := r.historyChild; child != nil && child != NoRule {
+			// The child record retained inside its parent's observable
+			// snapshot keeps the pusher-before link. Refresh its completed
+			// fields in place without changing that deliberately cut parent.
+			before := child.Parent
+			*child = *ruleSnapshot(frozen)
+			child.Parent = before
+			child.Child = NoRule
+			child.Next = NoRule
+			view.Child = child
+			view.Next = child
+		} else {
+			view.Child = frozen
+			if view.Next == r {
+				view.Next = frozen
+			}
+		}
+	}
 }
 
 // EnsureN returns the rule's named-counter map, allocating it on first
@@ -1326,6 +1438,10 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		alt.A(r, ctx)
 	}
 
+	boundedPush := false
+	boundedReplace := false
+	popped := false
+
 	// Push / Replace / Pop
 	if alt != nil {
 		// PF and RF are resolved into the pass copy above, before the
@@ -1351,8 +1467,15 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				ctx.RSI++
 				next = MakeRule(rulespec, ctx, r.Node)
 				next.nodeOwner = r.nodeHolder()
+				boundedPush = 0 < ctx.Cfg.RuleHistory
+				if boundedPush {
+					next.Parent = boundedRuleHistory(
+						r, ctx.Cfg.RuleHistory, historyPusherBeforeLink)
+					next.historyPusher = r
+				} else {
+					next.Parent = r
+				}
 				r.Child = next
-				next.Parent = r
 				if len(r.N) > 0 {
 					nn := next.EnsureN()
 					for k, v := range r.N {
@@ -1378,7 +1501,12 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next = MakeRule(rulespec, ctx, r.Node)
 				next.nodeOwner = r.nodeHolder()
 				next.Parent = r.Parent
-				next.Prev = r
+				boundedReplace = 0 < ctx.Cfg.RuleHistory
+				if !boundedReplace {
+					next.Prev = r
+				}
+				next.historyPusher = r.historyPusher
+				next.historyParent = r.historyParent
 				if len(r.N) > 0 {
 					nn := next.EnsureN()
 					for k, v := range r.N {
@@ -1396,6 +1524,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				return next
 			}
 		} else if !isOpen {
+			popped = true
 			// Pop
 			if ctx.RSI > 0 {
 				ctx.RSI--
@@ -1405,6 +1534,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 			}
 		}
 	} else if !isOpen {
+		popped = true
 		// No alt matched AND we're closing → pop
 		if ctx.RSI > 0 {
 			ctx.RSI--
@@ -1430,6 +1560,28 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	// State transition
 	if r.State == OPEN {
 		r.State = CLOSE
+	}
+
+	if boundedPush {
+		before := next.Parent
+		child := ruleSnapshot(next)
+		child.Parent = before
+		child.Child = NoRule
+		child.Next = NoRule
+		parent := boundedRuleHistory(
+			r, ctx.Cfg.RuleHistory, historyParentLink)
+		parent.Child = child
+		parent.Next = child
+		next.Parent = parent
+		next.historyParent = parent
+		next.historyChild = child
+	} else if boundedReplace {
+		next.Prev = boundedRuleHistory(
+			r, ctx.Cfg.RuleHistory, historyPrevLink)
+		freezeHistoryChild(r, next, ctx.Cfg.RuleHistory)
+		next.historyChild = r.historyChild
+	} else if popped {
+		freezeHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 	}
 
 	// Token consumption with backtrack (only when an alt matched).

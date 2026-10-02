@@ -348,6 +348,7 @@ one here; see [`go/doc/differences.md`](../../go/doc/differences.md).
 | `start` | string | `"val"` | Name of the starting rule |
 | `finish` | boolean | `true` | Auto-close unclosed structures at EOF |
 | `maxmul` | number | `3` | Rule-occurrence multiplier limit |
+| `history` | integer or null | `null` | Predecessor snapshots retained through rule links; 1 through `MAX_RULE_HISTORY` (16), or `null` for unbounded |
 | `include` | string | `""` | Include only alternates with these group tags (comma-separated) |
 | `exclude` | string | `""` | Exclude alternates with these group tags (comma-separated) |
 

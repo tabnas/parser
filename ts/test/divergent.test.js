@@ -316,3 +316,20 @@ describe('divergent', () => {
     assert.ok(0 < ran, 'divergent.tsv parsed but no data row ran')
   })
 })
+
+describe('shared rule-history contract', () => {
+  it('runs every former divergence in the canonical lane', () => {
+    const rows = loadTSV('rule-history')
+    const specs = collectSpecs(rows)
+    let ran = 0
+    for (const { cols, row } of rows) {
+      if (1 === cols.length && cols[0].startsWith('#')) continue
+      assert.equal(cols.length, 4, `rule-history.tsv:${row}: expected 4 columns`)
+      const [name, argRaw, input, want] = cols
+      const got = probeSpec(JSON.parse(argRaw), input, specs)
+      assert.equal(got, want, name)
+      ran++
+    }
+    assert.ok(0 < ran, 'rule-history.tsv ran no cases')
+  })
+})

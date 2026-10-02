@@ -189,6 +189,7 @@ Controls parser rule behavior.
 | `Start` | `string` | `"val"` | Starting rule name |
 | `Finish` | `*bool` | `true` | Auto-close at EOF |
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
+| `History` | `*int` | `nil` | Predecessor snapshots retained through rule links; `nil` is unbounded, direct values clamp to 1 through `MaxRuleHistory` (16), and serialized grammars accept only 1 through 16 or `null` |
 | `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
 | `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
 
