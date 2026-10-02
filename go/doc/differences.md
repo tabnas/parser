@@ -863,16 +863,20 @@ replacing:
 | maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
 | `TokenSet` | every set | index-wise onto the default set |
 
-The serialized door produces the same delete marker. In the map form
-(`GrammarSpec.OptionsMap`, `SetOptionsText`, `OptionsFromMap`) a
-definition entry that is `null` or `false` -- `{"comment":{"def":{"slash":null}}}` -- is read as a present nil entry
-of `Comment.Def`, `Value.Def` or `Match.Value`, which the merge then
-removes, exactly as TypeScript's `makeCommentMatcher` and `configure`
-skip an entry that is `null == om || false === om`. The reader used to
-read a definition only when it was an object and drop anything else, so
-the default survived and a grammar document written for every runtime
-could not turn `//` or `null` off here; the ini and abnf ports carried
-typed-nil workarounds (#240).
+The serialized door produces the same delete marker. In the map form,
+through `GrammarSpec.OptionsMap`, `SetOptionsText` or `OptionsFromMap`,
+a `null` entry of `comment.def`, `value.def` or `match.value` reads as
+a present nil entry of `Comment.Def`, `Value.Def` or `Match.Value`,
+which the merge then removes, and a `false` entry of `comment.def` or
+`value.def` deletes the same way, exactly as TypeScript's
+`makeCommentMatcher` and `configure` skip an entry when
+`null == om || false === om`. A `false` match value stays a load fault,
+as in TypeScript, which takes a regular expression, a function, an
+object or null there and refuses a boolean. The reader used to read a
+definition only when it was an object and drop anything else, so the
+default survived and a grammar document written for every runtime had
+no way to turn `//` or `null` off here, and the ini and abnf ports
+carried typed-nil workarounds for #240.
 
 For that to hold, an instance starts from `DefaultOptions()`, which
 carries the defaults those overlays merge onto (the three token sets,

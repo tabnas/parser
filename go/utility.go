@@ -1493,12 +1493,14 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 				case nil:
 					// A null entry deletes a matcher value set earlier:
 					// a nil *MatchValueSpec is the delete marker Deep
-					// removes (#240).
+					// removes (#240). Null is the only spelling of it
+					// here. TypeScript's validator takes a regexp, a
+					// function, an object or null for a match value and
+					// refuses false, so validateOptionsMap has already
+					// reported a false entry, and reading it as a
+					// deletion would make one grammar delete a matcher
+					// here and fail to load there.
 					opts.Match.Value[name] = nil
-				case bool:
-					if !spec {
-						opts.Match.Value[name] = nil
-					}
 				}
 			}
 		}
