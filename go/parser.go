@@ -603,7 +603,6 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}
-			syncHistoryParentNode(prev)
 			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory)
 		}
 
@@ -615,22 +614,6 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			if rule.historyPusher == prev {
 				if prev.Child != nil && prev.Child != NoRule && prev.Child.I == rule.I {
 					rule.Node = prev.Child.Node
-				}
-				if rule.Parent != nil && rule.Parent != NoRule && rule.Parent.I == prev.I {
-					rule.Parent.Node = prev.Node
-				}
-			}
-
-			// While a bounded root is suspended, its frozen Parent snapshot is
-			// the public root view too. A child action can write Parent.Node and
-			// immediately read the same value through ctx.Root. Restore the live
-			// root record when that same occurrence resumes.
-			if ctx.Root != nil && ctx.Root != NoRule {
-				if rule.Parent != nil && rule.Parent != NoRule &&
-					rule.Parent.I == ctx.Root.I {
-					ctx.Root = rule.Parent
-				} else if ctx.Root.I == rule.I {
-					ctx.Root = rule
 				}
 			}
 		}

@@ -301,6 +301,74 @@ func TestRuleHistoryParentNodeWriteIsImmediateThroughRoot(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryRootRemainsTheLiveRootAfterRuleDone(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.Node
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, ctx *Context) {
+					rule.Node = ctx.Root.U["late"]
+				}})
+				rs.AddClose(&AltSpec{})
+			})
+			parser.SubRuleDone(func(rule *Rule, _ *Context, done RuleDone) {
+				if rule.Name == "top" && done.State == OPEN {
+					rule.EnsureU()["late"] = "seen"
+				}
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "seen" {
+				t.Fatalf("live root state = %v, %v; want seen", value, err)
+			}
+		})
+	}
+}
+
+func TestRuleHistoryParentNodeWriteIsImmediateThroughLiveStack(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.Node
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, ctx *Context) {
+					rule.Parent.Node = "after"
+					rule.Node = ctx.RS[ctx.RSI-1].Node
+				}})
+				rs.AddClose(&AltSpec{})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "after" {
+				t.Fatalf("live stack parent state = %v, %v; want after", value, err)
+			}
+		})
+	}
+}
+
 func TestRuleHistorySharesAfterPushChildNode(t *testing.T) {
 	for _, bounded := range []bool{false, true} {
 		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
