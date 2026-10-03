@@ -343,11 +343,14 @@ function configure(
 
   cfg.text = {
     lex: !!opts.text?.lex,
-    modify: (cfg.text?.modify || [])
-      .concat(
-        (opts.text?.modify ? [opts.text.modify] : []).flat() as ValModifier[],
-      )
-      .filter((m) => null != m),
+    // Rebuilt from the merged options on every call, like the rest of the
+    // config. Concatenating onto the config's existing list appended the
+    // modifiers again on every options() call, so each ran once more per
+    // text token (#243); Go and Rust build their lists fresh from the
+    // merged options.
+    modify: (
+      (opts.text?.modify ? [opts.text.modify] : []).flat() as ValModifier[]
+    ).filter((m) => null != m),
     check: opts.text?.check,
   }
 
