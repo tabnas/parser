@@ -167,6 +167,31 @@ describe('rule history', () => {
     assert.equal(parser.parse('abc'), 'after')
   })
 
+  it('merges writes through the live and published child after ruleDone', () => {
+    const parser = new Tabnas({
+      rule: { start: 'top', history: 1 },
+      fixed: { token: { '#A': 'a', '#B': 'b', '#C': 'c' } },
+    })
+    parser.rule('top', (rs) => rs
+      .open([{ s: '#A', p: 'child' }])
+      .close([{ s: '#C', a: (rule) => {
+        rule.node = `${rule.child.u.live}/${rule.child.u.published}`
+      } }]))
+    parser.rule('child', (rs) => rs
+      .open([{ s: '#B' }])
+      .close([{}]))
+    parser.sub({
+      ruleDone: (rule, ctx, done) => {
+        if ('child' === rule.name && 'c' === done.state) {
+          rule.u.live = 'yes'
+          ctx.root().child.u.published = 'yes'
+        }
+      },
+    })
+
+    assert.equal(parser.parse('abc'), 'yes/yes')
+  })
+
   it('keeps original-root result semantics when history is bounded', () => {
     const parse = (history) => {
       const parser = new Tabnas({

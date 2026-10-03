@@ -442,7 +442,7 @@ func forceClose(ctx *Context, r *Rule) {
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
-	refreshHistoryChild(r, nil, ctx.Cfg.RuleHistory, publishedBefore)
+	refreshHistoryChild(r, ctx.Cfg.RuleHistory, publishedBefore)
 }
 
 // absorbBad is the lexer soft mode: with recovery on, a bad token is

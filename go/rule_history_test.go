@@ -547,6 +547,41 @@ func TestRuleHistoryKeepsTheFirstChildNodeAcrossReplacements(t *testing.T) {
 	}
 }
 
+func TestRuleHistorySharesTheFirstChildNodeWithSuccessorPrev(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.Node
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, R: "tail", A: func(rule *Rule, _ *Context) {
+					rule.Node = "first"
+				}})
+			})
+			parser.Rule("tail", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{A: func(rule *Rule, _ *Context) {
+					rule.Prev.SetNode("updated")
+				}})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "updated" {
+				t.Fatalf("shared child/prev node = %v, %v; want updated", value, err)
+			}
+		})
+	}
+}
+
 func TestRuleHistoryParentRecordIsFrozenButNodeCellIsShared(t *testing.T) {
 	history := 1
 	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})

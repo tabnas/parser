@@ -1127,7 +1127,17 @@ func freezeHistoryChild(r, successor *Rule, history int) {
 	if pusher.Child == nil || pusher.Child == NoRule || pusher.Child.I != r.I {
 		return
 	}
-	done := boundedRuleHistory(r, history, historyPrev)
+	var done *Rule
+	if successor != nil && successor != NoRule &&
+		successor.Prev != nil && successor.Prev != NoRule &&
+		successor.Prev.I == r.I {
+		// The successor's public Prev and the pusher's completed Child are
+		// two views of the same rule record in the canonical runtime. Reuse
+		// the snapshot so SetNode through either alias updates both.
+		done = successor.Prev
+	} else {
+		done = boundedRuleHistory(r, history, historyPrev)
+	}
 	pusher.Child = done
 	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == done.I {
 		pusher.Next = done
@@ -1203,7 +1213,7 @@ func mergePublishedHistoryChanges(dst, base, published *Rule) {
 }
 
 // refreshHistoryChild republishes a child after post-process subscribers.
-func refreshHistoryChild(r, successor *Rule, history int, base *Rule) {
+func refreshHistoryChild(r *Rule, history int, base *Rule) {
 	if history == 0 || r == nil || r == NoRule || r.historyPusher == nil {
 		return
 	}
@@ -1214,17 +1224,13 @@ func refreshHistoryChild(r, successor *Rule, history int, base *Rule) {
 	}
 	frozen := boundedRuleHistory(r, history, historyPrev)
 	mergePublishedHistoryChanges(frozen, base, published)
-	pusher.Child = frozen
-	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == frozen.I {
-		pusher.Next = frozen
-	}
-	if successor != nil {
-		if successor.snapshotNodeOwner == published {
-			successor.snapshotNodeOwner = frozen
-		}
-		if successor.nodeOwner == published {
-			successor.nodeOwner = frozen
-		}
+	// Keep the published object's identity: a replacement successor may
+	// expose this same snapshot through Prev, which is the shared node cell
+	// TypeScript gets natively.
+	*published = *frozen
+	pusher.Child = published
+	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == published.I {
+		pusher.Next = published
 	}
 }
 

@@ -291,13 +291,80 @@ function freezeHistoryChild(rule: Rule, ctx: Context): void {
   if (pusher.next.i === rule.i) pusher.next = frozen
 }
 
+// Capture the public child immediately before ruleDone subscribers run. The
+// final refresh uses this as the base of a three-way merge, so a subscriber
+// may write either the live rule argument or the already-published child.
+export function publishedHistoryChildSnapshot(
+  rule: Rule,
+  ctx: Context,
+): Rule | undefined {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return undefined
+  return pusher.child.snapshot(ctx)
+}
+
+function mergeHistoryRecord<T>(
+  target: () => Record<string, T>,
+  base: Record<string, T> | undefined,
+  published: Record<string, T> | undefined,
+): void {
+  const baseRecord = base ?? {}
+  const publishedRecord = published ?? {}
+  const keys = new Set([
+    ...Object.keys(baseRecord),
+    ...Object.keys(publishedRecord),
+  ])
+  let out: Record<string, T> | undefined
+  for (const key of keys) {
+    const inBase = Object.prototype.hasOwnProperty.call(baseRecord, key)
+    const inPublished = Object.prototype.hasOwnProperty.call(publishedRecord, key)
+    const baseValue = baseRecord[key]
+    const publishedValue = publishedRecord[key]
+    if (inBase === inPublished && (!inBase || Object.is(baseValue, publishedValue))) {
+      continue
+    }
+    out ??= target()
+    if (inPublished) out[key] = publishedValue as T
+    else delete out[key]
+  }
+}
+
+function sameHistoryArray<T>(left: T[], right: T[]): boolean {
+  return left.length === right.length && left.every((value, i) => value === right[i])
+}
+
 // Republish a bounded child after ruleDone subscribers. Process freezes a
-// completed/replaced child before the parser dispatches those callbacks, so
-// mutations to copied rule state (u/n/k and token arrays) need one final
-// snapshot. Node already shares its backing cell, but the rest deliberately
-// does not.
-export function refreshHistoryChild(rule: Rule, ctx: Context): void {
-  freezeHistoryChild(rule, ctx)
+// completed/replaced child before the parser dispatches those callbacks; the
+// live rule and its public snapshot can then both be mutated. Node already
+// shares its backing cell, while copied state needs the merge below.
+export function refreshHistoryChild(
+  rule: Rule,
+  ctx: Context,
+  base?: Rule,
+): void {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return
+  const published = pusher.child
+  const frozen = boundedRuleHistory(
+    rule, ctx, ctx.cfg.rule.history, 'prev',
+  )
+  if (null != base) {
+    mergeHistoryRecord(() => frozen.n, base.rawn(), published.rawn())
+    mergeHistoryRecord(() => frozen.u, base.rawu(), published.rawu())
+    mergeHistoryRecord(() => frozen.k, base.rawk(), published.rawk())
+    if (!sameHistoryArray(base.o, published.o)) {
+      frozen.o = published.o.slice()
+      frozen.oN = published.oN
+    }
+    if (!sameHistoryArray(base.c, published.c)) {
+      frozen.c = published.c.slice()
+      frozen.cN = published.cN
+    }
+    if (base.need !== published.need) frozen.need = published.need
+    if (base.why !== published.why) frozen.why = published.why
+  }
+  pusher.child = frozen
+  if (pusher.next.i === rule.i) pusher.next = frozen
 }
 
 // Result of matching one parse alternate against the current tokens (built from current tokens and AltSpec).
@@ -1391,9 +1458,10 @@ function attemptRecover(
     // accept the sync token, and it is not on ctx.rs): synthesize its
     // close notification first so the structural stream stays balanced.
     if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
+      const publishedBefore = publishedHistoryChildSnapshot(rule, ctx)
       const done = { state: CLOSE, alt: null, forced: true }
       ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
-      refreshHistoryChild(rule, ctx)
+      refreshHistoryChild(rule, ctx, publishedBefore)
     }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]
@@ -1405,9 +1473,10 @@ function attemptRecover(
       // notification so structural consumers (outline/folding) see a
       // balanced event stream even through recovery.
       if (null != r && ctx.sub.ruleDone) {
+        const publishedBefore = publishedHistoryChildSnapshot(r, ctx)
         const done = { state: CLOSE, alt: null, forced: true }
         ctx.sub.ruleDone.map((s) => s(r, ctx, done))
-        refreshHistoryChild(r, ctx)
+        refreshHistoryChild(r, ctx, publishedBefore)
       }
     }
     return undefined

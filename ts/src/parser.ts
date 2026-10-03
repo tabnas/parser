@@ -33,7 +33,12 @@ import { TabnasError } from './error'
 
 import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 
-import { makeRule, makeRuleSpec, refreshHistoryChild } from './rules'
+import {
+  makeRule,
+  makeRuleSpec,
+  publishedHistoryChildSnapshot,
+  refreshHistoryChild,
+} from './rules'
 
 
 // Rule-driven parser: start() parses from scratch, clone() makes a child sibling.
@@ -265,6 +270,7 @@ class Parser {
       // Unlike the pre-process `rule` event, this one can see what the
       // pass actually did (RuleDone: matched alternate's b/g/p/r).
       if (ctx.sub.ruleDone) {
+        const publishedBefore = publishedHistoryChildSnapshot(prev, ctx)
         const dalt: any = (ctx as any)._dalt
         const done = {
           state: prevState,
@@ -283,7 +289,7 @@ class Parser {
                 },
         }
         ctx.sub.ruleDone.map((sub) => sub(prev, ctx, done))
-        refreshHistoryChild(prev, ctx)
+        refreshHistoryChild(prev, ctx, publishedBefore)
       }
 
       ctx.log && ctx.log(S.stack, ctx, rule, lex)
@@ -367,6 +373,7 @@ class Parser {
         try {
           const frule = ctx.rule
           if (null != frule && norule !== frule) {
+            const publishedBefore = publishedHistoryChildSnapshot(frule, ctx)
             const dalt: any = (ctx as any)._dalt
             const done = {
               state: frule.state,
@@ -382,7 +389,7 @@ class Parser {
                     },
             }
             ctx.sub.ruleDone.map((sub) => sub(frule, ctx, done))
-            refreshHistoryChild(frule, ctx)
+            refreshHistoryChild(frule, ctx, publishedBefore)
           }
         } catch (subErr) {
           // Subscriber failures must not mask the parse error.
