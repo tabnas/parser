@@ -60,6 +60,9 @@ func (r *Rule) NodeCell() *Rule {
 	if r == nil || r == NoRule {
 		return r
 	}
+	if r.snapshotNodeOwner != nil && r.snapshotNodeOwner != r {
+		return r.snapshotNodeOwner.NodeCell()
+	}
 	for cur := r; ; {
 		if c := cur.ownCell(); c != cur {
 			return c

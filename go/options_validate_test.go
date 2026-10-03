@@ -9,6 +9,7 @@ package tabnas
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -193,6 +194,121 @@ func TestOptionsFromMapAcceptsTheDocumentedIdioms(t *testing.T) {
 	}
 }
 
+// A null entry in a map of definitions DELETES that definition, in every
+// runtime, and so does a false comment or value definition: TypeScript's
+// makeCommentMatcher and configure skip an entry that is `null == om ||
+// false === om`, so the default is gone from the config. The serialized
+// door here read a definition only when it was an object and dropped
+// anything else, so the default survived and a grammar document could
+// not turn one off in Go (#240; tabnas/ini#77 and the abnf port carried
+// typed-nil workarounds). The typed door was never affected: Deep already
+// treats a nil *Def entry as the delete marker, so the reader's job is to
+// produce that entry rather than skip it.
+//
+// A match value takes null only. TypeScript's validator accepts a regexp,
+// a function, an object or null there and refuses false, so a false match
+// value is a load fault here too, rather than a deletion in one runtime
+// and a refusal in the other.
+func TestOptionsFromMapNullDefinitionDeletes(t *testing.T) {
+	gs, err := GrammarSpecFromJSON([]byte(`{"options":{
+		"comment":{"def":{"slash":null,"multi":false}},
+		"value":{"def":{"null":null}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := Make()
+	if err := j.Grammar(gs); err != nil {
+		t.Fatal(err)
+	}
+	cfg := j.Config()
+	if len(cfg.CommentLine) != 1 || cfg.CommentLine[0] != "#" {
+		t.Errorf("comment.def.slash: null left the line comments at %v, want [#]", cfg.CommentLine)
+	}
+	if len(cfg.CommentBlock) != 0 {
+		t.Errorf("comment.def.multi: false left the block comments at %v, want none", cfg.CommentBlock)
+	}
+	if _, has := cfg.ValueDef["null"]; has {
+		t.Errorf("value.def.null: null left the keyword in %v", cfg.ValueDef)
+	}
+	if _, has := cfg.ValueDef["true"]; !has {
+		t.Errorf("value.def.true should survive an unrelated deletion: %v", cfg.ValueDef)
+	}
+
+	// The reader's own output is the typed delete marker: the key is
+	// present and its definition nil, which is what Deep removes.
+	opts, err := OptionsFromMap(map[string]any{
+		"comment": map[string]any{"def": map[string]any{"slash": nil, "multi": false}},
+		"value":   map[string]any{"def": map[string]any{"null": nil, "no": false}},
+		"match":   map[string]any{"value": map[string]any{"x": nil}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"slash": true, "multi": true} {
+		if cd, ok := opts.Comment.Def[name]; !ok || cd != nil || !want {
+			t.Errorf("comment.def.%s: want a present nil entry, got present=%v value=%v", name, ok, cd)
+		}
+	}
+	for _, name := range []string{"null", "no"} {
+		if vd, ok := opts.Value.Def[name]; !ok || vd != nil {
+			t.Errorf("value.def.%s: want a present nil entry, got present=%v value=%v", name, ok, vd)
+		}
+	}
+	if mv, ok := opts.Match.Value["x"]; !ok || mv != nil {
+		t.Errorf("match.value.x: want a present nil entry, got present=%v value=%v", ok, mv)
+	}
+
+	// match.value has no defaults, so the deletion is of an entry set
+	// earlier: a typed matcher value, then nulled through the serialized
+	// door, is gone from the config.
+	k := Make(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{
+		"at": {Match: regexp.MustCompile(`^@\w+`)},
+	}}})
+	if len(k.Config().MatchValues) != 1 {
+		t.Fatalf("setup: want one match value, got %d", len(k.Config().MatchValues))
+	}
+	if err := k.Grammar(&GrammarSpec{OptionsMap: map[string]any{
+		"match": map[string]any{"value": map[string]any{"at": nil}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(k.Config().MatchValues); n != 0 {
+		t.Errorf("match.value.at: null left %d match values", n)
+	}
+
+	// false is not a second spelling of that deletion. The door refuses
+	// it with the shapes the slot takes, as TypeScript's validator does,
+	// and the matcher it would have deleted survives: one grammar must
+	// not delete a matcher in one runtime and fail to load in the other.
+	k = Make(Options{Match: &MatchOptions{Value: map[string]*MatchValueSpec{
+		"at": {Match: regexp.MustCompile(`^@\w+`)},
+	}}})
+	want := "options.match.value.at: expected a serialized regex, " +
+		"a matcher function or an object, got boolean"
+	err = k.Grammar(&GrammarSpec{OptionsMap: map[string]any{
+		"match": map[string]any{"value": map[string]any{"at": false}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("match.value.at: false: want an error naming %q, got %v", want, err)
+	}
+	if n := len(k.Config().MatchValues); n != 1 {
+		t.Errorf("match.value.at: false deleted the matcher: %d match values left", n)
+	}
+	// And the reader produces no entry for it, so the value a caller
+	// ignores the error of carries no delete marker either.
+	refused, err := OptionsFromMap(map[string]any{
+		"match": map[string]any{"value": map[string]any{"at": false}},
+	})
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("OptionsFromMap match.value.at: false: want an error naming %q, got %v", want, err)
+	}
+	if refused.Match != nil && refused.Match.Value != nil {
+		if mv, has := refused.Match.Value["at"]; has {
+			t.Errorf("match.value.at: false was read as the entry %v", mv)
+		}
+	}
+}
+
 // #143's validator was stricter than the readers it described, and
 // 0.11.0 shipped that in every runtime: a string `ender` is read by
 // OptionsFromMap (and passed by @tabnas/yaml), and the door refused it.
@@ -251,10 +367,11 @@ func TestOptionWideningsAreAccepted(t *testing.T) {
 	}{
 		{"options.ender", ";"},
 		{"options.rewind.history", false},
-		// The general definition-map rule, stated in optionWidenings'
-		// comment rather than as an entry.
+		// The general definition-map rule, falseDeletes rather than an
+		// optionWidenings entry.
 		{"options.lex.match.number", false},
 		{"options.comment.def.hash", false},
+		{"options.value.def.no", false},
 	} {
 		var errs []string
 		validateLeafAt(c.path, c.val, &errs)
@@ -271,6 +388,13 @@ func TestOptionWideningsAreAccepted(t *testing.T) {
 		{"options.ender", 7.0},
 		{"options.rewind.history", true},
 		{"options.lex.match.number", "off"},
+		// false deletes a definition in the three maps falseDeletes
+		// names and nowhere else. A match value, a match token and a
+		// fixed token take their own shapes, TypeScript refuses false in
+		// each, and the readers here used to drop it in silence.
+		{"options.match.value.x", false},
+		{"options.match.token.#X", false},
+		{"options.fixed.token.#X", false},
 	} {
 		var errs []string
 		validateLeafAt(c.path, c.val, &errs)

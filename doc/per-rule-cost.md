@@ -429,11 +429,11 @@ unbroken chain, completed in every release and fat-LTO run, and a
 1,000,000-element unbounded chain dropped without overflow in a fat-LTO
 build on an 8 MiB stack (through the combined build; load not recorded).
 
-TypeScript and Go need nothing. `rule.history` is Rust-only today
-(`DIVERGENCE.md`, "A bounded rule history in Rust"), and when the other
-two carry it they will cut live links, with no copies to share. The
-change pays where the bound is set, and nothing in the fleet's
-checkouts sets it yet; until then its effect is the `Drop` change.
+The tail-sharing optimization described here remains Rust-specific.
+TypeScript and Go now carry `rule.history` too, using their own bounded
+rule records; they have no `Rc` tails for this optimization to share.
+The option remains opt-in, so this section's unbounded measurements and
+the Rust `Drop` effect are unchanged.
 
 ### 4. Leave the match record unfilled when nothing reads it
 

@@ -23,7 +23,7 @@ import type {
   EagerRegExp,
 } from './types'
 
-import { EMPTY, SKIP, STRING } from './types'
+import { EMPTY, MAX_RULE_HISTORY, SKIP, STRING } from './types'
 
 import { makeToken, makePoint } from './lexer'
 import { TabnasError } from './error'
@@ -401,6 +401,8 @@ function configure(
     start: null == opts.rule?.start ? 'val' : opts.rule.start,
     maxmul: null == opts.rule?.maxmul ? 3 : opts.rule.maxmul,
     finish: !!opts.rule?.finish,
+    history: null == opts.rule?.history || false === opts.rule.history
+      ? null : opts.rule.history,
     include: opts.rule?.include
       ? opts.rule.include.split(/\s*,+\s*/).filter((g) => '' !== g)
       : [],
@@ -1400,6 +1402,21 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     const val = opts[key]
     const d = dflt?.[key]
     const at = path + '.' + key
+    if ('options.rule.history' === at && null != val) {
+      if (false === val) continue
+      if ('number' !== typeof val || !Number.isSafeInteger(val) || val < 1) {
+        throw new Error(
+          `Tabnas: ${at} must be an integer of at least 1, null, or false`,
+        )
+      }
+      if (MAX_RULE_HISTORY < val) {
+        throw new Error(
+          `Tabnas: ${at} is outside the supported range ` +
+          `(at most ${MAX_RULE_HISTORY})`,
+        )
+      }
+      continue
+    }
     if (widened(at, val)) continue
     const entry = DYNAMIC_MAPS[at]
     if (null != entry) {

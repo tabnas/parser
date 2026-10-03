@@ -491,6 +491,48 @@ func TestDivergentRegister(t *testing.T) {
 	}
 }
 
+func TestSharedRuleHistoryRegister(t *testing.T) {
+	rows, err := loadTSV(filepath.Join(specDir(), "rule-history.tsv"))
+	if err != nil {
+		t.Fatalf("cannot load rule-history.tsv: %v", err)
+	}
+	specs := divergentSpecs(rows)
+	ran := 0
+	for _, row := range rows {
+		if len(row.cols) == 1 && strings.HasPrefix(row.cols[0], "#") {
+			continue
+		}
+		if len(row.cols) != 4 {
+			t.Fatalf("rule-history.tsv:%d: expected 4 columns, got %d",
+				row.lineNo, len(row.cols))
+		}
+		cols := make([]string, len(row.cols))
+		for i, column := range row.cols {
+			cols[i] = preprocessEscapes(column)
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(cols[1]), &args); err != nil {
+			t.Fatalf("%s: bad arguments: %v", cols[0], err)
+		}
+		got, err := divergentRunProbe("spec", args, cols[2], specs)
+		if err != nil {
+			t.Fatalf("%s: %v", cols[0], err)
+		}
+		if got == "INSTALL_ERROR" {
+			got = "ERROR:install"
+		} else {
+			got = strings.TrimPrefix(got, "OK:")
+		}
+		if got != cols[3] {
+			t.Errorf("%s: got %s, want %s", cols[0], got, cols[3])
+		}
+		ran++
+	}
+	if ran == 0 {
+		t.Fatal("rule-history.tsv ran no cases")
+	}
+}
+
 // TestJSNumberStringMatchesJavaScript pins jsNumberString against the
 // real String(number), value by value.
 //

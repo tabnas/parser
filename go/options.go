@@ -42,6 +42,12 @@ type Options struct {
 	Property *PropertyOptions    // Go-specific options not present in the TypeScript version.
 	Color    *ColorOptions       // ANSI colour codes in formatted error messages (TS options.color).
 	Tag      string              // Instance identifier tag. Default: DefaultTag.
+
+	// ruleHistorySet is an overlay-only presence bit. RuleOptions.History
+	// deliberately uses nil for the public unbounded value, so a decoded
+	// `history: null` needs this bit to remain distinguishable from an omitted
+	// field until the overlay has been applied.
+	ruleHistorySet bool
 }
 
 // DefaultTag is the instance tag applied when Options.Tag is unset. It
@@ -89,6 +95,24 @@ type InfoOptions struct {
 // DefaultRewindHistory is the retained rewind window when
 // RewindOptions.History is unset, and what a serialized `null` means.
 const DefaultRewindHistory = 64
+
+// MaxRuleHistory is the largest predecessor-history bound the parser
+// honours. Each transition copies at most this many rule records, so keeping
+// the cap finite preserves linear parse time for untrusted documents.
+const MaxRuleHistory = 16
+
+func effectiveRuleHistory(history *int) *int {
+	if history == nil {
+		return nil
+	}
+	effective := *history
+	if effective < 1 {
+		effective = 1
+	} else if effective > MaxRuleHistory {
+		effective = MaxRuleHistory
+	}
+	return &effective
+}
 
 // RewindOptions bounds the consumed-token history retained for ctx.Rewind (TS options.rewind).
 type RewindOptions struct {
@@ -337,11 +361,13 @@ type ValueOptions struct {
 
 // RuleOptions controls parser rule behavior.
 type RuleOptions struct {
-	Start   string // Starting rule name. Default: "val".
-	Finish  *bool  // Auto-close unclosed structures at EOF. Default: true.
-	MaxMul  *int   // Max rule occurrence multiplier. Default: 3.
-	Include string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
-	Exclude string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
+	Start      string // Starting rule name. Default: "val".
+	Finish     *bool  // Auto-close unclosed structures at EOF. Default: true.
+	MaxMul     *int   // Max rule occurrence multiplier. Default: 3.
+	History    *int   // Retained predecessor snapshots. Nil is unbounded; values are clamped to 1..16.
+	HistorySet bool   // Apply History even when nil. Set this in a typed overlay to reset an existing bound to unbounded.
+	Include    string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
+	Exclude    string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
 }
 
 // LexOptions controls global lex behavior.
@@ -565,10 +591,34 @@ func DefaultOptions() Options {
 	}
 }
 
+// mergeOptionsOverlay applies the ordinary structural overlay and then the
+// one nullable scalar for which nil is a value rather than "omitted". The
+// presence bit is consumed here and never retained on a configured parser.
+func mergeOptionsOverlay(base, over Options) Options {
+	merged := Deep(base, over).(Options)
+	historySet := over.ruleHistorySet ||
+		(over.Rule != nil && over.Rule.HistorySet)
+	if historySet {
+		if merged.Rule == nil {
+			merged.Rule = &RuleOptions{}
+		}
+		if over.Rule == nil {
+			merged.Rule.History = nil
+		} else {
+			merged.Rule.History = over.Rule.History
+		}
+	}
+	if merged.Rule != nil {
+		merged.Rule.HistorySet = false
+	}
+	merged.ruleHistorySet = false
+	return merged
+}
+
 func Make(opts ...Options) *Tabnas {
 	o := DefaultOptions()
 	if len(opts) > 0 {
-		o = Deep(o, opts[0]).(Options)
+		o = mergeOptionsOverlay(o, opts[0])
 	}
 	if err := checkCommentDefinitions(&o); err != nil {
 		panic(err.Error())
@@ -1153,6 +1203,10 @@ func buildConfig(o *Options) *LexConfig {
 		cfg.RuleStart = o.Rule.Start
 	} else {
 		cfg.RuleStart = "val"
+	}
+	cfg.RuleHistory = 0
+	if o.Rule != nil && o.Rule.History != nil {
+		cfg.RuleHistory = *effectiveRuleHistory(o.Rule.History)
 	}
 
 	// Safe

@@ -104,7 +104,7 @@ describe('api', function () {
   it('custom bad-token error codes propagate', () => {
     const makeParser = (raise) => {
       const p = new Tabnas({
-        error: { probe_bad: 'probe failed on row idx {rowidx}' },
+        error: { probe_bad: 'probe failed on row idx {rowidx}; node={node}' },
         hint: { probe_bad: 'row idx {rowidx} is the problem' },
       })
       p.options({ rule: { start: 'top', exclude: 'tabnas,imp' } })
@@ -117,12 +117,16 @@ describe('api', function () {
 
     let err
     try {
-      makeParser((r, ctx) => ctx.t0.bad('probe_bad', { rowidx: 7 })).parse('abc')
+      makeParser((r, ctx) => {
+        r.node = 'kept'
+        return ctx.t0.bad('probe_bad', { rowidx: 7 })
+      }).parse('abc')
     } catch (e) {
       err = e
     }
     assert.equal(err.code, 'probe_bad')
     assert.match(err.message, /probe failed on row idx 7/)
+    assert.match(err.message, /node=kept/)
     assert.match(err.message, /row idx 7 is the problem/)
     assert.equal(err.details.rowidx, 7)
 
