@@ -3831,7 +3831,10 @@ impl Parser {
         }
 
         // Post-loop check: ensure no unexpected trailing tokens. Recovery
-        // keeps the completed value and reports the trailing fault.
+        // keeps the completed value and reports the trailing fault. No
+        // option turns the check off: `rule.finish` is the grammar's
+        // end-of-source switch, kept in the options for its `@finish` to
+        // read, not this check's (#250).
         if let Err(error) = self.ensure_lookahead(
             &mut lexer,
             &mut context,

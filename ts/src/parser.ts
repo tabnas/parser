@@ -297,7 +297,10 @@ class Parser {
       kI++
     }
 
-    // TODO: option to allow trailing content
+    // No option turns this check off. `rule.finish` is not it: that is
+    // the grammar's end-of-source switch, which jsonic's `@finish` reads
+    // to close or refuse an unterminated structure and which the engine
+    // stores for the grammar without reading (#250).
 
     // First check the lookahead buffer. A token that an alt fetched and
     // then backtracked past (b:1) is still sitting in ctx.t[0] and was

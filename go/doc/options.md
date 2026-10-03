@@ -187,7 +187,7 @@ Controls parser rule behavior.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `Start` | `string` | `"val"` | Starting rule name |
-| `Finish` | `*bool` | `true` | Auto-close at EOF |
+| `Finish` | `*bool` | `true` | The grammar's end-of-source switch, kept as `Config.FinishRule` for a grammar's `@finish` to read: jsonic closes an unterminated structure at the end of the source under `true` and refuses it with `end_of_source` under `false`. The engine never reads it, and trailing content is an error either way |
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
 | `History` | `*int` | `nil` | Predecessor snapshots retained through rule links; `nil` is unbounded, direct values clamp to 1 through `MaxRuleHistory` (16), and serialized grammars accept 1 through 16 or `null`/`false` |
 | `HistorySet` | `bool` | `false` | Typed-overlay presence bit. Set it with `History: nil` to reset an existing finite bound to unbounded. Serialized options omit it |

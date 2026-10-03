@@ -379,7 +379,7 @@ type ValueOptions struct {
 // RuleOptions controls parser rule behavior.
 type RuleOptions struct {
 	Start      string // Starting rule name. Default: "val".
-	Finish     *bool  // Auto-close unclosed structures at EOF. Default: true.
+	Finish     *bool  // The grammar's end-of-source switch, kept as Config.FinishRule for a grammar's @finish to read (jsonic auto-closes an unterminated structure when it is true and refuses it when false); the engine does not read it. Default: true.
 	MaxMul     *int   // Max rule occurrence multiplier. Default: 3.
 	History    *int   // Retained predecessor snapshots. Nil is unbounded; values are clamped to 1..16.
 	HistorySet bool   // Apply History even when nil. Set this in a typed overlay to reset an existing bound to unbounded.

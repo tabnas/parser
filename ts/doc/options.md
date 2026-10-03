@@ -346,7 +346,7 @@ one here; see [`go/doc/differences.md`](../../go/doc/differences.md).
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `start` | string | `"val"` | Name of the starting rule |
-| `finish` | boolean | `true` | Auto-close unclosed structures at EOF |
+| `finish` | boolean | `true` | The grammar's end-of-source switch, which the engine stores and merges for the grammar and never reads. jsonic's `@finish` closes an unterminated structure at the end of the source under `true` and refuses it with `end_of_source` under `false`. Trailing content is an error either way |
 | `maxmul` | number | `3` | Rule-occurrence multiplier limit |
 | `history` | integer, `null`, or `false` | `null` | Predecessor snapshots retained through rule links; 1 through `MAX_RULE_HISTORY` (16), or `null`/`false` for unbounded |
 | `include` | string | `""` | Include only alternates with these group tags (comma-separated) |
