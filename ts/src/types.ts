@@ -284,7 +284,7 @@ export type TabnasOptions = {
   }
   rule?: {                          // Rule engine settings.
     start?: string                  // Name of the start rule.
-    finish?: boolean                // Require input to be fully consumed.
+    finish?: boolean                // Grammar's end-of-source switch (jsonic's `@finish` reads it); the engine does not.
     maxmul?: number                 // Max rule multiplier (loop guard).
     history?: number | null | false // Retained predecessor snapshots (1..16); null/false is unbounded.
     include?: string                // Group tags to include.
@@ -387,7 +387,7 @@ export type Config = {
   rule: {                           // Rule engine settings.
     start: string                   // Name of the start rule.
     maxmul: number                  // Max rule multiplier (loop guard).
-    finish: boolean                 // Require input to be fully consumed.
+    finish: boolean                 // Grammar's end-of-source switch (jsonic's `@finish` reads it); the engine does not.
     history: number | null          // Retained predecessor snapshots; null is unbounded.
     include: string[]               // Group tags to include.
     exclude: string[]               // Group tags to exclude.

@@ -261,7 +261,7 @@ type LexConfig struct {
 	SafeKey bool // Prevent __proto__ keys. Default: true.
 
 	// Rule options
-	FinishRule  bool   // Auto-close unclosed structures at EOF
+	FinishRule  bool   // options.rule.finish, kept for a grammar's @finish to read; the engine does not read it.
 	RuleStart   string // Starting rule name. Default: "val".
 	RuleHistory int    // Retained predecessor snapshots; 0 is unbounded.
 
