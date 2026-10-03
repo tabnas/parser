@@ -3733,7 +3733,9 @@ impl Parser {
                     } else {
                         (String::new(), src.len(), 1, 1)
                     };
-                    let code = t0.as_ref().map_or("unexpected", deferred_error_code);
+                    let code = t0
+                        .as_ref()
+                        .map_or("unexpected", |t| deferred_error_code(t, mode.recovering));
                     let error = TabnasError::new(code, src_token, src, si, ri, ci);
                     let done_alt = (!alts.is_empty() && !self.rule_done_subscribers.is_empty())
                         .then(|| RuleDoneAlt {
@@ -3797,7 +3799,9 @@ impl Parser {
                             )
                         },
                     );
-                    let code = token.as_ref().map_or("unexpected", deferred_error_code);
+                    let code = token
+                        .as_ref()
+                        .map_or("unexpected", |t| deferred_error_code(t, mode.recovering));
                     let error = TabnasError::new(code, source, src, pos, row, col);
                     let done_alt = Some(RuleDoneAlt {
                         b: 0,
@@ -3984,13 +3988,22 @@ fn error_token(error: &TabnasError) -> Token {
     token
 }
 
-fn deferred_error_code(token: &Token) -> &str {
+/// The code an error with no matching alternative takes from the first
+/// token of the lookahead, read as the canonical engine reads it at the
+/// same point. Fail-fast, its deferred throw takes a bad token's why, else
+/// `unexpected` (`bad.why || UNEXPECTED` in ts/src/rules.ts); when the
+/// parse is recovering, `attemptRecover` takes the token's err ahead of
+/// its why (`tkn.err || tkn.why`). This engine's own lexer faults set why
+/// and err alike, so only a token a matcher built with err alone tells
+/// the two apart: `unexpected` fail-fast, its err under recovery, in every
+/// runtime (#285).
+fn deferred_error_code(token: &Token, recovering: bool) -> &str {
     if token.tin != TIN_BD {
         "unexpected"
+    } else if recovering && !token.err.is_empty() {
+        &token.err
     } else if !token.why.is_empty() {
         &token.why
-    } else if !token.err.is_empty() {
-        &token.err
     } else {
         "unexpected"
     }

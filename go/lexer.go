@@ -1003,12 +1003,13 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 			l.Err = je
 			return &Token{Name: "#ZZ", Tin: TinZZ, Val: Undefined, Site: l.pnt.Site}
 		}
-		// Bad token → store error and return end-of-source
+		// Bad token → store error and return end-of-source. Its code is
+		// its Why, else "unexpected" (Token.badCode); Err is not read.
 		if tkn.Tin == TinBD {
 			if defer_ {
 				return tkn
 			}
-			je := makeTabnasError(tkn.Why, tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
+			je := makeTabnasError(tkn.badCode(), tkn.Src, l.Src, tkn.SI, tkn.RI, tkn.CI, l.Config)
 			l.attachErrContext(je, r, tkn.Name, tkn.Why)
 			l.Ctx.recordErr(je)
 			l.Err = je

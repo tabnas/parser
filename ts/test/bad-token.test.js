@@ -16,8 +16,9 @@ const { loadTSV } = require('./utility')
 
 const JSON_GRAMMAR = require('./json-builder.fixture.json')
 
-// The custom matcher the fixture header specifies: a bad token at `?`, and
-// one running to the end of the source at `%`, neither moving the cursor.
+// The custom matcher the fixture header specifies: a bad token at `?`, one
+// running to the end of the source at `%`, and one at `!` with only its err
+// set, none moving the cursor.
 const bad = {
   order: 1.5e6,
   make: () => (lex) => {
@@ -25,6 +26,7 @@ const bad = {
     const c = lex.src[sI]
     if ('?' === c) return lex.bad('custom_bad', sI, sI + 1)
     if ('%' === c) return lex.bad('custom_unterminated', sI, lex.src.length)
+    if ('!' === c) return lex.token('#BD', undefined, '!', lex.pnt).bad('custom_err')
     return undefined
   },
 }

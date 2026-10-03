@@ -20,8 +20,8 @@ import (
 )
 
 // badTokenMatcher is the custom matcher the fixture header specifies: a
-// bad token at `?`, and one running to the end of the source at `%`,
-// neither moving the cursor.
+// bad token at `?`, one running to the end of the source at `%`, and one
+// at `!` with only its Err set, none moving the cursor.
 func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
 	return func(lex *Lex, rule *Rule) *Token {
 		pnt := lex.Cursor()
@@ -36,6 +36,10 @@ func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
 		case '%':
 			tkn := lex.Token("#BD", TinBD, nil, lex.Src[pnt.SI:])
 			tkn.Why = "custom_unterminated"
+			return tkn
+		case '!':
+			tkn := lex.Token("#BD", TinBD, nil, "!")
+			tkn.Err = "custom_err"
 			return tkn
 		}
 		return nil
