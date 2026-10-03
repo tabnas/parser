@@ -332,6 +332,95 @@ fn a_pusher_read_back_through_its_child_has_linked_it() {
     }
 }
 
+/// An after action that clears the pusher's `child` and `next` keeps its
+/// edit. The canonical engine links a pushed child before the pushing
+/// alternate's after actions run and does not touch the links again, so a
+/// later reader, a `ruleDone` subscriber among them, sees what the action
+/// left. The relink with no bound runs after those actions, and once
+/// overwrote the edit with a fresh link to the child.
+#[test]
+fn an_after_action_that_clears_the_pushers_links_keeps_its_edit() {
+    let mut parser = close_push_parser("null");
+    parser.define_rule("list", |rule| {
+        rule.add_ac(|rule, _context| {
+            rule.child_rule = None;
+            rule.next_rule = None;
+        });
+    });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    parser.subscribe_rule_done(move |rule, _context, done| {
+        // The passes whose alternate pushed an item: the close phases the
+        // after action ran in, once the push had linked the item.
+        if done.alt.as_ref().is_some_and(|alt| alt.p == "item") {
+            sink.lock()
+                .unwrap()
+                .push((rule.child_rule.is_some(), rule.next_rule.is_some()));
+        }
+    });
+    parser.parse("abbbe").expect("parses");
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        vec![(false, false); 3],
+        "one push per item, and the cleared links stay cleared"
+    );
+}
+
+/// DIVERGENCE.md "A pusher read back past four hops through its child's
+/// snapshots in Rust", the after-action face. TypeScript and Go link the
+/// live rules before the pushing alternate's after actions run, so the
+/// pusher's `child.parent.child` there is the child just pushed. This
+/// port relinks after those actions, so during them the read reaches the
+/// child pushed before, or nothing on the first push; by the closing pass
+/// on `e` the relink has run and the read is the child again. A repair
+/// fails here, as a regression would.
+#[test]
+fn an_after_action_on_the_pusher_reads_the_child_pushed_before() {
+    let mut parser = close_push_parser("null");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    parser.define_rule("list", move |rule| {
+        rule.add_ac(move |rule, _context| {
+            let Some(child) = rule.child_rule.as_deref() else {
+                return;
+            };
+            if child.name.as_str() != "item" {
+                return;
+            }
+            let back = child
+                .parent_rule
+                .as_deref()
+                .and_then(|pusher| pusher.child_rule.as_deref())
+                .map(|again| again.i);
+            sink.lock().unwrap().push((child.i, back));
+        });
+    });
+    parser.parse("abbbe").expect("parses");
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen.len(),
+        4,
+        "three pushing passes and the close on e: {seen:?}"
+    );
+    assert_eq!(seen[0].1, None, "the first push reads nothing: {seen:?}");
+    assert_eq!(
+        seen[1].1,
+        Some(seen[0].0),
+        "the child pushed before: {seen:?}"
+    );
+    assert_eq!(
+        seen[2].1,
+        Some(seen[1].0),
+        "the child pushed before: {seen:?}"
+    );
+    assert_eq!(
+        seen[3],
+        (seen[2].0, Some(seen[2].0)),
+        "relinked by then: {seen:?}"
+    );
+}
+
 /// A copy that cuts its `next` cuts the name with it. A snapshot whose
 /// `next` has its own name reads itself as `next`, so under a bound a
 /// replacement loop's `prev.next` read the predecessor itself, not

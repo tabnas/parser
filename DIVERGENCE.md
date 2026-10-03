@@ -503,19 +503,15 @@ fixed or quietly dropped.
   with `rule-history-pusher-one-hop` (`parent.child.name`, the row the
   register kept as its control) beside it, and in Rust by
   `a_pusher_read_back_through_its_child_has_linked_it` in
-  `rs/tests/rule_history_test.rs`. What the relink does not reach, both
-  measured on this change and on the engine before it: TypeScript and
-  Go link the live rules before the pushing alternate's after-actions
-  run, so a state action on the pusher's close reads `child`,
-  `child.parent.child` and `next.parent.child` as the child just
-  pushed, where Rust relinks after `run_after_actions` and such an
-  action reads the child pushed before; and from the child, six hops
-  (`parent.child.parent.child.parent.child`) read the child in
-  TypeScript and the child pushed before in Rust. Neither path is read
-  by a fleet grammar; both are the snapshot model's, and the reader-side
-  alternative, resolving a child's `parent` as the rule itself, would
-  give TypeScript's answer at every depth for a condition path at no
-  cost and still not to a subscriber walking the raw links.
+  `rs/tests/rule_history_test.rs`. The relink runs only when the
+  pushing alternate's after actions left the pusher's `child` and `next`
+  as the push made them, so an action that clears or repoints them
+  keeps its edit, as in TypeScript and Go
+  (`an_after_action_that_clears_the_pushers_links_keeps_its_edit`).
+  What the relink does not reach, a read six hops from the child and a
+  read from the pusher during those after actions, is the live entry "A
+  pusher read back past four hops through its child's snapshots in
+  Rust".
 
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
@@ -951,6 +947,55 @@ moves past it.
 Registered as `block-comment-two-char-end` and
 `block-comment-three-char-end`, with `block-comment-end-control` as
 their control: a one-character end, where the three ports agree.
+
+### A pusher read back past four hops through its child's snapshots in Rust
+
+**Deferred, not deliberate**: what the repair of "A pusher read back
+through its child's snapshot in Rust" (under "Repaired") does not reach.
+
+TypeScript and Go link a pushed child to its pusher as live rules, so
+from the child every `parent.child` is the child itself, however often
+the path repeats it. Rust links snapshots. With no history bound the
+push arm links the child a second time, from a snapshot that carries the
+pusher with the child linked, and that carries the read through four
+hops. Two hops further the snapshots end at the pusher as it stood
+before the push, whose `child` is the child pushed before. With `list`
+pushing `first` from its open phase and `second` from its close phase:
+
+| path read on `second` | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `parent.child.parent.child.name` | `second` | `second` | `second` |
+| `parent.child.parent.child.parent.child.name` | `second` | `second` | `first` |
+
+The same model shows from the pusher's side, during the pushing
+alternate's after actions. TypeScript and Go have linked the live rules
+before those actions run, so a state action on the pusher's close reads
+`child.parent.child` as the child just pushed. Rust relinks after the
+actions, so the same action reads the child pushed before, or nothing on
+the pusher's first push. No row can carry this face, because a
+serialized grammar has no after action that reads a path; per-runtime
+tests pin it instead.
+
+No fleet grammar reads either path: the survey in
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+past three hops.
+
+Repair direction: **Rust changes**, by a mechanism the maintainer
+chooses. Relinking further costs two more records per push without a
+bound for each further pair of hops. Resolving a child's `parent` as the
+live rule in the path readers gives TypeScript's answer at every depth
+for a condition path at no memory cost, though not to a subscriber
+walking the raw links or to an after action. Linking live rules, as the
+canonical engine does, is the full repair.
+
+Registered as `pusher-six-hops`, with `pusher-four-hops-control` as its
+control: the four-hop read, where the three runtimes agree. The
+after-action face is pinned by `ts/test/divergence.test.js` ('a pusher's
+after action reads the child just pushed here and in Go, the child
+pushed before in Rust'), `go/divergence_test.go`
+`TestPusherAfterActionReadsTheChildJustPushed` and
+`rs/tests/rule_history_test.rs`
+`an_after_action_on_the_pusher_reads_the_child_pushed_before`.
 
 ## Not divergences
 

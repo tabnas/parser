@@ -3392,6 +3392,9 @@ impl Parser {
                     current_rule.child_rule = Some(child.snapshot());
                     current_rule.next_rule = current_rule.child_rule.clone();
                     current_rule.note_child_push(&child);
+                    // The link as this arm made it, so the relink below can
+                    // tell whether an after action has changed it.
+                    let linked = current_rule.child_rule.clone();
                     let after = self.run_after_actions(
                         spec,
                         prepared,
@@ -3445,8 +3448,13 @@ impl Parser {
                     // more records kept per push, 8 for 6 per element.
                     // Under a bound the links stay as the canonical engine
                     // copies them, where that path reads nothing
-                    // (`rule-history-bounded-pusher`).
-                    if crate::options::effective_rule_history(self.options.rule.history).is_none() {
+                    // (`rule-history-bounded-pusher`). An after action that
+                    // cleared or repointed `child` or `next` keeps its edit:
+                    // the canonical engine links before the after actions
+                    // and never overwrites them afterwards.
+                    if crate::options::effective_rule_history(self.options.rule.history).is_none()
+                        && current_rule.links_unchanged(&linked)
+                    {
                         current_rule.relink_child(&child);
                         child.parent_rule = Some(current_rule.snapshot());
                     }

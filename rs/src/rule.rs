@@ -1720,6 +1720,19 @@ impl Rule {
         self.child_rule = Some(snapshot);
     }
 
+    /// Whether `child` and `next` are still the link the push arm made,
+    /// `linked`. The push arm relinks only then: an after action that
+    /// cleared or repointed either link keeps its edit, as it does in
+    /// TypeScript and Go, which link before the after actions run and do
+    /// not touch the links again.
+    pub(crate) fn links_unchanged(&self, linked: &Option<Rc<RuleSnapshot>>) -> bool {
+        let same = |link: &Option<Rc<RuleSnapshot>>| match (link, linked) {
+            (Some(now), Some(made)) => Rc::ptr_eq(now, made),
+            _ => false,
+        };
+        same(&self.child_rule) && same(&self.next_rule)
+    }
+
     /// The pushed child is about to stop being the current rule, either
     /// because it is being replaced or because it is popping. Freeze both
     /// halves of the link: the cell its `node` field ended on, and its
