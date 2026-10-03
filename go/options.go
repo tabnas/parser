@@ -361,12 +361,13 @@ type ValueOptions struct {
 
 // RuleOptions controls parser rule behavior.
 type RuleOptions struct {
-	Start   string // Starting rule name. Default: "val".
-	Finish  *bool  // Auto-close unclosed structures at EOF. Default: true.
-	MaxMul  *int   // Max rule occurrence multiplier. Default: 3.
-	History *int   // Retained predecessor snapshots. Nil is unbounded; values are clamped to 1..16.
-	Include string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
-	Exclude string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
+	Start      string // Starting rule name. Default: "val".
+	Finish     *bool  // Auto-close unclosed structures at EOF. Default: true.
+	MaxMul     *int   // Max rule occurrence multiplier. Default: 3.
+	History    *int   // Retained predecessor snapshots. Nil is unbounded; values are clamped to 1..16.
+	HistorySet bool   // Apply History even when nil. Set this in a typed overlay to reset an existing bound to unbounded.
+	Include    string // Comma-separated group tags; keep only alts whose G has one of these. Applied before Exclude.
+	Exclude    string // Comma-separated group tags; drop alts whose G has any of these. Applied after Include.
 }
 
 // LexOptions controls global lex behavior.
@@ -595,7 +596,9 @@ func DefaultOptions() Options {
 // presence bit is consumed here and never retained on a configured parser.
 func mergeOptionsOverlay(base, over Options) Options {
 	merged := Deep(base, over).(Options)
-	if over.ruleHistorySet {
+	historySet := over.ruleHistorySet ||
+		(over.Rule != nil && over.Rule.HistorySet)
+	if historySet {
 		if merged.Rule == nil {
 			merged.Rule = &RuleOptions{}
 		}
@@ -604,6 +607,9 @@ func mergeOptionsOverlay(base, over Options) Options {
 		} else {
 			merged.Rule.History = over.Rule.History
 		}
+	}
+	if merged.Rule != nil {
+		merged.Rule.HistorySet = false
 	}
 	merged.ruleHistorySet = false
 	return merged

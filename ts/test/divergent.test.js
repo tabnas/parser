@@ -326,7 +326,10 @@ describe('shared rule-history contract', () => {
       if (1 === cols.length && cols[0].startsWith('#')) continue
       assert.equal(cols.length, 4, `rule-history.tsv:${row}: expected 4 columns`)
       const [name, argRaw, input, want] = cols
-      const got = probeSpec(JSON.parse(argRaw), input, specs)
+      const raw = probeSpec(JSON.parse(argRaw), input, specs)
+      const got = 'INSTALL_ERROR' === raw
+        ? 'ERROR:install'
+        : raw.startsWith('OK:') ? raw.slice(3) : raw
       assert.equal(got, want, name)
       ran++
     }

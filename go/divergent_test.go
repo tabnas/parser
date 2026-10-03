@@ -518,6 +518,11 @@ func TestSharedRuleHistoryRegister(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", cols[0], err)
 		}
+		if got == "INSTALL_ERROR" {
+			got = "ERROR:install"
+		} else {
+			got = strings.TrimPrefix(got, "OK:")
+		}
 		if got != cols[3] {
 			t.Errorf("%s: got %s, want %s", cols[0], got, cols[3])
 		}

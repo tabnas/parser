@@ -34,6 +34,9 @@ var mapKeys = map[string]string{
 // with the reason. An entry here that OptionsFromMap DOES read fails,
 // so an exclusion cannot outlive its justification.
 var notInMap = map[string]string{
+	// Typed overlays need an explicit presence bit because nil is the
+	// unbounded value; serialized history null/false set the private bit.
+	"Rule.HistorySet": "typed-overlay presence for rule.history, never serialized",
 	// Derived from the @~/…/ ref form of match.token, never written
 	// directly; TestMapToOptionsAllKeys covers the derivation.
 	"Match.TokenEager": "derived from an eager @~/…/ match.token entry",

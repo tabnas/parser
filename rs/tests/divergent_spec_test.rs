@@ -190,7 +190,7 @@ fn shared_rule_history_register_has_a_live_rust_lane() {
     }
 
     let mut ran = 0;
-    for (index, raw) in source.lines().enumerate() {
+    for (index, raw) in source.lines().enumerate().skip(1) {
         if raw.starts_with('#') || raw.trim().is_empty() {
             continue;
         }
@@ -199,7 +199,12 @@ fn shared_rule_history_register_has_a_live_rust_lane() {
         let [name, args, input, expected]: &[String; COLUMNS] =
             columns.as_slice().try_into().expect("checked column count");
         let args: JsonValue = serde_json::from_str(args).expect("probe arguments");
-        let actual = spec_probe(input, &args, &specs);
+        let raw_actual = spec_probe(input, &args, &specs);
+        let actual = if raw_actual == "INSTALL_ERROR" {
+            "ERROR:install"
+        } else {
+            raw_actual.strip_prefix("OK:").unwrap_or(&raw_actual)
+        };
         assert_eq!(actual, *expected, "rule-history row {name}");
         ran += 1;
     }

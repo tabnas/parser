@@ -94,17 +94,18 @@ type Context struct {
 	// Groundwork for opt-in multi-error recovery.
 	Errs []*TabnasError
 
-	Opts    *Options         // Tabnas instance options (TS: opts).
-	Cfg     *LexConfig       // Tabnas instance config (TS: cfg).
-	Src     string           // Source text being parsed (TS: src).
-	Inst    *Tabnas          // Current Tabnas instance (TS: inst).
-	U       map[string]any   // Custom plugin data bag (TS: u).
-	Root    *Rule            // Root rule (TS: root).
-	TC      int              // Token count (TS: tC).
-	F       func(any) string // Format a value as a string (TS: F).
-	Log     func(...any)     // Debug logger (TS: log).
-	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN).
-	NORULE  *Rule            // Sentinel no-rule (TS: NORULE).
+	Opts       *Options         // Tabnas instance options (TS: opts).
+	Cfg        *LexConfig       // Tabnas instance config (TS: cfg).
+	Src        string           // Source text being parsed (TS: src).
+	Inst       *Tabnas          // Current Tabnas instance (TS: inst).
+	U          map[string]any   // Custom plugin data bag (TS: u).
+	Root       *Rule            // Root rule (TS: root).
+	resultRule *Rule            // Current root replacement; avoids an unbounded root.Next chain.
+	TC         int              // Token count (TS: tC).
+	F          func(any) string // Format a value as a string (TS: F).
+	Log        func(...any)     // Debug logger (TS: log).
+	NOTOKEN    *Token           // Sentinel no-token (TS: NOTOKEN).
+	NORULE     *Rule            // Sentinel no-rule (TS: NORULE).
 
 	// tokenSetDyn is set when the parsing instance carries custom token sets,
 	// so alts that name a token set must be re-resolved against it rather
@@ -509,6 +510,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	rule := MakeRule(startSpec, ctx, nil)
 	root := rule
 	ctx.Root = root
+	ctx.resultRule = root
 
 	// Run parse.prepare hooks
 	if len(p.Config.ParsePrepare) > 0 {
@@ -779,13 +781,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 	}
 
-	// Follow replacement chain: when val is replaced by list (implicit list),
-	// root.Node is stale. Follow Next/Prev links to find the actual result.
-	resRule := root
-	for resRule.Next != NoRule && resRule.Next != nil &&
-		resRule.Next.Prev != NoRule && resRule.Next.Prev != nil &&
-		resRule.Next.Prev.I == resRule.I {
-		resRule = resRule.Next
+	// A bounded root releases obsolete forward links as it replaces. The
+	// current result is tracked directly, while an unbounded parse retains
+	// the established chain and reaches the same final rule here.
+	resRule := ctx.resultRule
+	if resRule == nil {
+		resRule = root
 	}
 
 	// A give-up can also leave the node at Go's zero value rather than

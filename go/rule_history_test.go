@@ -134,6 +134,17 @@ func TestRuleHistoryNullAndFalseResetAnExistingBound(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryTypedNilResetsAnExistingBound(t *testing.T) {
+	three := 3
+	parser := historyJSONParser(t, &three)
+	if err := parser.ApplyOptions(Options{Rule: &RuleOptions{HistorySet: true}}); err != nil {
+		t.Fatalf("apply typed unbounded history: %v", err)
+	}
+	if parser.Config().RuleHistory != 0 {
+		t.Fatalf("typed nil history left bound %d", parser.Config().RuleHistory)
+	}
+}
+
 func TestRuleHistoryBoundsTenThousandItemsWithoutChangingValue(t *testing.T) {
 	history := 3
 	src := historyFlatArray(10_000)
@@ -241,6 +252,91 @@ func TestRuleHistoryAfterPushActionsSeeOnlyTheFrozenChild(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryPushSnapshotIncludesInheritedKeeps(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	var inherited any
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child", K: map[string]any{"x": "kept"}})
+		rs.AddAO(func(rule *Rule, _ *Context) { inherited = rule.Child.K["x"] })
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+			rule.Node = "ok"
+		}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}})
+		rs.AddClose(&AltSpec{})
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "ok" {
+		t.Fatalf("parse = %v, %v", value, err)
+	}
+	if inherited != "kept" {
+		t.Fatalf("frozen child inherited K[x] = %v, want kept", inherited)
+	}
+}
+
+func TestRuleHistorySnapshotNodeWritesReachTheLiveParent(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, _ *Context) {
+			rule.Parent.Node = "from-child"
+		}})
+		rs.AddClose(&AltSpec{})
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "from-child" {
+		t.Fatalf("bounded parent node write = %v, %v; want from-child", value, err)
+	}
+}
+
+func TestRuleHistoryRecoveryPublishesAbandonedChildren(t *testing.T) {
+	for _, popUntilValid := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pop-until-valid-%v", popUntilValid), func(t *testing.T) {
+			history := 1
+			parser := Make(Options{
+				Rule: &RuleOptions{Start: "top", History: &history},
+				Parse: &ParseOptions{Recover: &RecoverOptions{
+					Enabled: true, PopUntilValid: &popUntilValid,
+				}},
+			})
+			ta := parser.Token("#A", "a")
+			tb := parser.Token("#B", "b")
+			tc := parser.Token("#C", "c")
+			td := parser.Token("#D", "d")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, G: "sync", A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.U["x"]
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, _ *Context) {
+					rule.EnsureU()["x"] = "kept"
+				}})
+				// The child cannot close on C, so recovery abandons it and
+				// resumes the parent at its tagged C sync point.
+				rs.AddClose(&AltSpec{S: [][]Tin{{td}}})
+			})
+
+			value, errs, err := parser.ParseRecover("abc")
+			if err != nil || len(errs) != 1 || value != "kept" {
+				t.Fatalf("recovered parse = %v, errs=%d, err=%v; want kept and one error",
+					value, len(errs), err)
+			}
+		})
+	}
+}
+
 func TestRuleHistoryInvalidMapEntryDoesNotResetBound(t *testing.T) {
 	history := 3
 	parser := Make(Options{Rule: &RuleOptions{History: &history}})
@@ -269,6 +365,33 @@ func TestRuleHistoryKeepsRootReplacementResult(t *testing.T) {
 	value, err := parser.Parse("a")
 	if err != nil || value != "new" {
 		t.Fatalf("bounded root replacement = %v, %v; want new", value, err)
+	}
+}
+
+func TestRuleHistoryCutsTheLiveRootReplacementChain(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta := parser.Token("#A", "a")
+	var root *Rule
+	parser.Sub(nil, func(rule *Rule, _ *Context) {
+		if root == nil {
+			root = rule
+		}
+	})
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, R: "top"})
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinZZ}}, A: func(rule *Rule, _ *Context) {
+			rule.Node = "done"
+		}})
+		rs.AddClose(&AltSpec{})
+	})
+
+	value, err := parser.Parse(strings.Repeat("a", 1000))
+	if err != nil || value != "done" {
+		t.Fatalf("replacement parse = %v, %v; want done", value, err)
+	}
+	if root == nil || (root.Next != nil && root.Next != NoRule) {
+		t.Fatalf("original root retained a live forward chain: %#v", root.Next)
 	}
 }
 
