@@ -1646,6 +1646,13 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 	}
 
 	if boundedPush {
+		// The child snapshot exposed to after-push actions deliberately owns
+		// copied rule metadata, but Node has shared-value semantics in the
+		// canonical runtime. Publish a direct Child.Node assignment to the live
+		// child before its first pass.
+		if r.Child != nil && r.Child != NoRule && r.Child.I == next.I {
+			next.Node = r.Child.Node
+		}
 		parent := boundedRuleHistory(
 			r, ctx.Cfg.RuleHistory, historyParentLink)
 		next.Parent = parent

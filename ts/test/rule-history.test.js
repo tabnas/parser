@@ -167,6 +167,25 @@ describe('rule history', () => {
     assert.equal(parser.parse('abc'), 'after')
   })
 
+  it('keeps original-root result semantics when history is bounded', () => {
+    const parse = (history) => {
+      const parser = new Tabnas({
+        rule: { start: 'top', history },
+        fixed: { token: { '#A': 'a' } },
+      })
+      parser.rule('top', (rs) => rs.open([{
+        s: '#A', r: 'tail', a: (rule) => { rule.node = 'old' },
+      }]))
+      parser.rule('tail', (rs) => rs.open([{
+        a: (rule) => { rule.node = 'new' },
+      }]))
+      return parser.parse('a')
+    }
+
+    assert.equal(parse(null), 'old')
+    assert.equal(parse(1), 'old')
+  })
+
   it('merges on the effective history setting', () => {
     const left = new Tabnas({ tag: 'L', rule: { history: 3 } })
     const right = new Tabnas({ tag: 'R' })

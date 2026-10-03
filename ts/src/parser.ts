@@ -201,7 +201,6 @@ class Parser {
     let rule = makeRule(startspec, ctx)
 
     root = rule
-    ctx._resultRule = root
 
     // Maximum rule iterations (prevents infinite loops). Allow for
     // rule open and close, and for each rule on each char to be
@@ -350,12 +349,9 @@ class Parser {
       throw new TabnasError(S.unexpected, {}, endtry, norule, ctx)
     }
 
-    // Preserve the original-root result in compatibility (unbounded) mode;
-    // only a finite history cuts that chain and therefore uses the directly
-    // tracked replacement.
-    const result = (
-      null == ctx.cfg.rule.history ? ctx.root() : ctx._resultRule ?? ctx.root()
-    ).node
+    // A history bound changes retention only. The original root identity and
+    // result are part of the public parse contract in every mode.
+    const result = ctx.root().node
 
     if (this.cfg.result.fail.includes(result)) {
       throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)

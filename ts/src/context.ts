@@ -53,9 +53,6 @@ export class Context {
   meta!: Record<string, any>                   // Parse meta parameters.
   src!: () => string                           // Returns the full source text.
   root!: () => any                             // Returns the parse result root.
-  // Current replacement of the root. Kept separate from root(), whose
-  // original-rule identity is part of the public parse context contract.
-  _resultRule?: Rule
   plgn!: () => Plugin[]                         // Returns the applied plugins.
   inst!: () => Tabnas                           // Returns the owning Tabnas instance.
 

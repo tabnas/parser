@@ -607,6 +607,34 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory)
 		}
 
+		if ctx.Cfg.RuleHistory > 0 && rule != nil && rule != NoRule {
+			// Process snapshots both sides of a bounded push before ruleDone
+			// subscribers run. Node is the intentionally shared exception: copy
+			// subscriber writes made through either public snapshot before the
+			// child gets its first pass.
+			if rule.historyPusher == prev {
+				if prev.Child != nil && prev.Child != NoRule && prev.Child.I == rule.I {
+					rule.Node = prev.Child.Node
+				}
+				if rule.Parent != nil && rule.Parent != NoRule && rule.Parent.I == prev.I {
+					rule.Parent.Node = prev.Node
+				}
+			}
+
+			// While a bounded root is suspended, its frozen Parent snapshot is
+			// the public root view too. A child action can write Parent.Node and
+			// immediately read the same value through ctx.Root. Restore the live
+			// root record when that same occurrence resumes.
+			if ctx.Root != nil && ctx.Root != NoRule {
+				if rule.Parent != nil && rule.Parent != NoRule &&
+					rule.Parent.I == ctx.Root.I {
+					ctx.Root = rule.Parent
+				} else if ctx.Root.I == rule.I {
+					ctx.Root = rule
+				}
+			}
+		}
+
 		// Check for parse error from alt.E or actions.
 		if ctx.ParseErr != nil {
 			// Opt-in recovery: record the error and resume from a sync

@@ -269,6 +269,99 @@ func TestRuleHistorySyncsParentNodeAfterRuleDone(t *testing.T) {
 	}
 }
 
+func TestRuleHistoryParentNodeWriteIsImmediateThroughRoot(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.Node
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, ctx *Context) {
+					rule.Parent.Node = "after"
+					rule.Node = ctx.Root.Node
+				}})
+				rs.AddClose(&AltSpec{})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "after" {
+				t.Fatalf("immediate parent/root write = %v, %v; want after", value, err)
+			}
+		})
+	}
+}
+
+func TestRuleHistorySharesAfterPushChildNode(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+				rs.AddAO(func(rule *Rule, _ *Context) { rule.Child.Node = "seed" })
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+					rule.Node = rule.Child.U["seen"]
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, _ *Context) {
+					rule.EnsureU()["seen"] = rule.Node
+				}})
+				rs.AddClose(&AltSpec{})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "seed" {
+				t.Fatalf("after-push child seed = %v, %v; want seed", value, err)
+			}
+		})
+	}
+}
+
+func TestRuleHistorySharesPushNodeWritesAfterRuleDone(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(rule *Rule, _ *Context) {
+			rule.Node = rule.Child.U["seen"]
+		}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(rule *Rule, ctx *Context) {
+			rule.EnsureU()["seen"] = fmt.Sprintf("%v/%v", rule.Node, ctx.Root.Node)
+		}})
+		rs.AddClose(&AltSpec{})
+	})
+	parser.SubRuleDone(func(rule *Rule, _ *Context, done RuleDone) {
+		if rule.Name == "top" && done.State == OPEN {
+			rule.Child.Node = "child"
+			rule.Node = "parent"
+		}
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "child/parent" {
+		t.Fatalf("post-push ruleDone nodes = %v, %v; want child/parent", value, err)
+	}
+}
+
 func TestRuleHistoryAfterPushActionsSeeOnlyTheFrozenChild(t *testing.T) {
 	history := 1
 	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
