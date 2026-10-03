@@ -310,6 +310,35 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Step over one character of a string body, counting a column and
+    /// never a row. `advance` counts a row for any character in
+    /// `line.rowChars`, which is right between tokens and wrong inside a
+    /// string: TypeScript's `buildStringBodySpec` (ts/src/lexer.ts) makes
+    /// a row character plain body there unless the string is multi-line
+    /// and the character is in `line.chars` as well, which is
+    /// [`Lexer::advance_string_line`].
+    fn advance_body(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.idx += 1;
+        self.ci += 1;
+        Some(c)
+    }
+
+    /// Step over a line character inside a multi-line string: the column
+    /// resets, and a character in `line.rowChars` counts a row, as
+    /// TypeScript's string-body classes LINE and LINE+ROW do
+    /// (`STRING_BODY_TABLE` in ts/src/lexer.ts) and as Go's
+    /// `BuildStringBodySpec` ports them.
+    fn advance_string_line(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.idx += 1;
+        if self.char_sets.row.contains(c) {
+            self.ri += 1;
+        }
+        self.ci = 1;
+        Some(c)
+    }
+
     fn peek(&self) -> Option<char> {
         if self.idx < self.char_len {
             Some(self.chars[self.idx])
@@ -1791,6 +1820,21 @@ impl<'a> Lexer<'a> {
 
         let mut pending_high_surrogate: Option<u16> = None;
 
+        // The body classes of TypeScript's `buildStringBodySpec`
+        // (ts/src/lexer.ts), which Go's `BuildStringBodySpec` ports: a
+        // line character is LINE or LINE+ROW only inside a multi-line
+        // string, where it resets the column and, in `line.rowChars`,
+        // counts a row; anywhere else in a body it is plain content,
+        // counted as a column, unless it is a control character, which
+        // stops the body as `unprintable`. This loop used to count a row
+        // for any row character it stepped over, string body or not, and
+        // to refuse any line character inside a single-line string: with
+        // json5's U+2028 and U+2029 as row characters, `y` in
+        // `"a<U+2028>b" y` sat on row 2 here and on row 1 in TypeScript
+        // and Go, and with the two in `line.chars` as well the string was
+        // `unprintable` (tabnas/parser#263).
+        let multi_line = self.options.string.multi_chars.contains(quote);
+
         while let Some(c) = self.peek() {
             if c == quote {
                 raw_src.push(self.advance().unwrap());
@@ -1813,35 +1857,28 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
-            if self.char_sets.line.contains(c) {
-                if self.options.string.multi_chars.contains(quote) {
-                    raw_src.push(self.advance().expect("peeked character must advance"));
-                    out_str.push(c);
-                    continue;
-                }
-                // Sited ON the line character, as TypeScript does
-                // (`pnt.sI = sI; pnt.cI = cI` before its `bad()` call,
-                // ts/src/lexer.ts) and as the control-character branch
-                // below already does. `pnt` is the opening quote, and
-                // reporting that put every embedded newline at the start
-                // of its string.
+            if multi_line && self.char_sets.line.contains(c) {
+                raw_src.push(
+                    self.advance_string_line()
+                        .expect("peeked character must advance"),
+                );
+                out_str.push(c);
+                continue;
+            }
+
+            // A control character stops the body: a line character
+            // always, since a single-line string cannot hold one, and any
+            // other unless `string.allowControl` admits it. Sited ON the
+            // character, as TypeScript does (`pnt.sI = sI; pnt.cI = cI`
+            // before its `bad()` call, ts/src/lexer.ts). `pnt` is the
+            // opening quote, and reporting that put every embedded
+            // newline at the start of its string.
+            if (c as u32) < 32
+                && (self.char_sets.line.contains(c) || !self.options.string.allow_control)
+            {
                 let site = self.current_point().site;
                 let err =
                     TabnasError::new("unprintable", c.to_string(), "", site.pos, site.ri, site.ci);
-                self.err = Some(err.clone());
-                return Err(Box::new(err));
-            }
-
-            // Check for unprintable unescaped control characters in string (< 32)
-            if (c as u32) < 32 && !self.options.string.allow_control {
-                let err = TabnasError::new(
-                    "unprintable",
-                    c.to_string(),
-                    "",
-                    self.current_point().site.pos,
-                    self.current_point().site.ri,
-                    self.current_point().site.ci,
-                );
                 self.err = Some(err.clone());
                 return Err(Box::new(err));
             }
@@ -2042,7 +2079,7 @@ impl<'a> Lexer<'a> {
                 }
             } else {
                 self.flush_surrogate(&mut pending_high_surrogate, &mut out_str);
-                raw_src.push(self.advance().unwrap());
+                raw_src.push(self.advance_body().expect("peeked character must advance"));
                 out_str.push(c);
             }
         }

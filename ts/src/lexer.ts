@@ -396,10 +396,15 @@ function buildStringBodySpec(cfg: Config, qchar: string): ScanSpec {
       classOf[cc] = 1
     } else if (hasReplace && replaceCodeMap[cc] !== undefined) {
       classOf[cc] = 1
+    } else if (isMultiLine && lineBM[cc]) {
+      // A line char inside a multi-line string, at any code point in
+      // the table, as the fallback below already classified one past
+      // it. This test sat under `cc < 32`, so a Latin-1 line char
+      // (U+0085, configured as one) was plain body inside a multi-line
+      // string while U+2028 counted a row (tabnas/parser#263).
+      classOf[cc] = rowBM[cc] ? 3 : 2
     } else if (cc < 32) {
-      if (isMultiLine && lineBM[cc]) {
-        classOf[cc] = rowBM[cc] ? 3 : 2
-      } else if (allowControl && !lineBM[cc]) {
+      if (allowControl && !lineBM[cc]) {
         // Raw control char admitted verbatim: plain BODY. Line chars
         // are deliberately excluded — inside a single-line string they
         // must still stop and error.

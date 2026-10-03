@@ -1955,7 +1955,17 @@ func (l *Lex) matchString() *Token {
 			if sI >= srclen {
 				break
 			}
-			esc := src[sI]
+			// The escaped character, whole. This read one byte, `esc :=
+			// src[sI]`, and stepped one byte past it, so the remaining
+			// bytes of a multi-byte character fell to the body scan and
+			// were counted as columns of their own, and a `string.escape`
+			// mapping of a non-ASCII character was looked up by its first
+			// byte and never found: `"\é" y` put `y` at column 7 here and
+			// at 6 in TypeScript and Rust, and under `{é: 'E'}` the value
+			// of `"\é"` was `é` (tabnas/parser#263). An invalid byte
+			// decodes as RuneError of width one and is copied from the
+			// source below rather than re-encoded, so the value keeps it.
+			esc, escSize := utf8.DecodeRuneInString(src[sI:])
 
 			// Only \u can continue a surrogate pair; every other escape is
 			// literal content and resolves a withheld high surrogate first.
@@ -1963,12 +1973,18 @@ func (l *Lex) matchString() *Token {
 				flushHi()
 			}
 
-			// Check custom escape map first.
-			if l.Config.EscapeMap != nil {
+			// Check custom escape map first, for a character of one UTF-16
+			// unit. TypeScript looks the map up by `src[sI]`, one code
+			// unit, so a key above U+FFFF, two units there, never matches,
+			// and the character is copied as an unknown escape: `"\😀"`
+			// under `{😀: 'X'}` keeps the character. Looking an astral
+			// character up whole gave Rust's `X` instead (DIVERGENCE.md "A
+			// `string.escape` key longer than one UTF-16 unit").
+			if l.Config.EscapeMap != nil && esc <= 0xFFFF {
 				if rep, ok := l.Config.EscapeMap[string(esc)]; ok {
 					flushHi() // a remapped \u is literal text, not a code unit
 					sb.WriteString(rep)
-					sI++
+					sI += escSize
 					continue
 				}
 			}
@@ -1981,8 +1997,8 @@ func (l *Lex) matchString() *Token {
 			if l.Config.EscapeRemoved[string(esc)] ||
 				(l.Config.EscapeStrict && esc == 'x') {
 				if l.Config.AllowUnknownEscape {
-					sb.WriteByte(esc)
-					sI++
+					sb.WriteString(src[sI : sI+escSize])
+					sI += escSize
 					continue
 				}
 				if l.Config.StringAbandon {
@@ -1994,7 +2010,6 @@ func (l *Lex) matchString() *Token {
 				// still reported column 1. Span the whole RUNE: a
 				// non-ASCII escape char is more than one byte, and half
 				// of one is not valid UTF-8 in the diagnostic.
-				_, escSize := utf8.DecodeRuneInString(src[sI:])
 				l.pnt.SI = sI
 				l.pnt.CI = cI - 1
 				return l.bad("unexpected", sI, sI+escSize)
@@ -2132,7 +2147,7 @@ func (l *Lex) matchString() *Token {
 				}
 			default:
 				if l.Config.AllowUnknownEscape {
-					sb.WriteByte(esc)
+					sb.WriteString(src[sI : sI+escSize])
 				} else {
 					if l.Config.StringAbandon {
 						return nil
@@ -2141,13 +2156,15 @@ func (l *Lex) matchString() *Token {
 					// step back to the backslash. Span the whole RUNE —
 					// `sI+1` takes one byte of a multi-byte character and
 					// leaves invalid UTF-8 in the diagnostic.
-					_, escSize := utf8.DecodeRuneInString(src[sI:])
 					l.pnt.SI = sI
 					l.pnt.CI = cI - 1
 					return l.bad("unexpected", sI, sI+escSize)
 				}
 			}
-			sI++
+			// Past the escaped character, whole: one byte for the
+			// switch's own cases, which are all ASCII, and the full
+			// width of an unknown multi-byte one.
+			sI += escSize
 			continue
 		}
 
