@@ -955,18 +955,21 @@ the plugins first and copies the decorations after (`Derive` in
 
 What a plugin sees of the instance while it re-runs on the child:
 
-| during the plugin's re-run on the child | TypeScript | Go | Rust |
+| a plugin that writes a different value on each run | TypeScript | Go | Rust |
 | --- | --- | --- | --- |
-| its own decoration, set on the parent, is already there | yes | no | yes |
-| the child's decoration once the derive returns | the parent's | the parent's | the parent's |
+| during its re-run on the child, its decoration from the parent is already there | yes | no | yes |
+| the child's decoration once the derive returns | what the re-run wrote | the parent's, copied over what the re-run wrote | what the re-run wrote |
 
 Found by tabnas/yaml (#244): the Rust plugin guarded its install with a
 decoration, so on a child it found its own mark, returned early, and
 the child parsed `a: 1` to null with no error, where the same guard in
 Go would have installed. A guard belongs on the rules, as jsonic's is
 and tabnas-yaml's now is (tabnas/yaml#113). What remains is the
-order: a plugin that reads a parent decoration during its re-run, to
-inherit state, finds it in TypeScript and Rust and not in Go.
+order, with two faces: a plugin that reads a parent decoration during
+its re-run, to inherit state, finds it in TypeScript and Rust and not
+in Go; and a value the re-run writes, one computed from the child's
+options say, is what the child carries in TypeScript and Rust, where
+Go's copy afterwards puts the parent's value over it.
 
 Repair direction: **Go changes.** TypeScript defines the order and
 Rust follows it: the child carries its parent's decorations before

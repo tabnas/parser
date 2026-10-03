@@ -425,16 +425,22 @@ describe('divergence', () => {
     // in Go". The constructor copies the parent's own properties onto the
     // child before it re-runs the parent's plugins, so a plugin's re-run
     // finds the decoration it set on the parent; Go copies them after.
+    // The plugin writes a different value on each run, so the second
+    // observable shows too: the value the plugin writes on the child's
+    // re-run survives here, where Go's later copy puts the parent's over it.
     const seen = []
+    let runs = 0
     const mark = (tn) => {
-      seen.push(undefined !== tn.mark)
-      tn.mark = true
+      seen.push(tn.mark)
+      runs += 1
+      tn.mark = 'run' + runs
     }
     const parent = new Tabnas()
     parent.use(mark)
     const child = parent.make()
-    assert.deepEqual(seen, [false, true])
-    assert.strictEqual(child.mark, true)
+    assert.deepEqual(seen, [undefined, 'run1'])
+    assert.strictEqual(parent.mark, 'run1')
+    assert.strictEqual(child.mark, 'run2')
   })
 
 })
