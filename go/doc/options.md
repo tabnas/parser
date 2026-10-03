@@ -286,7 +286,7 @@ Controls ANSI color codes in formatted error messages (TS:
 | `Hint` | `map[string]string` | Error hint templates by code; same `{key}` injection. Merged over defaults |
 | `Parse` | `*ParseOptions` | Parse-time hooks: `Prepare` is a name-keyed map of `func(ctx *Context)` run at the start of every parse; `Budget` is the opt-in cancellation hook and `Recover` the opt-in error recovery (both below) |
 | `Result` | `*ResultOptions` | `Fail []any` lists result values treated as parse failures |
-| `Property` | `*PropertyOptions` | Go-only: `ConfigModify map[string]ConfigModifier` post-config callbacks |
+| `Property` | `*PropertyOptions` | `ConfigModify map[string]ConfigModifier`: callbacks that run after every config build, the Go form of TypeScript `config.modify`. A field they set survives `SetOptions`, unlike a write through `Config()`, except the fields assigned after they run: the token sets, which `Options.TokenSet` defines, and the fixed tokens, custom token names, custom matchers and match entries that `SetOptions` carries over from the live config. Set those through their own options |
 | `Tag` | `string` | Instance identifier tag, appended to the instance id and shown in the error suffix internal line. Unset defaults to `DefaultTag` (`"-"`), matching TS. `Merge` treats `"-"` as "no tag chosen" and rejects it |
 
 ### `Parse.Recover`: multi-error recovery

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Deep recursively merges values (maps, slices, structs via reflection); zero/nil overlays preserve base.
@@ -1263,7 +1264,22 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 			for k, v := range rep {
 				if len(k) > 0 {
 					if s, ok := v.(string); ok {
-						opts.String.Replace[rune(k[0])] = s
+						// Keyed by the key's first CHARACTER, as TypeScript
+						// keys it by the first code unit (`c.charCodeAt(0)`
+						// in makeStringMatcher). This took the first BYTE,
+						// `rune(k[0])`, so a non-ASCII key never applied and
+						// its lead byte, read as a Latin-1 character,
+						// applied instead: under `{é: 'E'}` the value of
+						// `"aéb"` was `aéb` and of `"aÃb"` was `aEb`
+						// (tabnas/parser#263). A key above U+FFFF is keyed
+						// by the whole character, as the native
+						// `map[rune]string` option is; TypeScript replaces
+						// its first unit, a high surrogate, which no Go
+						// string can hold apart from the rest (DIVERGENCE.md
+						// "A `string.replace` key longer than one UTF-16
+						// unit").
+						r, _ := utf8.DecodeRuneInString(k)
+						opts.String.Replace[r] = s
 					}
 				}
 			}
