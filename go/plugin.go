@@ -726,7 +726,7 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		o = opts[0]
 	}
 	if j.options != nil {
-		o = Deep(*j.options, o).(Options)
+		o = mergeOptionsOverlay(*j.options, o)
 	}
 	child := Make(o)
 
@@ -891,7 +891,7 @@ func (j *Tabnas) ApplyOptions(opts Options) error {
 	if err := checkFixedTokenNames(&opts); err != nil {
 		return err
 	}
-	merged := Deep(*j.options, opts).(Options)
+	merged := mergeOptionsOverlay(*j.options, opts)
 	if err := checkCommentDefinitions(&merged); err != nil {
 		return err
 	}
@@ -900,7 +900,7 @@ func (j *Tabnas) ApplyOptions(opts Options) error {
 }
 
 func (j *Tabnas) SetOptions(opts Options) *Tabnas {
-	merged := Deep(*j.options, opts).(Options)
+	merged := mergeOptionsOverlay(*j.options, opts)
 	if err := checkCommentDefinitions(&merged); err != nil {
 		panic(err.Error())
 	}

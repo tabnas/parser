@@ -172,6 +172,23 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 	if val == nil || IsSkip(val) {
 		return
 	}
+	if path == "options.rule.history" {
+		if disabled, ok := val.(bool); ok && !disabled {
+			return
+		}
+		history, ok := mapWholeInt(val)
+		if !ok || history < 1 {
+			*errs = append(*errs,
+				path+": must be an integer of at least 1, null, or false")
+			return
+		}
+		if history > MaxRuleHistory {
+			*errs = append(*errs, fmt.Sprintf(
+				"%s: is outside the supported range (at most %d)",
+				path, MaxRuleHistory))
+		}
+		return
+	}
 	// A shape the reader takes beyond the field's own type. Declared in
 	// optionWidenings, never tested inline here — an inline widening
 	// drifts from the reader that motivates it, which is #143.

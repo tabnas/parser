@@ -177,6 +177,40 @@ fn shared_divergence_register_has_a_live_rust_lane() {
     assert!(ran > 0, "divergence register ran no rows");
 }
 
+#[test]
+fn shared_rule_history_register_has_a_live_rust_lane() {
+    const COLUMNS: usize = 4;
+    let source = fs::read_to_string("../test/spec/rule-history.tsv").expect("rule-history.tsv");
+    let mut specs = IndexMap::new();
+    for line in source.lines() {
+        if let Some(spec) = line.strip_prefix("# @spec ") {
+            let (name, document) = spec.split_once(' ').expect("named spec document");
+            specs.insert(name.to_string(), document.to_string());
+        }
+    }
+
+    let mut ran = 0;
+    for (index, raw) in source.lines().enumerate().skip(1) {
+        if raw.starts_with('#') || raw.trim().is_empty() {
+            continue;
+        }
+        let columns: Vec<String> = raw.split('\t').map(preprocess).collect();
+        assert_eq!(columns.len(), COLUMNS, "rule-history.tsv:{}", index + 1);
+        let [name, args, input, expected]: &[String; COLUMNS] =
+            columns.as_slice().try_into().expect("checked column count");
+        let args: JsonValue = serde_json::from_str(args).expect("probe arguments");
+        let raw_actual = spec_probe(input, &args, &specs);
+        let actual = if raw_actual == "INSTALL_ERROR" {
+            "ERROR:install"
+        } else {
+            raw_actual.strip_prefix("OK:").unwrap_or(&raw_actual)
+        };
+        assert_eq!(actual, *expected, "rule-history row {name}");
+        ran += 1;
+    }
+    assert!(ran > 0, "rule-history register ran no rows");
+}
+
 // DIVERGENCE.md "Key order in parsed objects": ADR-15 puts key order out
 // of the parsed-value contract, and this port keeps insertion order. No
 // ECMAScript integer-key emulation, ever.

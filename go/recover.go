@@ -390,6 +390,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 
 	if !rec.PopUntilValid {
 		// Fixed-depth pop: exactly one rule.
+		freezeHistoryChild(rule, nil, ctx.Cfg.RuleHistory)
 		if 0 < ctx.RSI {
 			ctx.RSI--
 			return ctx.RS[ctx.RSI]
@@ -415,6 +416,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 
 	// The erroring rule is being abandoned: synthesize its close event
 	// first, so a structural consumer still sees a balanced stream.
+	freezeHistoryChild(rule, nil, ctx.Cfg.RuleHistory)
 	forceClose(ctx, rule)
 	for 0 < ctx.RSI {
 		ctx.RSI--
@@ -422,6 +424,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 		if r != nil && acceptsClose(ctx, r.Spec, cand.Tin, rec.SyncGroups) {
 			return r
 		}
+		freezeHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 		forceClose(ctx, r)
 	}
 	return nil
@@ -434,10 +437,12 @@ func forceClose(ctx *Context, r *Rule) {
 	if r == nil || r == NoRule || 0 == len(ctx.RuleDoneSubs) {
 		return
 	}
+	publishedBefore := publishedHistoryChildSnapshot(r, ctx.Cfg.RuleHistory)
 	done := RuleDone{State: CLOSE, Alt: nil, Forced: true}
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
+	refreshHistoryChild(r, ctx.Cfg.RuleHistory, publishedBefore)
 }
 
 // absorbBad is the lexer soft mode: with recovery on, a bad token is

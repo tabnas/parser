@@ -94,17 +94,18 @@ type Context struct {
 	// Groundwork for opt-in multi-error recovery.
 	Errs []*TabnasError
 
-	Opts    *Options         // Tabnas instance options (TS: opts).
-	Cfg     *LexConfig       // Tabnas instance config (TS: cfg).
-	Src     string           // Source text being parsed (TS: src).
-	Inst    *Tabnas          // Current Tabnas instance (TS: inst).
-	U       map[string]any   // Custom plugin data bag (TS: u).
-	Root    *Rule            // Root rule (TS: root).
-	TC      int              // Token count (TS: tC).
-	F       func(any) string // Format a value as a string (TS: F).
-	Log     func(...any)     // Debug logger (TS: log).
-	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN).
-	NORULE  *Rule            // Sentinel no-rule (TS: NORULE).
+	Opts       *Options         // Tabnas instance options (TS: opts).
+	Cfg        *LexConfig       // Tabnas instance config (TS: cfg).
+	Src        string           // Source text being parsed (TS: src).
+	Inst       *Tabnas          // Current Tabnas instance (TS: inst).
+	U          map[string]any   // Custom plugin data bag (TS: u).
+	Root       *Rule            // Root rule (TS: root).
+	resultRule *Rule            // Current root replacement; avoids an unbounded root.Next chain.
+	TC         int              // Token count (TS: tC).
+	F          func(any) string // Format a value as a string (TS: F).
+	Log        func(...any)     // Debug logger (TS: log).
+	NOTOKEN    *Token           // Sentinel no-token (TS: NOTOKEN).
+	NORULE     *Rule            // Sentinel no-rule (TS: NORULE).
 
 	// tokenSetDyn is set when the parsing instance carries custom token sets,
 	// so alts that name a token set must be re-resolved against it rather
@@ -509,6 +510,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	rule := MakeRule(startSpec, ctx, nil)
 	root := rule
 	ctx.Root = root
+	ctx.resultRule = root
 
 	// Run parse.prepare hooks
 	if len(p.Config.ParsePrepare) > 0 {
@@ -597,9 +599,23 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// the same reason TS dispatches from its loop: Process has
 		// several return points, and one dispatch site cannot miss one.
 		if len(ctx.RuleDoneSubs) > 0 {
+			publishedBefore := publishedHistoryChildSnapshot(prev, ctx.Cfg.RuleHistory)
 			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
+			}
+			refreshHistoryChild(prev, ctx.Cfg.RuleHistory, publishedBefore)
+		}
+
+		if ctx.Cfg.RuleHistory > 0 && rule != nil && rule != NoRule {
+			// Process snapshots both sides of a bounded push before ruleDone
+			// subscribers run. Node is the intentionally shared exception: copy
+			// subscriber writes made through either public snapshot before the
+			// child gets its first pass.
+			if rule.historyPusher == prev {
+				if prev.Child != nil && prev.Child != NoRule && prev.Child.I == rule.I {
+					rule.Node = prev.Child.Node
+				}
 			}
 		}
 
@@ -779,11 +795,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 	}
 
-	// Follow replacement chain: when val is replaced by list (implicit list),
-	// root.Node is stale. Follow Next/Prev links to find the actual result.
-	resRule := root
-	for resRule.Next != NoRule && resRule.Next != nil && resRule.Next.Prev == resRule {
-		resRule = resRule.Next
+	// A bounded root releases obsolete forward links as it replaces. The
+	// current result is tracked directly, while an unbounded parse retains
+	// the established chain and reaches the same final rule here.
+	resRule := ctx.resultRule
+	if resRule == nil {
+		resRule = root
 	}
 
 	// A give-up can also leave the node at Go's zero value rather than

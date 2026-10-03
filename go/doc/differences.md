@@ -1481,6 +1481,21 @@ Two differences from Rust remain in what the cell means:
 
 TypeScript and Rust need neither method; there is nothing to port.
 
+## Direct Go `rule.history` bounds clamp
+
+The portable serialized option accepts only integer bounds from 1 through
+16 (or `null`/`false` for unbounded history) in every runtime. TypeScript
+also rejects an out-of-range value supplied directly to its options object.
+Go's typed `RuleOptions.History` instead clamps values below 1 to 1 and
+values greater than `MaxRuleHistory` to 16. `Make`, `SetOptions` and `ApplyOptions`
+all use that same typed rule. This preserves the established Go convention
+for integer pointer options while the serialized grammar surface remains
+strict and portable.
+
+A typed overlay uses `HistorySet: true` with `History: nil` to reset an
+existing finite bound to unbounded. Serialized options omit the presence
+bit. Serialized `null` and `false` carry their own presence.
+
 ## Lex-event retraction on unrelex: both runtimes
 
 Under negotiated lexing, both runtimes re-announce the RESTORED token

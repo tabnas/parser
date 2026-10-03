@@ -553,6 +553,9 @@ function mergeInstances(
   // synthetic plugin below — neither takes part in the conflict walk.
   const strip = (tree: Record<string, any>) => {
     const { tag, plugins, ...rest } = tree
+    if (isplain(rest.rule) && false === rest.rule.history) {
+      return { ...rest, rule: { ...rest.rule, history: null } }
+    }
     return rest
   }
   const mergedOptions: Record<string, any> = mergeOptionTrees(
