@@ -72,10 +72,9 @@ func validateOptionsMap(m map[string]any) error {
 //
 // Two widenings are NOT here because they are general rules rather than
 // per-leaf ones, and each already has exactly one home: a `false` entry
-// in a definition map removes that definition (the pointer-element case
-// in validateLeaf, which covers comment.def, value.def, lex.match and
-// match.value alike), and errmsg.suffix takes any shape because the field
-// it lands in is `any`.
+// in a definition map removes that definition (falseDeletes, read by the
+// map case in validateLeaf), and errmsg.suffix takes any shape because
+// the field it lands in is `any`.
 var optionWidenings = map[string]func(val any) bool{
 	// OptionsFromMap reads a string ender as a one-entry list, whose
 	// characters then each become an ender.
@@ -84,6 +83,24 @@ var optionWidenings = map[string]func(val any) bool{
 	// false is the portable spelling of "retain every consumed token"
 	// (#144, #142); TypeScript also accepts its Infinity spelling.
 	"options.rewind.history": isFalse,
+}
+
+// falseDeletes names the definition maps in which a `false` entry
+// removes the definition, as a null entry does: the maps whose canonical
+// validator takes false, which is comment.def and value.def by their own
+// rule and lex.match.* as a widening (ts/src/utility.ts, DYNAMIC_MAPS and
+// WIDENINGS). It used to be every pointer-valued map, which also let a
+// false fixed token, match token or match value through, where the
+// readers dropped it in silence and TypeScript refuses it: a match value
+// takes a regexp, a function, an object or null and nothing else, and
+// reading false there as a deletion (#240's first cut) would have made
+// one grammar delete a matcher here and fail to load there. An entry of
+// any other map is validated as its own shape, so a false one is reported
+// with the shapes the slot takes.
+var falseDeletes = map[string]bool{
+	"options.comment.def": true,
+	"options.value.def":   true,
+	"options.lex.match":   true,
 }
 
 func isFalse(val any) bool {
@@ -316,11 +333,12 @@ func validateLeaf(t reflect.Type, val any, path string, errs *[]string) {
 					path, name, name, path[strings.LastIndex(path, ".")+1:]))
 				continue
 			}
-			// A false entry removes a definition, as null does — the
-			// general form of an optionWidenings entry, covering every
-			// definition map (value.def, comment.def, lex.match,
-			// match.value) rather than naming each one.
-			if isFalse(entry) && t.Elem().Kind() == reflect.Ptr {
+			// A false entry removes a definition, as null does, in the
+			// maps falseDeletes names and in no other: a false match
+			// value falls through to the match.value case of
+			// validateLeaf and is reported with the shapes it takes, as
+			// TypeScript reports it.
+			if isFalse(entry) && falseDeletes[path] {
 				continue
 			}
 			// A tokenSet name takes an array, or the two spellings of

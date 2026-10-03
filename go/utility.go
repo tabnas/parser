@@ -1150,6 +1150,17 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 			for k, v := range defm {
 				dm, ok := v.(map[string]any)
 				if !ok {
+					// A null or false entry DELETES the definition, as
+					// TypeScript's makeCommentMatcher reads it: the
+					// entry is kept as a nil *CommentDef, the delete
+					// marker Deep removes from the merged options
+					// (#240). Skipping it instead left the default
+					// alive, so a grammar document could not turn one
+					// off in Go. Anything else is ill-typed, and
+					// validateOptionsMap has already reported it.
+					if v == nil || isFalse(v) {
+						opts.Comment.Def[k] = nil
+					}
 					continue
 				}
 				cd := &CommentDef{}
@@ -1307,8 +1318,15 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 						vd.Consume = c
 					}
 					opts.Value.Def[k] = vd
-				case nil, bool:
-					// nil or false removes the value def
+				case nil:
+					// A null entry deletes the keyword: a nil *ValueDef
+					// is the delete marker Deep removes (#240).
+					opts.Value.Def[k] = nil
+				case bool:
+					// false deletes as null does, in every runtime.
+					if !vv {
+						opts.Value.Def[k] = nil
+					}
 				}
 			}
 		}
@@ -1518,6 +1536,17 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
 				case func(lex *Lex, rule *Rule) *Token:
 					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
+				case nil:
+					// A null entry deletes a matcher value set earlier:
+					// a nil *MatchValueSpec is the delete marker Deep
+					// removes (#240). Null is the only spelling of it
+					// here. TypeScript's validator takes a regexp, a
+					// function, an object or null for a match value and
+					// refuses false, so validateOptionsMap has already
+					// reported a false entry, and reading it as a
+					// deletion would make one grammar delete a matcher
+					// here and fail to load there.
+					opts.Match.Value[name] = nil
 				}
 			}
 		}
