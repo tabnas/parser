@@ -845,6 +845,7 @@ would normally claim.
 | State actions raising errors | Return an error `Token` | Set `ctx.ParseErr` (same effect: parse halts with the error) |
 | Plugin defaults | `.defaults` property on the function | `UseDefaults(plugin, defaults)` |
 | Option namespacing | Plugin options merged by name | `PluginOptions` / `SetPluginOptions` |
+| Decorations on a derived child | Copied onto the child before the parent's plugins re-run | Copied after the plugins re-run, so a plugin's re-run finds none of them. `DIVERGENCE.md` records it under "Decorations reach a derived child after the plugins in Go" |
 
 ## Merge
 

@@ -34,10 +34,10 @@ columns collapsed into the one answer every runtime now gives, where the
 same runners keep asserting the repair, and the entry moves under
 "Repaired, and what replaced them" below. Where an entry cannot be
 registered yet it is declared, with a reason, in the `notRegistered` map
-in `go/divergent_test.go`; today that is one entry, the fractional
-`rule.maxmul` below, which needs a full value grammar no probe builds
-yet. A gate in the same file fails if an entry here gains no row and no
-exemption, or if an exemption outlives the entry it exempts.
+in `go/divergent_test.go`, which names each such entry, the reason, and
+where it is pinned instead. A gate in the same file fails if an entry
+here gains no row and no exemption, or if an exemption outlives the
+entry it exempts.
 
 When this file and the register disagree, **the register is what runs**.
 Fix this file to match it, never the other way round.
@@ -1204,6 +1204,52 @@ pushed before in Rust'), `go/divergence_test.go`
 `TestPusherAfterActionReadsTheChildJustPushed` and
 `rs/tests/rule_history_test.rs`
 `an_after_action_on_the_pusher_reads_the_child_pushed_before`.
+
+### Decorations reach a derived child after the plugins in Go
+
+A derived child (`make()` in TypeScript, `derive` in Rust, `Derive` in
+Go) is built from the parent's options and re-runs the parent's plugins,
+so option-conditional grammar is rebuilt against the child's options.
+It also inherits the parent's decorations: the own properties a plugin
+puts on the instance in TypeScript, the `decorate` entries in Go and
+Rust. The two steps run in a different order. TypeScript copies the
+parent's properties onto the child before it re-runs the plugins (the
+`Object.keys(parent)` loop ahead of `this.use(plugin)` in the `Tabnas`
+constructor, `ts/src/tabnas.ts`), and Rust does the same
+(`child.decorations = self.decorations.clone()` ahead of the
+`use_plugin` loop in `Tabnas::derive`, `rs/src/lib.rs`). Go re-applies
+the plugins first and copies the decorations after (`Derive` in
+`go/plugin.go`).
+
+What a plugin sees of the instance while it re-runs on the child:
+
+| a plugin that writes a different value on each run | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| during its re-run on the child, its decoration from the parent is already there | yes | no | yes |
+| the child's decoration once the derive returns | what the re-run wrote | the parent's, copied over what the re-run wrote | what the re-run wrote |
+
+Found by tabnas/yaml (#244): the Rust plugin guarded its install with a
+decoration, so on a child it found its own mark, returned early, and
+the child parsed `a: 1` to null with no error, where the same guard in
+Go would have installed. A guard belongs on the rules, as jsonic's is
+and tabnas-yaml's now is (tabnas/yaml#113). What remains is the
+order, with two faces: a plugin that reads a parent decoration during
+its re-run, to inherit state, finds it in TypeScript and Rust and not
+in Go; and a value the re-run writes, one computed from the child's
+options say, is what the child carries in TypeScript and Rust, where
+Go's copy afterwards puts the parent's value over it.
+
+Repair direction: **Go changes.** TypeScript defines the order and
+Rust follows it: the child carries its parent's decorations before
+any plugin runs on it.
+
+Not registered: the observable is what a plugin sees of the instance
+during its re-run, which no row-shaped probe drives. Pinned per
+runtime by `ts/test/divergence.test.js` ('a derived child carries its
+decorations into the plugin re-run here and in Rust, after it in Go'),
+`go/divergence_test.go` `TestDerivedChildGetsDecorationsAfterThePlugins`
+and `rs/tests/divergent_spec_test.rs`
+`derived_child_carries_decorations_into_the_plugin_rerun`.
 
 ## Not divergences
 
