@@ -604,6 +604,13 @@ var notRegistered = map[string]string{
 		"would show OK:null three times; pinned per runtime by " +
 		"TestNoValueParseIsNil, the TS divergence test 'a parse that sets no " +
 		"value' and the Rust no_value_parse_is_null",
+	"Decorations reach a derived child after the plugins in Go": "cannot be " +
+		"registered by the probe set: the observable is what a plugin sees of " +
+		"the instance while it re-runs on a derived child, which no row-shaped " +
+		"probe drives; pinned per runtime by the TS divergence test 'a derived " +
+		"child carries its decorations into the plugin re-run here and in " +
+		"Rust, after it in Go', TestDerivedChildGetsDecorationsAfterThePlugins " +
+		"and the Rust derived_child_carries_decorations_into_the_plugin_rerun",
 }
 
 // TestDivergenceRegisterCoversEveryEntry ties the register to the prose.

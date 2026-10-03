@@ -611,3 +611,43 @@ func TestNoValueParseIsNil(t *testing.T) {
 		t.Errorf("empty source answered %#v, want the declared emptyResult", v)
 	}
 }
+
+// DIVERGENCE.md "Decorations reach a derived child after the plugins in
+// Go": Derive re-applies the parent's plugins first and copies the
+// parent's decorations after, so a plugin's re-run on the child finds
+// none of them; TypeScript and Rust copy them first. The repair
+// direction is this port's.
+func TestDerivedChildGetsDecorationsAfterThePlugins(t *testing.T) {
+	// The plugin writes a different value on each run, so the second
+	// observable shows too: the copy after the re-run puts the parent's
+	// value over the one the plugin wrote on the child, where TypeScript
+	// and Rust keep the plugin's.
+	var seen []any
+	names := []string{"run1", "run2"}
+	runs := 0
+	mark := func(j *Tabnas, _ map[string]any) error {
+		seen = append(seen, j.Decoration("mark"))
+		j.Decorate("mark", names[runs])
+		runs++
+		return nil
+	}
+	parent := Make(Options{})
+	if err := parent.Use(mark); err != nil {
+		t.Fatal(err)
+	}
+	child, err := parent.Derive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != nil || seen[1] != nil {
+		t.Errorf("the plugin found its decoration %v on its two runs, want [<nil> <nil>]: "+
+			"none on the parent, and none yet during the re-run on the child", seen)
+	}
+	if parent.Decoration("mark") != "run1" {
+		t.Errorf("the parent's decoration is %#v, want run1", parent.Decoration("mark"))
+	}
+	if child.Decoration("mark") != "run1" {
+		t.Errorf("the child's decoration is %#v after Derive, want the parent's run1 over the "+
+			"re-run's run2", child.Decoration("mark"))
+	}
+}

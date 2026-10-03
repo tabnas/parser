@@ -251,3 +251,35 @@ fn no_value_parse_is_null() {
     assert_eq!(parser.parse("a").unwrap(), Value::Null);
     assert_eq!(parser.parse("").unwrap(), Value::String("EMPTY".into()));
 }
+
+// DIVERGENCE.md "Decorations reach a derived child after the plugins in
+// Go": `derive` copies the parent's decorations onto the child before it
+// re-runs the plugins, as the canonical constructor does, so a plugin's
+// re-run finds the decoration it set on the parent; Go copies them after.
+#[test]
+fn derived_child_carries_decorations_into_the_plugin_rerun() {
+    // The plugin writes a different value on each run, so the second
+    // observable shows too: the value it writes on the child's re-run
+    // survives here, where Go's later copy puts the parent's over it.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let mark = tabnas::Plugin::new("mark", move |parser, _options| {
+        let mut log = log.lock().unwrap();
+        log.push(parser.decoration::<String>("mark").cloned());
+        let run = format!("run{}", log.len());
+        parser.decorate("mark", run);
+        Ok(())
+    });
+    let mut parent = Tabnas::new();
+    parent.use_plugin(mark, None).unwrap();
+    let child = parent.derive(|_| {}).unwrap();
+    assert_eq!(*seen.lock().unwrap(), [None, Some("run1".to_string())]);
+    assert_eq!(
+        parent.decoration::<String>("mark"),
+        Some(&"run1".to_string())
+    );
+    assert_eq!(
+        child.decoration::<String>("mark"),
+        Some(&"run2".to_string())
+    );
+}
