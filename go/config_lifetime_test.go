@@ -79,3 +79,38 @@ func TestConfigModifyRunsOnEveryRebuild(t *testing.T) {
 		t.Fatalf("hook installed by ConfigModify: got %v, %v; want hooked", v, err)
 	}
 }
+
+// Two config fields share their storage with the options: StringReplace is
+// the String.Replace map and TextModify the Text.Modify slice. A write into
+// the map through Config() changes the options, so it outlasts the
+// rebuild; assigning a new map to the field changes only the config, and
+// the rebuild puts the options' map back.
+func TestConfigWriteIntoAnOptionMapOutlivesTheRebuild(t *testing.T) {
+	j := Make(Options{String: &StringOptions{Replace: map[rune]string{'a': "A"}}})
+	j.Config().StringReplace['a'] = "B"
+	j.SetOptions(Options{})
+	if got := j.Config().StringReplace['a']; "B" != got {
+		t.Errorf("a write into StringReplace answers %q after SetOptions, want B", got)
+	}
+	j.Config().StringReplace = map[rune]string{'a': "C"}
+	j.SetOptions(Options{})
+	if got := j.Config().StringReplace['a']; "B" != got {
+		t.Errorf("a new StringReplace map answers %q after SetOptions, want the options' B", got)
+	}
+}
+
+// ConfigModify runs inside the build, before the token sets are installed
+// from Options.TokenSet and before SetOptions carries the live config's
+// state over, so a modifier's write to a token set never takes, neither
+// at construction nor after a rebuild.
+func TestConfigModifyCannotSetTheTokenSets(t *testing.T) {
+	j := Make(Options{Property: &PropertyOptions{ConfigModify: map[string]ConfigModifier{
+		"vals": func(cfg *LexConfig, _ *Options) { cfg.ValSet = []Tin{TinZZ} },
+	}}})
+	for _, when := range []string{"after Make", "after SetOptions"} {
+		if vs := j.Config().ValSet; 1 == len(vs) && TinZZ == vs[0] {
+			t.Errorf("%s: the modifier's ValSet took: %v", when, vs)
+		}
+		j.SetOptions(Options{})
+	}
+}

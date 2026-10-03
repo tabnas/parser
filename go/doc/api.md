@@ -146,8 +146,17 @@ until the next `SetOptions`: a `*Check` hook, `ParseBudgetN` and
 `ParseBudgetCheck`, `EnderChars` and `EnderSeqs`. To keep such a
 setting, put it where the rebuild reads it: the matching `Options`
 field, `Options.Ender` for an ender, or `Property.ConfigModify`, which
-runs on every rebuild. `Grammar()` applies the options a spec carries
-through `SetOptions`, so it rebuilds in the same way.
+runs on every rebuild. The token sets and the state the rebuild
+carries forward land after the modifiers run, so a modifier's write to
+them never takes.
+`Grammar()` applies the options a spec carries through `SetOptions`,
+so it rebuilds in the same way.
+
+Two fields share their storage with the options: `StringReplace` is
+the `String.Replace` map and `TextModify` the `Text.Modify` slice. A
+write into either through `Config()` changes the options themselves, so
+it outlasts the rebuild. Assigning a new map or slice to the field
+changes only the config, and the rebuild replaces it.
 
 ### `(*Tabnas) ApplyOptions(opts Options) error`
 
@@ -577,8 +586,11 @@ match token and match value entries on the live config. That rebuild
 drops a `*Check` hook, the parse budget, or an ender written here, and
 the parse goes on without it. The supported routes are the `Options`
 fields, `Options.Ender`, and `Property.ConfigModify`, which runs on
-every rebuild and so can write a field no option covers. See
-`SetOptions`.
+every rebuild and so can write a field no option covers, though not the
+token sets or the state the rebuild carries forward. A write into
+`StringReplace` or `TextModify` is the exception the other way: both
+share their storage with the options, so the write outlasts the
+rebuild. See `SetOptions`.
 
 ## Error handling
 
