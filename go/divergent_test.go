@@ -725,3 +725,121 @@ func TestDivergenceRegisterCoversEveryEntry(t *testing.T) {
 		}
 	}
 }
+
+const repairedCols = 5
+
+// divergentRowNames returns the names of the register's data rows, so the
+// repaired lane can refuse a name that is still live.
+func divergentRowNames(t *testing.T) map[string]bool {
+	t.Helper()
+	rows, err := loadTSV(filepath.Join(specDir(), "divergent.tsv"))
+	if err != nil {
+		t.Fatalf("cannot load divergent.tsv: %v", err)
+	}
+	names := map[string]bool{}
+	for _, row := range rows {
+		if len(row.cols) == divergentCols {
+			names[row.cols[0]] = true
+		}
+	}
+	return names
+}
+
+// TestRepairedRegister runs test/spec/repaired.tsv: the rows that LEFT the
+// register, each with the one answer every runtime gives since its
+// repair, through the same probes. The register proves a split is live;
+// this lane proves it stays closed, which is the half of ADR-14 that
+// deleting a repaired row on its own gives up. It also keeps the file
+// honest against the other two: a `# @repaired:` marker must name an
+// entry that is no longer a `### ` heading in DIVERGENCE.md and is still
+// mentioned there, under "Repaired, and what replaced them", and no row
+// name here may still be a row name in divergent.tsv.
+func TestRepairedRegister(t *testing.T) {
+	rows, err := loadTSV(filepath.Join(specDir(), "repaired.tsv"))
+	if err != nil {
+		t.Fatalf("cannot load repaired.tsv: %v", err)
+	}
+	md, err := os.ReadFile(filepath.Join("..", "DIVERGENCE.md"))
+	if err != nil {
+		t.Fatalf("cannot read DIVERGENCE.md: %v", err)
+	}
+	headings := map[string]bool{}
+	for _, line := range strings.Split(string(md), "\n") {
+		if strings.HasPrefix(line, "### ") {
+			headings[strings.TrimSpace(strings.TrimPrefix(line, "### "))] = true
+		}
+	}
+	live := divergentRowNames(t)
+	specs := divergentSpecs(rows)
+	seen := map[string]bool{}
+	ran := 0
+
+	for _, row := range rows {
+		if len(row.cols) == 1 {
+			if strings.HasPrefix(row.cols[0], "# @repaired: ") {
+				entry := strings.TrimSpace(strings.TrimPrefix(row.cols[0], "# @repaired: "))
+				if headings[entry] {
+					t.Errorf("repaired.tsv marks %q repaired, but it is still a "+
+						"`### ` heading in DIVERGENCE.md: a divergence is live or "+
+						"repaired, not both", entry)
+				}
+				if !strings.Contains(string(md), entry) {
+					t.Errorf("repaired.tsv marks %q repaired, but DIVERGENCE.md no "+
+						"longer mentions it: a repaired entry keeps a forwarding "+
+						"address under \"Repaired, and what replaced them\"", entry)
+				}
+			}
+			continue
+		}
+		if len(row.cols) != repairedCols {
+			t.Errorf("line %d: want %d columns (name probe arg input expected), got %d",
+				row.lineNo, repairedCols, len(row.cols))
+			continue
+		}
+
+		// Decode escapes in EVERY column, as the register runner does.
+		cols := make([]string, len(row.cols))
+		for i, c := range row.cols {
+			cols[i] = preprocessEscapes(c)
+		}
+		name, probe, argRaw, input, want := cols[0], cols[1], cols[2], cols[3], cols[4]
+
+		if seen[name] {
+			t.Errorf("%s: duplicate row name", name)
+		}
+		seen[name] = true
+		if live[name] {
+			t.Errorf("%s: a row in repaired.tsv is still a row in divergent.tsv — "+
+				"a divergence is live or repaired, not both", name)
+		}
+
+		arg := map[string]any{}
+		if argRaw != "-" && argRaw != "" {
+			if err := json.Unmarshal([]byte(argRaw), &arg); err != nil {
+				t.Errorf("%s: bad arg %q: %v", name, argRaw, err)
+				continue
+			}
+		}
+
+		got, err := divergentRunProbe(probe, arg, input, specs)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		ran++
+
+		if got != want {
+			t.Errorf("%s: a repaired divergence is back.\n"+
+				"  probe: %s %s\n  input: %q\n  got:   %s\n  want:  %s\n"+
+				"The row records the answer every runtime gives since the "+
+				"repair. If this port has moved, the split is open again and "+
+				"belongs in divergent.tsv, with its DIVERGENCE.md entry. Do not "+
+				"edit the column to match.",
+				name, probe, argRaw, input, got, want)
+		}
+	}
+
+	if ran == 0 {
+		t.Error("repaired.tsv parsed but no data row ran")
+	}
+}
