@@ -16,8 +16,9 @@ const { loadTSV } = require('./utility')
 
 const JSON_GRAMMAR = require('./json-builder.fixture.json')
 
-// The custom matcher the fixture header specifies: a bad token at `?`, and
-// one running to the end of the source at `%`, neither moving the cursor.
+// The custom matcher the fixture header specifies: a bad token at `?`, one
+// running to the end of the source at `%`, and one at `!` with only its err
+// set, none moving the cursor.
 const bad = {
   order: 1.5e6,
   make: () => (lex) => {
@@ -25,6 +26,7 @@ const bad = {
     const c = lex.src[sI]
     if ('?' === c) return lex.bad('custom_bad', sI, sI + 1)
     if ('%' === c) return lex.bad('custom_unterminated', sI, lex.src.length)
+    if ('!' === c) return lex.token('#BD', undefined, '!', lex.pnt).bad('custom_err')
     return undefined
   },
 }
@@ -124,6 +126,16 @@ describe('bad-token', () => {
 
     const capped = { parse: { recover: { enabled: true, maxRecoveries: 1 } } }
     assert.deepEqual(answer(capped, '[1,,,2]'), ['[1,2]', 'unexpected@1:4+skip0'])
+  })
+
+  // Under relexing, a bad token no alternate re-cut is raised with the code
+  // its fetch would have given it: its why, else unexpected, and never its
+  // err (`bad.why || UNEXPECTED` in rules.ts). The shared fixture does not
+  // carry this row, because the Rust port reads err at this one site;
+  // go/bad_token_spec_test.go pins the same answer for Go (#267).
+  it('an-err-only-bad-token-under-relexing', () => {
+    const relex = make('json', {}, JSON.stringify({ lex: { relex: true } }))
+    assert.deepEqual(run(relex, '[1,!]'), ['-', 'unexpected@1:4'])
   })
 
   // The third, also in the shared fixture. After a complete document, a bad

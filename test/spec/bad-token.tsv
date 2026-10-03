@@ -33,9 +33,11 @@ grammar	opts	input	value	errors
 #   name `bad`, order 1.5e6 (after `match`, before `fixed`). At `?` it
 #   returns a bad token with why `custom_bad` whose source is the `?`; at
 #   `%`, one with why `custom_unterminated` whose source runs to the end of
-#   the source. Neither advances the cursor, as TS `lex.bad`, Go
-#   `lex.Token` on the cursor and Rust `Lexer::bad_span` do not. Anything
-#   else it declines.
+#   the source; at `!`, one whose source is the `!` with NO why and its err
+#   set to `custom_err`, the shape TS `Token.bad`, Go `Token.Err` and Rust
+#   `Token.err` give a token a matcher builds itself. None advances the
+#   cursor, as TS `lex.bad`, Go `lex.Token` on the cursor and Rust
+#   `Lexer::bad_span` do not. Anything else it declines.
 #
 # The canonical engine raises such a token the moment it is fetched, with
 # its own code at its own position; under recovery it records it,
@@ -44,6 +46,15 @@ grammar	opts	input	value	errors
 # check for content after the parse raises it without recording it first.
 # A recovering parse that gives up lists every error once: the one it
 # gave up on is the last one it recorded, or a cascade it dropped.
+#
+# The code of a bad token is its why, else `unexpected`. err is not read
+# where a rule fetches the token, nor where the trailing-content check
+# meets it (ts/src/rules.ts, `tkn.why || UNEXPECTED`), so a token with
+# only err set is `unexpected` there. err is read, ahead of why, only
+# where recovery is attempted after every alternate declined the token
+# (`tkn.err || tkn.why`), which relexing with recovery reaches. Go once
+# gave such a token's fail-fast error no code at all, and read its err
+# under recovery and in the trailing-content check (#267).
 #
 # ts/test/bad-token.test.js and rs/tests/bad_token_fetch_test.rs pin the
 # rows under "Relexing with recovery", the cascade at the cap and the
@@ -66,7 +77,9 @@ json	-	[?]	-	custom_bad@1:2
 json	-	{"a"?:1}	-	custom_bad@1:5
 json	-	[1,?,2]	-	custom_bad@1:4
 json	-	[1,% 2]	-	custom_unterminated@1:4
+json	-	[1,!,2]	-	unexpected@1:4
 json	-	[1] ?	-	custom_bad@1:5
+json	-	[1] !	-	unexpected@1:5
 json	-	[1,\n?\n,2]	-	custom_bad@2:1
 json	-	[1,x,2]	-	unexpected@1:4
 json	-	"abc	-	unterminated_string@1:1
@@ -76,6 +89,9 @@ json	-	[1,2]	[1,2]	-
 # parse steps past it and goes on.
 json	{"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+bad1
 json	{"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+bad2
+json	{"parse":{"recover":{"enabled":true}}}	[1,!,2]	[1,2]	unexpected@1:4+bad1
+# A run's one error carries the code of the token that began it.
+json	{"parse":{"recover":{"enabled":true}}}	[1,!?,2]	[1,2]	unexpected@1:4+bad2
 json	{"parse":{"recover":{"enabled":true}}}	{"a"?:1}	{"a":1}	custom_bad@1:5+bad1
 json	{"parse":{"recover":{"enabled":true}}}	[1,% 2]	[1]	custom_unterminated@1:4+bad1
 json	{"parse":{"recover":{"enabled":true}}}	[1,?],[2]	[1]	custom_bad@1:4+bad1,unexpected@1:6
@@ -110,6 +126,9 @@ json	{"lex":{"relex":true}}	[1,?]	-	custom_bad@1:4
 json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+skip1
 json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+skip2
 json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,? 2,3]	[1,3]	custom_bad@1:4+skip2
+# A token every alternate declined is recovered from with its err, when it
+# has one, ahead of its why.
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,!,2]	[1,2]	custom_err@1:4+skip1
 #
 # Giving up. The error recovery gave up on is listed once: recorded, when it
 # was news, or dropped, when it was a cascade of the one before it.
@@ -123,6 +142,8 @@ nest	{"parse":{"recover":{"enabled":true,"suppress":0}}}	<	null	unexpected@1:2+s
 # skipped, recovering or not.
 one	-	1 ? 2	-	custom_bad@1:3
 one	{"parse":{"recover":{"enabled":true}}}	1 ? 2	1	custom_bad@1:3
+one	-	1 ! 2	-	unexpected@1:3
+one	{"parse":{"recover":{"enabled":true}}}	1 ! 2	1	unexpected@1:3
 one	{"parse":{"recover":{"enabled":true}}}	1 "x\n2	1	unprintable@1:5
 one	{"parse":{"recover":{"enabled":true}}}	1	1	-
 #

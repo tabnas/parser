@@ -108,6 +108,24 @@ func (t *Token) Bad(err string, details ...map[string]any) *Token {
 	return t
 }
 
+// badCode is the error code a bad token is raised with: its Why, else
+// "unexpected". Err is not read, because TypeScript does not read it where
+// a rule fetches a #BD token, where the trailing-content check meets one,
+// or under relexing when no alternate re-cut one (`tkn.why || UNEXPECTED`
+// in ts/src/rules.ts): a token a matcher built with only Err set is
+// "unexpected" on each of those paths. The fetch once gave such a token's
+// fail-fast error no code at all, and under recovery and in the
+// trailing-content check Go read its Err, so its paths disagreed with each
+// other as well as with TypeScript (#267). Err is read, ahead of Why, only
+// in attemptRecover, where recovery follows every alternate declining the
+// token (`tkn.err || tkn.why`).
+func (t *Token) badCode() string {
+	if "" != t.Why {
+		return t.Why
+	}
+	return "unexpected"
+}
+
 // IsNoToken returns true if this is a sentinel/empty token.
 func (t *Token) IsNoToken() bool {
 	return t.Tin == -1

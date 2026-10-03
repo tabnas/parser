@@ -20,8 +20,8 @@ import (
 )
 
 // badTokenMatcher is the custom matcher the fixture header specifies: a
-// bad token at `?`, and one running to the end of the source at `%`,
-// neither moving the cursor.
+// bad token at `?`, one running to the end of the source at `%`, and one
+// at `!` with only its Err set, none moving the cursor.
 func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
 	return func(lex *Lex, rule *Rule) *Token {
 		pnt := lex.Cursor()
@@ -36,6 +36,10 @@ func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
 		case '%':
 			tkn := lex.Token("#BD", TinBD, nil, lex.Src[pnt.SI:])
 			tkn.Why = "custom_unterminated"
+			return tkn
+		case '!':
+			tkn := lex.Token("#BD", TinBD, nil, "!")
+			tkn.Err = "custom_err"
 			return tkn
 		}
 		return nil
@@ -203,5 +207,22 @@ func TestBadTokenSpec(t *testing.T) {
 	}
 	if ran <= 20 {
 		t.Fatalf("bad-token.tsv ran only %d rows", ran)
+	}
+}
+
+// Under relexing, a bad token no alternate re-cut is raised with the code
+// its fetch would have given it: its Why, else `unexpected`, and never its
+// Err (ts/src/rules.ts, `bad.why || UNEXPECTED`). Pinned here rather than
+// in the shared fixture, which the Rust port runs too: that port reads err
+// at this one site, so the row would not yet hold in all three runtimes.
+func TestBadTokenErrOnlyUnderRelexFailFast(t *testing.T) {
+	j := badTokenParser(t, "json", nil, `{"lex":{"relex":true}}`)
+	_, err := j.Parse("[1,!]")
+	je, ok := err.(*TabnasError)
+	if !ok {
+		t.Fatalf("expected *TabnasError, got %T (%v)", err, err)
+	}
+	if got := badTokenError(je); "unexpected@1:4" != got {
+		t.Errorf("relex fail-fast: got %s, want unexpected@1:4", got)
 	}
 }

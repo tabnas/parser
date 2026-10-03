@@ -2086,7 +2086,7 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	if relex && 0 < len(ctx.T) && ctx.T[0] != nil && ctx.T[0].Tin == TinBD &&
 		lex.Err == nil && !ctx.recovering() {
 		bad := ctx.T[0]
-		je := makeTabnasError(bad.Why, bad.Src, lex.Src, bad.SI, bad.RI, bad.CI, lex.Config)
+		je := makeTabnasError(bad.badCode(), bad.Src, lex.Src, bad.SI, bad.RI, bad.CI, lex.Config)
 		lex.attachErrContext(je, rule, bad.Name, bad.Why)
 		ctx.recordErr(je)
 		lex.Err = je
