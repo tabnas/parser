@@ -754,6 +754,9 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 		return "unexpected"
 	}
+	// No option turns this check off: rule.finish is the grammar's
+	// end-of-source switch, kept as Config.FinishRule for its @finish to
+	// read, not this check's (#250).
 	trailing := !gaveUp && ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ
 	if trailing && !soft {
 		ctx.trailingFault = true

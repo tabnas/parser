@@ -851,6 +851,12 @@ pub(crate) fn effective_rule_history(history: Option<usize>) -> Option<usize> {
 
 #[derive(Debug, Clone)]
 pub struct RuleOptions {
+    /// The grammar's end-of-source switch (default true). jsonic's
+    /// `@finish` reads it: an unterminated structure is closed at the end
+    /// of the source when it is true and refused with `end_of_source`
+    /// when it is false. The engine stores, merges and serializes it for
+    /// the grammar and does not read it: trailing content is an error
+    /// either way.
     pub finish: bool,
     pub maxmul: usize,
     pub include: String,
