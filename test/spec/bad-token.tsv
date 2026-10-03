@@ -44,10 +44,6 @@ grammar	opts	input	value	errors
 # coalesces a run of them into one error, and steps past it; under
 # relexing it leaves it in the lookahead for an alternate to re-cut. The
 # check for content after the parse raises it without recording it first.
-# An err-only token no alternate re-cut under relexing, fail-fast, has no
-# row here: the Rust port raises it with its err where TypeScript and Go
-# raise `unexpected` (tabnas/parser#285), so ts/test/bad-token.test.js and
-# go/bad_token_spec_test.go pin that answer until Rust follows.
 # A recovering parse that gives up lists every error once: the one it
 # gave up on is the last one it recorded, or a cascade it dropped.
 #
@@ -124,6 +120,9 @@ json	{"parse":{"recover":{"enabled":true,"maxRecoveries":1}}}	[1,,,2]	[1,2]	unex
 # when none can, the first token of the lookahead is the error.
 json	{"lex":{"relex":true}}	{"a"?:1}	-	unexpected@1:2
 json	{"lex":{"relex":true}}	[1,?]	-	custom_bad@1:4
+# An err-only token no alternate re-cut is `unexpected`: its why is empty,
+# and err is not read on this path (#285).
+json	{"lex":{"relex":true}}	[1,!]	-	unexpected@1:4
 #
 # Relexing with recovery. A bad token no alternate re-cut is recovered from
 # as any failure is, and listed once, with the tokens the recovery skipped.

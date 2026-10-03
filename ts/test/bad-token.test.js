@@ -128,16 +128,6 @@ describe('bad-token', () => {
     assert.deepEqual(answer(capped, '[1,,,2]'), ['[1,2]', 'unexpected@1:4+skip0'])
   })
 
-  // Under relexing, a bad token no alternate re-cut is raised with the code
-  // its fetch would have given it: its why, else unexpected, and never its
-  // err (`bad.why || UNEXPECTED` in rules.ts). The shared fixture does not
-  // carry this row, because the Rust port reads err at this one site (#285);
-  // go/bad_token_spec_test.go pins the same answer for Go (#267).
-  it('an-err-only-bad-token-under-relexing', () => {
-    const relex = make('json', {}, JSON.stringify({ lex: { relex: true } }))
-    assert.deepEqual(run(relex, '[1,!]'), ['-', 'unexpected@1:4'])
-  })
-
   // The third, also in the shared fixture. After a complete document, a bad
   // token (or any trailing content) is met by the trailing-content check,
   // which has no rule: continuations() answers with the start rule's

@@ -209,21 +209,3 @@ func TestBadTokenSpec(t *testing.T) {
 		t.Fatalf("bad-token.tsv ran only %d rows", ran)
 	}
 }
-
-// Under relexing, a bad token no alternate re-cut is raised with the code
-// its fetch would have given it: its Why, else `unexpected`, and never its
-// Err (ts/src/rules.ts, `bad.why || UNEXPECTED`). Pinned here rather than
-// in the shared fixture, which the Rust port runs too: that port reads err
-// at this one site (#285), so the row would not yet hold in all three
-// runtimes.
-func TestBadTokenErrOnlyUnderRelexFailFast(t *testing.T) {
-	j := badTokenParser(t, "json", nil, `{"lex":{"relex":true}}`)
-	_, err := j.Parse("[1,!]")
-	je, ok := err.(*TabnasError)
-	if !ok {
-		t.Fatalf("expected *TabnasError, got %T (%v)", err, err)
-	}
-	if got := badTokenError(je); "unexpected@1:4" != got {
-		t.Errorf("relex fail-fast: got %s, want unexpected@1:4", got)
-	}
-}
