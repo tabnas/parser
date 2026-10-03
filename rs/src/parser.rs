@@ -3430,6 +3430,26 @@ impl Parser {
                         self.options.rule.history,
                         Link::Parent,
                     ));
+                    // TypeScript and Go link the live rules, so from the
+                    // child, `parent.child.parent.child` is the child
+                    // itself. The snapshot linked above as `child` carries
+                    // this rule as it stood before the push, whose `child`
+                    // is the one pushed before (parser #259). With no
+                    // bound, link the child again from a snapshot that
+                    // carries this rule with the child linked, and give
+                    // the child this rule as it then stands, so that a
+                    // snapshot of the child reads the same chain: the
+                    // pre-link record is two hops further down, past the
+                    // four-hop read. The cost, measured on
+                    // `rs/tests/rule_history_test.rs`'s flat array, is two
+                    // more records kept per push, 8 for 6 per element.
+                    // Under a bound the links stay as the canonical engine
+                    // copies them, where that path reads nothing
+                    // (`rule-history-bounded-pusher`).
+                    if crate::options::effective_rule_history(self.options.rule.history).is_none() {
+                        current_rule.relink_child(&child);
+                        child.parent_rule = Some(current_rule.snapshot());
+                    }
                     completed_rule = self.rule_done_copy(&current_rule);
                     // The child about to run shares this rule's node cell,
                     // and `child_node` may be a second handle on the very
@@ -4466,8 +4486,12 @@ enum Link {
     /// linked the child, made at the end of the push arm.
     Parent,
     /// The pusher before it links the child, made at the start of the
-    /// push arm. It survives as the `parent_rule` of the child's own
-    /// snapshot, the one the pusher links as `child`.
+    /// push arm. It survives as the `parent_rule` of the child's snapshot
+    /// taken at the push: under a bound the one the pusher links as
+    /// `child`, and with none the one the child reads as
+    /// `parent.child.parent.child`, since the push arm then links the
+    /// child again once the pusher has linked it, and gives the child the
+    /// pusher as it then stands (see [`Rule::relink_child`]).
     PusherBefore,
     /// A replacement's `prev_rule`: the rule it replaces.
     Prev,
@@ -4493,7 +4517,11 @@ enum Link {
 /// them: its `child` is the pusher's previous child, and a rule that
 /// pushes again from its close phase would link every child it pushed,
 /// each through the one before. So `parent.child.parent.child` and the
-/// like, the pusher as it stood before the push, resolve to nothing.
+/// like, the pusher as it stood before the push, resolve to nothing
+/// under a bound, as they do in TypeScript and Go. With no bound the
+/// push arm links the child again (see [`Rule::relink_child`]), and
+/// that path reads the child, as the live links of the other two
+/// runtimes do.
 ///
 /// What a rule reads through `prev` (counters, values, tokens, node and
 /// name) and through `parent` (the pusher and its own parents) is kept.

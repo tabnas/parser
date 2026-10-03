@@ -265,6 +265,73 @@ fn a_close_phase_push_loop_keeps_the_bound() {
     }
 }
 
+/// What a pushed child reads through `parent.child.parent`: its pusher,
+/// read back through the child the pusher links, which must have linked
+/// the child. TypeScript and Go link live rules, so that pusher's `child`
+/// is the child itself; here the snapshot the pusher first links carries
+/// the pusher before the push, whose `child` was the one pushed before,
+/// so a child pushed from its pusher's close phase read the item before
+/// it (parser #259). With no bound the push arm links the child again
+/// once the pusher has linked it, and the child keeps the pusher as it
+/// then stands; under a bound the links stay as TypeScript and Go copy
+/// them, where the path reads nothing (`rule-history-bounded-pusher`).
+///
+/// Read through the snapshots a rule subscriber is handed: the child's
+/// `parent_rule` is the pusher's own record, so this is the chain a
+/// condition on the live child reaches (the shared
+/// `rule-history-pusher-control` reads that), and the pre-link pusher is
+/// the next record down either way.
+#[test]
+fn a_pusher_read_back_through_its_child_has_linked_it() {
+    /// For every `item` the parse runs: its id, its pusher's `child`'s
+    /// id, and the id of the child that pusher links when read back
+    /// through its own child.
+    fn through_the_child(
+        parser: &mut Tabnas,
+        src: &str,
+    ) -> Vec<(usize, Option<usize>, Option<usize>)> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        parser.subscribe_rules(move |rule, _context| {
+            if rule.name.as_str() != "item" {
+                return;
+            }
+            let child = rule
+                .parent_rule
+                .as_deref()
+                .and_then(|p| p.child_rule.as_deref());
+            let back = child
+                .and_then(|c| c.parent_rule.as_deref())
+                .and_then(|p| p.child_rule.as_deref());
+            sink.lock()
+                .unwrap()
+                .push((rule.i, child.map(|c| c.i), back.map(|c| c.i)));
+        });
+        parser.parse(src).expect("parses");
+        let links = seen.lock().unwrap().clone();
+        links
+    }
+    let src = format!("a{}e", "b".repeat(20));
+    let plain = through_the_child(&mut close_push_parser("null"), &src);
+    assert_eq!(plain.len(), 40, "two phases per item: {plain:?}");
+    for (item, child, back) in &plain {
+        assert_eq!(*child, Some(*item), "parent.child is the item: {plain:?}");
+        assert_eq!(
+            *back,
+            Some(*item),
+            "parent.child.parent.child is the item: {plain:?}"
+        );
+    }
+    for bound in ["1", "3"] {
+        let bounded = through_the_child(&mut close_push_parser(bound), &src);
+        assert_eq!(bounded.len(), 40, "history {bound}: {bounded:?}");
+        for (item, child, back) in &bounded {
+            assert_eq!(*child, Some(*item), "history {bound}: {bounded:?}");
+            assert_eq!(*back, None, "history {bound}: {bounded:?}");
+        }
+    }
+}
+
 /// A copy that cuts its `next` cuts the name with it. A snapshot whose
 /// `next` has its own name reads itself as `next`, so under a bound a
 /// replacement loop's `prev.next` read the predecessor itself, not

@@ -475,6 +475,34 @@ fixed or quietly dropped.
   `ts/test/options-validate.test.js`, `go/options_validate_test.go` and
   `rs/tests/options_overlay_test.rs`.
 
+- **A pusher read back through its child's snapshot in Rust.** A push
+  links the child to its pusher both ways. TypeScript and Go link the
+  live rules, so from the child `parent.child.parent.child` is the
+  child itself. Rust links snapshots, and the one the pusher kept as
+  `child` was taken before the pusher had linked it, so its `parent`
+  was the pusher as it stood before the push, whose `child` was the
+  child pushed before: with `list` pushing `first` from its open phase
+  and `second` from its close phase, `parent.child.parent.child.name`
+  read on `second` gave `second` in TypeScript and Go and `first` in
+  Rust, or nothing on a pusher's first push (#259). Repaired as the
+  entry said: with no history bound, the push arm links the child
+  again once the pusher has linked it, from a snapshot that carries the
+  pusher with the child linked (`Rule::relink_child` in
+  `rs/src/rule.rs`), and the child keeps the pusher as it then stands.
+  The cost is two more records kept per push without a bound, 8 for 6
+  per element of a flat array, 654 MB for 554 MB at its peak over
+  300,000 numbers. The pusher as it stood before the push is still
+  where the snapshots end, two hops further down, past every path a
+  fleet grammar reads: the survey in
+  [`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+  past three hops. Under a bound nothing moves: TypeScript and Go copy
+  the same two records there, so the path reads nothing in all three
+  runtimes, which `rule-history-bounded-pusher` pins. Pinned in all
+  three by `rule-history-pusher-control` in
+  `test/spec/rule-history.tsv`, the same grammar with the option unset,
+  and in Rust by `a_pusher_read_back_through_its_child_has_linked_it`
+  in `rs/tests/rule_history_test.rs`.
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
@@ -738,33 +766,6 @@ Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
 `chain-next-one-hop` as their control. **The control row is the load-bearing
 one:** it is what tells a later reader that the child link itself is at
 parity and only the walk past it is not.
-
-### A pusher read back through its child's snapshot in Rust
-
-**Deferred** — a Rust split in how a pushed child's own snapshot links
-its pusher, found while registering the rule-history bound.
-
-A push links the child to its pusher both ways: the child's `parent`
-is the pusher, and the pusher's `child` is the child. TypeScript and
-Go link the live rules, so from the child, `parent.child.parent` is the
-pusher as it stands, and its `child` is the child itself. Rust links
-snapshots, and the child's own snapshot, the one the pusher keeps as
-`child`, carries as its `parent` a snapshot of the pusher taken before
-the pusher linked the child. So in Rust `parent.child.parent.child` is
-the child the pusher pushed before, or nothing on its first push.
-
-| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
-|---|---|---|---|---|---|
-| `list` pushes `first`, then `second` from its close phase | `parent.child.name` on `second` | unset | `second` | `second` | `second` |
-| same | `parent.child.parent.child.name` on `second` | unset | `second` | `second` | **`first`** |
-Repair direction: **Rust changes**, linking the child's own snapshot to
-the pusher once the pusher has linked it, as the canonical engine reads
-it; then the rows with the option unset agree. No grammar in the fleet
-reads a four-hop path through `parent.child.parent`.
-
-Registered as `pusher-through-child`, with `pusher-through-child-control`
-as its control: `parent.child.name`, the same pusher read directly, where
-the three ports agree.
 
 ### A row counted at a raw U+2028 or U+2029 inside a string in Rust
 
