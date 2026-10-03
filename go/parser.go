@@ -599,11 +599,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// the same reason TS dispatches from its loop: Process has
 		// several return points, and one dispatch site cannot miss one.
 		if len(ctx.RuleDoneSubs) > 0 {
+			publishedBefore := publishedHistoryChildSnapshot(prev, ctx.Cfg.RuleHistory)
 			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}
-			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory)
+			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory, publishedBefore)
 		}
 
 		if ctx.Cfg.RuleHistory > 0 && rule != nil && rule != NoRule {

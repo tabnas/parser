@@ -437,11 +437,12 @@ func forceClose(ctx *Context, r *Rule) {
 	if r == nil || r == NoRule || 0 == len(ctx.RuleDoneSubs) {
 		return
 	}
+	publishedBefore := publishedHistoryChildSnapshot(r, ctx.Cfg.RuleHistory)
 	done := RuleDone{State: CLOSE, Alt: nil, Forced: true}
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
-	refreshHistoryChild(r, nil, ctx.Cfg.RuleHistory)
+	refreshHistoryChild(r, nil, ctx.Cfg.RuleHistory, publishedBefore)
 }
 
 // absorbBad is the lexer soft mode: with recovery on, a bad token is

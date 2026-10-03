@@ -4,6 +4,7 @@ package tabnas
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -987,6 +988,12 @@ type Rule struct {
 	// exactly when the first push happens. TypeScript and Rust need none
 	// of this; they hand out the same list object.
 	nodeOwner *Rule
+	// snapshotNodeOwner is the live rule whose node cell a bounded-history
+	// parent snapshot exposes. TypeScript snapshots share their private node
+	// cell, including for scalar values; Go fields cannot alias, so SetNode and
+	// NodeCell use this explicit link while the rest of Parent stays frozen. It
+	// is never set on a live rule or a retained Prev snapshot.
+	snapshotNodeOwner *Rule
 	// ownedKind is the kind of Node (none, list or map: nodeKind) when
 	// nodeOwner was last recorded — by the seeding in MakeRule, or by a
 	// builtin that lifts a child's container. A Go action that assigns
@@ -1033,25 +1040,20 @@ type Rule struct {
 	Why string         // Internal tracing field; set when a rule fails.
 
 	// Bounded-history bookkeeping is deliberately separate from the public
-	// links. An active child's Parent is the live pusher, so all public aliases
-	// observe direct writes immediately. Child and Prev expose bounded
-	// snapshots, and the completed first child is published when its replacement
-	// chain returns to the pusher.
-	historyPusher    *Rule
-	historyChild     *Rule
-	historyChildDone *Rule
+	// links. Parent, Child and Prev expose bounded snapshots; historyPusher is
+	// the private live link used to publish the completed first child.
+	historyPusher *Rule
 }
 
 // ruleSnapshot freezes the mutable parts of a rule record. Grammar, tokens
 // and node values remain shared; maps and slices that a suspended live rule
-// can mutate receive their own small copies. nodeOwner is an engine-only live
-// pointer and must not retain an otherwise cut chain.
+// can mutate receive their own small copies. Engine-only live links are cut;
+// boundedRuleHistory restores the one node-cell link needed by Parent.
 func ruleSnapshot(r *Rule) *Rule {
 	copy := *r
 	copy.nodeOwner = nil
+	copy.snapshotNodeOwner = nil
 	copy.historyPusher = nil
-	copy.historyChild = nil
-	copy.historyChildDone = nil
 	copy.O = append([]*Token(nil), r.O...)
 	copy.C = append([]*Token(nil), r.C...)
 	if r.N != nil {
@@ -1075,10 +1077,19 @@ func ruleSnapshot(r *Rule) *Rule {
 	return &copy
 }
 
+type ruleHistoryLink uint8
+
+const (
+	historyPrev ruleHistoryLink = iota
+	historyParent
+	historyPusherBefore
+)
+
 // boundedRuleHistory copies the nearest rule and up to history-1 of its
 // predecessors. Predecessors, replacements and a pre-link pusher lose their
-// Child/Next links; those links otherwise form a second unbounded ladder.
-func boundedRuleHistory(r *Rule, history int) *Rule {
+// Child/Next links; the nearest final parent keeps its bounded child/next
+// view, matching the canonical TypeScript snapshot shape.
+func boundedRuleHistory(r *Rule, history int, link ruleHistoryLink) *Rule {
 	if history == 0 {
 		return r
 	}
@@ -1089,79 +1100,130 @@ func boundedRuleHistory(r *Rule, history int) *Rule {
 	prev := NoRule
 	for depth := len(links) - 1; depth >= 0; depth-- {
 		copy := ruleSnapshot(links[depth])
-		copy.Child = NoRule
-		copy.Next = NoRule
+		if depth == 0 && (link == historyParent || link == historyPusherBefore) {
+			copy.snapshotNodeOwner = links[depth]
+			if links[depth].snapshotNodeOwner != nil {
+				copy.snapshotNodeOwner = links[depth].snapshotNodeOwner
+			}
+		}
+		if depth != 0 || link != historyParent {
+			copy.Child = NoRule
+			copy.Next = NoRule
+		}
 		copy.Prev = prev
 		prev = copy
 	}
 	return prev
 }
 
-// freezeHistoryChild records the first child when it replaces, and publishes
-// that completed bounded record when the replacement chain pops. The live
-// pusher keeps its pre-pass Child snapshot while a replacement is active, so
-// bounded navigation observes the same frozen shape as TypeScript. The active
-// rule's Parent remains the live pusher: direct writes are therefore visible
-// immediately through Parent, Context.Root and Context.RS, which cannot be
-// achieved by reconciling copied public fields after an action returns.
+// freezeHistoryChild publishes the completed first pushed rule to the live
+// pusher. Later replacements have different ids and cannot overwrite that
+// record. The child's own Parent remains the frozen post-push snapshot.
 func freezeHistoryChild(r, successor *Rule, history int) {
-	if history == 0 || r.historyPusher == nil ||
-		r.historyPusher.historyChild != r {
-		return
-	}
-	pusher := r.historyPusher
-	done := pusher.historyChildDone
-	if done == nil {
-		done = boundedRuleHistory(r, history)
-		pusher.historyChildDone = done
-	} else {
-		// Replacements inherit a node. A direct assignment on a later live
-		// replacement has the same shared-value semantics as an assignment on
-		// the first child whose completed record the pusher retains.
-		done.Node = r.Node
-	}
-	if successor != nil {
-		if successor.nodeOwner == r {
-			successor.nodeOwner = done
-		}
-		pusher.historyChild = successor
-		return
-	}
-	pusher.historyChild = nil
-	pusher.Child = done
-	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == done.I {
-		pusher.Next = done
-	}
-}
-
-// refreshHistoryChild republishes a child after post-process subscribers.
-// Process freezes the child before RuleDone runs, so a subscriber can still
-// change the live rule (notably through SetNode) after that first snapshot.
-// Replacing the snapshot here preserves the callback-visible mutation without
-// keeping the live child or its replacement chain reachable.
-func refreshHistoryChild(r, successor *Rule, history int) {
 	if history == 0 || r == nil || r == NoRule || r.historyPusher == nil {
 		return
 	}
 	pusher := r.historyPusher
-	old := pusher.historyChildDone
-	if old == nil || old == NoRule {
+	if pusher.Child == nil || pusher.Child == NoRule || pusher.Child.I != r.I {
 		return
 	}
-	if old.I == r.I {
-		frozen := boundedRuleHistory(r, history)
-		pusher.historyChildDone = frozen
-		if successor != nil && (successor.nodeOwner == r || successor.nodeOwner == old) {
-			successor.nodeOwner = frozen
-		}
-		old = frozen
-	} else {
-		old.Node = r.Node
+	done := boundedRuleHistory(r, history, historyPrev)
+	pusher.Child = done
+	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == done.I {
+		pusher.Next = done
 	}
-	if pusher.historyChild == nil {
-		pusher.Child = old
-		if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == old.I {
-			pusher.Next = old
+	if successor != nil && successor.nodeOwner == r {
+		successor.nodeOwner = done
+	}
+}
+
+// publishedHistoryChildSnapshot captures the public child immediately before
+// ruleDone subscribers run. refreshHistoryChild uses it as the base of a
+// three-way merge, so writes made through either the live rule or the already
+// published child survive the final snapshot.
+func publishedHistoryChildSnapshot(r *Rule, history int) *Rule {
+	if history == 0 || r == nil || r == NoRule || r.historyPusher == nil {
+		return nil
+	}
+	child := r.historyPusher.Child
+	if child == nil || child == NoRule || child.I != r.I {
+		return nil
+	}
+	return ruleSnapshot(child)
+}
+
+func mergeHistoryMap[K comparable, V any](
+	dst map[K]V, base map[K]V, published map[K]V,
+) map[K]V {
+	for key, baseValue := range base {
+		publishedValue, present := published[key]
+		if !present {
+			delete(dst, key)
+		} else if !reflect.DeepEqual(publishedValue, baseValue) {
+			if dst == nil {
+				dst = make(map[K]V)
+			}
+			dst[key] = publishedValue
+		}
+	}
+	for key, publishedValue := range published {
+		if _, present := base[key]; !present {
+			if dst == nil {
+				dst = make(map[K]V)
+			}
+			dst[key] = publishedValue
+		}
+	}
+	return dst
+}
+
+func mergePublishedHistoryChanges(dst, base, published *Rule) {
+	if base == nil || published == nil {
+		return
+	}
+	dst.N = mergeHistoryMap(dst.N, base.N, published.N)
+	dst.U = mergeHistoryMap(dst.U, base.U, published.U)
+	dst.K = mergeHistoryMap(dst.K, base.K, published.K)
+	if !reflect.DeepEqual(base.Node, published.Node) {
+		dst.SetNode(published.Node)
+	}
+	if !reflect.DeepEqual(base.O, published.O) {
+		dst.O = append([]*Token(nil), published.O...)
+		dst.ON = published.ON
+		dst.O0, dst.O1, dst.OS = published.O0, published.O1, published.OS
+	}
+	if !reflect.DeepEqual(base.C, published.C) {
+		dst.C = append([]*Token(nil), published.C...)
+		dst.CN = published.CN
+		dst.C0, dst.C1, dst.CS = published.C0, published.C1, published.CS
+	}
+	if base.Why != published.Why {
+		dst.Why = published.Why
+	}
+}
+
+// refreshHistoryChild republishes a child after post-process subscribers.
+func refreshHistoryChild(r, successor *Rule, history int, base *Rule) {
+	if history == 0 || r == nil || r == NoRule || r.historyPusher == nil {
+		return
+	}
+	pusher := r.historyPusher
+	published := pusher.Child
+	if published == nil || published == NoRule || published.I != r.I {
+		return
+	}
+	frozen := boundedRuleHistory(r, history, historyPrev)
+	mergePublishedHistoryChanges(frozen, base, published)
+	pusher.Child = frozen
+	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == frozen.I {
+		pusher.Next = frozen
+	}
+	if successor != nil {
+		if successor.snapshotNodeOwner == published {
+			successor.snapshotNodeOwner = frozen
+		}
+		if successor.nodeOwner == published {
+			successor.nodeOwner = frozen
 		}
 	}
 }
@@ -1490,10 +1552,9 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 				next.nodeOwner = r.nodeHolder()
 				boundedPush = 0 < ctx.Cfg.RuleHistory
 				if boundedPush {
-					next.Parent = r
+					next.Parent = boundedRuleHistory(
+						r, ctx.Cfg.RuleHistory, historyPusherBefore)
 					next.historyPusher = r
-					r.historyChild = next
-					r.historyChildDone = nil
 				} else {
 					next.Parent = r
 				}
@@ -1510,9 +1571,8 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 					}
 				}
 				if boundedPush {
-					before := boundedRuleHistory(r, ctx.Cfg.RuleHistory)
 					child := ruleSnapshot(next)
-					child.Parent = before
+					child.Parent = next.Parent
 					child.Child = NoRule
 					child.Next = NoRule
 					r.Child = child
@@ -1607,8 +1667,9 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		if r.Child != nil && r.Child != NoRule && r.Child.I == next.I {
 			next.Node = r.Child.Node
 		}
+		next.Parent = boundedRuleHistory(r, ctx.Cfg.RuleHistory, historyParent)
 	} else if boundedReplace {
-		next.Prev = boundedRuleHistory(r, ctx.Cfg.RuleHistory)
+		next.Prev = boundedRuleHistory(r, ctx.Cfg.RuleHistory, historyPrev)
 		freezeHistoryChild(r, next, ctx.Cfg.RuleHistory)
 		// The current result is tracked directly. Keeping the live successor
 		// here would make the original root retain every replacement despite
