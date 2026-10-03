@@ -435,6 +435,35 @@ func checkFixedTokenNames(opts *Options) error {
 	return nil
 }
 
+// checkCommentDefinitions refuses a block comment that has no terminator.
+// Such a definition used to close immediately in Go, run to EOF in Rust,
+// and take two different failure paths in TypeScript. Validate the resolved
+// overlay so partial edits of built-in definitions are judged by their
+// effective line/block shape.
+func checkCommentDefinitions(opts *Options) error {
+	if opts == nil || opts.Comment == nil || opts.Comment.Def == nil {
+		return nil
+	}
+	names := make([]string, 0, len(opts.Comment.Def))
+	for name := range opts.Comment.Def {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		definition := opts.Comment.Def[name]
+		if definition == nil || boolVal(definition.Line, false) {
+			continue
+		}
+		if definition.End == "" {
+			return fmt.Errorf(
+				"tabnas: options.comment.def.%s.end: block comments require a non-empty end marker",
+				name,
+			)
+		}
+	}
+	return nil
+}
+
 // applyFixedTokens updates the lexer's fixed-token table from opts.Fixed.Token.
 // Keys are token names, values are pointers to the intended source string:
 //   - non-nil: remove any existing src→tin mapping for that name, then set
@@ -697,7 +726,7 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		o = opts[0]
 	}
 	if j.options != nil {
-		o = Deep(*j.options, o).(Options)
+		o = mergeOptionsOverlay(*j.options, o)
 	}
 	child := Make(o)
 
@@ -862,12 +891,19 @@ func (j *Tabnas) ApplyOptions(opts Options) error {
 	if err := checkFixedTokenNames(&opts); err != nil {
 		return err
 	}
+	merged := mergeOptionsOverlay(*j.options, opts)
+	if err := checkCommentDefinitions(&merged); err != nil {
+		return err
+	}
 	j.SetOptions(opts)
 	return nil
 }
 
 func (j *Tabnas) SetOptions(opts Options) *Tabnas {
-	merged := Deep(*j.options, opts).(Options)
+	merged := mergeOptionsOverlay(*j.options, opts)
+	if err := checkCommentDefinitions(&merged); err != nil {
+		panic(err.Error())
+	}
 	j.options = &merged
 
 	// Rebuild config from merged options.

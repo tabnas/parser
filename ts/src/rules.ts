@@ -47,7 +47,11 @@ import { TabnasError } from './error'
 class Rule {
   i = -1                                  // Unique rule id within this parse run.
   name = EMPTY                            // Rule name (matches its RuleSpec).
-  node: any = null                        // Value node this rule is building.
+  // Snapshots share the node cell so a parent that retained its child before
+  // the child ran still sees the completed primitive value, just as it sees
+  // mutations to a shared array/object. The rest of the rule record freezes.
+  #node = { value: null as any }
+  node: any
   state: RuleState = OPEN                 // Current phase: open ('o') or close ('c').
   d = -1                                  // Stack depth at which this rule was pushed.
   bo = false                              // Has before-open actions.
@@ -100,10 +104,28 @@ class Rule {
   // Internal tracing field — set by the parser when a rule fails.
   why?: string
 
-  constructor(spec: RuleSpec, ctx: Context, node?: any) {
-    this.i = ctx.uI++ // Rule ids are unique only to the parse run.
+  // The live rule that pushed this one. Bounded public links are snapshots,
+  // so this private pointer is the only place a completed first child is
+  // published back to its suspended pusher.
+  historyPusher?: Rule
+
+  constructor(spec: RuleSpec, ctx: Context, node?: any, snapshotI?: number) {
+    // A history snapshot keeps the id of the rule it records and must not
+    // consume an id of its own. Live rules still receive the next parse-local
+    // id, including id zero (so use an undefined test rather than `||`).
+    this.i = undefined === snapshotI ? ctx.uI++ : snapshotI
     this.name = spec.name
     this.spec = spec
+
+    // Keep node an own enumerable property, as it was before snapshots
+    // shared a backing cell. Error and hint injection spreads the rule into
+    // its placeholder bag, so a prototype accessor would silently omit it.
+    defprop(this, 'node', {
+      configurable: true,
+      enumerable: true,
+      get: () => this.#node.value,
+      set: (value: any) => { this.#node.value = value },
+    })
 
     this.child = ctx.NORULE
     this.parent = ctx.NORULE
@@ -120,6 +142,37 @@ class Rule {
     this.ao = null != spec.def.ao
     this.bc = null != spec.def.bc
     this.ac = null != spec.def.ac
+  }
+
+  // Freeze this rule's record while sharing the immutable grammar, token and
+  // value objects it names. The small mutable maps and token arrays must be
+  // copied: a suspended parent can resume and mutate them after a child has
+  // retained the snapshot.
+  snapshot(ctx: Context): Rule {
+    const copy = new Rule(this.spec, ctx, this.node, this.i)
+    copy.#node = this.#node
+    copy.name = this.name
+    copy.state = this.state
+    copy.d = this.d
+    copy.bo = this.bo
+    copy.ao = this.ao
+    copy.bc = this.bc
+    copy.ac = this.ac
+    copy.oN = this.oN
+    copy.cN = this.cN
+    copy.child = this.child
+    copy.parent = this.parent
+    copy.prev = this.prev
+    copy.next = this.next
+    copy.o = this.o.slice()
+    copy.c = this.c.slice()
+    copy._NOTOKEN = this._NOTOKEN
+    copy.need = this.need
+    copy.why = this.why
+    if (undefined !== this.#n) copy.#n = Object.assign(Object.create(null), this.#n)
+    if (undefined !== this.#u) copy.#u = Object.assign(Object.create(null), this.#u)
+    if (undefined !== this.#k) copy.#k = Object.assign(Object.create(null), this.#k)
+    return copy
   }
 
   // Legacy aliases for o[0], o[1], c[0], c[1] and the count fields.
@@ -189,6 +242,130 @@ const makeRule = (...params: ConstructorParameters<typeof Rule>) =>
   new Rule(...params)
 
 const makeNoRule = (j: Tabnas, ctx: Context) => makeRule(makeRuleSpec(j, ctx.cfg, {}), ctx)
+
+type RuleHistoryLink = 'parent' | 'pusherBefore' | 'prev'
+
+// Copy the nearest rule and up to `history - 1` predecessors. Every older
+// copy drops child/next, as does the nearest copy for a replacement or the
+// pre-link pusher: those links otherwise form a second ladder back through an
+// entire sequence. A child's final parent keeps its own child/next snapshot,
+// which is finite and is part of the established observable rule interface.
+function boundedRuleHistory(
+  rule: Rule,
+  ctx: Context,
+  history: number | null,
+  link: RuleHistoryLink,
+): Rule {
+  if (null == history) return rule
+
+  const links: Rule[] = []
+  let current = rule
+  while (current !== ctx.NORULE && links.length < history) {
+    links.push(current)
+    current = current.prev
+  }
+
+  let prev = ctx.NORULE
+  for (let depth = links.length - 1; 0 <= depth; depth--) {
+    const copy = links[depth].snapshot(ctx)
+    if (0 !== depth || 'parent' !== link) {
+      copy.child = ctx.NORULE
+      copy.next = ctx.NORULE
+    }
+    copy.prev = prev
+    prev = copy
+  }
+  return prev
+}
+
+// Publish the completed first pushed rule to the live pusher. The snapshot
+// reachable through the child's own `parent` stays frozen at push time; only
+// the suspended live parent receives this completed record.
+function freezeHistoryChild(rule: Rule, ctx: Context): void {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return
+  const frozen = boundedRuleHistory(
+    rule, ctx, ctx.cfg.rule.history, 'prev',
+  )
+  pusher.child = frozen
+  if (pusher.next.i === rule.i) pusher.next = frozen
+}
+
+// Capture the public child immediately before ruleDone subscribers run. The
+// final refresh uses this as the base of a three-way merge, so a subscriber
+// may write either the live rule argument or the already-published child.
+export function publishedHistoryChildSnapshot(
+  rule: Rule,
+  ctx: Context,
+): Rule | undefined {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return undefined
+  return pusher.child.snapshot(ctx)
+}
+
+function mergeHistoryRecord<T>(
+  target: () => Record<string, T>,
+  base: Record<string, T> | undefined,
+  published: Record<string, T> | undefined,
+): void {
+  const baseRecord = base ?? {}
+  const publishedRecord = published ?? {}
+  const keys = new Set([
+    ...Object.keys(baseRecord),
+    ...Object.keys(publishedRecord),
+  ])
+  let out: Record<string, T> | undefined
+  for (const key of keys) {
+    const inBase = Object.prototype.hasOwnProperty.call(baseRecord, key)
+    const inPublished = Object.prototype.hasOwnProperty.call(publishedRecord, key)
+    const baseValue = baseRecord[key]
+    const publishedValue = publishedRecord[key]
+    if (inBase === inPublished && (!inBase || Object.is(baseValue, publishedValue))) {
+      continue
+    }
+    out ??= target()
+    if (inPublished) out[key] = publishedValue as T
+    else delete out[key]
+  }
+}
+
+function sameHistoryArray<T>(left: T[], right: T[]): boolean {
+  return left.length === right.length && left.every((value, i) => value === right[i])
+}
+
+// Republish a bounded child after ruleDone subscribers. Process freezes a
+// completed/replaced child before the parser dispatches those callbacks; the
+// live rule and its public snapshot can then both be mutated. Node already
+// shares its backing cell, while copied state needs the merge below.
+export function refreshHistoryChild(
+  rule: Rule,
+  ctx: Context,
+  base?: Rule,
+): void {
+  const pusher = rule.historyPusher
+  if (null == pusher || pusher.child.i !== rule.i) return
+  const published = pusher.child
+  const frozen = boundedRuleHistory(
+    rule, ctx, ctx.cfg.rule.history, 'prev',
+  )
+  if (null != base) {
+    mergeHistoryRecord(() => frozen.n, base.rawn(), published.rawn())
+    mergeHistoryRecord(() => frozen.u, base.rawu(), published.rawu())
+    mergeHistoryRecord(() => frozen.k, base.rawk(), published.rawk())
+    if (!sameHistoryArray(base.o, published.o)) {
+      frozen.o = published.o.slice()
+      frozen.oN = published.oN
+    }
+    if (!sameHistoryArray(base.c, published.c)) {
+      frozen.c = published.c.slice()
+      frozen.cN = published.cN
+    }
+    if (base.need !== published.need) frozen.need = published.need
+    if (base.why !== published.why) frozen.why = published.why
+  }
+  pusher.child = frozen
+  if (pusher.next.i === rule.i) pusher.next = frozen
+}
 
 // Result of matching one parse alternate against the current tokens (built from current tokens and AltSpec).
 class AltMatch {
@@ -702,13 +879,16 @@ class RuleSpec {
       }
     }
 
+    let boundedPush = false
+    let boundedReplace = false
+    let popped = false
+
     // Push a new rule onto the stack...
     if (alt.p) {
       ctx.rs[ctx.rsI++] = rule
       let rulespec = ctx.rsm[alt.p]
       if (rulespec) {
-        next = rule.child = makeRule(rulespec, ctx, rule.node)
-        next.parent = rule
+        next = makeRule(rulespec, ctx, rule.node)
         // Copy counters/keeps through the non-materializing views: a
         // parent that never touched them costs the child nothing, and
         // the child's object is created only when there is content.
@@ -721,6 +901,21 @@ class RuleSpec {
         if (undefined !== pk) {
           let nk: Record<string, any> | undefined = undefined
           for (let kn in pk) (nk ??= next.k)[kn] = pk[kn]
+        }
+        boundedPush = null != ctx.cfg.rule.history
+        if (boundedPush) {
+          next.parent = boundedRuleHistory(
+            rule, ctx, ctx.cfg.rule.history, 'pusherBefore',
+          )
+          // Keep the child exactly as it stood when pushed. Its own parent is
+          // the pre-link pusher copy, so a close-phase push cannot retain all
+          // earlier children through alternating child/parent links.
+          rule.child = next.snapshot(ctx)
+          next.historyPusher = rule
+        }
+        else {
+          next.parent = rule
+          rule.child = next
         }
         if (logging) why += 'P`' + alt.p + '`'
       }
@@ -735,7 +930,9 @@ class RuleSpec {
       if (rulespec) {
         next = makeRule(rulespec, ctx, rule.node)
         next.parent = rule.parent
-        next.prev = rule
+        boundedReplace = null != ctx.cfg.rule.history
+        if (!boundedReplace) next.prev = rule
+        else next.historyPusher = rule.historyPusher
         const pn = rule.rawn()
         if (undefined !== pn) {
           let nn: Counters | undefined = undefined
@@ -755,6 +952,7 @@ class RuleSpec {
 
     // Pop closed rule off stack.
     else if (!is_open) {
+      popped = true
       next = ctx.rs[--ctx.rsI] || ctx.NORULE
     }
 
@@ -762,7 +960,9 @@ class RuleSpec {
     // TODO: move action call here (alt.a)
     // and set r.next = next, so that action has access to next
 
-    rule.next = next
+    // A bounded push exposes the same frozen child through child and next;
+    // the running child receives its final parent after lifecycle actions.
+    rule.next = boundedPush ? rule.child : next
 
 
     // Handle "after" call.
@@ -784,6 +984,25 @@ class RuleSpec {
     // Must be last as state change is for next process call.
     if (OPEN === rule.state) {
       rule.state = CLOSE
+    }
+
+    if (boundedPush) {
+      next.parent = boundedRuleHistory(
+        rule, ctx, ctx.cfg.rule.history, 'parent',
+      )
+    }
+    else if (boundedReplace) {
+      next.prev = boundedRuleHistory(
+        rule, ctx, ctx.cfg.rule.history, 'prev',
+      )
+      freezeHistoryChild(rule, ctx)
+      // root() deliberately retains the original rule identity. The current
+      // result is tracked directly, so this obsolete forward edge must not
+      // retain every root replacement when history is bounded.
+      rule.next = ctx.NORULE
+    }
+    else if (popped && null != ctx.cfg.rule.history) {
+      freezeHistoryChild(rule, ctx)
     }
 
     // Shift by the count computed before the action (see above).
@@ -1234,30 +1453,37 @@ function attemptRecover(
       }
       return rule
     }
+    if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
     // The erroring rule itself is being abandoned (its close cannot
     // accept the sync token, and it is not on ctx.rs): synthesize its
     // close notification first so the structural stream stays balanced.
     if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
+      const publishedBefore = publishedHistoryChildSnapshot(rule, ctx)
       const done = { state: CLOSE, alt: null, forced: true }
       ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
+      refreshHistoryChild(rule, ctx, publishedBefore)
     }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]
       if (null != r && acceptsClose(r.spec, cand.tin, rec.syncGroups, sig)) {
         return r
       }
+      if (null != r) freezeHistoryChild(r, ctx)
       // Force-popped without a close pass: synthesize the close
       // notification so structural consumers (outline/folding) see a
       // balanced event stream even through recovery.
       if (null != r && ctx.sub.ruleDone) {
+        const publishedBefore = publishedHistoryChildSnapshot(r, ctx)
         const done = { state: CLOSE, alt: null, forced: true }
         ctx.sub.ruleDone.map((s) => s(r, ctx, done))
+        refreshHistoryChild(r, ctx, publishedBefore)
       }
     }
     return undefined
   }
 
   // Fixed-depth pop: one rule.
+  if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
   if (0 < ctx.rsI) return ctx.rs[--ctx.rsI]
   return undefined
 }

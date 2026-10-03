@@ -77,6 +77,25 @@ type Context struct {
 	contTins []Tin
 	contRule *Rule
 
+	// Set when the trailing-content check, which runs with no rule once
+	// the rule loop has ended, is what failed the parse. Continuations
+	// answers such a failure with the start rule's openers, as
+	// TypeScript does for an error raised with NORULE.
+	trailingFault bool
+
+	// Set at the first fetch that returned a bad token with relexing
+	// off, with the continuation set computed there: where TypeScript
+	// throws, and what its continuations() computes for the fetching
+	// rule from the buffer as it stood (Rule.ParseAlts).
+	fetchFault     bool
+	fetchFaultTins []Tin
+
+	// Set when the fetch-time absorber recorded a bad token and gave up
+	// on it, at maxSkip or maxRecoveries: the parse ends on that error
+	// without attemptRecover listing the token again, as TypeScript's
+	// absorber throws the recorded error itself.
+	absorbGaveUp bool
+
 	// Unlexable-run coalescing (TS: ctx._badTo / _badErr). badTo is the
 	// source offset just past the last absorbed bad token, so a token
 	// starting at or before it belongs to the SAME run and grows the
@@ -94,17 +113,18 @@ type Context struct {
 	// Groundwork for opt-in multi-error recovery.
 	Errs []*TabnasError
 
-	Opts    *Options         // Tabnas instance options (TS: opts).
-	Cfg     *LexConfig       // Tabnas instance config (TS: cfg).
-	Src     string           // Source text being parsed (TS: src).
-	Inst    *Tabnas          // Current Tabnas instance (TS: inst).
-	U       map[string]any   // Custom plugin data bag (TS: u).
-	Root    *Rule            // Root rule (TS: root).
-	TC      int              // Token count (TS: tC).
-	F       func(any) string // Format a value as a string (TS: F).
-	Log     func(...any)     // Debug logger (TS: log).
-	NOTOKEN *Token           // Sentinel no-token (TS: NOTOKEN).
-	NORULE  *Rule            // Sentinel no-rule (TS: NORULE).
+	Opts       *Options         // Tabnas instance options (TS: opts).
+	Cfg        *LexConfig       // Tabnas instance config (TS: cfg).
+	Src        string           // Source text being parsed (TS: src).
+	Inst       *Tabnas          // Current Tabnas instance (TS: inst).
+	U          map[string]any   // Custom plugin data bag (TS: u).
+	Root       *Rule            // Root rule (TS: root).
+	resultRule *Rule            // Current root replacement; avoids an unbounded root.Next chain.
+	TC         int              // Token count (TS: tC).
+	F          func(any) string // Format a value as a string (TS: F).
+	Log        func(...any)     // Debug logger (TS: log).
+	NOTOKEN    *Token           // Sentinel no-token (TS: NOTOKEN).
+	NORULE     *Rule            // Sentinel no-rule (TS: NORULE).
 
 	// tokenSetDyn is set when the parsing instance carries custom token sets,
 	// so alts that name a token set must be re-resolved against it rather
@@ -509,6 +529,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	rule := MakeRule(startSpec, ctx, nil)
 	root := rule
 	ctx.Root = root
+	ctx.resultRule = root
 
 	// Run parse.prepare hooks
 	if len(p.Config.ParsePrepare) > 0 {
@@ -597,9 +618,23 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// the same reason TS dispatches from its loop: Process has
 		// several return points, and one dispatch site cannot miss one.
 		if len(ctx.RuleDoneSubs) > 0 {
+			publishedBefore := publishedHistoryChildSnapshot(prev, ctx.Cfg.RuleHistory)
 			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
+			}
+			refreshHistoryChild(prev, ctx.Cfg.RuleHistory, publishedBefore)
+		}
+
+		if ctx.Cfg.RuleHistory > 0 && rule != nil && rule != NoRule {
+			// Process snapshots both sides of a bounded push before ruleDone
+			// subscribers run. Node is the intentionally shared exception: copy
+			// subscriber writes made through either public snapshot before the
+			// child gets its first pass.
+			if rule.historyPusher == prev {
+				if prev.Child != nil && prev.Child != NoRule && prev.Child.I == rule.I {
+					rule.Node = prev.Child.Node
+				}
 			}
 		}
 
@@ -611,11 +646,13 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			// observed — so it is where recovery hooks, mirroring the
 			// single raise site TS recovers at inside bad().
 			if p.Config.Recover.Enabled && !noRecover {
-				if resumed := attemptRecover(
-					ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
-					rule = resumed
-					kI++
-					continue
+				if !ctx.absorbGaveUp {
+					if resumed := attemptRecover(
+						ctx.ParseErr, prev, ctx, OPEN == prevState); resumed != nil {
+						rule = resumed
+						kI++
+						continue
+					}
 				}
 				// Recovery gave up — the skip cap was hit, or no rule on
 				// the stack could accept the sync token. The parse still
@@ -724,6 +761,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 	trailing := !gaveUp && ctx.T0 != nil && !ctx.T0.IsNoToken() && ctx.T0.Tin != TinZZ
 	if trailing && !soft {
+		ctx.trailingFault = true
 		// Prefer lex errors over generic unexpected for unconsumed tokens too.
 		if lex.Err != nil {
 			return nil, p.finishErr(lex.Err, ctx, meta, nil)
@@ -750,6 +788,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		ctx.Rule = curRule
 		if endTkn.Tin != TinZZ {
 			if !soft {
+				ctx.trailingFault = true
 				if lex.Err != nil {
 					return nil, p.finishErr(lex.Err, ctx, meta, nil)
 				}
@@ -770,6 +809,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// Check lexer errors from that final Next() call.
 		if lex.Err != nil {
 			if !soft {
+				ctx.trailingFault = true
 				return nil, p.finishErr(lex.Err, ctx, meta, nil)
 			}
 			if je, ok := lex.Err.(*TabnasError); ok && !ctx.alreadyRecorded(je) {
@@ -779,11 +819,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 	}
 
-	// Follow replacement chain: when val is replaced by list (implicit list),
-	// root.Node is stale. Follow Next/Prev links to find the actual result.
-	resRule := root
-	for resRule.Next != NoRule && resRule.Next != nil && resRule.Next.Prev == resRule {
-		resRule = resRule.Next
+	// A bounded root releases obsolete forward links as it replaces. The
+	// current result is tracked directly, while an unbounded parse retains
+	// the established chain and reaches the same final rule here.
+	resRule := ctx.resultRule
+	if resRule == nil {
+		resRule = root
 	}
 
 	// A give-up can also leave the node at Go's zero value rather than
@@ -1000,6 +1041,17 @@ func diagTinName(ctx *Context, tin Tin) string {
 // deliberately nil-safe: a Lex built without a Context (NewLex) has no
 // list to record into, and recording must never be the thing that
 // breaks a parse.
+// recovering reports whether this parse recovers from errors: the
+// instance's setting, unless the parse's meta switched it off, as
+// Continuations does for its own parse.
+func (ctx *Context) recovering() bool {
+	if ctx == nil || ctx.Cfg == nil || !ctx.Cfg.Recover.Enabled {
+		return false
+	}
+	off, _ := ctx.Meta[contNoRecoverMeta].(bool)
+	return !off
+}
+
 func (ctx *Context) recordErr(je *TabnasError) *TabnasError {
 	if ctx != nil && je != nil {
 		ctx.Errs = append(ctx.Errs, je)

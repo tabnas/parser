@@ -261,8 +261,9 @@ type LexConfig struct {
 	SafeKey bool // Prevent __proto__ keys. Default: true.
 
 	// Rule options
-	FinishRule bool   // Auto-close unclosed structures at EOF
-	RuleStart  string // Starting rule name. Default: "val".
+	FinishRule  bool   // Auto-close unclosed structures at EOF
+	RuleStart   string // Starting rule name. Default: "val".
+	RuleHistory int    // Retained predecessor snapshots; 0 is unbounded.
 
 	// EnderChars lists additional single-character enders: a character that
 	// ends a text or number token wherever it occurs.

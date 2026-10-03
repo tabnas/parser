@@ -189,6 +189,8 @@ Controls parser rule behavior.
 | `Start` | `string` | `"val"` | Starting rule name |
 | `Finish` | `*bool` | `true` | Auto-close at EOF |
 | `MaxMul` | `*int` | `3` | Rule occurrence multiplier |
+| `History` | `*int` | `nil` | Predecessor snapshots retained through rule links; `nil` is unbounded, direct values clamp to 1 through `MaxRuleHistory` (16), and serialized grammars accept 1 through 16 or `null`/`false` |
+| `HistorySet` | `bool` | `false` | Typed-overlay presence bit. Set it with `History: nil` to reset an existing finite bound to unbounded. Serialized options omit it |
 | `Include` | `string` | `""` | Comma-separated group tags to keep (applied first; drops untagged alts when set) |
 | `Exclude` | `string` | `""` | Comma-separated group tags to remove (applied after `Include`) |
 

@@ -23,7 +23,7 @@ import type {
   EagerRegExp,
 } from './types'
 
-import { EMPTY, SKIP, STRING } from './types'
+import { EMPTY, MAX_RULE_HISTORY, SKIP, STRING } from './types'
 
 import { makeToken, makePoint } from './lexer'
 import { TabnasError } from './error'
@@ -168,6 +168,7 @@ function configure(
   incfg: Config | undefined,
   opts: TabnasOptions,
 ): Config {
+  validateCommentDefinitions(opts)
   const cfg = incfg || ({} as Config)
 
   cfg.t = cfg.t || {}
@@ -400,6 +401,8 @@ function configure(
     start: null == opts.rule?.start ? 'val' : opts.rule.start,
     maxmul: null == opts.rule?.maxmul ? 3 : opts.rule.maxmul,
     finish: !!opts.rule?.finish,
+    history: null == opts.rule?.history || false === opts.rule.history
+      ? null : opts.rule.history,
     include: opts.rule?.include
       ? opts.rule.include.split(/\s*,+\s*/).filter((g) => '' !== g)
       : [],
@@ -1399,6 +1402,21 @@ function validateOptions(opts: any, dflt: any, path = 'options'): void {
     const val = opts[key]
     const d = dflt?.[key]
     const at = path + '.' + key
+    if ('options.rule.history' === at && null != val) {
+      if (false === val) continue
+      if ('number' !== typeof val || !Number.isSafeInteger(val) || val < 1) {
+        throw new Error(
+          `Tabnas: ${at} must be an integer of at least 1, null, or false`,
+        )
+      }
+      if (MAX_RULE_HISTORY < val) {
+        throw new Error(
+          `Tabnas: ${at} is outside the supported range ` +
+          `(at most ${MAX_RULE_HISTORY})`,
+        )
+      }
+      continue
+    }
     if (widened(at, val)) continue
     const entry = DYNAMIC_MAPS[at]
     if (null != entry) {
@@ -1610,6 +1628,27 @@ function rejectReservedNames(options: any) {
 const COMMENT_DEF_SHAPE = { line: true, start: '#', end: '*/', lex: true, eatline: false }
 
 
+// A block comment without a terminator previously reached three different
+// lexer behaviours: TypeScript mostly ran to EOF (and could throw on the
+// literal word "undefined"), Go closed immediately, and Rust ran to EOF.
+// Refuse the configuration after overlays have been resolved, so a partial
+// edit of a built-in line-comment definition is judged by its effective
+// shape rather than by the fields present in the edit.
+function validateCommentDefinitions(opts: TabnasOptions): void {
+  const definitions = opts.comment?.def
+  if (null == definitions) return
+  for (const [name, definition] of entries(definitions)) {
+    if (null == definition || false === definition || definition.line) continue
+    if ('string' !== typeof definition.end || 0 === definition.end.length) {
+      throw new Error(
+        `Tabnas: options.comment.def.${name}.end: block comments require ` +
+        `a non-empty end marker`,
+      )
+    }
+  }
+}
+
+
 // Recursively resolve FuncRef strings in an options object to actual functions,
 // and `@/pattern/flags` strings to RegExp instances.
 // resolveFuncRefs({r:'@/a/i'}) // => {r: /a/i};  resolveFuncRefs('@@x') // => '@x'
@@ -1750,6 +1789,7 @@ export {
   modlist,
   resolveFuncRefs,
   validateOptions,
+  validateCommentDefinitions,
   rejectReservedNames,
   WIDENINGS,
   isMatcherToken,

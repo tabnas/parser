@@ -314,9 +314,19 @@ func (j *Tabnas) Continuations(src string) ([]Tin, []string) {
 			tins = j.startOpeners()
 		}
 	} else {
-		// The failing pass named its own rule; the pre-process
-		// subscriber's last sighting is the fallback.
-		if failCtx != nil {
+		// A bad token a rule's fetch returned ends the parse in
+		// TypeScript at that fetch, so its answer is the one taken there
+		// (Rule.ParseAlts), whatever this parse went on to do with the
+		// token. Else the trailing-content check, which runs with no
+		// rule: TypeScript answers a failure raised there, with NORULE,
+		// from the start rule's openers, as for a prefix no rule ever
+		// ran on. Otherwise the failing pass named its own rule; the
+		// pre-process subscriber's last sighting is the fallback.
+		if failCtx != nil && failCtx.fetchFault {
+			tins = failCtx.fetchFaultTins
+		} else if failCtx != nil && failCtx.trailingFault {
+			tins = j.startOpeners()
+		} else if failCtx != nil {
 			r := failCtx.contRule
 			if r == nil {
 				r = failRule

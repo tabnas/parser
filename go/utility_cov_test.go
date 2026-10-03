@@ -461,8 +461,16 @@ func TestMapToOptionsAllKeys(t *testing.T) {
 	if opts.List == nil || !*opts.List.Property || *opts.List.Pair || !*opts.List.Child {
 		t.Error("list")
 	}
-	if opts.Value == nil || len(opts.Value.Def) != 2 {
+	// Four entries: the two definitions, and the null and false entries
+	// kept as present nil definitions, the delete marker Deep removes
+	// (#240). The reader used to drop them, and the default survived.
+	if opts.Value == nil || len(opts.Value.Def) != 4 {
 		t.Errorf("value.def: %v", opts.Value.Def)
+	}
+	for _, name := range []string{"gone", "off"} {
+		if vd, ok := opts.Value.Def[name]; !ok || vd != nil {
+			t.Errorf("value.def.%s: want a present nil entry, got present=%v value=%v", name, ok, vd)
+		}
 	}
 	yes := opts.Value.Def["yes"]
 	if yes.Val != true || yes.Match == nil || !yes.Consume {

@@ -83,6 +83,9 @@ pub(crate) fn compile_number_exclude(options: &Options) -> Option<Arc<Regex>> {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
+        if let Err(error) = options.validate_comment_definitions() {
+            panic!("invalid options: {error}");
+        }
         // A lexer built directly may be handed options nobody has
         // ordered yet. The parser's own lexer comes through
         // `with_shared`, whose options were ordered when they were
@@ -238,6 +241,13 @@ impl<'a> Lexer<'a> {
     }
 
     /// Construct a bad token at the current cursor.
+    ///
+    /// A custom matcher that returns it reports a lexer fault, which the
+    /// parser handles as it handles its own lexer's: a rule's fetch raises
+    /// it at once with `why` as the code, at this position, or, under
+    /// recovery, records it, coalescing a run of them into one error, and
+    /// moves the cursor past its source; relexing leaves it for an
+    /// alternate to re-cut. The cursor need not be advanced here.
     pub fn bad(&self, why: impl Into<String>) -> Token {
         let point = self.current_point();
         let source = self
@@ -251,6 +261,8 @@ impl<'a> Lexer<'a> {
 
     /// Construct a bad token whose displayed source is a scalar-indexed span.
     /// As in TypeScript, the diagnostic point remains the live cursor.
+    /// Returned from a matcher it is handled as [`Lexer::bad`] describes;
+    /// recovery steps past the span, counted from that cursor.
     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
         let point = self.current_point();
         let source = if start <= end && end <= self.char_len {
@@ -592,17 +604,25 @@ impl<'a> Lexer<'a> {
         self.next_raw_with(Some(expected_match_tins), Some((rule, context)))
     }
 
-    /// Clear a recoverable lexer fault. Compound string faults resume at the
-    /// next line boundary so the remainder of the broken string cannot be
-    /// mistaken for a new token stream.
-    pub(crate) fn recover_after_error(&mut self, to_line_end: bool) {
+    /// Step past a bad token the parser has absorbed or skipped, as
+    /// TypeScript's `advanceLexPast` does (ts/src/rules.ts): a bad token
+    /// does not advance the cursor by itself, so recovery moves it to the
+    /// end of the token's span, never backwards, and, for a fault raised
+    /// inside a compound construct, on past the next row character so
+    /// lexing resumes on a fresh row. The lexer's own faults latch until
+    /// this clears them.
+    pub(crate) fn skip_bad(&mut self, token: &Token, to_line_end: bool) {
+        let span = token.src.chars().count().max(1);
+        let mut target = self.idx.max(token.site.pos.saturating_add(span));
         if to_line_end {
-            while let Some(character) = self.peek() {
-                self.advance();
-                if matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
-                    break;
-                }
+            let mut end = target;
+            while end < self.char_len && !self.char_sets.row.contains(self.chars[end]) {
+                end += 1;
             }
+            target = target.max(self.char_len.min(end + 1));
+        }
+        while self.idx < target && self.idx < self.char_len {
+            self.advance();
         }
         self.err = None;
         if self.idx < self.char_len {
@@ -624,7 +644,14 @@ impl<'a> Lexer<'a> {
         if from.src.is_empty() || from.site.pos > self.char_len || wanted.is_empty() {
             return None;
         }
-        let saved = self.state();
+        // The standing error, if any, is moved into the checkpoint rather
+        // than copied: the cut below clears it anyway, and a copy is the
+        // length of the source (`full_source`) for every cut attempted.
+        let err = self.err.take();
+        let saved = LexerState {
+            err,
+            ..self.state()
+        };
         // TypeScript temporarily replaces the lexer's pending-token queue
         // with an empty queue for a negotiated cut. Rust keeps that queue on
         // Context, so hide it explicitly and preserve it in the checkpoint.
@@ -635,7 +662,12 @@ impl<'a> Lexer<'a> {
         self.err = None;
         self.end_reached = false;
         self.want = Some(wanted.to_vec());
-        let recut = self.next_raw_with(None, Some((rule, context))).ok();
+        // Straight to the matchers, past `next_raw_with`: an error here only
+        // rejects the cut, and the restore below puts back the lexer's own,
+        // so the source it would attach, and the copy it would keep, are
+        // never seen. With them, every rejected cut cost the length of the
+        // source, and a flat stylesheet parsed in quadratic time.
+        let recut = self.next_raw_inner(None, Some((rule, context))).ok();
         self.want = None;
         match recut.filter(|token| wanted.contains(&token.tin)) {
             Some(mut token) => {
@@ -718,6 +750,12 @@ impl<'a> Lexer<'a> {
         match result {
             Ok(token) => Ok(token),
             Err(mut error) => {
+                // The matchers build their errors without the source, and it
+                // is attached here, where an error leaves the lexer: a
+                // negotiated cut (`relex`) rejects many candidates, each an
+                // error nobody sees, and a copy of the whole source apiece
+                // made that quadratic.
+                error.full_source = self.src.to_string();
                 error.apply_options(&self.options);
                 self.err = Some((*error).clone());
                 Err(error)
@@ -1107,7 +1145,7 @@ impl<'a> Lexer<'a> {
             let err = TabnasError::new(
                 "unexpected",
                 bad_char.to_string(),
-                self.src,
+                "",
                 pnt.site.pos,
                 pnt.site.ri,
                 pnt.site.ci,
@@ -1347,7 +1385,7 @@ impl<'a> Lexer<'a> {
         let err = TabnasError::new(
             "unexpected",
             bad_char.to_string(),
-            self.src,
+            "",
             pnt.site.pos,
             pnt.site.ri,
             pnt.site.ci,
@@ -1444,7 +1482,7 @@ impl<'a> Lexer<'a> {
             let err = TabnasError::new(
                 "unterminated_comment",
                 src,
-                self.src,
+                "",
                 pnt.site.pos,
                 pnt.site.ri,
                 pnt.site.ci,
@@ -1788,14 +1826,8 @@ impl<'a> Lexer<'a> {
                 // reporting that put every embedded newline at the start
                 // of its string.
                 let site = self.current_point().site;
-                let err = TabnasError::new(
-                    "unprintable",
-                    c.to_string(),
-                    self.src,
-                    site.pos,
-                    site.ri,
-                    site.ci,
-                );
+                let err =
+                    TabnasError::new("unprintable", c.to_string(), "", site.pos, site.ri, site.ci);
                 self.err = Some(err.clone());
                 return Err(Box::new(err));
             }
@@ -1805,7 +1837,7 @@ impl<'a> Lexer<'a> {
                 let err = TabnasError::new(
                     "unprintable",
                     c.to_string(),
-                    self.src,
+                    "",
                     self.current_point().site.pos,
                     self.current_point().site.ri,
                     self.current_point().site.ci,
@@ -1857,7 +1889,7 @@ impl<'a> Lexer<'a> {
                                     let err = TabnasError::new(
                                         "invalid_unicode",
                                         self.source_span(esc_point.site.pos - 1, self.idx),
-                                        self.src,
+                                        "",
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
                                         esc_point.site.ci - 1,
@@ -1872,7 +1904,7 @@ impl<'a> Lexer<'a> {
                                         let err = TabnasError::new(
                                             "invalid_unicode",
                                             self.source_span(esc_point.site.pos - 1, self.idx),
-                                            self.src,
+                                            "",
                                             esc_point.site.pos - 1,
                                             esc_point.site.ri,
                                             esc_point.site.ci - 1,
@@ -1910,7 +1942,7 @@ impl<'a> Lexer<'a> {
                                             esc_point.site.pos - 1,
                                             esc_point.site.pos + 5,
                                         ),
-                                        self.src,
+                                        "",
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
                                         esc_point.site.ci - 1,
@@ -1926,7 +1958,7 @@ impl<'a> Lexer<'a> {
                                             esc_point.site.pos - 1,
                                             esc_point.site.pos + 5,
                                         ),
-                                        self.src,
+                                        "",
                                         esc_point.site.pos - 1,
                                         esc_point.site.ri,
                                         esc_point.site.ci - 1,
@@ -1961,7 +1993,7 @@ impl<'a> Lexer<'a> {
                                         esc_point.site.pos - 1,
                                         esc_point.site.pos + 3,
                                     ),
-                                    self.src,
+                                    "",
                                     esc_point.site.pos - 1,
                                     esc_point.site.ri,
                                     esc_point.site.ci - 1,
@@ -1984,7 +2016,7 @@ impl<'a> Lexer<'a> {
                                 let err = TabnasError::new(
                                     "unexpected",
                                     other.to_string(),
-                                    self.src,
+                                    "",
                                     esc_point.site.pos,
                                     esc_point.site.ri,
                                     esc_point.site.ci,
@@ -2000,7 +2032,7 @@ impl<'a> Lexer<'a> {
                     let err = TabnasError::new(
                         "unterminated_string",
                         raw_src,
-                        self.src,
+                        "",
                         pnt.site.pos,
                         pnt.site.ri,
                         pnt.site.ci,
@@ -2018,7 +2050,7 @@ impl<'a> Lexer<'a> {
         let err = TabnasError::new(
             "unterminated_string",
             raw_src,
-            self.src,
+            "",
             pnt.site.pos,
             pnt.site.ri,
             pnt.site.ci,

@@ -43,7 +43,9 @@ import type {
   Token,
 } from './types'
 
-import { OPEN, CLOSE, BEFORE, AFTER, EMPTY, SKIP } from './types'
+import {
+  OPEN, CLOSE, BEFORE, AFTER, EMPTY, MAX_RULE_HISTORY, SKIP,
+} from './types'
 
 import {
   keyOrder,
@@ -890,6 +892,7 @@ export {
   BEFORE,
   AFTER,
   EMPTY,
+  MAX_RULE_HISTORY,
   SKIP,
   S,
   util,

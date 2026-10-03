@@ -242,14 +242,6 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 		return nil
 	}
 
-	// Check the cap BEFORE recording, not after. Recording first and
-	// then bailing overshoots by one on every give-up path, and now
-	// that the fetch-time absorber records too, a cap of 2 was letting
-	// four diagnostics through.
-	if rec.MaxRecoveries <= len(ctx.Errs) {
-		return nil
-	}
-
 	code := tkn.Err
 	if "" == code {
 		code = tkn.Why
@@ -274,6 +266,16 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 	suppressed := ctx.recoverAtSet && ctx.VAbs-ctx.recoverAt < rec.Suppress
 	if suppressed && 0 < len(ctx.Errs) && ctx.Errs[len(ctx.Errs)-1] == err {
 		ctx.Errs = ctx.Errs[:len(ctx.Errs)-1]
+	}
+
+	// The cap is read after recording and after the cascade check, as
+	// TypeScript's attemptRecover reads it: a cascade dropped at the cap
+	// leaves room to go on, and the error the parse gives up on stays
+	// listed, as the fetch-time absorber lists its own. Read before
+	// recording, the cap ended the parse on a cascade it would have
+	// dropped: `[1,,,2]` under a cap of one gave `[1]`, not `[1,2]`.
+	if rec.MaxRecoveries < len(ctx.Errs) {
+		return nil
 	}
 
 	// Strict-progress guard. When nothing has been consumed since the
@@ -390,6 +392,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 
 	if !rec.PopUntilValid {
 		// Fixed-depth pop: exactly one rule.
+		freezeHistoryChild(rule, nil, ctx.Cfg.RuleHistory)
 		if 0 < ctx.RSI {
 			ctx.RSI--
 			return ctx.RS[ctx.RSI]
@@ -415,6 +418,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 
 	// The erroring rule is being abandoned: synthesize its close event
 	// first, so a structural consumer still sees a balanced stream.
+	freezeHistoryChild(rule, nil, ctx.Cfg.RuleHistory)
 	forceClose(ctx, rule)
 	for 0 < ctx.RSI {
 		ctx.RSI--
@@ -422,6 +426,7 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 		if r != nil && acceptsClose(ctx, r.Spec, cand.Tin, rec.SyncGroups) {
 			return r
 		}
+		freezeHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 		forceClose(ctx, r)
 	}
 	return nil
@@ -434,10 +439,12 @@ func forceClose(ctx *Context, r *Rule) {
 	if r == nil || r == NoRule || 0 == len(ctx.RuleDoneSubs) {
 		return
 	}
+	publishedBefore := publishedHistoryChildSnapshot(r, ctx.Cfg.RuleHistory)
 	done := RuleDone{State: CLOSE, Alt: nil, Forced: true}
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
+	refreshHistoryChild(r, ctx.Cfg.RuleHistory, publishedBefore)
 }
 
 // absorbBad is the lexer soft mode: with recovery on, a bad token is
