@@ -703,8 +703,9 @@ to peak memory (`VmHWM` 56.5 MiB and 664.8 MiB against 56.5 MiB and
   profile's unit costs (about 240 to 330 instructions to make a copy and
   about 410 to free it) they are worth an estimated 1,300 to 1,500
   instructions per rule, 6 to 7%. Removing them changes link types or
-  link semantics near registered splits (`chain-next-*`,
-  `pusher-through-child`). That is the split-the-borrow design's work, and
+  link semantics near a registered split (`chain-next-*`) and the
+  relink that repaired `pusher-through-child` (parser #259). That is the
+  split-the-borrow design's work, and
   it waits on items R2 to R7 of that spec and on folding in the R1 and R9
   rulings of 2026-09-18.
 - Linking a replaced rule's successor in place, by setting `next_rule`

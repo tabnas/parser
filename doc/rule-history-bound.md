@@ -108,7 +108,12 @@ copy:
   pusher's previous child, finished, and a rule that pushes again from
   its close phase would otherwise link every child it pushed, each
   through the one before: measured, five snapshots per item under every
-  bound, past the unbounded parse.
+  bound, past the unbounded parse. With no bound the push arm links the
+  child again once the pusher has linked it, so that
+  `parent.child.parent.child` reads the child, as TypeScript and Go
+  read it through live rules (parser #259); the pre-link snapshot then
+  sits one level further down, and two more records stay per push, 8
+  for 6 per element of the flat array in the table below.
 - A copy that drops its `next_rule` drops its name too. A snapshot
   whose next has its own name reads itself as `next`, so a replacement
   loop's copy that kept the name read `prev.next` as `prev`.
@@ -118,7 +123,8 @@ copy:
   `parent.next` included. `prev.child` and `prev.next` resolve to
   nothing, as `prev` on a rule with no predecessor does today, and so
   do `parent.child.parent.child` and the like, the pusher before it
-  linked the child; no grammar in the fleet reads them. A pusher's copy
+  linked the child, in all three runtimes; no grammar in the fleet
+  reads them, and without a bound they read the child. A pusher's copy
   keeps `history - 1` predecessors like any other, so `history: 1` cuts
   `parent.prev` too. `history: 3` serves every path the fleet reads and
   R7's walk; `history: 1` serves a grammar that reads one hop.
@@ -134,7 +140,8 @@ pruning already bounds for a stream).
 Parity: the option ships in all three runtimes, with the same range,
 cut-link behavior and install-time refusal above 16. The shared
 `test/spec/rule-history.tsv` pins `prev`, `prev.child`, `prev.next` and
-the pre-link pusher path under a bound; each runtime runs that file.
+the pre-link pusher path under a bound, and that path reading the child
+without one; each runtime runs that file.
 TypeScript and Go also parse 10,000 items under `history: 3` while a
 rule subscriber counts the reachable graph, which must stay constant.
 The former "A bounded rule history in Rust" divergence was removed when
