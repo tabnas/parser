@@ -3,6 +3,7 @@
 package tabnas
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -249,6 +250,58 @@ func TestMatchLineSingle(t *testing.T) {
 	}
 	if lex.Next().Tin != TinZZ {
 		t.Error("expected ZZ at end")
+	}
+}
+
+// TestMatchLineSingleRepeat pins the canonical single-mode token: a run
+// of line characters up to (not including) the first REPEATED one, with
+// every row character in it counted (#265). TypeScript's makeLineMatcher
+// (ts/src/lexer.ts) tracks per-character counts and breaks at n > 1; Rust's
+// is `!seen.insert(ch)`. So `\n\r` is ONE token, as `\r\n` is, and each
+// counts its `\n` as a row; `\n\n` and `\r\r` are two. Go consumed
+// `\r\n` or one character alone, making `\n\r` two tokens, and its
+// `\r\n` branch advanced no row: tabnas-csv's `record.empty` sets
+// line.single, so the record count and error rows differed there.
+func TestMatchLineSingleRepeat(t *testing.T) {
+	cases := []struct {
+		src  string
+		toks []string // #LN token sources, in order
+		rows []int    // RI of every token, the final ZZ included
+	}{
+		{"a\n\rb", []string{"\n\r"}, []int{1, 1, 2, 2}},
+		{"a\r\nb", []string{"\r\n"}, []int{1, 1, 2, 2}},
+		{"a\n\nb", []string{"\n", "\n"}, []int{1, 1, 2, 3, 3}},
+		{"a\r\rb", []string{"\r", "\r"}, []int{1, 1, 1, 1, 1}},
+		{"a\r\n\r\nb", []string{"\r\n", "\r\n"}, []int{1, 1, 2, 3, 3}},
+		{"a\n\r\n\rb", []string{"\n\r", "\n\r"}, []int{1, 1, 2, 3, 3}},
+	}
+	for _, c := range cases {
+		cfg := DefaultLexConfig()
+		cfg.LineSingle = true
+		cfg.IgnoreSet = map[Tin]bool{} // surface LN tokens
+		lex := NewLex(c.src, cfg)
+
+		var toks []string
+		var rows []int
+		for {
+			tkn := lex.Next()
+			rows = append(rows, tkn.RI)
+			if tkn.Tin == TinLN {
+				toks = append(toks, tkn.Src)
+			}
+			if tkn.Tin == TinZZ || tkn.Tin == TinBD {
+				break
+			}
+			if len(rows) > 10 {
+				t.Fatalf("%q: lexer did not end", c.src)
+			}
+		}
+		if fmt.Sprintf("%q", toks) != fmt.Sprintf("%q", c.toks) {
+			t.Errorf("%q: line tokens %q, want %q", c.src, toks, c.toks)
+		}
+		if fmt.Sprint(rows) != fmt.Sprint(c.rows) {
+			t.Errorf("%q: token rows %v, want %v", c.src, rows, c.rows)
+		}
 	}
 }
 

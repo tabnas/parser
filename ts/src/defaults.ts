@@ -417,6 +417,10 @@ The parse was cancelled by the caller's parse.budget.onCheck callback
     // Multiplier to increase the maximum number of rule occurrences.
     maxmul: 3,
 
+    // How many predecessor-rule snapshots a rule can reach. Unbounded is
+    // the compatibility default until every runtime carries the option.
+    history: null,
+
     // Include only those alts with matching group tags (comma sep).
     // NOTE: applies universally, thus also for subsequent rules.
     include: '',

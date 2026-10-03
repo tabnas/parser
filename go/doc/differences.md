@@ -670,6 +670,29 @@ Two consequences for callers, both aligned with TS:
 Pinned by the shared fixture `test/spec/lex-text-quote.tsv`, run by both
 suites.
 
+### Line tokens under `line.single`: aligned, was a Go defect
+
+Aligned. With `line.single` on, **a line token is a run of line characters
+up to the first repeated one, and every row character in it counts a row**,
+in all three runtimes. TypeScript's `makeLineMatcher` in `ts/src/lexer.ts`
+keeps a per-character count and stops where a count passes one, and Rust
+stops at `!seen.insert(ch)`. So `\r\n` and `\n\r` are each one `#LN` token
+that advances the row by one, and `\n\n` or `\r\r` is two tokens.
+
+Go's `matchLine` used to take `\r\n`, or one character alone, and its
+`\r\n` branch advanced no row. `\n\r` was therefore two tokens here and
+one there, and a `\r\n` file never left row 1, which is #265. tabnas-csv
+sets `line.single` from its `record.empty` option, so for
+`a,b\n\r1,2\n\r\n\r3,4` with empty records kept it saw six records here
+against four there, and it reported an `unterminated_string` after two
+`\r\n` line ends at row 1 instead of row 3.
+
+The row counting is the `RowChars` set, `\n` by default, applied per
+character, as the non-single path's `Scan` already did. Pinned by
+`TestMatchLineSingleRepeat` in `go/lexer_edge_test.go`. The shared lexer
+fixtures each read one token, so none of them can express a token count,
+and this one is a Go unit test.
+
 ## Aligned Error Handling
 
 Both implementations now share the same error model:
@@ -862,6 +885,21 @@ replacing:
 | slices | `Ender`, `Result.Fail`, `Parse.Recover.SyncGroups`/`SyncTokens`, `Match.TokenOrder` | index-wise: an overlay index wins, positions beyond it keep the base |
 | maps of definitions | `Comment.Def`, `Value.Def`, `Match.Value` | recurse into an entry both sides carry; a nil entry removes it |
 | `TokenSet` | every set | index-wise onto the default set |
+
+The serialized door produces the same delete marker. In the map form,
+through `GrammarSpec.OptionsMap`, `SetOptionsText` or `OptionsFromMap`,
+a `null` entry of `comment.def`, `value.def` or `match.value` reads as
+a present nil entry of `Comment.Def`, `Value.Def` or `Match.Value`,
+which the merge then removes, and a `false` entry of `comment.def` or
+`value.def` deletes the same way, exactly as TypeScript's
+`makeCommentMatcher` and `configure` skip an entry when
+`null == om || false === om`. A `false` match value stays a load fault,
+as in TypeScript, which takes a regular expression, a function, an
+object or null there and refuses a boolean. The reader used to read a
+definition only when it was an object and drop anything else, so the
+default survived and a grammar document written for every runtime had
+no way to turn `//` or `null` off here, and the ini and abnf ports
+carried typed-nil workarounds for #240.
 
 For that to hold, an instance starts from `DefaultOptions()`, which
 carries the defaults those overlays merge onto (the three token sets,
@@ -1352,8 +1390,10 @@ Verified against TS on `{"a":true blah blip,"b":1}`:
 | `suppress: 8` | 1 error, `{"a":true,"b":1}` | 1 error, `{"a":true,"b":1}` |
 
 Beyond `MaxSkip` the run gives up like any other over-long recovery,
-and beyond `MaxRecoveries` the parse gives up: Go checks that cap
-before recording rather than after, so the list does not overshoot.
+and beyond `MaxRecoveries` the parse gives up. Both runtimes read that
+cap after recording the error and after dropping a cascade, so the list
+keeps the error the parse gave up on, and a cascade at the cap leaves
+room to go on. `test/spec/bad-token.tsv` pins both.
 
 The one remaining difference on these inputs is the `undefined`/`nil`
 value-model split described above, not the diagnostics: a key whose
@@ -1490,6 +1530,21 @@ Two differences from Rust remain in what the cell means:
   and appends to that copy, so a truncation there does not stick.
 
 TypeScript and Rust need neither method; there is nothing to port.
+
+## Direct Go `rule.history` bounds clamp
+
+The portable serialized option accepts only integer bounds from 1 through
+16 (or `null`/`false` for unbounded history) in every runtime. TypeScript
+also rejects an out-of-range value supplied directly to its options object.
+Go's typed `RuleOptions.History` instead clamps values below 1 to 1 and
+values greater than `MaxRuleHistory` to 16. `Make`, `SetOptions` and `ApplyOptions`
+all use that same typed rule. This preserves the established Go convention
+for integer pointer options while the serialized grammar surface remains
+strict and portable.
+
+A typed overlay uses `HistorySet: true` with `History: nil` to reset an
+existing finite bound to unbounded. Serialized options omit the presence
+bit. Serialized `null` and `false` carry their own presence.
 
 ## Lex-event retraction on unrelex: both runtimes
 

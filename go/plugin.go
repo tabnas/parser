@@ -279,11 +279,17 @@ func (j *Tabnas) registerMatchSpecs(opts *Options) {
 			byName[name] = len(j.parser.Config.CustomMatchers) - 1
 		}
 	}
-	// Tie-break equal priorities by name: map iteration order is random,
-	// so without this the order of same-priority matchers would vary
-	// between runs (and between merge directions in (*Tabnas).Merge).
-	sort.SliceStable(j.parser.Config.CustomMatchers, func(i, k int) bool {
-		mi, mk := j.parser.Config.CustomMatchers[i], j.parser.Config.CustomMatchers[k]
+	j.parser.Config.sortCustomMatchers()
+}
+
+// sortCustomMatchers orders CustomMatchers by priority, tie-breaking equal
+// priorities by name: map iteration order is random, so without this the
+// order of same-priority matchers would vary between runs (and between
+// merge directions in (*Tabnas).Merge). Lex.Next walks the slice in
+// priority bands, so it must be sorted whenever an entry is added.
+func (c *LexConfig) sortCustomMatchers() {
+	sort.SliceStable(c.CustomMatchers, func(i, k int) bool {
+		mi, mk := c.CustomMatchers[i], c.CustomMatchers[k]
 		if mi.Priority != mk.Priority {
 			return mi.Priority < mk.Priority
 		}
@@ -430,6 +436,35 @@ func checkFixedTokenNames(opts *Options) error {
 					"options.line, options.comment), or use a token name of your own. "+
 					"Fixed punctuation tokens (#OB #CB #OS #CS #CL #CA) may be "+
 					"rebound freely.", name, *srcPtr)
+		}
+	}
+	return nil
+}
+
+// checkCommentDefinitions refuses a block comment that has no terminator.
+// Such a definition used to close immediately in Go, run to EOF in Rust,
+// and take two different failure paths in TypeScript. Validate the resolved
+// overlay so partial edits of built-in definitions are judged by their
+// effective line/block shape.
+func checkCommentDefinitions(opts *Options) error {
+	if opts == nil || opts.Comment == nil || opts.Comment.Def == nil {
+		return nil
+	}
+	names := make([]string, 0, len(opts.Comment.Def))
+	for name := range opts.Comment.Def {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		definition := opts.Comment.Def[name]
+		if definition == nil || boolVal(definition.Line, false) {
+			continue
+		}
+		if definition.End == "" {
+			return fmt.Errorf(
+				"tabnas: options.comment.def.%s.end: block comments require a non-empty end marker",
+				name,
+			)
 		}
 	}
 	return nil
@@ -697,7 +732,7 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		o = opts[0]
 	}
 	if j.options != nil {
-		o = Deep(*j.options, o).(Options)
+		o = mergeOptionsOverlay(*j.options, o)
 	}
 	child := Make(o)
 
@@ -728,9 +763,28 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 		}
 	}
 
-	// Copy parent's custom matchers.
-	for _, m := range j.parser.Config.CustomMatchers {
-		child.parser.Config.CustomMatchers = append(child.parser.Config.CustomMatchers, m)
+	// Copy parent's custom matchers. Make(o) above already registered
+	// every matcher the merged options carry (lex.match), so a matcher the
+	// child holds by name is not added again (#242): TS rebuilds
+	// cfg.lex.match from the merged options alone, one matcher per name in
+	// every generation. What remains are matchers a plugin put on the
+	// parent's Config directly, which the child inherits on the same terms.
+	if 0 < len(j.parser.Config.CustomMatchers) {
+		have := make(map[string]bool, len(child.parser.Config.CustomMatchers))
+		for _, m := range child.parser.Config.CustomMatchers {
+			have[m.Name] = true
+		}
+		added := false
+		for _, m := range j.parser.Config.CustomMatchers {
+			if !have[m.Name] {
+				child.parser.Config.CustomMatchers = append(child.parser.Config.CustomMatchers, m)
+				have[m.Name] = true
+				added = true
+			}
+		}
+		if added {
+			child.parser.Config.sortCustomMatchers()
+		}
 	}
 
 	// Copy parent's ender chars.
@@ -862,12 +916,19 @@ func (j *Tabnas) ApplyOptions(opts Options) error {
 	if err := checkFixedTokenNames(&opts); err != nil {
 		return err
 	}
+	merged := mergeOptionsOverlay(*j.options, opts)
+	if err := checkCommentDefinitions(&merged); err != nil {
+		return err
+	}
 	j.SetOptions(opts)
 	return nil
 }
 
 func (j *Tabnas) SetOptions(opts Options) *Tabnas {
-	merged := Deep(*j.options, opts).(Options)
+	merged := mergeOptionsOverlay(*j.options, opts)
+	if err := checkCommentDefinitions(&merged); err != nil {
+		panic(err.Error())
+	}
 	j.options = &merged
 
 	// Rebuild config from merged options.

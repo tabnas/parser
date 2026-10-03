@@ -1,0 +1,152 @@
+grammar	opts	input	value	errors
+# A bad token (#BD) the lexer hands the parser, and the error that ends a
+# recovering parse: parsed by every runtime, fail-fast, under recovery and
+# under relexing, and asserted field for field.
+#
+# FIVE tab-separated columns:
+#
+#   grammar  `json`, or the name of an `# @grammar` definition below
+#   opts     serialized engine options, installed as a second grammar
+#            carrying nothing but `options`, or `-` for none; or the word
+#            `continuations`, and the row asks the engine what could
+#            follow the input (`continuations(input)`) instead of parsing
+#            it: `value` is then the token names it answers, in its order,
+#            joined by `,`, and `errors` is `-`
+#   input    the source; \n, \r and \t are decoded, as in every file here
+#   value    the parse result: `-` when a fail-fast parse throws, else the
+#            value in the shared canonical form (map keys sorted, and an
+#            absent value -- TS undefined, Go nil, Rust None -- as `null`;
+#            DIVERGENCE.md "A parse that sets no value")
+#   errors   `-` for none, else every error, in order, as `code@row:col`,
+#            with the recovery metadata the engine attached to it:
+#            `+bad<n>` for a bad token recorded at fetch time as a run of n
+#            tokens, `+skip<n>` for a recovery that skipped n tokens to its
+#            sync token, and nothing for an error the parse ended on
+#            unrecovered. A fail-fast parse lists the error it threw.
+#
+# `json` is ts/test/json-builder.fixture.json, the serialized strict-JSON
+# grammar all three runtimes already load, installed on a default engine
+# with `rule.start` set to `val`. Every grammar here runs with ONE custom
+# lex matcher, which each runner builds natively because a serialized spec
+# cannot carry code, and which must behave identically in all three:
+#
+#   name `bad`, order 1.5e6 (after `match`, before `fixed`). At `?` it
+#   returns a bad token with why `custom_bad` whose source is the `?`; at
+#   `%`, one with why `custom_unterminated` whose source runs to the end of
+#   the source. Neither advances the cursor, as TS `lex.bad`, Go
+#   `lex.Token` on the cursor and Rust `Lexer::bad_span` do not. Anything
+#   else it declines.
+#
+# The canonical engine raises such a token the moment it is fetched, with
+# its own code at its own position; under recovery it records it,
+# coalesces a run of them into one error, and steps past it; under
+# relexing it leaves it in the lookahead for an alternate to re-cut. The
+# check for content after the parse raises it without recording it first.
+# A recovering parse that gives up lists every error once: the one it
+# gave up on is the last one it recorded, or a cascade it dropped.
+#
+# ts/test/bad-token.test.js and rs/tests/bad_token_fetch_test.rs pin the
+# rows under "Relexing with recovery", the cascade at the cap and the
+# continuations after a complete document a second time, as the canonical
+# engine's own statement of them: Go once answered each differently.
+#
+# Runners: ts/test/bad-token.test.js, go/bad_token_spec_test.go,
+# rs/tests/bad_token_spec_test.rs.
+#
+# @grammar nest {"options":{"rule":{"start":"top"},"fixed":{"token":{"#LB":"<","#RB":">"}}},"rule":{"top":{"open":[{"s":"#LB","p":"body"}],"close":[{"s":"#RB"}]},"body":{"open":[{"s":"#NR"}],"close":[{"s":"#RB","b":1},{"s":"#ZZ","b":1}]}}}
+#   `top` reads `<`, pushes `body` and closes on `>`; `body` reads a number
+#   and closes on `>` or the end, leaving either to its parent.
+# @grammar one {"options":{"rule":{"start":"top"}},"rule":{"top":{"open":[{"s":"#NR","a":"@value$"}]}}}
+#   One number, and nothing to close: the parse loop ends without reading
+#   past it, so what follows meets only the trailing-content check.
+#
+# Fail-fast. A bad token is raised where it is fetched, with its own code,
+# whichever position of an alternate asked for it.
+json	-	[?]	-	custom_bad@1:2
+json	-	{"a"?:1}	-	custom_bad@1:5
+json	-	[1,?,2]	-	custom_bad@1:4
+json	-	[1,% 2]	-	custom_unterminated@1:4
+json	-	[1] ?	-	custom_bad@1:5
+json	-	[1,\n?\n,2]	-	custom_bad@2:1
+json	-	[1,x,2]	-	unexpected@1:4
+json	-	"abc	-	unterminated_string@1:1
+json	-	[1,2]	[1,2]	-
+#
+# Recovery. The token is recorded, a run of them is one error, and the
+# parse steps past it and goes on.
+json	{"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+bad1
+json	{"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+bad2
+json	{"parse":{"recover":{"enabled":true}}}	{"a"?:1}	{"a":1}	custom_bad@1:5+bad1
+json	{"parse":{"recover":{"enabled":true}}}	[1,% 2]	[1]	custom_unterminated@1:4+bad1
+json	{"parse":{"recover":{"enabled":true}}}	[1,?],[2]	[1]	custom_bad@1:4+bad1,unexpected@1:6
+json	{"parse":{"recover":{"enabled":true}}}	[1]?2	[1]	custom_bad@1:4+bad1,unexpected@1:5
+json	{"parse":{"recover":{"enabled":true}}}	[1,\n?\n,2]	[1,2]	custom_bad@2:1+bad1
+json	{"parse":{"recover":{"enabled":true}}}	[1 2	[]	unexpected@1:4+skip1
+json	{"parse":{"recover":{"enabled":true}}}	[1,2,	[1,2]	unexpected@1:6+skip0
+# The lexer's own fault inside a string resumes past the next row character
+# after the bad token, so the line after it is skipped whole.
+json	{"parse":{"recover":{"enabled":true}}}	{"a":1,"b\n":[truex,null]}	{"a":1}	unprintable@1:10+bad1
+# The row character is `line.rowChars`: a lone CR is not one by default, so
+# the skip runs on to the end of the source, and is one when the option
+# names it, so the skip stops after the next CR. The option spells CR and LF
+# as \u escapes because the loaders decode \r and \n in every column.
+json	{"parse":{"recover":{"enabled":true}}}	{"a":1,"b\r":2,\r"c":3}	{"a":1}	unprintable@1:10+bad1
+json	{"parse":{"recover":{"enabled":true}},"line":{"rowChars":"\u000d\u000a"}}	{"a":1,"b\r":2,\r"c":3}	{"a":1,"c":3}	unprintable@1:10+bad1
+# The caps. Past `maxSkip` a run gives up, and past `maxRecoveries` the parse
+# does; either way the error it stops on is listed once.
+json	{"parse":{"recover":{"enabled":true,"maxSkip":1}}}	[1,???,2]	[1]	custom_bad@1:4+bad2
+json	{"parse":{"recover":{"enabled":true,"maxRecoveries":0}}}	[1,??,2]	[1]	custom_bad@1:4+bad1
+# The cap is read after an error is recorded and after a cascade of the one
+# before it is dropped, so a cascade at the cap does not end the parse.
+json	{"parse":{"recover":{"enabled":true,"maxRecoveries":1}}}	[1,,,2]	[1,2]	unexpected@1:4+skip0
+#
+# Relexing. The bad token stays in the lookahead for an alternate to re-cut;
+# when none can, the first token of the lookahead is the error.
+json	{"lex":{"relex":true}}	{"a"?:1}	-	unexpected@1:2
+json	{"lex":{"relex":true}}	[1,?]	-	custom_bad@1:4
+#
+# Relexing with recovery. A bad token no alternate re-cut is recovered from
+# as any failure is, and listed once, with the tokens the recovery skipped.
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,?,2]	[1,2]	custom_bad@1:4+skip1
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,??,2]	[1,2]	custom_bad@1:4+skip2
+json	{"lex":{"relex":true},"parse":{"recover":{"enabled":true}}}	[1,? 2,3]	[1,3]	custom_bad@1:4+skip2
+#
+# Giving up. The error recovery gave up on is listed once: recorded, when it
+# was news, or dropped, when it was a cascade of the one before it.
+nest	{"parse":{"recover":{"enabled":true}}}	<	null	unexpected@1:2+skip0
+nest	{"parse":{"recover":{"enabled":true}}}	<1 2	null	unexpected@1:4+skip1
+nest	{"parse":{"recover":{"enabled":true}}}	<<	null	unexpected@1:2+skip1
+# With no suppression window, two failures at one token are two errors.
+nest	{"parse":{"recover":{"enabled":true,"suppress":0}}}	<	null	unexpected@1:2+skip0,unexpected@1:2
+#
+# Trailing content. A bad token after the parse is raised, not recorded and
+# skipped, recovering or not.
+one	-	1 ? 2	-	custom_bad@1:3
+one	{"parse":{"recover":{"enabled":true}}}	1 ? 2	1	custom_bad@1:3
+one	{"parse":{"recover":{"enabled":true}}}	1 "x\n2	1	unprintable@1:5
+one	{"parse":{"recover":{"enabled":true}}}	1	1	-
+#
+# Continuations. What `continuations()` says could follow the input, which
+# the canonical engine computes from the rule that fetched a bad token, at
+# the first position of its alternates (`continuationTins(ctx, rule)` in
+# ts/src/tabnas.ts: nothing is recorded at the fetch itself), and from the
+# start rule's openers when no rule fetched it, the trailing-content check
+# having no rule. The end of the source is legal after a complete document.
+nest	continuations	<	#NR	-
+nest	continuations	<1	#RB	-
+nest	continuations	<?	#NR	-
+nest	continuations	<1>	#ZZ	-
+one	continuations	1	#ZZ	-
+one	continuations	1 ?	#NR	-
+json	continuations	[1] ?	#ZZ	-
+json	continuations	[1,?	#NR,#ST,#VL,#OB,#OS,#CS,#CA	-
+# After a complete document, a bad token or any trailing content meets the
+# trailing-content check, which has no rule: the start rule's openers.
+nest	continuations	<1>?	#LB	-
+nest	continuations	<1> ?	#LB	-
+nest	continuations	<1>>	#LB	-
+# At a bad token a rule fetched, the answer comes from the buffer at the
+# first position of that rule's alternates: what `[` hands over to, not the
+# `]` the two-token alternate `#OS #CS` still wanted.
+json	continuations	[?	#NR,#ST,#VL,#OB,#OS	-
+json	continuations	{"a"?	#NR,#ST,#VL,#OB,#OS	-

@@ -126,6 +126,29 @@ describe('recover', () => {
     }
   })
 
+  it('publishes a bounded child when recovery abandons it', () => {
+    const tn = new Tabnas({
+      rule: { start: 'top', history: 1 },
+      fixed: { token: { '#A': 'a', '#B': 'b', '#C': 'c', '#D': 'd' } },
+      parse: { recover: { enabled: true, suppress: 0 } },
+    })
+    let completed
+    tn.rule('top', (rs) => rs
+      .open([{ s: '#A', p: 'child' }])
+      .close([{ s: '#C', g: 'close', a: (rule) => {
+        completed = rule.child.u.x
+        rule.node = 'ok'
+      } }]))
+    tn.rule('child', (rs) => rs
+      .open([{ s: '#B', a: (rule) => { rule.u.x = true } }])
+      .close([{ s: '#D' }]))
+
+    const out = tn.parse('abc')
+    assert.equal(out.errors.length, 1)
+    assert.equal(out.value, 'ok')
+    assert.equal(completed, true)
+  })
+
   it('suppresses a lexer error region right after a recovery', () => {
     const zero = mk({ suppress: 0 }).parse('{"a":true blah blip,"b":1}')
     const eight = mk({ suppress: 8 }).parse('{"a":true blah blip,"b":1}')

@@ -70,7 +70,7 @@ links:
 
 ## The design
 
-An option, `options.rule.history`, an integer from 1 to 16 or `null`
+An option, `options.rule.history`, an integer from 1 to 16, `null`, or `false`
 (today's behaviour, and the default until every runtime carries the
 option): the number of predecessor snapshots a rule can reach through
 `prev`. Under it, the snapshot a replace or a push links is a bounded
@@ -131,27 +131,17 @@ a flat document of any length is parsed in memory proportional to its
 deepest container and to the value it builds (which the transducer's
 pruning already bounds for a stream).
 
-Parity: the option ships in all three runtimes, TypeScript first as the
-canonical engine, with `test/spec` rows that pin what a cut chain
-answers (`prev.prev.name` under `history: 1` is absent) and a fixture
-that parses 10,000 items under `history: 3` while a rule subscriber
-records the number of live snapshots, which must stay under a constant.
-The Rust port carries it first, as this design's prototype, so the
-option is registered in `DIVERGENCE.md` ("A bounded rule history in
-Rust") and in `test/spec/divergent.tsv` as `rule-history-bounded` with
-`rule-history-control` as its control: `prev.prev.name` read two
-replacements back resolves in every runtime with the option unset, and
-under `history: 1` resolves in TypeScript and Go, which do not carry the
-option, and not in Rust. `rule-history-bounded-child` and
-`rule-history-bounded-next`, with their controls, register
-`prev.child.name` and `prev.next.name` the same way, and
-`rule-history-past-the-cap` the refusal of a bound past 16, which the
-other two install. The group is deleted when the other two runtimes
-implement it. The pre-link pusher's cut, `parent.child.parent.child`,
-is registered as `rule-history-bounded-pusher` beside a split Rust has
-on that path with the option unset ("A pusher read back through its
-child's snapshot in Rust"), since TypeScript and Go read the live
-pusher there.
+Parity: the option ships in all three runtimes, with the same range,
+cut-link behavior and install-time refusal above 16. The shared
+`test/spec/rule-history.tsv` pins `prev`, `prev.child`, `prev.next` and
+the pre-link pusher path under a bound; each runtime runs that file.
+TypeScript and Go also parse 10,000 items under `history: 3` while a
+rule subscriber counts the reachable graph, which must stay constant.
+The former "A bounded rule history in Rust" divergence was removed when
+the two ports landed. The option remains `null`/nil by default for
+compatibility; serialized grammars may also use `false` for unbounded
+history, matching the other history options. Callers opt into the bound
+explicitly.
 
 ## Measurements
 

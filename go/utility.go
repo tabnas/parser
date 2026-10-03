@@ -5,6 +5,7 @@ package tabnas
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -944,6 +945,37 @@ func mapInt(v any) (int, bool) {
 	return 0, false
 }
 
+// mapWholeInt is the strict integer reader used by bounded resource options.
+// Unlike mapInt (whose truncation is retained for rule.maxmul compatibility),
+// it refuses fractions, non-finite JSON numbers and values outside int.
+func mapWholeInt(v any) (int, bool) {
+	var n64 int64
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n ||
+			n < float64(math.MinInt64) || n > float64(math.MaxInt64) {
+			return 0, false
+		}
+		n64 = int64(n)
+	case float32:
+		f := float64(n)
+		if math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f {
+			return 0, false
+		}
+		n64 = int64(n)
+	case int:
+		return n, true
+	case int64:
+		n64 = n
+	case int32:
+		n64 = int64(n)
+	default:
+		return 0, false
+	}
+	out := int(n64)
+	return out, int64(out) == n64
+}
+
 func MapToOptions(m map[string]any) Options {
 	opts, _ := OptionsFromMap(m)
 	return opts
@@ -1129,6 +1161,17 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 			for k, v := range defm {
 				dm, ok := v.(map[string]any)
 				if !ok {
+					// A null or false entry DELETES the definition, as
+					// TypeScript's makeCommentMatcher reads it: the
+					// entry is kept as a nil *CommentDef, the delete
+					// marker Deep removes from the merged options
+					// (#240). Skipping it instead left the default
+					// alive, so a grammar document could not turn one
+					// off in Go. Anything else is ill-typed, and
+					// validateOptionsMap has already reported it.
+					if v == nil || isFalse(v) {
+						opts.Comment.Def[k] = nil
+					}
 					continue
 				}
 				cd := &CommentDef{}
@@ -1286,8 +1329,15 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 						vd.Consume = c
 					}
 					opts.Value.Def[k] = vd
-				case nil, bool:
-					// nil or false removes the value def
+				case nil:
+					// A null entry deletes the keyword: a nil *ValueDef
+					// is the delete marker Deep removes (#240).
+					opts.Value.Def[k] = nil
+				case bool:
+					// false deletes as null does, in every runtime.
+					if !vv {
+						opts.Value.Def[k] = nil
+					}
 				}
 			}
 		}
@@ -1337,6 +1387,20 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		// "Rule-iteration budget: a fractional `rule.maxmul`".
 		if maxmul, ok := mapInt(rm["maxmul"]); ok {
 			opts.Rule.MaxMul = &maxmul
+		}
+		if raw, present := rm["history"]; present {
+			switch value := raw.(type) {
+			case nil:
+				opts.ruleHistorySet = true
+			case bool:
+				opts.ruleHistorySet = !value
+			default:
+				if history, ok := mapWholeInt(value); ok &&
+					history >= 1 && history <= MaxRuleHistory {
+					opts.Rule.History = &history
+					opts.ruleHistorySet = true
+				}
+			}
 		}
 	}
 
@@ -1483,6 +1547,17 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
 				case func(lex *Lex, rule *Rule) *Token:
 					opts.Match.Value[name] = &MatchValueSpec{Fn: spec}
+				case nil:
+					// A null entry deletes a matcher value set earlier:
+					// a nil *MatchValueSpec is the delete marker Deep
+					// removes (#240). Null is the only spelling of it
+					// here. TypeScript's validator takes a regexp, a
+					// function, an object or null for a match value and
+					// refuses false, so validateOptionsMap has already
+					// reported a false entry, and reading it as a
+					// deletion would make one grammar delete a matcher
+					// here and fail to load there.
+					opts.Match.Value[name] = nil
 				}
 			}
 		}

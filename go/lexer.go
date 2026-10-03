@@ -189,7 +189,7 @@ type LexConfig struct {
 	NumberExclude func(string) bool // Exclude certain number-like strings.
 
 	// Line options
-	LineSingle bool // Generate separate tokens per newline.
+	LineSingle bool // One token per line end (a run of line chars up to the first repeated one).
 
 	// Text options
 	TextModify []ValModifier // Pipeline of text value modifiers.
@@ -261,8 +261,9 @@ type LexConfig struct {
 	SafeKey bool // Prevent __proto__ keys. Default: true.
 
 	// Rule options
-	FinishRule bool   // Auto-close unclosed structures at EOF
-	RuleStart  string // Starting rule name. Default: "val".
+	FinishRule  bool   // Auto-close unclosed structures at EOF
+	RuleStart   string // Starting rule name. Default: "val".
+	RuleHistory int    // Retained predecessor snapshots; 0 is unbounded.
 
 	// EnderChars lists additional single-character enders: a character that
 	// ends a text or number token wherever it occurs.
@@ -1603,7 +1604,8 @@ func (l *Lex) matchSpace() *Token {
 }
 
 // matchLine matches line ending characters (\r, \n).
-// When LineSingle is true, generates separate tokens for each newline sequence.
+// When LineSingle is true, each token is a run of line characters up to
+// the first repeated one, so a file of lines yields one token per line end.
 func (l *Lex) matchLine() *Token {
 	sI := l.pnt.SI
 	if sI >= l.pnt.Len {
@@ -1612,7 +1614,7 @@ func (l *Lex) matchLine() *Token {
 	if l.tables.start[l.Src[sI]]&startLine == 0 {
 		return nil
 	}
-	ch, chSize := utf8.DecodeRuneInString(l.Src[sI:])
+	ch, _ := utf8.DecodeRuneInString(l.Src[sI:])
 	if !l.Config.LineChars[ch] {
 		return nil
 	}
@@ -1620,17 +1622,22 @@ func (l *Lex) matchLine() *Token {
 	rI := l.pnt.RI
 
 	if l.Config.LineSingle {
-		// Single mode: consume one newline sequence (\r\n or \n or \r)
-		sI += chSize
-		if l.Config.RowChars[ch] {
-			rI++
-		}
-		// Handle \r\n as a single sequence
-		if ch == '\r' && sI < l.pnt.Len && l.Src[sI] == '\n' {
-			if l.Config.RowChars['\n'] {
-				// \r\n counts as one row
+		// Single mode: consume line characters up to the first REPEATED
+		// one, counting every row character (TS makeLineMatcher breaks at
+		// a per-char count above one; Rust at `!seen.insert(ch)`). So
+		// `\r\n` and `\n\r` are each one token advancing one row, and
+		// `\n\n` is two tokens (#265).
+		seen := map[rune]bool{}
+		for sI < l.pnt.Len {
+			r, size := utf8.DecodeRuneInString(l.Src[sI:])
+			if !l.Config.LineChars[r] || seen[r] {
+				break
 			}
-			sI++
+			seen[r] = true
+			if l.Config.RowChars[r] {
+				rI++
+			}
+			sI += size
 		}
 		src := l.Src[l.pnt.SI:sI]
 		tkn := l.Token("#LN", TinLN, nil, src)
