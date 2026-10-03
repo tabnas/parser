@@ -136,6 +136,19 @@ Nil/zero fields do not overwrite existing values. Existing grammar
 rules (including plugin modifications) are preserved. Returns the
 instance for chaining.
 
+The rebuild starts from the merged options, and a value written to the
+live `*LexConfig` through `Config()` survives it only when the rebuild
+carries that value forward: fixed tokens, custom token names, token
+sets, custom matchers, and the match token and match value entries
+registered on the live config. The rebuild makes every other field
+again from the options, so a direct write to one of them lasts only
+until the next `SetOptions`: a `*Check` hook, `ParseBudgetN` and
+`ParseBudgetCheck`, `EnderChars` and `EnderSeqs`. To keep such a
+setting, put it where the rebuild reads it: the matching `Options`
+field, `Options.Ender` for an ender, or `Property.ConfigModify`, which
+runs on every rebuild. `Grammar()` applies the options a spec carries
+through `SetOptions`, so it rebuilds in the same way.
+
 ### `(*Tabnas) ApplyOptions(opts Options) error`
 
 `SetOptions` with an error channel. The options are validated first
@@ -554,6 +567,18 @@ listed token.
 
 Return the resolved lexer config for direct inspection. Prefer
 `Token`, `Rule`, and `Options.Lex.Match` for most work.
+
+A write through it lasts only until the next `SetOptions`, or the next
+`Grammar()` whose spec carries options, which applies them through
+`SetOptions`. Both rebuild the config from the merged options and copy
+the result over the live one, and the rebuild carries forward only
+fixed tokens, custom token names, token sets, custom matchers, and the
+match token and match value entries on the live config. That rebuild
+drops a `*Check` hook, the parse budget, or an ender written here, and
+the parse goes on without it. The supported routes are the `Options`
+fields, `Options.Ender`, and `Property.ConfigModify`, which runs on
+every rebuild and so can write a field no option covers. See
+`SetOptions`.
 
 ## Error handling
 
