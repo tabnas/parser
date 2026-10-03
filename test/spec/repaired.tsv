@@ -1,0 +1,77 @@
+name	probe	arg	input	expected
+# The rows that LEFT divergent.tsv: each a divergence that was repaired,
+# with the one answer every runtime gives since. The register proves a
+# split is live. This file proves it stays closed, through the same
+# probes and the same runners, ts/test/divergent.test.js,
+# go/divergent_test.go and rs/tests/divergent_spec_test.rs, so a row
+# moves here from the register by dropping two of its three runtime
+# columns and its justification. FIVE tab-separated columns:
+#
+#   name      the register's name, kept, so the DIVERGENCE.md entry under
+#             "Repaired, and what replaced them" can still cite it
+#   probe     `lex` or `spec`, as divergent.tsv defines them
+#   arg       the probe's arguments, as divergent.tsv spells them
+#   input     the source text
+#   expected  what EVERY runtime produces since the repair
+#
+# A `# @repaired:` line names the DIVERGENCE.md entry its rows came from.
+# That entry must no longer be a `### ` heading there and must still be
+# mentioned under "Repaired": go/divergent_test.go checks both, and that
+# no name here is also a row name in divergent.tsv. A row that fails here
+# is a repaired divergence coming back. It belongs in divergent.tsv again,
+# with its entry, not in an edit to this column.
+#
+# The escapes and rendering rules of divergent.tsv apply unchanged: \n,
+# \r and \t are decoded in every column, a control character inside a
+# JSON `arg` is spelled \uXXXX, and a rendered `src` or value cannot hold
+# a tab, newline or carriage return.
+#
+# @repaired: A row counted at a raw U+2028 or U+2029 inside a string in Rust
+# Under json5's row characters, LF, U+2028 and U+2029, a line character
+# inside a single-line string is body: a column, never a row, and not
+# `unprintable` when it is in `line.chars` as well. Rust counted a row
+# for any row character its cursor stepped over, string body or not, and
+# refused any line character inside a single-line string. The last three
+# rows are neighbours the same loop decided: a row character outside
+# `line.chars` inside a multi-line string, a CR inside a multi-line
+# string, and that CR's CRLF control.
+string-row-char-control	lex	{"opts":{"line":{"rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"ab" y	1:6
+string-raw-ls	lex	{"opts":{"line":{"rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"a b" y	1:7
+string-raw-ps	lex	{"opts":{"line":{"rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"a b" y	1:7
+string-raw-ls-line-char	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"a b" y	1:7
+string-raw-ps-line-char	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"a b" y	1:7
+string-raw-ls-value	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "}},"show":["valhex"]}	"a b"	0061.2028.0062
+string-raw-ls-then-row	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "}},"find":"y","show":["ri","ci"]}	"a b" y	2:1
+string-raw-nel	lex	{"opts":{"line":{"chars":"\u000a\u0085","rowChars":"\u000a\u0085"}},"find":"y","show":["ri","ci"]}	"ab" y	1:7
+string-multi-row-char-only	lex	{"opts":{"line":{"rowChars":"\u000a "},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"a b" y	1:7
+string-multi-cr	lex	{"find":"y","show":["ri","ci"]}	`a\rb` y	1:4
+string-multi-crlf-control	lex	{"find":"y","show":["ri","ci"]}	`a\r\nb` y	2:4
+#
+# @repaired: No row counted at a raw U+2028 or U+2029 inside a multi-line string in Go
+# Under json5's line configuration, with the double quote in
+# `string.multiChars`, a raw line character inside a multi-line string
+# counts a row at any code point, LF, U+2028, U+2029 and a Latin-1
+# U+0085 alike. Go tested the line and row sets only below code point
+# 32, and TypeScript's own table only below 32 inside its 256 entries.
+string-multi-row-char-control	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"a\nb" y	2:4
+string-multi-raw-ls	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"a b" y	2:4
+string-multi-raw-ps	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"a b" y	2:4
+string-multi-raw-ls-ps	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"a b c" y	3:4
+string-multi-raw-nel	lex	{"opts":{"line":{"chars":"\u000a\u0085","rowChars":"\u000a\u0085"},"string":{"multiChars":"\""}},"find":"y","show":["ri","ci"]}	"ab" y	2:4
+string-multi-raw-ls-value	lex	{"opts":{"line":{"chars":"\u000a  ","rowChars":"\u000a  "},"string":{"multiChars":"\""}},"show":["valhex"]}	"a b"	0061.2028.0062
+#
+# @repaired: An escaped non-ASCII character read as one byte in Go
+# The character after the escape character counts one column whatever
+# its UTF-8 width, and a `string.escape` mapping of a non-ASCII character
+# applies. Go read one byte and stepped one byte, so the column ran ahead
+# by the width minus one and the mapping was never found. The astral
+# case is not here: `"\😀" y` puts `y` at 7 in TypeScript, two UTF-16
+# units, and 6 in Go and Rust, the split under "Column positions for
+# astral characters".
+escape-ascii-control	lex	{"find":"y","show":["ci"]}	"\a" y	6
+escape-two-byte	lex	{"find":"y","show":["ci"]}	"\é" y	6
+escape-three-byte	lex	{"find":"y","show":["ci"]}	"\€" y	6
+escape-two-byte-value	lex	{"show":["valhex"]}	"\é"	00e9
+escape-map-ascii-control	lex	{"opts":{"string":{"escape":{"a":"X"}}},"show":["valhex"]}	"\a"	0058
+escape-map-two-byte	lex	{"opts":{"string":{"escape":{"é":"E"}}},"show":["valhex"]}	"\é"	0045
+escape-map-three-byte	lex	{"opts":{"string":{"escape":{"€":"EUR"}}},"show":["valhex"]}	"\€"	0045.0055.0052
