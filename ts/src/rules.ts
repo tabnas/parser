@@ -291,6 +291,15 @@ function freezeHistoryChild(rule: Rule, ctx: Context): void {
   if (pusher.next.i === rule.i) pusher.next = frozen
 }
 
+// Republish a bounded child after ruleDone subscribers. Process freezes a
+// completed/replaced child before the parser dispatches those callbacks, so
+// mutations to copied rule state (u/n/k and token arrays) need one final
+// snapshot. Node already shares its backing cell, but the rest deliberately
+// does not.
+export function refreshHistoryChild(rule: Rule, ctx: Context): void {
+  freezeHistoryChild(rule, ctx)
+}
+
 // Result of matching one parse alternate against the current tokens (built from current tokens and AltSpec).
 class AltMatch {
   p: string | null | false | 0 = EMPTY  // Push rule (by name).
@@ -1385,6 +1394,7 @@ function attemptRecover(
     if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
       const done = { state: CLOSE, alt: null, forced: true }
       ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
+      refreshHistoryChild(rule, ctx)
     }
     while (0 < ctx.rsI) {
       const r = ctx.rs[--ctx.rsI]
@@ -1398,6 +1408,7 @@ function attemptRecover(
       if (null != r && ctx.sub.ruleDone) {
         const done = { state: CLOSE, alt: null, forced: true }
         ctx.sub.ruleDone.map((s) => s(r, ctx, done))
+        refreshHistoryChild(r, ctx)
       }
     }
     return undefined

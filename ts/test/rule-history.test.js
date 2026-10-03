@@ -143,6 +143,30 @@ describe('rule history', () => {
     assert.equal(completed.o[0].src, 'b')
   })
 
+  it('republishes copied child state after ruleDone subscribers', () => {
+    const parser = new Tabnas({
+      rule: { start: 'top', history: 1 },
+      fixed: { token: { '#A': 'a', '#B': 'b', '#C': 'c' } },
+    })
+    parser.rule('top', (rs) => rs
+      .open([{ s: '#A', p: 'child' }])
+      .close([{ s: '#C', a: (rule) => {
+        rule.node = rule.child.u.after
+      } }]))
+    parser.rule('child', (rs) => rs
+      .open([{ s: '#B' }])
+      .close([{}]))
+    parser.sub({
+      ruleDone: (rule, _ctx, done) => {
+        if ('child' === rule.name && 'c' === done.state) {
+          rule.u.after = 'after'
+        }
+      },
+    })
+
+    assert.equal(parser.parse('abc'), 'after')
+  })
+
   it('merges on the effective history setting', () => {
     const left = new Tabnas({ tag: 'L', rule: { history: 3 } })
     const right = new Tabnas({ tag: 'R' })

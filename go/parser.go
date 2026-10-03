@@ -603,6 +603,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}
+			syncHistoryParentNode(prev)
 			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory)
 		}
 

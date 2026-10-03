@@ -245,6 +245,30 @@ func TestRuleHistoryRepublishesChildAfterRuleDoneSetNode(t *testing.T) {
 	}
 }
 
+func TestRuleHistorySyncsParentNodeAfterRuleDone(t *testing.T) {
+	history := 1
+	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})
+	ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+	parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{tc}}})
+	})
+	parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}})
+		rs.AddClose(&AltSpec{})
+	})
+	parser.SubRuleDone(func(rule *Rule, _ *Context, done RuleDone) {
+		if rule.Name == "child" && done.State == CLOSE {
+			rule.Parent.Node = "after"
+		}
+	})
+
+	value, err := parser.Parse("abc")
+	if err != nil || value != "after" {
+		t.Fatalf("bounded parent ruleDone write = %v, %v; want after", value, err)
+	}
+}
+
 func TestRuleHistoryAfterPushActionsSeeOnlyTheFrozenChild(t *testing.T) {
 	history := 1
 	parser := Make(Options{Rule: &RuleOptions{Start: "top", History: &history}})

@@ -441,6 +441,7 @@ func forceClose(ctx *Context, r *Rule) {
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}
+	syncHistoryParentNode(r)
 	refreshHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 }
 

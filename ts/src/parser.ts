@@ -33,7 +33,7 @@ import { TabnasError } from './error'
 
 import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
 
-import { makeRule, makeRuleSpec } from './rules'
+import { makeRule, makeRuleSpec, refreshHistoryChild } from './rules'
 
 
 // Rule-driven parser: start() parses from scratch, clone() makes a child sibling.
@@ -284,6 +284,7 @@ class Parser {
                 },
         }
         ctx.sub.ruleDone.map((sub) => sub(prev, ctx, done))
+        refreshHistoryChild(prev, ctx)
       }
 
       ctx.log && ctx.log(S.stack, ctx, rule, lex)
@@ -385,6 +386,7 @@ class Parser {
                     },
             }
             ctx.sub.ruleDone.map((sub) => sub(frule, ctx, done))
+            refreshHistoryChild(frule, ctx)
           }
         } catch (subErr) {
           // Subscriber failures must not mask the parse error.
