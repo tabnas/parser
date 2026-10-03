@@ -611,3 +611,32 @@ func TestNoValueParseIsNil(t *testing.T) {
 		t.Errorf("empty source answered %#v, want the declared emptyResult", v)
 	}
 }
+
+// DIVERGENCE.md "Decorations reach a derived child after the plugins in
+// Go": Derive re-applies the parent's plugins first and copies the
+// parent's decorations after, so a plugin's re-run on the child finds
+// none of them; TypeScript and Rust copy them first. The repair
+// direction is this port's.
+func TestDerivedChildGetsDecorationsAfterThePlugins(t *testing.T) {
+	var seen []bool
+	mark := func(j *Tabnas, _ map[string]any) error {
+		seen = append(seen, j.Decoration("mark") != nil)
+		j.Decorate("mark", true)
+		return nil
+	}
+	parent := Make(Options{})
+	if err := parent.Use(mark); err != nil {
+		t.Fatal(err)
+	}
+	child, err := parent.Derive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] || seen[1] {
+		t.Errorf("the plugin found its decoration %v on its two runs, want [false false]: "+
+			"none on the parent, and none yet during the re-run on the child", seen)
+	}
+	if child.Decoration("mark") != true {
+		t.Errorf("the child's decoration is %#v after Derive, want true", child.Decoration("mark"))
+	}
+}

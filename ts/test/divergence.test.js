@@ -420,4 +420,21 @@ describe('divergence', () => {
     assert.strictEqual(tn.parse(''), 'EMPTY')
   })
 
+  it('a derived child carries its decorations into the plugin re-run here and in Rust, after it in Go', () => {
+    // DIVERGENCE.md "Decorations reach a derived child after the plugins
+    // in Go". The constructor copies the parent's own properties onto the
+    // child before it re-runs the parent's plugins, so a plugin's re-run
+    // finds the decoration it set on the parent; Go copies them after.
+    const seen = []
+    const mark = (tn) => {
+      seen.push(undefined !== tn.mark)
+      tn.mark = true
+    }
+    const parent = new Tabnas()
+    parent.use(mark)
+    const child = parent.make()
+    assert.deepEqual(seen, [false, true])
+    assert.strictEqual(child.mark, true)
+  })
+
 })
