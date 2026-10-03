@@ -106,17 +106,3 @@ replace-two-byte	lex	{"opts":{"string":{"replace":{"é":"E"}}},"show":["valhex"]
 replace-lead-byte	lex	{"opts":{"string":{"replace":{"é":"E"}}},"show":["valhex"]}	"aÃb"	0061.00c3.0062
 replace-three-byte	lex	{"opts":{"string":{"replace":{"€":"EUR"}}},"show":["valhex"]}	"a€b"	0061.0045.0055.0052.0062
 replace-ls-json5-value	lex	{"opts":{"line":{"chars":"\u000a\u2028\u2029","rowChars":"\u000a\u2028\u2029"},"string":{"multiChars":"\"","replace":{"\u2028":"L"}}},"show":["valhex"]}	"a b"	0061.004c.0062
-#
-# @repaired: The `string.replace` map consulted after the escape and control checks in Go
-# Inside a string body the replace map comes first after the closing
-# quote, so a key for a control character or for the escape character
-# is replaced like any other. Go tested the escape character, then the
-# control range, then the map, so a replaced TAB or LF was refused as
-# `unprintable` and a replaced backslash began an escape (`\b`, a
-# backspace). Never registered: found while #263 was in review, and
-# repaired with the measurement. A replaced LF still counts a row in
-# Rust, the live entry "A replaced row character inside a string counts
-# a row in Rust"; its value agrees.
-replace-tab	lex	{"opts":{"string":{"replace":{"\u0009":"T"}}},"show":["valhex"]}	"a\tb"	0061.0054.0062
-replace-lf-value	lex	{"opts":{"string":{"replace":{"\u000a":"N"}}},"show":["valhex"]}	"a\nb"	0061.004e.0062
-replace-escape-char	lex	{"opts":{"string":{"replace":{"\\":"/"}}},"show":["valhex"]}	"a\bc"	0061.002f.0062.0063

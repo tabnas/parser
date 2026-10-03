@@ -1944,26 +1944,6 @@ func (l *Lex) matchString() *Token {
 			break
 		}
 
-		// Replace chars stop the body run; emit the replacement. Tested
-		// before the escape character and the control check, in
-		// TypeScript's order (closing quote, replace, escape, control).
-		// This sat last, so a replace key for a control character was
-		// refused as `unprintable` and one for the escape character
-		// began an escape: `"a<TAB>b"` under `{TAB: 'T'}` and `"a<LF>b"`
-		// under `{LF: 'N'}` gave `unprintable` here where TypeScript and
-		// Rust give `aTb` and `aNb`, and `"a\b"` under `{'\\': '/'}` gave
-		// a backspace where they give `a/b` (tabnas/parser#263).
-		if rep, ok := l.Config.StringReplace[c]; ok {
-			if !dirty {
-				dirty = true
-				sb.WriteString(src[valStart:sI])
-			}
-			flushHi() // replacement text ends any pending pair
-			sb.WriteString(rep)
-			sI += csize
-			continue
-		}
-
 		// Escape character (all string types process escapes)
 		if c == l.Config.EscapeChar {
 			if !dirty {
@@ -2212,6 +2192,18 @@ func (l *Lex) matchString() *Token {
 			l.pnt.SI = sI
 			l.pnt.CI = cI - 1
 			return l.bad("unprintable", sI, sI+1)
+		}
+
+		// Replace chars stop the body run; emit the replacement.
+		if rep, ok := l.Config.StringReplace[c]; ok {
+			if !dirty {
+				dirty = true
+				sb.WriteString(src[valStart:sI])
+			}
+			flushHi() // replacement text ends any pending pair
+			sb.WriteString(rep)
+			sI += csize
+			continue
 		}
 
 		// Unreachable: every stop class is dispatched above.

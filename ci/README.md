@@ -92,10 +92,7 @@ repository was green. That is the hole.
   package fails" is not a claim worth recording — an exemption accepting
   any non-zero exit turns regression detection off for that package
   entirely, and a second, newer break would ride in behind the first. The
-  expr break on 0.9.1 is real and is meant to block, so it never had an
-  entry; one is for a break that is not a regression, such as a downstream
-  divergence ledger still pinning an engine defect the engine under test
-  repairs.
+  file ships empty: the expr break on 0.9.1 is real and is meant to block.
 - `fleet.lock` — the versions the last `--update-lock` run recorded. The
   script prints what moved since; it never fails on a difference, because a
   new release is the thing being tested. Not committed until a full run has

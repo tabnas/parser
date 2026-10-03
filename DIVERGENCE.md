@@ -628,33 +628,6 @@ fixed or quietly dropped.
   [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `replace-two-byte`
   to `replace-ls-json5-value`, with `replace-ascii-control`.
 
-- **The `string.replace` map consulted after the escape and control checks in Go.**
-  Found with the entry above, and never registered. TypeScript's string
-  loop tests the closing quote, then the replace map, then the escape
-  character, then the control range (`makeStringMatcher`), and Rust
-  consults the replace map in the same place. Go tested the escape
-  character, then the control range, and the replace map last, so a key
-  for a control character was refused as `unprintable` and a key for the
-  escape character began an escape:
-
-  | `string.replace` | input, value | TypeScript | Go before | Rust |
-  |---|---|---|---|---|
-  | `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | `unprintable` | `aTb` |
-  | `{LF: 'N'}` | `"a<LF>b"` | `aNb` | `unprintable` | `aNb` |
-  | `{'\\': '/'}` | `"a\bc"` | `a/bc` | `a`, U+0008, `c` | `a/bc` |
-
-  Go now consults the replace map right after the closing quote, in
-  TypeScript's order. The replaced LF still splits on position, 1:7 in
-  TypeScript and Go and 2:4 in Rust, which is the live entry "A
-  replaced row character inside a string counts a row in Rust".
-  `tabnas/jsonic`'s own divergence ledger had recorded the Go half as
-  `string-replace-control`, and that row now fails there as its ledger
-  says a repaired divergence must; `ci/fleet/expect-fail.txt` carries it,
-  by that row's message, until a jsonic release deletes it. Pinned
-  by the fifth group of [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
-  `replace-tab`, `replace-lf-value` and `replace-escape-char`, with the
-  register's `replace-row-char-control` for the TAB's position.
-
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
@@ -1089,22 +1062,26 @@ and measured with it.
 TypeScript consults the replace map first after the closing quote, before
 a line character can count a row, so a replaced row character becomes its
 replacement and counts one column, in a single-line string and a
-multi-line one alike. Go does the same since #263 moved its replace check
-to TypeScript's place (see "Repaired"). Rust replaces the character too,
-but steps over it with `advance`, which counts a row:
+multi-line one alike. Rust replaces the character too, but steps over it
+with `advance`, which counts a row. Go agrees with TypeScript for a row
+character outside the control range, U+2028 under json5's line
+characters, since #263 made it read a replace key by character; a
+control one, LF, it refuses as `unprintable` before it reads the map,
+which is the entry "The `string.replace` map consulted after the escape
+and control checks in Go" below:
 
 | `string.replace` | input, position of `y` | TypeScript | Go | Rust |
 |---|---|---|---|---|
-| `{TAB: 'T'}` | `"a<TAB>b" y` | 1:7 | 1:7 | 1:7 |
-| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | 1:7 | **2:4** |
-| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | 1:7 | **2:4** |
+| `{x: 'X'}` | `"axb" y` | 1:7 | 1:7 | 1:7 |
+| `{U+2028: 'L'}`, json5's line characters | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
 | `{U+2028: 'L'}`, json5's line characters, `"` multi-line | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | `unprintable` | **2:4** |
+| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | `unprintable` | **2:4** |
 
-Every value agrees. Before #263 Go refused the first three as
-`unprintable`, and answered 1:7 on the last only because it never
-replaced the character, reading the key by its first byte; while #263 was
-in review, its wider multi-line test made that unreplaced character a
-row, 2:4.
+Every value agrees where Go answers. Before #263 Go answered 1:7 on the
+multi-line U+2028 row only because it read the key by its first byte and
+never replaced the character; while #263 was in review, its wider
+multi-line test made that unreplaced character a row, 2:4.
 
 `tabnas/jsonic`'s ledger carries the same split through its grammar as
 `string-replace-control-row`, where a raw CR after a replaced LF is
@@ -1116,8 +1093,57 @@ character counts a row wherever an escape or a replacement consumes it,
 TypeScript and Go move instead. One ruling settles this entry and the one
 above.
 
-Registered as `replace-lf`, `replace-lf-multi` and `replace-ls-json5`,
-with `replace-row-char-control` as their control.
+Registered as `replace-ls-single` and `replace-ls-json5`, with
+`replace-row-char-control` as their control: a replaced ordinary
+character, one column in every port. The LF rows are not registered
+here. Go's answer there is a lex error, and the `lex` probe renders the
+source of a lex error, which would be the LF itself, a character no
+register cell may hold; Go's refusal is pinned instead, through the
+`spec` probe, under the entry below.
+
+### The `string.replace` map consulted after the escape and control checks in Go
+
+**Deferred, not deliberate**, and held on purpose: measured while #263 was
+repaired, with the repair written, measured and taken out again. Tracked
+as [#287](https://github.com/tabnas/parser/issues/287).
+
+Inside a string body TypeScript tests the closing quote, then the replace
+map, then the escape character, then the control range
+(`makeStringMatcher` in `ts/src/lexer.ts`), and Rust consults the replace
+map in the same place. Go's `matchString` in `go/lexer.go` tests the
+escape character, then the control range, and reads the replace map
+last. So a `string.replace` key for a control character is refused as
+`unprintable` before the map is read, and a key for the escape character
+begins an escape instead of being replaced:
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{x: 'X'}` | `"axb"` | `aXb` | `aXb` | `aXb` |
+| `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | **`unprintable`** | `aTb` |
+| `{LF: 'N'}` | `"a<LF>b"` | `aNb` | **`unprintable`** | `aNb` |
+| `{'\\': '/'}` | `"a\bc"` | `a/bc` | **`a`, U+0008, `c`** | `a/bc` |
+
+Repair direction: **Go changes**, to TypeScript's order, reading the
+replace map right after the closing quote. TypeScript defines the
+language and Rust agrees with it. The repair moves one block in
+`matchString`, and #287 carries it.
+
+It is held because a downstream ledger pins Go's present answer.
+`tabnas/jsonic`'s divergence ledger carries the replaced-LF case, through
+its grammar, as `string-replace-control`, with Go at `unprintable`, and
+that ledger fails a row whose divergence has been repaired until the row
+is deleted. This repository's `gate` job runs jsonic from its `main`, and
+the fleet gate runs jsonic at its latest release, so the repair lands
+once the row is gone from both: delete the row in tabnas/jsonic, release
+jsonic, then land the reorder and close this group in the same change.
+
+Registered as `replace-tab`, `replace-lf-value` and `replace-escape-char`,
+with `replace-order-control` as their control: a replaced ordinary
+character, parsed alike in every port. The control, the TAB and the LF go
+through the `spec` probe, a grammar that takes one string token, because
+the `lex` probe renders the source of a lex error and Go's would be the
+TAB or the LF itself; the escape character goes through the `lex` probe,
+whose value Go decodes rather than refuses.
 
 ## Not divergences
 

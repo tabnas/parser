@@ -26,13 +26,6 @@
 # one -- and the most useful signatures do, being test-runner output such as
 # `# fail 16`.
 #
-# An entry is for a break that is NOT a regression. The expr break on parser
-# 0.9.1 is REAL and is meant to block: exempting it here would turn the gate
-# off for the one regression it was built to catch, so it never had one. A
-# downstream divergence ledger that still pins an engine defect the engine
-# under test repairs is the other kind: the fleet runs that package at its
-# latest release, so the row stands there until a release of it drops the
-# row, and until then it fails exactly as its ledger says a repaired
-# divergence must.
-
-jsonic/go :: string-replace-control: Go side of the ledger is stale :: jsonic's divergence ledger row string-replace-control pins Go's old `unprintable` for a control character mapped through string.replace, the Go defect tabnas/parser#281 repairs by consulting the replace map first, as TypeScript does; this line fails as an UNEXPECTED PASS, and goes, once a jsonic release has dropped the row.
+# This file is empty on purpose. The expr break on parser 0.9.1 is REAL and
+# is meant to block: exempting it here would turn the gate off for the one
+# regression it was built to catch.
