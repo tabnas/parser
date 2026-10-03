@@ -204,7 +204,7 @@ type LineOptions struct {
 	// stop rows being counted, and TypeScript honours `rowChars: ''`.
 	// Same defect, same repair, and it changes reported POSITIONS.
 	RowChars string
-	Single   *bool    // Generate separate tokens per newline. Default: false.
+	Single   *bool    // One token per line end (a run of line chars up to the first repeated one) instead of one per run. Default: false.
 	Check    LexCheck // Hook invoked before the line matcher runs (TS options.line.check).
 }
 

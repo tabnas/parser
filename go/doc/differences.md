@@ -670,6 +670,29 @@ Two consequences for callers, both aligned with TS:
 Pinned by the shared fixture `test/spec/lex-text-quote.tsv`, run by both
 suites.
 
+### Line tokens under `line.single`: aligned, was a Go defect
+
+Aligned. With `line.single` on, **a line token is a run of line characters
+up to the first repeated one, and every row character in it counts a row**,
+in all three runtimes. TypeScript's `makeLineMatcher` in `ts/src/lexer.ts`
+keeps a per-character count and stops where a count passes one, and Rust
+stops at `!seen.insert(ch)`. So `\r\n` and `\n\r` are each one `#LN` token
+that advances the row by one, and `\n\n` or `\r\r` is two tokens.
+
+Go's `matchLine` used to take `\r\n`, or one character alone, and its
+`\r\n` branch advanced no row. `\n\r` was therefore two tokens here and
+one there, and a `\r\n` file never left row 1, which is #265. tabnas-csv
+sets `line.single` from its `record.empty` option, so for
+`a,b\n\r1,2\n\r\n\r3,4` with empty records kept it saw six records here
+against four there, and it reported an `unterminated_string` after two
+`\r\n` line ends at row 1 instead of row 3.
+
+The row counting is the `RowChars` set, `\n` by default, applied per
+character, as the non-single path's `Scan` already did. Pinned by
+`TestMatchLineSingleRepeat` in `go/lexer_edge_test.go`. The shared lexer
+fixtures each read one token, so none of them can express a token count,
+and this one is a Go unit test.
+
 ## Aligned Error Handling
 
 Both implementations now share the same error model:
