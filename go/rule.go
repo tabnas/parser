@@ -1183,6 +1183,30 @@ func freezeHistoryChild(r, successor *Rule, history int) {
 	pusher.historyChild = nil
 }
 
+// refreshHistoryChild republishes a child after post-process subscribers.
+// Process freezes the child before RuleDone runs, so a subscriber can still
+// change the live rule (notably through SetNode) after that first snapshot.
+// Replacing the snapshot here preserves the callback-visible mutation without
+// keeping the live child or its replacement chain reachable.
+func refreshHistoryChild(r, successor *Rule, history int) {
+	if history == 0 || r == nil || r == NoRule || r.historyPusher == nil {
+		return
+	}
+	pusher := r.historyPusher
+	old := pusher.Child
+	if old == nil || old == NoRule || old.I != r.I {
+		return
+	}
+	frozen := boundedRuleHistory(r, history, historyPrevLink)
+	if successor != nil && (successor.nodeOwner == r || successor.nodeOwner == old) {
+		successor.nodeOwner = frozen
+	}
+	pusher.Child = frozen
+	if pusher.Next != nil && pusher.Next != NoRule && pusher.Next.I == r.I {
+		pusher.Next = frozen
+	}
+}
+
 // EnsureN returns the rule's named-counter map, allocating it on first
 // use. Required before writing r.N on a fresh rule (nil until written).
 func (r *Rule) EnsureN() map[string]int {

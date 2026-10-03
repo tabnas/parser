@@ -201,6 +201,7 @@ class Parser {
     let rule = makeRule(startspec, ctx)
 
     root = rule
+    ctx._resultRule = root
 
     // Maximum rule iterations (prevents infinite loops). Allow for
     // rule open and close, and for each rule on each char to be
@@ -349,7 +350,7 @@ class Parser {
     }
 
     // NOTE: by returning root, we get implicit closing of maps and lists.
-    const result = ctx.root().node
+    const result = (ctx._resultRule ?? ctx.root()).node
 
     if (this.cfg.result.fail.includes(result)) {
       throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)

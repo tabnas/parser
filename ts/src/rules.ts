@@ -853,6 +853,7 @@ class RuleSpec {
       let rulespec = ctx.rsm[alt.r]
       if (rulespec) {
         next = makeRule(rulespec, ctx, rule.node)
+        if (ctx._resultRule === rule) ctx._resultRule = next
         next.parent = rule.parent
         boundedReplace = null != ctx.cfg.rule.history
         if (!boundedReplace) next.prev = rule
@@ -920,6 +921,10 @@ class RuleSpec {
         rule, ctx, ctx.cfg.rule.history, 'prev',
       )
       freezeHistoryChild(rule, ctx)
+      // root() deliberately retains the original rule identity. The current
+      // result is tracked directly, so this obsolete forward edge must not
+      // retain every root replacement when history is bounded.
+      rule.next = ctx.NORULE
     }
     else if (popped && null != ctx.cfg.rule.history) {
       freezeHistoryChild(rule, ctx)

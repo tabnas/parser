@@ -40,7 +40,12 @@ function reach(parser, src) {
       longest = Math.max(longest, chain)
 
       const seen = new Set()
-      const pending = [rule.parent, rule.child, rule.prev, rule.next]
+      // Include the original root retained by ctx.root(): measuring only the
+      // current rule misses an obsolete forward replacement chain rooted
+      // there.
+      const pending = [
+        ctx.root(), rule.parent, rule.child, rule.prev, rule.next,
+      ]
       while (0 < pending.length) {
         const snapshot = pending.pop()
         if (snapshot === ctx.NORULE || seen.has(snapshot)) continue

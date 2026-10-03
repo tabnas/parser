@@ -603,6 +603,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}
+			refreshHistoryChild(prev, rule, ctx.Cfg.RuleHistory)
 		}
 
 		// Check for parse error from alt.E or actions.

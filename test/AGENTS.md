@@ -26,10 +26,14 @@ Those fixtures now live in `tabnas/jsonic` only.
 
 ## Format
 
-`divergent.tsv` is the exception to everything in this section: it is the
-ADR-14 divergence register, not a conformance fixture, and it has its own
-eight-column shape with a `probe` column. Its own header documents it.
-See "The divergence register" below.
+Two files have declared special shapes:
+
+- `divergent.tsv` is the ADR-14 divergence register, not a conformance
+  fixture. It has eight columns including `probe`; its own header documents
+  them. See "The divergence register" below.
+- `rule-history.tsv` has four columns: `name`, `spec`, `input`, and
+  `expected`. Comment directives define serialized grammar specs, and each
+  data row names one through the JSON object in `spec`.
 
 Every other file here is tab-separated, one case per line, with a header
 row (`input` `expected` or, for list-child fixtures, a third column). The
