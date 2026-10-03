@@ -420,4 +420,29 @@ describe('divergence', () => {
     assert.strictEqual(tn.parse(''), 'EMPTY')
   })
 
+  it("a pusher's after action reads the child just pushed here and in Go, the child pushed before in Rust", () => {
+    // DIVERGENCE.md "A pusher read back past four hops through its child's
+    // snapshots in Rust", the after-action face. The live link is made
+    // before the pushing alternate's after actions run, so the pusher's
+    // child.parent.child there is the child itself, on every pass.
+    const tn = new Tabnas({
+      rule: { start: 'list' },
+      fixed: { token: { '#A': 'a', '#B': 'b', '#E': 'e' } },
+    })
+    const seen = []
+    tn.rule('list', (rs) =>
+      rs
+        .open([{ s: ['#A'] }])
+        .close([{ s: ['#B'], b: 1, p: 'item' }, { s: ['#E'] }])
+        .ac((rule) => {
+          if ('item' === rule.child.name) {
+            seen.push(rule.child.parent.child === rule.child)
+          }
+        }),
+    )
+    tn.rule('item', (rs) => rs.open([{ s: ['#B'] }]).close([{}]))
+    tn.parse('abbbe')
+    assert.deepEqual(seen, [true, true, true, true])
+  })
+
 })

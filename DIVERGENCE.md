@@ -475,6 +475,44 @@ fixed or quietly dropped.
   `ts/test/options-validate.test.js`, `go/options_validate_test.go` and
   `rs/tests/options_overlay_test.rs`.
 
+- **A pusher read back through its child's snapshot in Rust.** A push
+  links the child to its pusher both ways. TypeScript and Go link the
+  live rules, so from the child `parent.child.parent.child` is the
+  child itself. Rust links snapshots, and the one the pusher kept as
+  `child` was taken before the pusher had linked it, so its `parent`
+  was the pusher as it stood before the push, whose `child` was the
+  child pushed before: with `list` pushing `first` from its open phase
+  and `second` from its close phase, `parent.child.parent.child.name`
+  read on `second` gave `second` in TypeScript and Go and `first` in
+  Rust, or nothing on a pusher's first push (#259). Repaired as the
+  entry said: with no history bound, the push arm links the child
+  again once the pusher has linked it, from a snapshot that carries the
+  pusher with the child linked (`Rule::relink_child` in
+  `rs/src/rule.rs`), and the child keeps the pusher as it then stands.
+  The cost is two more records kept per push without a bound, 8 for 6
+  per element of a flat array, 654 MB for 554 MB at its peak over
+  300,000 numbers. The pusher as it stood before the push is still
+  where the snapshots end, two hops further down, past every path a
+  fleet grammar reads: the survey in
+  [`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+  past three hops. Under a bound nothing moves: TypeScript and Go copy
+  the same two records there, so the path reads nothing in all three
+  runtimes, which `rule-history-bounded-pusher` pins. Pinned in all
+  three by `rule-history-pusher-control` in
+  `test/spec/rule-history.tsv`, the same grammar with the option unset,
+  with `rule-history-pusher-one-hop` (`parent.child.name`, the row the
+  register kept as its control) beside it, and in Rust by
+  `a_pusher_read_back_through_its_child_has_linked_it` in
+  `rs/tests/rule_history_test.rs`. The relink runs only when the
+  pushing alternate's after actions left the pusher's `child` and `next`
+  as the push made them, so an action that clears or repoints them
+  keeps its edit, as in TypeScript and Go
+  (`an_after_action_that_clears_the_pushers_links_keeps_its_edit`).
+  What the relink does not reach, a read six hops from the child and a
+  read from the pusher during those after actions, is the live entry "A
+  pusher read back past four hops through its child's snapshots in
+  Rust".
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
@@ -739,33 +777,6 @@ Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
 one:** it is what tells a later reader that the child link itself is at
 parity and only the walk past it is not.
 
-### A pusher read back through its child's snapshot in Rust
-
-**Deferred** — a Rust split in how a pushed child's own snapshot links
-its pusher, found while registering the rule-history bound.
-
-A push links the child to its pusher both ways: the child's `parent`
-is the pusher, and the pusher's `child` is the child. TypeScript and
-Go link the live rules, so from the child, `parent.child.parent` is the
-pusher as it stands, and its `child` is the child itself. Rust links
-snapshots, and the child's own snapshot, the one the pusher keeps as
-`child`, carries as its `parent` a snapshot of the pusher taken before
-the pusher linked the child. So in Rust `parent.child.parent.child` is
-the child the pusher pushed before, or nothing on its first push.
-
-| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
-|---|---|---|---|---|---|
-| `list` pushes `first`, then `second` from its close phase | `parent.child.name` on `second` | unset | `second` | `second` | `second` |
-| same | `parent.child.parent.child.name` on `second` | unset | `second` | `second` | **`first`** |
-Repair direction: **Rust changes**, linking the child's own snapshot to
-the pusher once the pusher has linked it, as the canonical engine reads
-it; then the rows with the option unset agree. No grammar in the fleet
-reads a four-hop path through `parent.child.parent`.
-
-Registered as `pusher-through-child`, with `pusher-through-child-control`
-as its control: `parent.child.name`, the same pusher read directly, where
-the three ports agree.
-
 ### A row counted at a raw U+2028 or U+2029 inside a string in Rust
 
 **Deferred, not deliberate** — a Rust defect found by the cross-runtime
@@ -936,6 +947,55 @@ moves past it.
 Registered as `block-comment-two-char-end` and
 `block-comment-three-char-end`, with `block-comment-end-control` as
 their control: a one-character end, where the three ports agree.
+
+### A pusher read back past four hops through its child's snapshots in Rust
+
+**Deferred, not deliberate**: what the repair of "A pusher read back
+through its child's snapshot in Rust" (under "Repaired") does not reach.
+
+TypeScript and Go link a pushed child to its pusher as live rules, so
+from the child every `parent.child` is the child itself, however often
+the path repeats it. Rust links snapshots. With no history bound the
+push arm links the child a second time, from a snapshot that carries the
+pusher with the child linked, and that carries the read through four
+hops. Two hops further the snapshots end at the pusher as it stood
+before the push, whose `child` is the child pushed before. With `list`
+pushing `first` from its open phase and `second` from its close phase:
+
+| path read on `second` | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `parent.child.parent.child.name` | `second` | `second` | `second` |
+| `parent.child.parent.child.parent.child.name` | `second` | `second` | `first` |
+
+The same model shows from the pusher's side, during the pushing
+alternate's after actions. TypeScript and Go have linked the live rules
+before those actions run, so a state action on the pusher's close reads
+`child.parent.child` as the child just pushed. Rust relinks after the
+actions, so the same action reads the child pushed before, or nothing on
+the pusher's first push. No row can carry this face, because a
+serialized grammar has no after action that reads a path; per-runtime
+tests pin it instead.
+
+No fleet grammar reads either path: the survey in
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+past three hops.
+
+Repair direction: **Rust changes**, by a mechanism the maintainer
+chooses. Relinking further costs two more records per push without a
+bound for each further pair of hops. Resolving a child's `parent` as the
+live rule in the path readers gives TypeScript's answer at every depth
+for a condition path at no memory cost, though not to a subscriber
+walking the raw links or to an after action. Linking live rules, as the
+canonical engine does, is the full repair.
+
+Registered as `pusher-six-hops`, with `pusher-four-hops-control` as its
+control: the four-hop read, where the three runtimes agree. The
+after-action face is pinned by `ts/test/divergence.test.js` ('a pusher's
+after action reads the child just pushed here and in Go, the child
+pushed before in Rust'), `go/divergence_test.go`
+`TestPusherAfterActionReadsTheChildJustPushed` and
+`rs/tests/rule_history_test.rs`
+`an_after_action_on_the_pusher_reads_the_child_pushed_before`.
 
 ## Not divergences
 
