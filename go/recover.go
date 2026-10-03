@@ -463,15 +463,10 @@ func absorbBad(ctx *Context, lex *Lex, rule *Rule, tkn *Token) bool {
 	}
 	rec := ctx.Cfg.Recover
 
-	code := tkn.Why
-	if "" == code {
-		code = tkn.Err
-	}
-	if "" == code {
-		code = "unexpected"
-	}
+	// Its Why, else "unexpected", as at a fail-fast fetch: Err is not read
+	// here either (Token.badCode).
 	bderr := ctx.Inst.parser.makeErrorIn(
-		ctx, code, tkn.Src, ctx.Src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
+		ctx, tkn.badCode(), tkn.Src, ctx.Src, tkn.SI, tkn.RI, tkn.CI, tkn.Use)
 
 	// makeErrorIn appended it, so it is the last entry — which is what
 	// makes coalescing a pop rather than a search.

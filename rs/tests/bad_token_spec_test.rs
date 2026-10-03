@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tabnas::{ImperativeLexMatcher, LexMatcher, Tabnas, TabnasError, Value};
+use tabnas::{
+    ImperativeLexMatcher, LexMatcher, Tabnas, TabnasError, Token, TokenCode, Value, TIN_BD,
+};
 
 const FIXTURE: &str = "../test/spec/bad-token.tsv";
 
@@ -23,8 +25,9 @@ fn decode(field: &str) -> String {
         .replace("\\t", "\t")
 }
 
-/// The custom matcher the fixture header specifies: a bad token at `?`, and
-/// one running to the end of the source at `%`, neither moving the cursor.
+/// The custom matcher the fixture header specifies: a bad token at `?`, one
+/// running to the end of the source at `%`, and one at `!` with only its
+/// `err` set, none moving the cursor.
 fn bad_matcher() -> LexMatcher {
     let matcher: ImperativeLexMatcher = Arc::new(|lexer, _rule, _context| {
         let at = lexer.point().site.pos;
@@ -34,6 +37,10 @@ fn bad_matcher() -> LexMatcher {
         } else if rest.starts_with('%') {
             let end = at + rest.chars().count();
             Some(lexer.bad_span("custom_unterminated", at, end))
+        } else if rest.starts_with('!') {
+            let mut token = Token::new("#BD", TIN_BD, Value::Undefined, "!", lexer.point());
+            token.err = TokenCode::from("custom_err");
+            Some(token)
         } else {
             None
         }
