@@ -1710,8 +1710,9 @@ impl Rule {
     /// whose `child` is the child pushed before, and a grammar reading
     /// `parent.child.parent.child` from the child found that one where
     /// TypeScript and Go, which link live rules, find the child itself
-    /// (parser #259). The links a grammar reads, `child` and `next`, and
-    /// the record `accept_child` restores on resume all move together.
+    /// (parser #259). `child` and `next`, the links a grammar reads, move
+    /// together; `child_record` moves with them so the three agree, though
+    /// `freeze_child` replaces it before `accept_child` reads it on resume.
     pub(crate) fn relink_child(&mut self, child: &Rule) {
         let snapshot = child.snapshot();
         self.child_record = Some(Rc::clone(&snapshot));

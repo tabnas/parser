@@ -4491,7 +4491,11 @@ enum Link {
     /// `child`, and with none the one the child reads as
     /// `parent.child.parent.child`, since the push arm then links the
     /// child again once the pusher has linked it, and gives the child the
-    /// pusher as it then stands (see [`Rule::relink_child`]).
+    /// pusher as it then stands (see [`Rule::relink_child`]). That second
+    /// link is made after the pushing alternate's after-actions have run,
+    /// where TypeScript and Go link the live rules before them: a state
+    /// action on the pusher's close still reads the child pushed before,
+    /// and six hops from the child still reach this record.
     PusherBefore,
     /// A replacement's `prev_rule`: the rule it replaces.
     Prev,

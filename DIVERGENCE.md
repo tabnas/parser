@@ -500,8 +500,22 @@ fixed or quietly dropped.
   runtimes, which `rule-history-bounded-pusher` pins. Pinned in all
   three by `rule-history-pusher-control` in
   `test/spec/rule-history.tsv`, the same grammar with the option unset,
-  and in Rust by `a_pusher_read_back_through_its_child_has_linked_it`
-  in `rs/tests/rule_history_test.rs`.
+  with `rule-history-pusher-one-hop` (`parent.child.name`, the row the
+  register kept as its control) beside it, and in Rust by
+  `a_pusher_read_back_through_its_child_has_linked_it` in
+  `rs/tests/rule_history_test.rs`. What the relink does not reach, both
+  measured on this change and on the engine before it: TypeScript and
+  Go link the live rules before the pushing alternate's after-actions
+  run, so a state action on the pusher's close reads `child`,
+  `child.parent.child` and `next.parent.child` as the child just
+  pushed, where Rust relinks after `run_after_actions` and such an
+  action reads the child pushed before; and from the child, six hops
+  (`parent.child.parent.child.parent.child`) read the child in
+  TypeScript and the child pushed before in Rust. Neither path is read
+  by a fleet grammar; both are the snapshot model's, and the reader-side
+  alternative, resolving a child's `parent` as the rule itself, would
+  give TypeScript's answer at every depth for a condition path at no
+  cost and still not to a subscriber walking the raw links.
 
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
