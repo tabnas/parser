@@ -510,8 +510,12 @@ fixed or quietly dropped.
   the double quote multi-line, is at 1:7 in every runtime where Rust had
   2:4. A CR inside a multi-line string resets the column without
   counting a row, as TypeScript's class LINE does and Go already did, so
-  `y` in `` `a<CR>b` y `` is at 1:4 where Rust had 1:7. Pinned in all
-  three runtimes by the first group of
+  `y` in `` `a<CR>b` y `` is at 1:4 where Rust had 1:7. Two paths those
+  classes do not decide still count a row in Rust, a row character an
+  escape consumes and one a `string.replace` key replaces: the live
+  entries "An escaped row character inside a string counts a row in
+  Rust" and "A replaced row character inside a string counts a row in
+  Rust". Pinned in all three runtimes by the first group of
   [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `string-raw-ls`
   to `string-multi-crlf-control`, with `string-row-char-control`.
 
@@ -530,20 +534,34 @@ fixed or quietly dropped.
   | `"a<U+2028>b" y` | 2:4 | 1:7 | 2:4 |
   | `"a<U+2028>b<U+2029>c" y` | 3:4 | 1:9 | 3:4 |
 
-  The test now applies to every character in `LineChars`. TypeScript's
-  own table had a narrower form of the same gap: `buildStringBodySpec`
-  classified a line character inside a multi-line string at any code
-  point in the fallback past its 256-entry table, and only below 32
-  inside the table, so a Latin-1 line character, U+0085 configured as
-  one, was body inside a multi-line string while U+2028 counted a row.
-  Measured, `"a<U+0085>b" y` under `line.chars` and `line.rowChars` of
-  LF and U+0085, with the double quote multi-line, put `y` at 1:7 in
-  TypeScript and Go and at 2:4 in Rust. The table now classifies a line
-  character at any code point, as the fallback did, and all three
-  runtimes answer 2:4. No grammar in the fleet configures a line
-  character between U+0020 and U+00FF. Pinned by the second group of
+  The test now applies to every character in `LineChars`.
+
+  **TypeScript moves here as well, and this is the one place the repair
+  moves it.** Its 256-entry table disagreed with its own fallback:
+  `buildStringBodySpec` classified a line character inside a multi-line
+  string at any code point past the table, and inside the table only
+  below 32, so a line character from U+0020 to U+00FF was body there
+  where any other line character reset the column. Measured before the
+  change, with the double quote multi-line:
+
+  | input, position of `y` | `line.chars` | `line.rowChars` | TypeScript before | Go before | Rust before |
+  |---|---|---|---|---|---|
+  | `"a<U+2028>b" y` | LF, U+2028 | LF | 1:4 | 1:7 | 1:7 |
+  | `"a<U+0085>b" y` | LF, U+0085 | LF | 1:7 | 1:7 | 1:7 |
+  | `"a<U+0085>b" y` | LF, U+0085 | LF, U+0085 | 1:7 | 1:7 | 2:4 |
+
+  The first row is the fallback's answer and the other two the table's.
+  The table now classifies a line character at any code point, as the
+  fallback did, and all three runtimes answer 1:4, 1:4 and 2:4. So
+  TypeScript's answer moves on the second and third rows, Go's on all
+  three and Rust's on the first two. No grammar in the fleet configures
+  a line character from U+0020 to U+00FF. To keep the table as it was,
+  strike the hunk in `ts/src/lexer.ts` and the two rows that pin it,
+  `string-multi-raw-nel` and `string-multi-line-char-nel`; Go and Rust
+  would then need the same exception below U+0100, or the split it
+  leaves would need registering. Pinned by the second group of
   [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
-  `string-multi-raw-ls` to `string-multi-raw-ls-value`, with
+  `string-multi-raw-ls` to `string-multi-line-char-ls`, with
   `string-multi-row-char-control`.
 
 - **An escaped non-ASCII character read as one byte in Go.** The second
@@ -563,17 +581,75 @@ fixed or quietly dropped.
   | `{a: 'X'}` | `"\a"`, value | `X` | `X` | `X` |
   | `{é: 'E'}` | `"\é"`, value | `E` | `é` | `E` |
 
-  The matcher now decodes the rune after the escape character, looks the
-  mapping up by the whole character, copies its bytes whole and steps
-  past its full width, counting one column, as every other branch of
-  that matcher already did for a multi-byte character. The astral case
-  stays apart for its own reason: `"\😀" y` puts `y` at column 6 in Go,
-  where it was 9, and in Rust, and at 7 in TypeScript, which counts the
-  character's two UTF-16 units, the split recorded under "Column
-  positions for astral characters". Pinned by the third group of
-  [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `escape-two-byte`
-  to `escape-map-three-byte`, with `escape-ascii-control` and
-  `escape-map-ascii-control`.
+  The matcher now decodes the rune after the escape character, copies
+  its bytes whole and steps past its full width, counting one column, as
+  every other branch of that matcher already did for a multi-byte
+  character, and looks the mapping up by the whole character when that
+  character is one UTF-16 unit, as TypeScript reads the map. A character
+  above U+FFFF is not looked up. TypeScript compares a key with one code
+  unit and so never matches a key of two, and looking an astral
+  character up whole, as this repair first did, gave Rust's answer
+  instead: a split older than #263, the live entry "A `string.escape`
+  key longer than one UTF-16 unit". The column after an escaped astral
+  character stays apart for its own reason: `"\😀" y` puts `y` at
+  column 6 in Go, where it was 9, and in Rust, and at 7 in TypeScript,
+  which counts the character's two UTF-16 units, the split recorded
+  under "Column positions for astral characters". Pinned by the third
+  group of [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
+  `escape-two-byte` to `escape-map-three-byte`, with
+  `escape-ascii-control` and `escape-map-ascii-control`.
+
+- **A non-ASCII `string.replace` key read by its first byte in Go.**
+  Found while #263 was in review, and never registered. Go's serialized
+  options, `OptionsFromMap` in `go/utility.go`, keyed the replace map by
+  a key's first byte, `rune(k[0])`, so a non-ASCII key never applied,
+  and its lead byte, read as a Latin-1 character, applied in its place.
+  TypeScript keys the map by a key's first code unit (`c.charCodeAt(0)`
+  in `makeStringMatcher`) and Rust by its character:
+
+  | `string.replace` | input, value | TypeScript | Go before | Rust |
+  |---|---|---|---|---|
+  | `{b: 'B'}` | `"abc"` | `aBc` | `aBc` | `aBc` |
+  | `{é: 'E'}` | `"aéb"` | `aEb` | `aéb` | `aEb` |
+  | `{é: 'E'}` | `"aÃb"` | `aÃb` | `aEb` | `aÃb` |
+  | `{€: 'EUR'}` | `"a€b"` | `aEURb` | `a€b` | `aEURb` |
+
+  A key is now decoded to its first character, which is TypeScript's key
+  for every character in the BMP. The same read had a position
+  consequence once #263 widened Go's multi-line test. Under json5's line
+  configuration, with the double quote multi-line and `{U+2028: 'L'}`,
+  the unreplaced U+2028 became a row, and `y` in `"a<U+2028>b" y` moved
+  from 1:7 to 2:4 while the PR was in review. Go now replaces it and
+  answers 1:7 with TypeScript. Rust answers 2:4 there, counting a row for
+  the replaced character, which is the live entry "A replaced row
+  character inside a string counts a row in Rust"; a key above U+FFFF is
+  the live entry "A `string.replace` key longer than one UTF-16 unit".
+  Pinned by the fourth group of
+  [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `replace-two-byte`
+  to `replace-ls-json5-value`, with `replace-ascii-control`.
+
+- **The `string.replace` map consulted after the escape and control checks in Go.**
+  Found with the entry above, and never registered. TypeScript's string
+  loop tests the closing quote, then the replace map, then the escape
+  character, then the control range (`makeStringMatcher`), and Rust
+  consults the replace map in the same place. Go tested the escape
+  character, then the control range, and the replace map last, so a key
+  for a control character was refused as `unprintable` and a key for the
+  escape character began an escape:
+
+  | `string.replace` | input, value | TypeScript | Go before | Rust |
+  |---|---|---|---|---|
+  | `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | `unprintable` | `aTb` |
+  | `{LF: 'N'}` | `"a<LF>b"` | `aNb` | `unprintable` | `aNb` |
+  | `{'\\': '/'}` | `"a\bc"` | `a/bc` | `a`, U+0008, `c` | `a/bc` |
+
+  Go now consults the replace map right after the closing quote, in
+  TypeScript's order. The replaced LF still splits on position, 1:7 in
+  TypeScript and Go and 2:4 in Rust, which is the live entry "A
+  replaced row character inside a string counts a row in Rust". Pinned
+  by the fifth group of [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
+  `replace-tab`, `replace-lf-value` and `replace-escape-char`, with the
+  register's `replace-row-char-control` for the TAB's position.
 
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
@@ -892,6 +968,148 @@ moves past it.
 Registered as `block-comment-two-char-end` and
 `block-comment-three-char-end`, with `block-comment-end-control` as
 their control: a one-character end, where the three ports agree.
+
+### A `string.escape` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired. Rust's split is older than that PR, which briefly moved Go to
+Rust's side of it.
+
+TypeScript looks the escape map up by `src[sI]`, the one code unit after
+the escape character (`makeStringMatcher` in `ts/src/lexer.ts`), so a key
+of two units or more never matches. An escaped character above U+FFFF,
+two units, is then copied as an unknown escape, and a key of two
+characters is never consulted at all. Go looks the map up only for an
+escaped character of one UTF-16 unit, which gives TypeScript's answer by
+another route, and its map, keyed by string, never matches a longer key
+either. Rust keys the map by character (`HashMap<char, String>` in
+`rs/src/options.rs`), so it applies a key above U+FFFF, and it refuses a
+key of more than one character when the options load.
+
+| `string.escape` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"\é"` | `E` | `E` | `E` |
+| same | `"\😀"` | `😀` | `😀` | **`X`** |
+| `{ab: 'X'}` | `"\abc"` | `abc` | `abc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answers
+follow from its UTF-16 index, not from a decision anyone made about keys.
+If a key is a character, TypeScript moves, looking the map up by code
+point, and Go goes with it, back to the whole-character lookup #263 first
+wrote. If a key is one code unit, Rust moves and matches no key above
+U+FFFF. Either ruling also settles a key of two characters: refused when
+the options load, as in Rust, or accepted and never matched, as in
+TypeScript and Go.
+
+Registered as `escape-key-astral` and `escape-key-two-chars`, with
+`escape-key-bmp-control` as their control: a key of one unit under the
+same options, applied in every port.
+
+### A `string.replace` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: the replace-map half of the
+entry above, measured with it.
+
+TypeScript keys the replace map by the first code unit of each key
+(`c.charCodeAt(0)` in `makeStringMatcher`) and reads the source one code
+unit at a time. A key above U+FFFF therefore replaces its high surrogate
+alone and leaves the low surrogate in the value, and a key of two
+characters replaces its first character wherever that appears. Go keys
+the map by a key's first character, which is TypeScript's key for every
+character in the BMP. For one above U+FFFF it keys the whole character,
+as its native `map[rune]string` option always has, because TypeScript's
+answer there is a lone surrogate, which a Go string cannot hold. Before
+#263 Go keyed by a key's first byte, so this key never applied and the
+split had three answers. Rust keys by character, replaces the whole of an
+astral one, and refuses a longer key when the options load.
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"aéb"` | `aEb` | `aEb` | `aEb` |
+| same | `"a😀b"` | **`aX`, U+DE00, `b`** | `aXb` | `aXb` |
+| `{ab: 'X'}` | `"abc"` | `Xbc` | `Xbc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answer
+follows from its UTF-16 index, and neither port can give it, since a lone
+surrogate folds to U+FFFD in Go and Rust (see "Lone surrogates in quoted
+strings"). So the astral split closes only if TypeScript moves, keying
+and reading the map by code point as Go and Rust do; the alternative is
+to accept it as a consequence of the string models. A key of two
+characters is the question the entry above asks.
+
+Registered as `replace-key-astral` and `replace-key-two-chars`, with
+`replace-key-bmp-control` as their control.
+
+### An escaped row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired.
+
+An escape whose character is in `line.rowChars`, a line continuation,
+puts that character in the value in every port. TypeScript copies it as
+an unknown escape and counts one column (`buf.push(ec); sI++; cI++` in
+`ts/src/lexer.ts`), and Go does the same. Rust steps over it with
+`advance` in `rs/src/lexer.rs`, which counts a row for every character
+in `line.rowChars`, so every position after the string is a row further
+on:
+
+| input, position of `y` | options | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `"a\qb" y` | default | 1:8 | 1:8 | 1:8 |
+| `"a\<LF>b" y` | default | 1:8 | 1:8 | **2:4** |
+| `` `a\<LF>b` y `` | default | 1:8 | 1:8 | **2:4** |
+| `"a\<U+2028>b" y` | json5's line characters | 1:8 | 1:8 | **2:4** |
+
+The value is the same in every port. The last row was 1:10 in Go before
+#263, which read the escaped character one byte at a time.
+
+Repair direction: **Rust changes, by ADR-13's default.** TypeScript
+defines the language, Go agrees with it, and the fix is to step over an
+escaped character as one column. It is recorded rather than made because
+the default may be the wrong way round: Rust's row is where `y` stands in
+the source, and TypeScript's count leaves every later position a row
+behind it, which is a defect of its own if a position names a source
+line. If the maintainer rules so, TypeScript and Go move instead and
+count a row for an escaped row character. The rows hold the split until
+then.
+
+Registered as `escape-lf`, `escape-lf-multi` and `escape-ls-json5`, with
+`escape-row-char-control` as their control: an escaped ordinary
+character, one column in every port.
+
+### A replaced row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for the ruling the entry above asks for,
+and measured with it.
+
+TypeScript consults the replace map first after the closing quote, before
+a line character can count a row, so a replaced row character becomes its
+replacement and counts one column, in a single-line string and a
+multi-line one alike. Go does the same since #263 moved its replace check
+to TypeScript's place (see "Repaired"). Rust replaces the character too,
+but steps over it with `advance`, which counts a row:
+
+| `string.replace` | input, position of `y` | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{TAB: 'T'}` | `"a<TAB>b" y` | 1:7 | 1:7 | 1:7 |
+| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | 1:7 | **2:4** |
+| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | 1:7 | **2:4** |
+| `{U+2028: 'L'}`, json5's line characters, `"` multi-line | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+
+Every value agrees. Before #263 Go refused the first three as
+`unprintable`, and answered 1:7 on the last only because it never
+replaced the character, reading the key by its first byte; while #263 was
+in review, its wider multi-line test made that unreplaced character a
+row, 2:4.
+
+Repair direction: **Rust changes, by ADR-13's default**, stepping over a
+replaced character as one column. If the maintainer rules that a row
+character counts a row wherever an escape or a replacement consumes it,
+TypeScript and Go move instead. One ruling settles this entry and the one
+above.
+
+Registered as `replace-lf`, `replace-lf-multi` and `replace-ls-json5`,
+with `replace-row-char-control` as their control.
 
 ## Not divergences
 

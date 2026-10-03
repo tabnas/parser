@@ -1944,6 +1944,26 @@ func (l *Lex) matchString() *Token {
 			break
 		}
 
+		// Replace chars stop the body run; emit the replacement. Tested
+		// before the escape character and the control check, in
+		// TypeScript's order (closing quote, replace, escape, control).
+		// This sat last, so a replace key for a control character was
+		// refused as `unprintable` and one for the escape character
+		// began an escape: `"a<TAB>b"` under `{TAB: 'T'}` and `"a<LF>b"`
+		// under `{LF: 'N'}` gave `unprintable` here where TypeScript and
+		// Rust give `aTb` and `aNb`, and `"a\b"` under `{'\\': '/'}` gave
+		// a backspace where they give `a/b` (tabnas/parser#263).
+		if rep, ok := l.Config.StringReplace[c]; ok {
+			if !dirty {
+				dirty = true
+				sb.WriteString(src[valStart:sI])
+			}
+			flushHi() // replacement text ends any pending pair
+			sb.WriteString(rep)
+			sI += csize
+			continue
+		}
+
 		// Escape character (all string types process escapes)
 		if c == l.Config.EscapeChar {
 			if !dirty {
@@ -1973,8 +1993,14 @@ func (l *Lex) matchString() *Token {
 				flushHi()
 			}
 
-			// Check custom escape map first.
-			if l.Config.EscapeMap != nil {
+			// Check custom escape map first, for a character of one UTF-16
+			// unit. TypeScript looks the map up by `src[sI]`, one code
+			// unit, so a key above U+FFFF, two units there, never matches,
+			// and the character is copied as an unknown escape: `"\😀"`
+			// under `{😀: 'X'}` keeps the character. Looking an astral
+			// character up whole gave Rust's `X` instead (DIVERGENCE.md "A
+			// `string.escape` key longer than one UTF-16 unit").
+			if l.Config.EscapeMap != nil && esc <= 0xFFFF {
 				if rep, ok := l.Config.EscapeMap[string(esc)]; ok {
 					flushHi() // a remapped \u is literal text, not a code unit
 					sb.WriteString(rep)
@@ -2186,18 +2212,6 @@ func (l *Lex) matchString() *Token {
 			l.pnt.SI = sI
 			l.pnt.CI = cI - 1
 			return l.bad("unprintable", sI, sI+1)
-		}
-
-		// Replace chars stop the body run; emit the replacement.
-		if rep, ok := l.Config.StringReplace[c]; ok {
-			if !dirty {
-				dirty = true
-				sb.WriteString(src[valStart:sI])
-			}
-			flushHi() // replacement text ends any pending pair
-			sb.WriteString(rep)
-			sI += csize
-			continue
 		}
 
 		// Unreachable: every stop class is dispatched above.

@@ -34,11 +34,12 @@ Two files have declared special shapes:
 - `rule-history.tsv` has four columns: `name`, `spec`, `input`, and
   `expected`. Comment directives define serialized grammar specs, and each
   data row names one through the JSON object in `spec`.
-- `repaired.tsv` holds the rows that left `divergent.tsv`: five columns,
-  `name`, `probe`, `arg`, `input` and `expected`, the register's shape
-  with its three runtime columns collapsed into the one answer every
-  runtime gives since the repair, and no justification. See "The
-  divergence register" below.
+- `repaired.tsv` holds the rows that pin repaired divergences, and the
+  controls and neighbours measured with them, whether or not a row was
+  ever in `divergent.tsv`: five columns, `name`, `probe`, `arg`, `input`
+  and `expected`, the register's shape with its three runtime columns
+  collapsed into the one answer every runtime gives since the repair,
+  and no justification. See "The divergence register" below.
 
 Every other file here is tab-separated, one case per line, with a header
 row (`input` `expected` or, for list-child fixtures, a third column). The
@@ -132,9 +133,12 @@ Deleted from the register, not from the suites. The row moves to
 `repaired.tsv`, keeping its name, probe, arguments and input, with the
 one answer every runtime gives in place of the three columns, and the
 same runners go on asserting it, so a repaired split that comes back
-fails by name. `go/divergent_test.go` also checks that a `# @repaired:`
-marker names no live `### ` heading in `DIVERGENCE.md` and is still
-mentioned there, and that no row name is in both files.
+fails by name. A split found and repaired in the same change, never
+registered, puts its rows there directly, under a marker naming its
+bullet in DIVERGENCE.md's "Repaired" list. `go/divergent_test.go` also
+checks that a `# @repaired:` marker names no live `### ` heading in
+`DIVERGENCE.md` and is still mentioned there, and that no row name is in
+both files.
 
 Three things about it differ from every other file here:
 
