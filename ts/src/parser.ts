@@ -349,8 +349,12 @@ class Parser {
       throw new TabnasError(S.unexpected, {}, endtry, norule, ctx)
     }
 
-    // NOTE: by returning root, we get implicit closing of maps and lists.
-    const result = (ctx._resultRule ?? ctx.root()).node
+    // Preserve the original-root result in compatibility (unbounded) mode;
+    // only a finite history cuts that chain and therefore uses the directly
+    // tracked replacement.
+    const result = (
+      null == ctx.cfg.rule.history ? ctx.root() : ctx._resultRule ?? ctx.root()
+    ).node
 
     if (this.cfg.result.fail.includes(result)) {
       throw new TabnasError(S.unexpected, {}, ctx.t0, norule, ctx)

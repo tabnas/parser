@@ -853,9 +853,9 @@ class RuleSpec {
       let rulespec = ctx.rsm[alt.r]
       if (rulespec) {
         next = makeRule(rulespec, ctx, rule.node)
-        if (ctx._resultRule === rule) ctx._resultRule = next
         next.parent = rule.parent
         boundedReplace = null != ctx.cfg.rule.history
+        if (boundedReplace && ctx._resultRule === rule) ctx._resultRule = next
         if (!boundedReplace) next.prev = rule
         else next.historyPusher = rule.historyPusher
         const pn = rule.rawn()
