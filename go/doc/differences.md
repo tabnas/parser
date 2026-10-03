@@ -932,6 +932,16 @@ The third row is the one that decides the design: TS falls back for
 fields the caller omits, so merging a supplied definition as a whole
 record would zero four fields TS demonstrably keeps.
 
+`NumberOptions.Sep` has three states in TS: a character, `null` for
+no separator, and absent for the merged default. Go keeps it a string,
+as `StringOptions.Chars` is one, and spells the third state as a value.
+An empty `Sep` keeps the default `_` or the base value, and
+`NumberSepNone` switches the separator off. A serialized `"sep": null`
+or `"sep": ""` arrives as `NumberSepNone`. An empty `Sep` used to switch
+the separator off as well, so turning number lexing on, or installing a
+number `Check`, disabled `1_000` in Go only. Issue #241 records it, and
+`go/number_sep_test.go` pins each spelling against the lexer's token.
+
 Go cannot spell TS's `undefined` inside a typed slice, so there is no
 "keep this index" element: **an empty name in a `TokenSet` slice is the
 removed position**, which is what TS's `null` does, and a serialized

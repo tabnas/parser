@@ -1124,8 +1124,19 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		if bin, ok := nm["bin"].(bool); ok {
 			opts.Number.Bin = &bin
 		}
-		if sep, ok := nm["sep"].(string); ok {
-			opts.Number.Sep = sep
+		// TS switches the separator off for `"sep": null` and for
+		// `"sep": ""`, so both arrive as NumberSepNone. An absent key
+		// leaves Sep empty, which keeps the default or the base (#241).
+		if raw, present := nm["sep"]; present {
+			switch sep := raw.(type) {
+			case nil:
+				opts.Number.Sep = NumberSepNone
+			case string:
+				if sep == "" {
+					sep = NumberSepNone
+				}
+				opts.Number.Sep = sep
+			}
 		}
 		if fn, ok := nm["exclude"].(func(string) bool); ok {
 			opts.Number.Exclude = fn
