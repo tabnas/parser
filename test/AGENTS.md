@@ -68,6 +68,7 @@ Every fixture here, and the runner that executes it:
 | `utility-str.tsv`, `utility-deep.tsv`, `utility-modlist.tsv`, `utility-strinject.tsv` | `ts/test/utility.test.js` | `go/utility_spec_test.go` | `rs/tests/utility_spec_test.rs` |
 | `lex-string-control.tsv`, `lex-text-line-terminator.tsv`, `lex-text-quote.tsv`, `lex-ender-array.tsv` | `ts/test/lex.test.js` | Go lexer tests | `rs/tests/lexer_spec_test.rs` |
 | `diagnostic.tsv` | `ts/test/diagnostic.test.js` | `go/diagnostic_spec_test.go` | `rs/tests/diagnostic_spec_test.rs` |
+| `bad-token.tsv` | `ts/test/bad-token.test.js` | `go/bad_token_spec_test.go` | `rs/tests/bad_token_spec_test.rs` |
 | `rule-history.tsv` | `ts/test/divergent.test.js` | `go/divergent_test.go` | `rs/tests/divergent_spec_test.rs` |
 | `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — | — |
 | `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |
@@ -75,6 +76,13 @@ Every fixture here, and the runner that executes it:
 Both strict-JSON runners go through the strict-JSON grammar that lives as
 a test fixture in each runtime (`ts/test/json-plugin.ts`,
 `go/jsonplugin_test.go`) — the engine itself ships no grammar.
+
+`bad-token.tsv` is the one fixture whose rows need code a serialized
+grammar cannot carry: a custom lex matcher that returns bad tokens. Its
+header specifies that matcher, and each runner builds it natively; the
+grammars are serialized (`ts/test/json-builder.fixture.json`, and the
+`# @grammar` lines in the file), so all three runtimes install the same
+ones.
 
 Both loaders (`ts/test/utility.js`, `go/spec_test.go`) must stay in step
 on escape handling and on what counts as a row; a divergence there makes

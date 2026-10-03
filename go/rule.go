@@ -1865,12 +1865,35 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 				// were not there and the text after it still parses.
 				// Under relex the bad token belongs to the alternates
 				// instead — one of them may re-cut the span.
-				if !relex && ctx.Cfg != nil && ctx.Cfg.Recover.Enabled {
+				if !relex && ctx.recovering() {
 					for tkn != nil && TinBD == tkn.Tin && absorbBad(ctx, lex, rule, tkn) {
 						tkn = lex.next(rule)
 					}
+					// The absorber recorded the token and gave up on it,
+					// at maxSkip or maxRecoveries. TypeScript throws the
+					// recorded error there, and the parse ends on it:
+					// nothing records it again (attemptRecover, below in
+					// the parse loop, would list the same token twice).
+					if tkn != nil && TinBD == tkn.Tin {
+						ctx.absorbGaveUp = true
+					}
 				}
 				lex.tI = 0
+				// A fault the fetch returned with relexing off, a bad
+				// token or, with recovery off, the error the lexer
+				// latched behind an end token, ends the parse in
+				// TypeScript here, before any later alternate is tried,
+				// and continuations() then computes its answer for the
+				// fetching rule from the buffer as it stands at this
+				// point. This pass goes on to try the alternates that
+				// still fit the shorter prefix, and fails later in
+				// another rule, so the answer is taken now, once per
+				// parse.
+				if !relex && !ctx.fetchFault && (lex.Err != nil || (tkn != nil && TinBD == tkn.Tin)) {
+					ctx.fetchFault = true
+					ctx.contTins = nil
+					ctx.fetchFaultTins = continuationTins(ctx, rule, 0)
+				}
 				ctx.T[i] = tkn
 				// Keep the legacy T0 / T1 aliases in sync so existing
 				// grammar / plugin code that reads them observes the
@@ -2055,9 +2078,13 @@ func ParseAlts(isOpen bool, alts []*AltSpec, lex *Lex, rule *Rule, ctx *Context)
 	// lexer's own error, exactly as the non-negotiated path does at fetch
 	// time. Deferring that throw is what let the alternates try to re-cut
 	// it; now that all of them have declined, the specific diagnostic is
-	// the useful one.
+	// the useful one. Not under recovery: the token then goes on as
+	// ParseErr into attemptRecover, which records it once with what the
+	// recovery skipped, as TypeScript's parse_alts leaves it to
+	// RuleSpec.bad. Recording it here as well listed it twice, once
+	// unrecovered (#266).
 	if relex && 0 < len(ctx.T) && ctx.T[0] != nil && ctx.T[0].Tin == TinBD &&
-		lex.Err == nil {
+		lex.Err == nil && !ctx.recovering() {
 		bad := ctx.T[0]
 		je := makeTabnasError(bad.Why, bad.Src, lex.Src, bad.SI, bad.RI, bad.CI, lex.Config)
 		lex.attachErrContext(je, rule, bad.Name, bad.Why)

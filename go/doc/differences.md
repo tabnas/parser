@@ -1357,8 +1357,10 @@ Verified against TS on `{"a":true blah blip,"b":1}`:
 | `suppress: 8` | 1 error, `{"a":true,"b":1}` | 1 error, `{"a":true,"b":1}` |
 
 Beyond `MaxSkip` the run gives up like any other over-long recovery,
-and beyond `MaxRecoveries` the parse gives up: Go checks that cap
-before recording rather than after, so the list does not overshoot.
+and beyond `MaxRecoveries` the parse gives up. Both runtimes read that
+cap after recording the error and after dropping a cascade, so the list
+keeps the error the parse gave up on, and a cascade at the cap leaves
+room to go on. `test/spec/bad-token.tsv` pins both.
 
 The one remaining difference on these inputs is the `undefined`/`nil`
 value-model split described above, not the diagnostics: a key whose
