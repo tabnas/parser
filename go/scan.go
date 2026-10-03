@@ -206,13 +206,17 @@ func BuildStringBodySpec(cfg *LexConfig, q rune) *ScanSpec {
 			return 1
 		case hasKey(cfg.StringReplace, r):
 			return 1
-		case r < 32:
-			if isMultiLine && cfg.LineChars[r] {
-				if cfg.RowChars[r] {
-					return 3
-				}
-				return 2
+		case isMultiLine && cfg.LineChars[r]:
+			// A line char inside a multi-line string, at any code point.
+			// This test sat under `r < 32`, so U+2028 and U+2029 under
+			// json5's line configuration fell through to BODY, and a raw
+			// one inside a multi-line string counted a column where
+			// TypeScript and Rust count a row (tabnas/parser#263).
+			if cfg.RowChars[r] {
+				return 3
 			}
+			return 2
+		case r < 32:
 			if cfg.AllowControl && !cfg.LineChars[r] {
 				// Raw control char admitted verbatim: plain BODY. Line
 				// chars are deliberately excluded — inside a single-line

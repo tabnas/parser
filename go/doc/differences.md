@@ -707,7 +707,8 @@ Both implementations now share the same error model:
 | "See also" link line | `errmsg.link` | `ErrMsg.Link` |
 | `--internal: tag=...; rule=...; token=...; plugins=...--` block | yes | yes |
 | Instance tag when unset | `'-'` (`defaults.ts`) | `'-'` (`DefaultTag`, applied in `Make`) |
-| Custom bad-token error code | `tkn.err` wins over `unexpected` | `tkn.Err` wins over `unexpected` |
+| Code of a bad token a matcher returns, a `#BD` token | Its `why`, else `unexpected`. Only `attemptRecover` reads its `err` ahead of `why`, when every alternate declined the token under `lex.relex` with recovery | The same: `Token.badCode` gives `Why`, else `unexpected`, and `attemptRecover` reads `Err` ahead of `Why` |
+| Code of an error token an alternate's `e` returns | `tkn.err`, else `unexpected` | `tkn.Err`, else `unexpected`, through `ctx.ParseErr` |
 | Source filename in `--> file:row:col` | `meta.fileName` | `ParseMeta` meta `"fileName"` |
 | ANSI colors | `options.color` | `Options.Color` |
 | Source site extract with caret | yes | yes |
@@ -836,6 +837,7 @@ would normally claim.
 |---|---|---|
 | Plugin signature | `(tabnas, opts?) => void \| Tabnas` | `func(j *Tabnas, opts map[string]any) error` |
 | Plugin failure | throw | returned `error` |
+| Config modifiers | `config.modify` runs last in `configure`, after the token sets, so it can set any field | `Property.ConfigModify` runs inside `buildConfig`, before the token sets and before `SetOptions` carries the live config's state over, so its writes to those never take |
 | Rule definer | `(rs: RuleSpec, p: Parser) => void \| RuleSpec` | `func(rs *RuleSpec, p *Parser)` (no replacement return) |
 | RuleSpec alternate/action lists | private; mutated via methods | private; mutated via methods (`AddOpen`/`PrependOpen`/`ModifyOpen`/`ClearOpen`, `AddBO`/`PrependBO`/`ClearActions`, `Fnref`) and read via getters (`OpenAlts`/`CloseAlts`/`Actions`/`HasBO…`), aligned with TS; direct field assignment is no longer possible |
 | Funcref `@x/append` vs plain `@x` | same slot (`fr['@x/append'] ?? fr['@x']`) | same slot (aligned) |

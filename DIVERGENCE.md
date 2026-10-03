@@ -28,7 +28,11 @@ its own `###` heading is therefore also REGISTERED, per ADR-14, in
 [`test/spec/divergent.tsv`](test/spec/divergent.tsv): a row per case, a
 column per runtime, asserted by every runtime suite. A divergence that gets
 repaired fails that register as loudly as one that regresses, so the row
-— and the entry here — must then be deleted. Where an entry cannot be
+— and the entry here — must then be deleted: the row moves to
+[`test/spec/repaired.tsv`](test/spec/repaired.tsv), its three runtime
+columns collapsed into the one answer every runtime now gives, where the
+same runners keep asserting the repair, and the entry moves under
+"Repaired, and what replaced them" below. Where an entry cannot be
 registered yet it is declared, with a reason, in the `notRegistered` map
 in `go/divergent_test.go`, which names each such entry, the reason, and
 where it is pinned instead. A gate in the same file fails if an entry
@@ -475,6 +479,193 @@ fixed or quietly dropped.
   `ts/test/options-validate.test.js`, `go/options_validate_test.go` and
   `rs/tests/options_overlay_test.rs`.
 
+- **A row counted at a raw U+2028 or U+2029 inside a string in Rust.**
+  Found by the differential run behind tabnas/json5#82 and reported as
+  #263. A string body is not multi-line unless its quote is in
+  `string.multiChars`, and in TypeScript and Go a line character inside
+  such a body is ordinary content: `buildStringBodySpec` in
+  `ts/src/lexer.ts` classifies a line character as body unless the
+  string is multi-line, and Go's `BuildStringBodySpec` is its port. Rust
+  counted rows in one place, `advance` in `rs/src/lexer.rs`, for every
+  character in `line.rowChars` its cursor stepped over, string body or
+  not, and refused any character in `line.chars` inside a single-line
+  string as `unprintable`. Under json5's row characters, LF, U+2028 and
+  U+2029, which all three json5 ports set:
+
+  | input, position of `y` | `line.chars` | TypeScript | Go | Rust before |
+  |---|---|---|---|---|
+  | `"ab" y` | default | 1:6 | 1:6 | 1:6 |
+  | `"a<U+2028>b" y` | default | 1:7 | 1:7 | 2:4 |
+  | `"a<U+2028>b" y` | LF, U+2028, U+2029 | 1:7 | 1:7 | `unprintable` at column 3 |
+
+  The Rust string matcher now follows the body classes of
+  `buildStringBodySpec`: inside a multi-line string a line character
+  resets the column and counts a row when `line.rowChars` holds it, and
+  everywhere else in a string body a character counts a column, with
+  one exception, a control character below 32, which stops the body as
+  `unprintable` whether or not it is a line character. The same rule
+  settles two neighbours no row had registered. A row character outside
+  `line.chars` is body inside a multi-line string too, so `y` in
+  `"a<U+2028>b" y` under `line.rowChars` of LF and U+2028 alone, with
+  the double quote multi-line, is at 1:7 in every runtime where Rust had
+  2:4. A CR inside a multi-line string resets the column without
+  counting a row, as TypeScript's class LINE does and Go already did, so
+  `y` in `` `a<CR>b` y `` is at 1:4 where Rust had 1:7. Two paths those
+  classes do not decide still count a row in Rust, a row character an
+  escape consumes and one a `string.replace` key replaces: the live
+  entries "An escaped row character inside a string counts a row in
+  Rust" and "A replaced row character inside a string counts a row in
+  Rust". Pinned in all three runtimes by the first group of
+  [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `string-raw-ls`
+  to `string-multi-crlf-control`, with `string-row-char-control`.
+
+- **No row counted at a raw U+2028 or U+2029 inside a multi-line string in Go.**
+  The Go half of the same split, measured while #263 was registered.
+  Go's `BuildStringBodySpec` in `go/scan.go` tested
+  `LineChars` and `RowChars` only for a character below code point 32,
+  so under json5's line configuration, with the double quote in
+  `string.multiChars`, a raw U+2028 or U+2029 inside a multi-line string
+  was plain body, and the token after the string sat on row 1 where
+  TypeScript and Rust put it on row 2:
+
+  | input, position of `y` | TypeScript | Go before | Rust |
+  |---|---|---|---|
+  | `"a<LF>b" y` | 2:4 | 2:4 | 2:4 |
+  | `"a<U+2028>b" y` | 2:4 | 1:7 | 2:4 |
+  | `"a<U+2028>b<U+2029>c" y` | 3:4 | 1:9 | 3:4 |
+
+  The test now applies to every character in `LineChars`.
+
+  **TypeScript moves here as well, and this is the one place the repair
+  moves it.** Its 256-entry table disagreed with its own fallback:
+  `buildStringBodySpec` classified a line character inside a multi-line
+  string at any code point past the table, and inside the table only
+  below 32, so a line character from U+0020 to U+00FF was body there
+  where any other line character reset the column. Measured before the
+  change, with the double quote multi-line:
+
+  | input, position of `y` | `line.chars` | `line.rowChars` | TypeScript before | Go before | Rust before |
+  |---|---|---|---|---|---|
+  | `"a<U+2028>b" y` | LF, U+2028 | LF | 1:4 | 1:7 | 1:7 |
+  | `"a<U+0085>b" y` | LF, U+0085 | LF | 1:7 | 1:7 | 1:7 |
+  | `"a<U+0085>b" y` | LF, U+0085 | LF, U+0085 | 1:7 | 1:7 | 2:4 |
+
+  The first row is the fallback's answer and the other two the table's.
+  The table now classifies a line character at any code point, as the
+  fallback did, and all three runtimes answer 1:4, 1:4 and 2:4. So
+  TypeScript's answer moves on the second and third rows, Go's on all
+  three and Rust's on the first two. No grammar in the fleet configures
+  a line character from U+0020 to U+00FF. To keep the table as it was,
+  strike the hunk in `ts/src/lexer.ts` and the two rows that pin it,
+  `string-multi-raw-nel` and `string-multi-line-char-nel`; Go and Rust
+  would then need the same exception below U+0100, or the split it
+  leaves would need registering. Pinned by the second group of
+  [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
+  `string-multi-raw-ls` to `string-multi-line-char-ls`, with
+  `string-multi-row-char-control`.
+
+- **An escaped non-ASCII character read as one byte in Go.** The second
+  half of #263. The Go string matcher read the character after the
+  escape character as one byte, `esc := src[sI]` in `go/lexer.go`, and
+  stepped one byte past it, so the remaining bytes of a multi-byte
+  character fell to the body scan and were counted as columns of their
+  own, and a `string.escape` mapping of a non-ASCII character was looked
+  up by its first byte and never found. The value of an unmapped escape
+  was right, since the bytes were appended in order:
+
+  | `string.escape` | input | TypeScript | Go before | Rust |
+  |---|---|---|---|---|
+  | default | `"\a" y`, column of `y` | 6 | 6 | 6 |
+  | default | `"\é" y`, column of `y` | 6 | 7 | 6 |
+  | default | `"\€" y`, column of `y` | 6 | 8 | 6 |
+  | `{a: 'X'}` | `"\a"`, value | `X` | `X` | `X` |
+  | `{é: 'E'}` | `"\é"`, value | `E` | `é` | `E` |
+
+  The matcher now decodes the rune after the escape character, copies
+  its bytes whole and steps past its full width, counting one column, as
+  every other branch of that matcher already did for a multi-byte
+  character, and looks the mapping up by the whole character when that
+  character is one UTF-16 unit, as TypeScript reads the map. A character
+  above U+FFFF is not looked up. TypeScript compares a key with one code
+  unit and so never matches a key of two, and looking an astral
+  character up whole, as this repair first did, gave Rust's answer
+  instead: a split older than #263, the live entry "A `string.escape`
+  key longer than one UTF-16 unit". The column after an escaped astral
+  character stays apart for its own reason: `"\😀" y` puts `y` at
+  column 6 in Go, where it was 9, and in Rust, and at 7 in TypeScript,
+  which counts the character's two UTF-16 units, the split recorded
+  under "Column positions for astral characters". Pinned by the third
+  group of [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
+  `escape-two-byte` to `escape-map-three-byte`, with
+  `escape-ascii-control` and `escape-map-ascii-control`.
+
+- **A non-ASCII `string.replace` key read by its first byte in Go.**
+  Found while #263 was in review, and never registered. Go's serialized
+  options, `OptionsFromMap` in `go/utility.go`, keyed the replace map by
+  a key's first byte, `rune(k[0])`, so a non-ASCII key never applied,
+  and its lead byte, read as a Latin-1 character, applied in its place.
+  TypeScript keys the map by a key's first code unit (`c.charCodeAt(0)`
+  in `makeStringMatcher`) and Rust by its character:
+
+  | `string.replace` | input, value | TypeScript | Go before | Rust |
+  |---|---|---|---|---|
+  | `{b: 'B'}` | `"abc"` | `aBc` | `aBc` | `aBc` |
+  | `{é: 'E'}` | `"aéb"` | `aEb` | `aéb` | `aEb` |
+  | `{é: 'E'}` | `"aÃb"` | `aÃb` | `aEb` | `aÃb` |
+  | `{€: 'EUR'}` | `"a€b"` | `aEURb` | `a€b` | `aEURb` |
+
+  A key is now decoded to its first character, which is TypeScript's key
+  for every character in the BMP. The same read had a position
+  consequence once #263 widened Go's multi-line test. Under json5's line
+  configuration, with the double quote multi-line and `{U+2028: 'L'}`,
+  the unreplaced U+2028 became a row, and `y` in `"a<U+2028>b" y` moved
+  from 1:7 to 2:4 while the PR was in review. Go now replaces it and
+  answers 1:7 with TypeScript. Rust answers 2:4 there, counting a row for
+  the replaced character, which is the live entry "A replaced row
+  character inside a string counts a row in Rust"; a key above U+FFFF is
+  the live entry "A `string.replace` key longer than one UTF-16 unit".
+  Pinned by the fourth group of
+  [`test/spec/repaired.tsv`](test/spec/repaired.tsv), `replace-two-byte`
+  to `replace-ls-json5-value`, with `replace-ascii-control`.
+
+- **A pusher read back through its child's snapshot in Rust.** A push
+  links the child to its pusher both ways. TypeScript and Go link the
+  live rules, so from the child `parent.child.parent.child` is the
+  child itself. Rust links snapshots, and the one the pusher kept as
+  `child` was taken before the pusher had linked it, so its `parent`
+  was the pusher as it stood before the push, whose `child` was the
+  child pushed before: with `list` pushing `first` from its open phase
+  and `second` from its close phase, `parent.child.parent.child.name`
+  read on `second` gave `second` in TypeScript and Go and `first` in
+  Rust, or nothing on a pusher's first push (#259). Repaired as the
+  entry said: with no history bound, the push arm links the child
+  again once the pusher has linked it, from a snapshot that carries the
+  pusher with the child linked (`Rule::relink_child` in
+  `rs/src/rule.rs`), and the child keeps the pusher as it then stands.
+  The cost is two more records kept per push without a bound, 8 for 6
+  per element of a flat array, 654 MB for 554 MB at its peak over
+  300,000 numbers. The pusher as it stood before the push is still
+  where the snapshots end, two hops further down, past every path a
+  fleet grammar reads: the survey in
+  [`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+  past three hops. Under a bound nothing moves: TypeScript and Go copy
+  the same two records there, so the path reads nothing in all three
+  runtimes, which `rule-history-bounded-pusher` pins. Pinned in all
+  three by `rule-history-pusher-control` in
+  `test/spec/rule-history.tsv`, the same grammar with the option unset,
+  with `rule-history-pusher-one-hop` (`parent.child.name`, the row the
+  register kept as its control) beside it, and in Rust by
+  `a_pusher_read_back_through_its_child_has_linked_it` in
+  `rs/tests/rule_history_test.rs`. The relink runs only when the
+  pushing alternate's after actions left the pusher's `child` and `next`
+  as the push made them, so an action that clears or repoints them
+  keeps its edit, as in TypeScript and Go
+  (`an_after_action_that_clears_the_pushers_links_keeps_its_edit`).
+  What the relink does not reach, a read six hops from the child and a
+  read from the pusher during those after actions, is the live entry "A
+  pusher read back past four hops through its child's snapshots in
+  Rust".
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
@@ -739,177 +930,6 @@ Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
 one:** it is what tells a later reader that the child link itself is at
 parity and only the walk past it is not.
 
-### A pusher read back through its child's snapshot in Rust
-
-**Deferred** — a Rust split in how a pushed child's own snapshot links
-its pusher, found while registering the rule-history bound.
-
-A push links the child to its pusher both ways: the child's `parent`
-is the pusher, and the pusher's `child` is the child. TypeScript and
-Go link the live rules, so from the child, `parent.child.parent` is the
-pusher as it stands, and its `child` is the child itself. Rust links
-snapshots, and the child's own snapshot, the one the pusher keeps as
-`child`, carries as its `parent` a snapshot of the pusher taken before
-the pusher linked the child. So in Rust `parent.child.parent.child` is
-the child the pusher pushed before, or nothing on its first push.
-
-| grammar | path read | `options.rule.history` | TypeScript | Go | Rust |
-|---|---|---|---|---|---|
-| `list` pushes `first`, then `second` from its close phase | `parent.child.name` on `second` | unset | `second` | `second` | `second` |
-| same | `parent.child.parent.child.name` on `second` | unset | `second` | `second` | **`first`** |
-Repair direction: **Rust changes**, linking the child's own snapshot to
-the pusher once the pusher has linked it, as the canonical engine reads
-it; then the rows with the option unset agree. No grammar in the fleet
-reads a four-hop path through `parent.child.parent`.
-
-Registered as `pusher-through-child`, with `pusher-through-child-control`
-as its control: `parent.child.name`, the same pusher read directly, where
-the three ports agree.
-
-### A row counted at a raw U+2028 or U+2029 inside a string in Rust
-
-**Deferred, not deliberate** — a Rust defect found by the cross-runtime
-differential run that fixed tabnas/json5#80 (tabnas/json5#82), and
-reported here as [#263](https://github.com/tabnas/parser/issues/263).
-
-A string body is not multi-line unless its quote is in
-`string.multiChars`, and in TypeScript and Go a line character inside
-such a body is ordinary content: `buildStringBodySpec` in
-`ts/src/lexer.ts` classifies a line character as body unless the string
-is multi-line (`if (isMultiLine && lineChars[c]) return rowChars[c] ? 3
-: 2`), and Go's `stringBodySpec` is its port. Rust counts rows in one
-place, `advance` in `rs/src/lexer.rs`: every character the cursor steps
-over that is in `line.rowChars` adds a row and resets the column, string
-body or not. With the default row character, LF, the three agree,
-because a raw LF inside a single-line string is `unprintable` in all of
-them before any row is counted. With U+2028 or U+2029 as a row character
-they part: TypeScript and Go count a column, Rust a row, and every
-position after the string differs by a row.
-
-| input | `line.rowChars` | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `"ab" y`, position of `y` | LF, U+2028, U+2029 | 1:6 | 1:6 | 1:6 |
-| `"a<U+2028>b" y`, position of `y` | same | 1:7 | 1:7 | **2:4** |
-| `"a<U+2029>b" y`, position of `y` | same | 1:7 | 1:7 | **2:4** |
-
-json5 is the live configuration: JSON5 admits an unescaped U+2028 or
-U+2029 inside a string literal, and all three json5 ports set
-`line.rowChars` to LF, U+2028 and U+2029 (`JSON5_ROW_CHARS` in
-`ts/src/json5.ts`, `go/json5.go` and `rs/src/lib.rs` of tabnas/json5).
-The first rows use only that option, which is the part of json5's
-configuration the three ports share. json5's TypeScript and Go ports
-also put the two characters in `line.chars`, and its Rust port puts
-them in `line.fixed` instead, because of the same defect seen from the
-other side: with U+2028 or U+2029 in `line.chars` as well, Rust's string
-matcher reports the raw character inside a single-line string as
-`unprintable` before any row is counted, where TypeScript and Go accept
-it as body and count a column. A repair of the row count alone would
-leave that path, so both are registered:
-
-| input | `line.rowChars` | `line.chars` | TypeScript | Go | Rust |
-|---|---|---|---|---|---|
-| `"a<U+2028>b" y`, position of `y` | LF, U+2028, U+2029 | LF, U+2028, U+2029 | 1:7 | 1:7 | **`unprintable` at column 3** |
-| `"a<U+2029>b" y`, position of `y` | same | same | 1:7 | 1:7 | **`unprintable` at column 3** |
-
-Repair direction: **Rust changes.** TypeScript defines the language and
-Go agrees with it. The string matcher's body loop should treat a line
-character as body unless the string is multi-line, as
-`buildStringBodySpec` does: neither counting a row for one in
-`line.rowChars` nor refusing one in `line.chars`.
-
-Registered as `string-raw-ls` and `string-raw-ps`, with
-`string-row-char-control` as their control: the same option and a
-string with no line terminator in it, where the three ports agree. The
-`line.chars` path is `string-raw-ls-line-char` and
-`string-raw-ps-line-char`, with both options set. Inside a multi-line
-string the same two characters split the other way, with Go apart: the
-next entry.
-
-### No row counted at a raw U+2028 or U+2029 inside a multi-line string in Go
-
-**Deferred, not deliberate** — the Go half of the same line-terminator
-split, measured while #263 was registered, and the third way the three
-ports read a raw U+2028 or U+2029 in a string.
-
-Under json5's line configuration, LF, U+2028 and U+2029 in both
-`line.chars` and `line.rowChars`, and with the double quote in
-`string.multiChars`, a raw LF inside the string counts a row in every
-port. A raw U+2028 or U+2029 counts a row in TypeScript, whose
-`buildStringBodySpec` classifies a line character in a multi-line string
-as a row character when `line.rowChars` holds it, and in Rust, which
-counts a row for any row character its cursor steps over. Go's
-`BuildStringBodySpec` (`go/scan.go`) tests `LineChars` and `RowChars`
-only for a character below code point 32, so U+2028 and U+2029 fall
-through to plain body, and the token after the string sits on row 1
-where the other two put it on row 2.
-
-| input, position of `y` | TypeScript | Go | Rust |
-|---|---|---|---|
-| `"a<LF>b" y` | 2:4 | 2:4 | 2:4 |
-| `"a<U+2028>b" y` | 2:4 | **1:7** | 2:4 |
-| `"a<U+2029>b" y` | 2:4 | **1:7** | 2:4 |
-
-Repair direction: **Go changes.** TypeScript defines the language and
-Rust agrees with it here: the multi-line test in `BuildStringBodySpec`
-should apply to every character in `LineChars`, not only to the control
-characters.
-
-Registered as `string-multi-raw-ls` and `string-multi-raw-ps`, with
-`string-multi-row-char-control` as their control: a raw LF in the same
-multi-line string, where the three ports agree.
-
-### An escaped non-ASCII character read as one byte in Go
-
-**Deferred, not deliberate** — a Go defect from the same differential
-run, the second half of [#263](https://github.com/tabnas/parser/issues/263).
-
-In the Go string matcher the character after the escape character is
-read as one byte: `esc := src[sI]` in `go/lexer.go`, after `sI +=
-csize; cI++` has stepped past the backslash. The unknown-escape branch
-writes that byte (`sb.WriteByte(esc)`) and steps one byte past it, so
-the remaining bytes of a multi-byte character fall to the body scan and
-are counted as columns of their own. The value is right, because the
-bytes are appended in order and reassemble into the character, but the
-column runs ahead by the character's UTF-8 length minus one. TypeScript
-counts the escaped character as one UTF-16 unit (`buf.push(ec); sI++;
-cI++` in `ts/src/lexer.ts`) and Rust as one character.
-
-| input, position of `y` | TypeScript | Go | Rust |
-|---|---|---|---|
-| `"\a" y` | 6 | 6 | 6 |
-| `"\é" y` (U+00E9, two bytes) | 6 | **7** | 6 |
-| `"\€" y` (U+20AC, three bytes) | 6 | **8** | 6 |
-| `"\😀" y` (U+1F600, four bytes) | 7 | **9** | 6 |
-
-The last line is not registered: the astral character brings in the
-scan-unit split recorded under "Column positions for astral characters",
-so TypeScript's 7 is its own count of two UTF-16 units and the row would
-pin two divergences at once. The two registered rows are inside the BMP,
-where TypeScript and Rust agree and only Go differs.
-
-The same one-byte read misses a `string.escape` mapping of a non-ASCII
-character, so the value differs too. The lookup is `string(esc)`, the
-first byte alone, and a mapping of `é` is never found: the unknown-escape
-branch reconstructs the character where TypeScript and Rust look the
-character up whole and emit the replacement.
-
-| `string.escape` | input | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{a: 'X'}` | `"\a"` | `X` | `X` | `X` |
-| `{é: 'E'}` | `"\é"` | `E` | **`é`** | `E` |
-
-Repair direction: **Go changes.** Decode the rune after the escape
-character with `utf8.DecodeRuneInString`, look it up in the escape map
-whole, write it whole and step past its full width, counting one column,
-as every other branch of that matcher already does for a multi-byte
-character.
-
-Registered as `escape-two-byte` and `escape-three-byte`, with
-`escape-ascii-control` as their control: an escape followed by an ASCII
-character, where the three ports agree; and the mapping as
-`escape-map-two-byte`, with `escape-map-ascii-control` as its control,
-a mapping of an ASCII character, applied in every port.
-
 ### A multi-character block-comment end is cut short in Rust
 
 **Deferred, not deliberate** — a Rust defect measured while the block
@@ -936,6 +956,254 @@ moves past it.
 Registered as `block-comment-two-char-end` and
 `block-comment-three-char-end`, with `block-comment-end-control` as
 their control: a one-character end, where the three ports agree.
+
+### A `string.escape` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired. Rust's split is older than that PR, which briefly moved Go to
+Rust's side of it.
+
+TypeScript looks the escape map up by `src[sI]`, the one code unit after
+the escape character (`makeStringMatcher` in `ts/src/lexer.ts`), so a key
+of two units or more never matches. An escaped character above U+FFFF,
+two units, is then copied as an unknown escape, and a key of two
+characters is never consulted at all. Go looks the map up only for an
+escaped character of one UTF-16 unit, which gives TypeScript's answer by
+another route, and its map, keyed by string, never matches a longer key
+either. Rust keys the map by character (`HashMap<char, String>` in
+`rs/src/options.rs`), so it applies a key above U+FFFF, and it refuses a
+key of more than one character when the options load.
+
+| `string.escape` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"\é"` | `E` | `E` | `E` |
+| same | `"\😀"` | `😀` | `😀` | **`X`** |
+| `{ab: 'X'}` | `"\abc"` | `abc` | `abc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answers
+follow from its UTF-16 index, not from a decision anyone made about keys.
+If a key is a character, TypeScript moves, looking the map up by code
+point, and Go goes with it, back to the whole-character lookup #263 first
+wrote. If a key is one code unit, Rust moves and matches no key above
+U+FFFF. Either ruling also settles a key of two characters: refused when
+the options load, as in Rust, or accepted and never matched, as in
+TypeScript and Go.
+
+Registered as `escape-key-astral` and `escape-key-two-chars`, with
+`escape-key-bmp-control` as their control: a key of one unit under the
+same options, applied in every port.
+
+### A `string.replace` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: the replace-map half of the
+entry above, measured with it.
+
+TypeScript keys the replace map by the first code unit of each key
+(`c.charCodeAt(0)` in `makeStringMatcher`) and reads the source one code
+unit at a time. A key above U+FFFF therefore replaces its high surrogate
+alone and leaves the low surrogate in the value, and a key of two
+characters replaces its first character wherever that appears. Go keys
+the map by a key's first character, which is TypeScript's key for every
+character in the BMP. For one above U+FFFF it keys the whole character,
+as its native `map[rune]string` option always has, because TypeScript's
+answer there is a lone surrogate, which a Go string cannot hold. Before
+#263 Go keyed by a key's first byte, so this key never applied and the
+split had three answers. Rust keys by character, replaces the whole of an
+astral one, and refuses a longer key when the options load.
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"aéb"` | `aEb` | `aEb` | `aEb` |
+| same | `"a😀b"` | **`aX`, U+DE00, `b`** | `aXb` | `aXb` |
+| `{ab: 'X'}` | `"abc"` | `Xbc` | `Xbc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answer
+follows from its UTF-16 index, and neither port can give it, since a lone
+surrogate folds to U+FFFD in Go and Rust (see "Lone surrogates in quoted
+strings"). So the astral split closes only if TypeScript moves, keying
+and reading the map by code point as Go and Rust do; the alternative is
+to accept it as a consequence of the string models. A key of two
+characters is the question the entry above asks.
+
+Registered as `replace-key-astral` and `replace-key-two-chars`, with
+`replace-key-bmp-control` as their control.
+
+### An escaped row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired.
+
+An escape whose character is in `line.rowChars`, a line continuation,
+puts that character in the value in every port. TypeScript copies it as
+an unknown escape and counts one column (`buf.push(ec); sI++; cI++` in
+`ts/src/lexer.ts`), and Go does the same. Rust steps over it with
+`advance` in `rs/src/lexer.rs`, which counts a row for every character
+in `line.rowChars`, so every position after the string is a row further
+on:
+
+| input, position of `y` | options | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `"a\qb" y` | default | 1:8 | 1:8 | 1:8 |
+| `"a\<LF>b" y` | default | 1:8 | 1:8 | **2:4** |
+| `` `a\<LF>b` y `` | default | 1:8 | 1:8 | **2:4** |
+| `"a\<U+2028>b" y` | json5's line characters | 1:8 | 1:8 | **2:4** |
+
+The value is the same in every port. The last row was 1:10 in Go before
+#263, which read the escaped character one byte at a time.
+
+Repair direction: **Rust changes, by ADR-13's default.** TypeScript
+defines the language, Go agrees with it, and the fix is to step over an
+escaped character as one column. It is recorded rather than made because
+the default may be the wrong way round: Rust's row is where `y` stands in
+the source, and TypeScript's count leaves every later position a row
+behind it, which is a defect of its own if a position names a source
+line. If the maintainer rules so, TypeScript and Go move instead and
+count a row for an escaped row character. The rows hold the split until
+then.
+
+Registered as `escape-lf`, `escape-lf-multi` and `escape-ls-json5`, with
+`escape-row-char-control` as their control: an escaped ordinary
+character, one column in every port.
+
+### A replaced row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for the ruling the entry above asks for,
+and measured with it.
+
+TypeScript consults the replace map first after the closing quote, before
+a line character can count a row, so a replaced row character becomes its
+replacement and counts one column, in a single-line string and a
+multi-line one alike. Rust replaces the character too, but steps over it
+with `advance`, which counts a row. Go agrees with TypeScript for a row
+character outside the control range, U+2028 under json5's line
+characters, since #263 made it read a replace key by character; a
+control one, LF, it refuses as `unprintable` before it reads the map,
+which is the entry "The `string.replace` map consulted after the escape
+and control checks in Go" below:
+
+| `string.replace` | input, position of `y` | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{x: 'X'}` | `"axb" y` | 1:7 | 1:7 | 1:7 |
+| `{U+2028: 'L'}`, json5's line characters | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+| `{U+2028: 'L'}`, json5's line characters, `"` multi-line | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | `unprintable` | **2:4** |
+| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | `unprintable` | **2:4** |
+
+Every value agrees where Go answers. Before #263 Go answered 1:7 on the
+multi-line U+2028 row only because it read the key by its first byte and
+never replaced the character; while #263 was in review, its wider
+multi-line test made that unreplaced character a row, 2:4.
+
+`tabnas/jsonic`'s ledger carries the same split through its grammar as
+`string-replace-control-row`, where a raw CR after a replaced LF is
+`unprintable` at 2:6 in TypeScript and Go and at 3:1 in Rust.
+
+Repair direction: **Rust changes, by ADR-13's default**, stepping over a
+replaced character as one column. If the maintainer rules that a row
+character counts a row wherever an escape or a replacement consumes it,
+TypeScript and Go move instead. One ruling settles this entry and the one
+above.
+
+Registered as `replace-ls-single` and `replace-ls-json5`, with
+`replace-row-char-control` as their control: a replaced ordinary
+character, one column in every port. The LF rows are not registered
+here. Go's answer there is a lex error, and the `lex` probe renders the
+source of a lex error, which would be the LF itself, a character no
+register cell may hold; Go's refusal is pinned instead, through the
+`spec` probe, under the entry below.
+
+### The `string.replace` map consulted after the escape and control checks in Go
+
+**Deferred, not deliberate**, and held on purpose: measured while #263 was
+repaired, with the repair written, measured and taken out again. Tracked
+as [#287](https://github.com/tabnas/parser/issues/287).
+
+Inside a string body TypeScript tests the closing quote, then the replace
+map, then the escape character, then the control range
+(`makeStringMatcher` in `ts/src/lexer.ts`), and Rust consults the replace
+map in the same place. Go's `matchString` in `go/lexer.go` tests the
+escape character, then the control range, and reads the replace map
+last. So a `string.replace` key for a control character is refused as
+`unprintable` before the map is read, and a key for the escape character
+begins an escape instead of being replaced:
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{x: 'X'}` | `"axb"` | `aXb` | `aXb` | `aXb` |
+| `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | **`unprintable`** | `aTb` |
+| `{LF: 'N'}` | `"a<LF>b"` | `aNb` | **`unprintable`** | `aNb` |
+| `{'\\': '/'}` | `"a\bc"` | `a/bc` | **`a`, U+0008, `c`** | `a/bc` |
+
+Repair direction: **Go changes**, to TypeScript's order, reading the
+replace map right after the closing quote. TypeScript defines the
+language and Rust agrees with it. The repair moves one block in
+`matchString`, and #287 carries it.
+
+It is held because a downstream ledger pins Go's present answer.
+`tabnas/jsonic`'s divergence ledger carries the replaced-LF case, through
+its grammar, as `string-replace-control`, with Go at `unprintable`, and
+that ledger fails a row whose divergence has been repaired until the row
+is deleted. This repository's `gate` job runs jsonic from its `main`, and
+the fleet gate runs jsonic at its latest release, so the repair lands
+once the row is gone from both: delete the row in tabnas/jsonic, release
+jsonic, then land the reorder and close this group in the same change.
+
+Registered as `replace-tab`, `replace-lf-value` and `replace-escape-char`,
+with `replace-order-control` as their control: a replaced ordinary
+character, parsed alike in every port. The control, the TAB and the LF go
+through the `spec` probe, a grammar that takes one string token, because
+the `lex` probe renders the source of a lex error and Go's would be the
+TAB or the LF itself; the escape character goes through the `lex` probe,
+whose value Go decodes rather than refuses.
+
+### A pusher read back past four hops through its child's snapshots in Rust
+
+**Deferred, not deliberate**: what the repair of "A pusher read back
+through its child's snapshot in Rust" (under "Repaired") does not reach.
+
+TypeScript and Go link a pushed child to its pusher as live rules, so
+from the child every `parent.child` is the child itself, however often
+the path repeats it. Rust links snapshots. With no history bound the
+push arm links the child a second time, from a snapshot that carries the
+pusher with the child linked, and that carries the read through four
+hops. Two hops further the snapshots end at the pusher as it stood
+before the push, whose `child` is the child pushed before. With `list`
+pushing `first` from its open phase and `second` from its close phase:
+
+| path read on `second` | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `parent.child.parent.child.name` | `second` | `second` | `second` |
+| `parent.child.parent.child.parent.child.name` | `second` | `second` | `first` |
+
+The same model shows from the pusher's side, during the pushing
+alternate's after actions. TypeScript and Go have linked the live rules
+before those actions run, so a state action on the pusher's close reads
+`child.parent.child` as the child just pushed. Rust relinks after the
+actions, so the same action reads the child pushed before, or nothing on
+the pusher's first push. No row can carry this face, because a
+serialized grammar has no after action that reads a path; per-runtime
+tests pin it instead.
+
+No fleet grammar reads either path: the survey in
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+past three hops.
+
+Repair direction: **Rust changes**, by a mechanism the maintainer
+chooses. Relinking further costs two more records per push without a
+bound for each further pair of hops. Resolving a child's `parent` as the
+live rule in the path readers gives TypeScript's answer at every depth
+for a condition path at no memory cost, though not to a subscriber
+walking the raw links or to an after action. Linking live rules, as the
+canonical engine does, is the full repair.
+
+Registered as `pusher-six-hops`, with `pusher-four-hops-control` as its
+control: the four-hop read, where the three runtimes agree. The
+after-action face is pinned by `ts/test/divergence.test.js` ('a pusher's
+after action reads the child just pushed here and in Go, the child
+pushed before in Rust'), `go/divergence_test.go`
+`TestPusherAfterActionReadsTheChildJustPushed` and
+`rs/tests/rule_history_test.rs`
+`an_after_action_on_the_pusher_reads_the_child_pushed_before`.
 
 ### Decorations reach a derived child after the plugins in Go
 

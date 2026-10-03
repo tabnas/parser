@@ -1703,6 +1703,36 @@ impl Rule {
         self.child_record = Some(child.snapshot());
     }
 
+    /// Link the pushed child again, from its snapshot as it now stands.
+    /// Called by the push arm, with no history bound, once the child's
+    /// `parent_rule` is this rule with the child linked: the snapshot
+    /// taken at the push carries this rule as it stood BEFORE the push,
+    /// whose `child` is the child pushed before, and a grammar reading
+    /// `parent.child.parent.child` from the child found that one where
+    /// TypeScript and Go, which link live rules, find the child itself
+    /// (parser #259). `child` and `next`, the links a grammar reads, move
+    /// together; `child_record` moves with them so the three agree, though
+    /// `freeze_child` replaces it before `accept_child` reads it on resume.
+    pub(crate) fn relink_child(&mut self, child: &Rule) {
+        let snapshot = child.snapshot();
+        self.child_record = Some(Rc::clone(&snapshot));
+        self.next_rule = Some(Rc::clone(&snapshot));
+        self.child_rule = Some(snapshot);
+    }
+
+    /// Whether `child` and `next` are still the link the push arm made,
+    /// `linked`. The push arm relinks only then: an after action that
+    /// cleared or repointed either link keeps its edit, as it does in
+    /// TypeScript and Go, which link before the after actions run and do
+    /// not touch the links again.
+    pub(crate) fn links_unchanged(&self, linked: &Option<Rc<RuleSnapshot>>) -> bool {
+        let same = |link: &Option<Rc<RuleSnapshot>>| match (link, linked) {
+            (Some(now), Some(made)) => Rc::ptr_eq(now, made),
+            _ => false,
+        };
+        same(&self.child_rule) && same(&self.next_rule)
+    }
+
     /// The pushed child is about to stop being the current rule, either
     /// because it is being replaced or because it is popping. Freeze both
     /// halves of the link: the cell its `node` field ended on, and its

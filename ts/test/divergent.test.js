@@ -336,3 +336,51 @@ describe('shared rule-history contract', () => {
     assert.ok(0 < ran, 'rule-history.tsv ran no cases')
   })
 })
+
+// The rows that LEFT the register. test/spec/repaired.tsv holds each
+// repaired divergence with the one answer every runtime gives since, run
+// through the same probes: the register proves a split is live, and this
+// lane proves it stays closed. The Go runner carries the gates that tie
+// the file to DIVERGENCE.md and to divergent.tsv.
+const REPAIRED_COLS = 5
+
+describe('repaired register', () => {
+  it('every repaired row has the one answer, here as in the other runtimes', () => {
+    const rows = loadTSV('repaired')
+    const specs = collectSpecs(rows)
+    const seen = new Set()
+    let ran = 0
+
+    for (const { cols, row } of rows) {
+      if (1 === cols.length && cols[0].startsWith('#')) continue
+      assert.equal(
+        cols.length,
+        REPAIRED_COLS,
+        `repaired.tsv:${row}: want ${REPAIRED_COLS} columns ` +
+          `(name probe arg input expected), got ${cols.length}`,
+      )
+      const [name, probe, argRaw, input, want] = cols
+
+      assert.ok(!seen.has(name), `${name}: duplicate row name`)
+      seen.add(name)
+
+      const arg = '-' === argRaw || '' === argRaw ? {} : JSON.parse(argRaw)
+      const got = runProbe(probe, arg, input, specs)
+      ran++
+
+      assert.equal(
+        got,
+        want,
+        `${name}: a repaired divergence is back.\n` +
+          `  probe: ${probe} ${argRaw}\n  input: ${JSON.stringify(input)}\n` +
+          `  got:   ${got}\n  want:  ${want}\n` +
+          'The row records the answer every runtime gives since the repair. ' +
+          'If this port has moved, the split is open again and belongs in ' +
+          'divergent.tsv, with its DIVERGENCE.md entry. Do not edit the ' +
+          'column to match.',
+      )
+    }
+
+    assert.ok(0 < ran, 'repaired.tsv ran no rows')
+  })
+})

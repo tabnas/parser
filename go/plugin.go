@@ -529,6 +529,15 @@ func (j *Tabnas) Plugins() []Plugin {
 
 // Config returns the parser's LexConfig for direct inspection or modification.
 // Use with care — prefer Token(), Rule(), and options.lex.match for most work.
+//
+// A write through it lasts only until the next SetOptions, or the next
+// Grammar whose spec carries options: the rebuild copies a fresh config
+// over this one and carries forward only fixed tokens, custom token
+// names, token sets, custom matchers and the match token and match value
+// entries registered here (#238). A *Check hook, the parse budget or an
+// ender written here is dropped then. The routes that survive are the
+// Options fields, Options.Ender and Property.ConfigModify, which runs on
+// every rebuild.
 func (j *Tabnas) Config() *LexConfig {
 	return j.parser.Config
 }
@@ -900,13 +909,6 @@ func (j *Tabnas) Derive(opts ...Options) (result *Tabnas, err error) {
 	return child, nil
 }
 
-// SetOptions deep-merges new options into this instance and rebuilds the
-// config. Existing grammar rules (including plugin modifications) are
-// preserved — matching the TypeScript clone/inherit pattern where
-// options() does not rebuild the grammar.
-// When called from within a plugin (during re-apply), skips plugin
-// re-application to avoid infinite recursion.
-// Returns the instance for chaining.
 // ApplyOptions is SetOptions with an error channel: it validates the
 // options first and returns the caller's mistake as an error instead of
 // panicking. SetOptions keeps its chaining signature and panics on the
@@ -924,6 +926,22 @@ func (j *Tabnas) ApplyOptions(opts Options) error {
 	return nil
 }
 
+// SetOptions deep-merges new options into this instance and rebuilds the
+// config from the merged result. Existing grammar rules (including plugin
+// modifications) are preserved, matching the TypeScript clone/inherit
+// pattern where options() does not rebuild the grammar, and plugins are
+// not re-applied: only Derive re-runs them. Returns the instance for
+// chaining.
+//
+// The rebuild copies a fresh config over the live one, keeping its
+// pointer, and carries forward only the per-instance state the options
+// cannot rebuild: fixed tokens, custom token names, token sets, custom
+// matchers, and the match token and match value entries registered on
+// the live config. Everything else written through Config() is lost at
+// this point (#238): every *Check hook, the parse budget, EnderChars and
+// EnderSeqs. The routes that survive are the Options fields, Options.Ender
+// and Property.ConfigModify, which runs on every rebuild. Grammar applies
+// a spec's options through here, so it rebuilds the same way.
 func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	merged := mergeOptionsOverlay(*j.options, opts)
 	if err := checkCommentDefinitions(&merged); err != nil {
@@ -947,8 +965,11 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	// of its two entry points. `MapToOptions` had the same shape of gap —
 	// it named four `rule` fields and dropped `maxmul` — so a shared options
 	// blob configured the guard in TypeScript and left this port on its
-	// default. Both are pinned by test/spec/rule-maxmul.tsv, which runs
-	// every row twice.
+	// default. Both are pinned in go/rule_budget_test.go, by
+	// TestMaxMulTakesEffectThroughSetOptions and
+	// TestMaxMulSurvivesTheOptionsMap; no shared fixture can pin them,
+	// because a fixture row is input to parse result, and the result does
+	// not move with the multiplier.
 	if nil != j.options.Rule && nil != j.options.Rule.MaxMul {
 		j.parser.MaxMul = *j.options.Rule.MaxMul
 	}
@@ -1029,8 +1050,10 @@ func (j *Tabnas) SetOptions(opts Options) *Tabnas {
 	*j.parser.Config = *cfg
 
 	// The dispatch tables baked into cfg by buildConfig predate the
-	// preserved-state merges above (fixed tokens, ender chars) — rebuild
-	// them against the final merged config.
+	// preserved-state merges above, fixed tokens among them — rebuild them
+	// against the final merged config. Ender chars are not among what is
+	// preserved: the rebuild takes them from the merged options alone,
+	// unlike Derive, which copies the parent's onto the child.
 	j.parser.Config.refreshLexTables()
 
 	// Do NOT rebuild grammar — preserve existing RSM with user rule

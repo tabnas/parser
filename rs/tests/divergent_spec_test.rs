@@ -252,6 +252,50 @@ fn no_value_parse_is_null() {
     assert_eq!(parser.parse("").unwrap(), Value::String("EMPTY".into()));
 }
 
+/// The rows that LEFT the register. test/spec/repaired.tsv holds each
+/// repaired divergence with the one answer every runtime gives since, run
+/// through the same probes: the register proves a split is live, and this
+/// lane proves it stays closed. The Go runner carries the gates that tie
+/// the file to DIVERGENCE.md and to divergent.tsv.
+#[test]
+fn shared_repaired_register_has_a_live_rust_lane() {
+    const COLUMNS: usize = 5;
+    let source = fs::read_to_string("../test/spec/repaired.tsv").expect("repaired.tsv");
+    let mut specs = IndexMap::new();
+    for line in source.lines() {
+        if let Some(spec) = line.strip_prefix("# @spec ") {
+            let (name, document) = spec.split_once(' ').expect("named spec document");
+            specs.insert(name.to_string(), document.to_string());
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut ran = 0;
+    for (index, raw) in source.lines().enumerate().skip(1) {
+        if raw.starts_with('#') || raw.trim().is_empty() {
+            continue;
+        }
+        let columns: Vec<String> = raw.split('\t').map(preprocess).collect();
+        assert_eq!(columns.len(), COLUMNS, "repaired.tsv:{}", index + 1);
+        let [name, probe, args, input, expected]: &[String; COLUMNS] =
+            columns.as_slice().try_into().expect("checked column count");
+        assert!(seen.insert(name.clone()), "duplicate repaired row {name}");
+        let args: JsonValue = serde_json::from_str(args).expect("probe arguments");
+        let actual = match probe.as_str() {
+            "lex" => lex_probe(input, &args),
+            "spec" => spec_probe(input, &args, &specs),
+            value => panic!("unknown probe {value}"),
+        };
+        assert_eq!(
+            actual, *expected,
+            "repaired row {name}: a repaired divergence is back, and belongs in \
+             divergent.tsv again, with its DIVERGENCE.md entry"
+        );
+        ran += 1;
+    }
+    assert!(ran > 0, "repaired register ran no rows");
+}
+
 // DIVERGENCE.md "Decorations reach a derived child after the plugins in
 // Go": `derive` copies the parent's decorations onto the child before it
 // re-runs the plugins, as the canonical constructor does, so a plugin's

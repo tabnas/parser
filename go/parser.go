@@ -746,16 +746,11 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	// A #BD token in trailing content carries its own error code —
 	// unterminated_string, invalid_unicode, … — and TS raises
 	// `why || unexpected` with the token's use details (parser.ts
-	// buffered/endtry checks). The absorbBad precedence (Why, Err,
-	// "unexpected") is the Go form of that.
+	// buffered/endtry checks). Token.badCode is the Go form of that, the
+	// same resolution as at a fetch: Err is not read.
 	bdCode := func(tkn *Token) string {
 		if TinBD == tkn.Tin {
-			if "" != tkn.Why {
-				return tkn.Why
-			}
-			if "" != tkn.Err {
-				return tkn.Err
-			}
+			return tkn.badCode()
 		}
 		return "unexpected"
 	}

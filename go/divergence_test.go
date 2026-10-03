@@ -612,6 +612,47 @@ func TestNoValueParseIsNil(t *testing.T) {
 	}
 }
 
+// DIVERGENCE.md "A pusher read back past four hops through its child's
+// snapshots in Rust", the after-action face: this port links the live
+// rules before the pushing alternate's after actions run, as TypeScript
+// does, so the pusher's Child.Parent.Child there is the child itself on
+// every pass. Rust relinks after the actions and reads the child pushed
+// before.
+func TestPusherAfterActionReadsTheChildJustPushed(t *testing.T) {
+	ta, tb, te := "a", "b", "e"
+	j := Make(Options{
+		Rule:  &RuleOptions{Start: "list"},
+		Fixed: &FixedOptions{Token: map[string]*string{"#A": &ta, "#B": &tb, "#E": &te}},
+	})
+	A, B, E := j.Token("#A"), j.Token("#B"), j.Token("#E")
+	var seen []bool
+	j.Rule("list", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{A}}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{B}}, B: 1, P: "item"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{E}}})
+		rs.AddAC(func(r *Rule, _ *Context) {
+			if r.Child != nil && "item" == r.Child.Name {
+				seen = append(seen, r.Child.Parent.Child == r.Child)
+			}
+		})
+	})
+	j.Rule("item", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{B}}})
+		rs.AddClose(&AltSpec{})
+	})
+	if _, err := j.Parse("abbbe"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 4 {
+		t.Fatalf("the after action ran %d times on an item child, want 4: %v", len(seen), seen)
+	}
+	for i, same := range seen {
+		if !same {
+			t.Errorf("pass %d: Child.Parent.Child is not the child just pushed: %v", i, seen)
+		}
+	}
+}
+
 // DIVERGENCE.md "Decorations reach a derived child after the plugins in
 // Go": Derive re-applies the parent's plugins first and copies the
 // parent's decorations after, so a plugin's re-run on the child finds
