@@ -44,6 +44,10 @@ grammar	opts	input	value	errors
 # coalesces a run of them into one error, and steps past it; under
 # relexing it leaves it in the lookahead for an alternate to re-cut. The
 # check for content after the parse raises it without recording it first.
+# An err-only token no alternate re-cut under relexing, fail-fast, has no
+# row here: the Rust port raises it with its err where TypeScript and Go
+# raise `unexpected` (tabnas/parser#285), so ts/test/bad-token.test.js and
+# go/bad_token_spec_test.go pin that answer until Rust follows.
 # A recovering parse that gives up lists every error once: the one it
 # gave up on is the last one it recorded, or a cascade it dropped.
 #

@@ -131,7 +131,7 @@ describe('bad-token', () => {
   // Under relexing, a bad token no alternate re-cut is raised with the code
   // its fetch would have given it: its why, else unexpected, and never its
   // err (`bad.why || UNEXPECTED` in rules.ts). The shared fixture does not
-  // carry this row, because the Rust port reads err at this one site;
+  // carry this row, because the Rust port reads err at this one site (#285);
   // go/bad_token_spec_test.go pins the same answer for Go (#267).
   it('an-err-only-bad-token-under-relexing', () => {
     const relex = make('json', {}, JSON.stringify({ lex: { relex: true } }))
