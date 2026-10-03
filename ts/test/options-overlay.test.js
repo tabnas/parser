@@ -99,4 +99,28 @@ describe('options-overlay', () => {
     removed.options({ match: { value: { hex: null } } })
     assert.equal(removed.parse('0xff'), 255)
   })
+
+  it('text.modify is rebuilt, not carried forward, by options()', () => {
+    const tn = new Tabnas({ text: { modify: (v) => v + '!' } })
+    tn.grammar({
+      options: { rule: { start: 'top' } },
+      rule: { top: { open: [{ s: '#TX', a: '@value$' }] } },
+    })
+    tn.options({})
+    tn.options({})
+    tn.options({})
+
+    // One modifier, however many calls rebuilt the config: configure()
+    // once concatenated onto the list it had, so each call added the
+    // modifiers again, and a modifier that is not idempotent ran once more
+    // per text token (#243).
+    assert.equal(tn.internal().config.text.modify.length, 1)
+    assert.equal(tn.parse('abc'), 'abc!')
+
+    // A call that names text.modify leaves the merged options holding what
+    // it passed, and the config is built from that alone.
+    tn.options({ text: { modify: (v) => '[' + v + ']' } })
+    assert.equal(tn.internal().config.text.modify.length, 1)
+    assert.equal(tn.parse('abc'), '[abc]')
+  })
 })
