@@ -20,6 +20,11 @@ export const SKIP: unique symbol = Symbol.for('tabnas.SKIP')
 
 export const STRING = 'string'
 
+// Every bounded rule link copies up to this many snapshots. Keeping the cap
+// finite preserves linear parse time even when a caller supplies a bound
+// proportional to the input length.
+export const MAX_RULE_HISTORY = 16
+
 // Standalone parse function signature, for plugins that type a parse callback.
 export type TabnasParse = (src: any, meta?: any, parent_ctx?: any) => any
 
@@ -281,6 +286,7 @@ export type TabnasOptions = {
     start?: string                  // Name of the start rule.
     finish?: boolean                // Require input to be fully consumed.
     maxmul?: number                 // Max rule multiplier (loop guard).
+    history?: number | null | false // Retained predecessor snapshots (1..16); null/false is unbounded.
     include?: string                // Group tags to include.
     exclude?: string                // Group tags to exclude.
   }
@@ -382,6 +388,7 @@ export type Config = {
     start: string                   // Name of the start rule.
     maxmul: number                  // Max rule multiplier (loop guard).
     finish: boolean                 // Require input to be fully consumed.
+    history: number | null          // Retained predecessor snapshots; null is unbounded.
     include: string[]               // Group tags to include.
     exclude: string[]               // Group tags to exclude.
   }
