@@ -646,7 +646,11 @@ fixed or quietly dropped.
   Go now consults the replace map right after the closing quote, in
   TypeScript's order. The replaced LF still splits on position, 1:7 in
   TypeScript and Go and 2:4 in Rust, which is the live entry "A
-  replaced row character inside a string counts a row in Rust". Pinned
+  replaced row character inside a string counts a row in Rust".
+  `tabnas/jsonic`'s own divergence ledger had recorded the Go half as
+  `string-replace-control`, and that row now fails there as its ledger
+  says a repaired divergence must; `ci/fleet/expect-fail.txt` carries it,
+  by that row's message, until a jsonic release deletes it. Pinned
   by the fifth group of [`test/spec/repaired.tsv`](test/spec/repaired.tsv),
   `replace-tab`, `replace-lf-value` and `replace-escape-char`, with the
   register's `replace-row-char-control` for the TAB's position.
@@ -1101,6 +1105,10 @@ Every value agrees. Before #263 Go refused the first three as
 replaced the character, reading the key by its first byte; while #263 was
 in review, its wider multi-line test made that unreplaced character a
 row, 2:4.
+
+`tabnas/jsonic`'s ledger carries the same split through its grammar as
+`string-replace-control-row`, where a raw CR after a replaced LF is
+`unprintable` at 2:6 in TypeScript and Go and at 3:1 in Rust.
 
 Repair direction: **Rust changes, by ADR-13's default**, stepping over a
 replaced character as one column. If the maintainer rules that a row
