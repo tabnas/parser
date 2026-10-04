@@ -1,0 +1,3839 @@
+From 619213b88ea3ddc97c1e51e34471d81c01c37692 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 4 Oct 2026 17:16:15 +0000
+Subject: [PATCH] feat: the alchemy command, composing alchemy, transduce and
+ render
+
+On the maintainer's instruction of 2026-10-04, alchemy owns the shared
+types and takes its routers and renderers from its host
+(tabnas/alchemy#40), and the command moves here: the one place that
+builds all three, passing transduce's Routers (tabnas/transduce#32) and
+render's Renderers (tabnas/render#13) to alchemy's compile.
+
+- TypeScript: @tabnas/alchemy-cli, the `alchemy` bin.
+- Go: github.com/tabnas/alchemy-cli/go, cmd/alchemy.
+- Rust: tabnas-alchemy-cli, the `alchemy` binary.
+
+Each carries the CLI tests that moved out of alchemy. CI: the fleet's
+polyglot workflow (ci.yml, with a go-nodecell job), the Rust gate
+(rust.yml running ci/rust/run.sh and ci/polyglot/run.sh against sibling
+checkouts) and the dependency gate.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01YJMTwaNM32P1NyHuH3G6Zg
+---
+ .github/workflows/ci.yml        |  72 ++++
+ .github/workflows/deps-gate.yml |  18 +
+ .github/workflows/rust.yml      |  81 +++++
+ .gitignore                      |  20 +
+ AGENTS.md                       | 109 ++++++
+ CLAUDE.md                       |   1 +
+ README.md                       |  53 +++
+ ci/polyglot/run.sh              |  74 ++++
+ ci/rust/run.sh                  | 112 ++++++
+ go/cmd/alchemy/cli_test.go      | 510 ++++++++++++++++++++++++++
+ go/cmd/alchemy/main.go          | 324 +++++++++++++++++
+ go/go.mod                       |  21 ++
+ go/go.sum                       |  40 ++
+ rs/Cargo.lock                   | 244 +++++++++++++
+ rs/Cargo.toml                   |  35 ++
+ rs/LICENSE                      |  21 ++
+ rs/README.md                    |  25 ++
+ rs/src/bin/alchemy.rs           | 296 +++++++++++++++
+ rs/tests/cli_test.rs            | 624 ++++++++++++++++++++++++++++++++
+ ts/.gitignore                   |   5 +
+ ts/LICENSE                      |  21 ++
+ ts/README.md                    |  29 ++
+ ts/bin/alchemy                  |   5 +
+ ts/package.json                 |  60 +++
+ ts/src/cli.ts                   | 315 ++++++++++++++++
+ ts/src/tsconfig.json            |  16 +
+ ts/test/cli.test.ts             | 415 +++++++++++++++++++++
+ ts/test/common.ts               |  17 +
+ ts/test/tsconfig.json           |  14 +
+ 29 files changed, 3577 insertions(+)
+ create mode 100644 .github/workflows/ci.yml
+ create mode 100644 .github/workflows/deps-gate.yml
+ create mode 100644 .github/workflows/rust.yml
+ create mode 100644 .gitignore
+ create mode 100644 AGENTS.md
+ create mode 120000 CLAUDE.md
+ create mode 100644 README.md
+ create mode 100755 ci/polyglot/run.sh
+ create mode 100755 ci/rust/run.sh
+ create mode 100644 go/cmd/alchemy/cli_test.go
+ create mode 100644 go/cmd/alchemy/main.go
+ create mode 100644 go/go.mod
+ create mode 100644 go/go.sum
+ create mode 100644 rs/Cargo.lock
+ create mode 100644 rs/Cargo.toml
+ create mode 100644 rs/LICENSE
+ create mode 100644 rs/README.md
+ create mode 100644 rs/src/bin/alchemy.rs
+ create mode 100644 rs/tests/cli_test.rs
+ create mode 100644 ts/.gitignore
+ create mode 100644 ts/LICENSE
+ create mode 100644 ts/README.md
+ create mode 100755 ts/bin/alchemy
+ create mode 100644 ts/package.json
+ create mode 100644 ts/src/cli.ts
+ create mode 100644 ts/src/tsconfig.json
+ create mode 100644 ts/test/cli.test.ts
+ create mode 100644 ts/test/common.ts
+ create mode 100644 ts/test/tsconfig.json
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..4a0ac74
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,72 @@
++# CI caller: the org-standard polyglot workflow for the ts/ and go/
++# trees. rust.yml runs the Rust gate (ci/rust/run.sh) separately.
++name: ci
++
++on:
++  push:
++    branches: [ main ]
++  pull_request:
++
++jobs:
++  # deps names every tabnas repository the ts/ and go/ trees depend on,
++  # dependency first: the grammars, then alchemy, then transduce and render,
++  # which build on alchemy's shared types.
++  ci:
++    uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
++    with:
++      deps: "parser json jsonic csv alchemy transduce render"
++
++  # The shared workflow runs `go test ./...` with no build tags. `alchemy
++  # run` reads its document through transduce's incremental source, which
++  # that module builds only under the `tabnas_nodecell` build tag; without
++  # it the run tests skip. This job runs the suite once more with the tag,
++  # as alchemy's own ci.yml does.
++  go-nodecell:
++    strategy:
++      fail-fast: false
++      matrix:
++        os: [ubuntu-latest, macos-latest]
++    runs-on: ${{ matrix.os }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
++        with:
++          path: alchemy-cli
++
++      # cache: false, as in support's job: setup-go looks for go.mod in
++      # $GITHUB_WORKSPACE, non-recursively, and the checkout is one level
++      # down, so the cache step would warn on every run.
++      - name: Set up Go
++        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
++        with:
++          go-version: "1.24"
++          cache: false
++
++      # The same siblings the shared go job clones (the deps input above).
++      - name: Clone tabnas dependencies
++        shell: bash
++        run: |
++          set -e
++          for dep in parser json jsonic csv alchemy transduce render; do
++            git clone --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
++          done
++
++      # Mirrors the shared workflow's go job: a workspace over every module
++      # in the tree, so the suite runs against sibling source.
++      - name: Set up go workspace
++        shell: bash
++        run: |
++          set -e
++          go work init
++          for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
++            go work use "$(dirname "$gm")"
++          done
++
++      - name: Build with the tag
++        working-directory: alchemy-cli/go
++        run: go build -tags tabnas_nodecell ./...
++
++      - name: Vet and test with the tag
++        working-directory: alchemy-cli/go
++        run: |
++          go vet -tags tabnas_nodecell ./...
++          go test -tags tabnas_nodecell -v ./...
+diff --git a/.github/workflows/deps-gate.yml b/.github/workflows/deps-gate.yml
+new file mode 100644
+index 0000000..e39c5bd
+--- /dev/null
++++ b/.github/workflows/deps-gate.yml
+@@ -0,0 +1,18 @@
++# Target: tabnas/alchemy-cli -> .github/workflows/deps-gate.yml
++#
++# Calls the fleet deps gate: no committed dependency may name a local path.
++# See the reusable workflow for why this is npm-only.
++
++name: deps-gate
++
++on:
++  push:
++    branches: [ main ]
++  pull_request:
++    branches: [ main ]
++
++jobs:
++  deps-gate:
++    uses: tabnas/.github/.github/workflows/deps-gate.yml@main
++    permissions:
++      contents: read
+diff --git a/.github/workflows/rust.yml b/.github/workflows/rust.yml
+new file mode 100644
+index 0000000..8ff2e3e
+--- /dev/null
++++ b/.github/workflows/rust.yml
+@@ -0,0 +1,81 @@
++# The gates: ci/polyglot/run.sh (TypeScript and Go) and ci/rust/run.sh
++# (Rust), with the sibling checkouts they need.
++#
++# Runs on every branch push and on pull requests. `branches` is set
++# explicitly so a tag push does not run the gate on a ref where the path
++# filters mean nothing.
++name: Rust
++
++on:
++  push:
++    branches: [ '**' ]
++    paths:
++      - 'rs/**'
++      - 'go/**'
++      - 'ts/**'
++      - 'ci/**'
++      - '.github/workflows/rust.yml'
++  pull_request:
++    paths:
++      - 'rs/**'
++      - 'go/**'
++      - 'ts/**'
++      - 'ci/**'
++      - '.github/workflows/rust.yml'
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  rust:
++    runs-on: ubuntu-latest
++    steps:
++      # Checked out into a NAMED directory: rs/Cargo.toml takes the engine
++      # and the grammars as `path = "../../<sibling>/rs"`, which resolves
++      # relative to rs/, so the siblings sit beside this checkout.
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
++        with:
++          path: alchemy-cli
++
++      # A sibling is taken from the branch of the same name when it has one,
++      # else from main: cross-repository work lands on same-named branches
++      # in each repo, and a pull request here can then be gated against the
++      # sibling changes it needs before they merge.
++      - name: Check out the sibling crates
++        run: |
++          set -euo pipefail
++          BRANCH="${{ github.head_ref || github.ref_name }}"
++          SIBLINGS=$(sed -n 's/^\(TS_\)\?SIBLINGS="\(.*\)"$/\2/p' alchemy-cli/ci/rust/run.sh)
++          n=0; total=$(echo "$SIBLINGS" | wc -w)
++          for s in $SIBLINGS; do
++            n=$((n+1))
++            if git clone -q --depth 1 --branch "$BRANCH" "https://github.com/tabnas/$s" "$s" 2>/dev/null; then
++              echo "siblings: $n of $total ($((n*100/total))%) $s @ $BRANCH"
++            else
++              git clone -q --depth 1 "https://github.com/tabnas/$s" "$s"
++              echo "siblings: $n of $total ($((n*100/total))%) $s @ main"
++            fi
++          done
++
++      - name: Install the MSRV toolchain
++        run: |
++          MSRV=$(awk -F'"' '/^rust-version = /{print $2; exit}' alchemy-cli/rs/Cargo.toml)
++          rustup toolchain install "$MSRV" --profile minimal --component rustfmt,clippy
++          rustup default "$MSRV"
++
++      - name: Use Node.js 24
++        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
++        with:
++          node-version: 24.x
++
++      - name: Set up Go
++        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
++        with:
++          go-version: 1.24.x
++
++      - name: Gate TypeScript and Go
++        run: alchemy-cli/ci/polyglot/run.sh
++
++      - name: Gate Rust
++        run: alchemy-cli/ci/rust/run.sh
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..f7241cf
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,20 @@
++# TypeScript (ts/)
++node_modules/
++dist/
++dist-test/
++package-lock.json
++*.tsbuildinfo
++*.tgz
++
++# Go (go/): local workspaces and built binaries
++go.work
++go.work.sum
++/go/alchemy
++/go/alchemy.exe
++/go/cmd/alchemy/alchemy
++/go/cmd/alchemy/alchemy.exe
++
++# Rust (rs/): Cargo's build output (Cargo.lock IS committed)
++target/
++
++.DS_Store
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..9e7f4e0
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,109 @@
++# Agents Guide — alchemy-cli
++
++`CLAUDE.md` is a symlink to this file.
++
++## Core principle: dependencies change only on explicit instruction
++
++**Dependencies may only be changed by explicit instruction from the
++maintainer.** This covers every dependency this repository declares, in
++every runtime and every manifest:
++
++- `package.json` `dependencies`, `peerDependencies` and `devDependencies`,
++  and their lockfiles;
++- `go.mod` `require` and `replace` lines, their versions, and `go.sum`;
++- `Cargo.toml` dependency tables and `Cargo.lock`;
++- any other manifest here, nested test modules included.
++
++Adding, removing, re-pointing or re-versioning any of them is a
++dependency change.
++
++- **A dependency never arrives as a side effect.** Watch for an import,
++  `go mod tidy`, `npm install`, `cargo update`, a stamped template, or a
++  fix for something else. If a change would alter a dependency, stop and
++  ask before making it. Do not make it and explain afterwards.
++- **An explicit instruction names the change**, for example "bump the
++  parser requirement in X to 0.12" or "cascade the parser release". A
++  goal is not an instruction for its means. "Make CI green", "ship the C
++  library" or "fix the build" does not authorise a dependency change,
++  however direct the route through one looks.
++- **This repository's own version sites are not dependencies.** They
++  include the root entry of its own lockfile. A release bump moves them.
++- **Versions track the latest release.** Every dependency is kept at
++  its latest published version, and none is held on an older one. That
++  is the maintainer's standing instruction, so moving a dependency to
++  its latest version needs no further one. Holding a dependency back,
++  or adding, removing or re-pointing one, still does.
++
++## Core principle: transient tasks report progress
++
++**Every transient task produces status output at least every 30 seconds,
++with an estimate of how far through it is, as a percentage, where one can
++be made.** This is the maintainer's instruction. A transient task is any
++work that runs for a while and then ends: a build, a test or conformance
++sweep, an install or a fetch, a release, a wait on CI, a benchmark, a
++script or loop you write, and anything sent to the background.
++
++- **Minimal is enough.** One line with the step and a count, such as
++  `conformance: 412 of 1500 (27%)`, meets it. When no total is known, print
++  what is known (the step, the current item, the elapsed time) and say the
++  percentage is unknown rather than inventing one.
++- **Build it into what you write.** A script or loop prints a line per
++  item or per interval. A quiet tool gets its progress or verbose flag, or
++  a wrapper that prints a heartbeat, so that nothing runs silent for more
++  than 30 seconds.
++- **Silence reads as a hang.** Whoever is watching, a person or an agent,
++  cannot tell a slow task from a stuck one without it, and so cannot
++  decide whether to wait or to stop it.
++
++A quick command that finishes within 30 seconds needs nothing extra.
++
++## Pull requests
++
++Open pull requests **ready for review, never as drafts.** This is a
++standing maintainer preference, and it overrides any tooling or agent
++default that opens pull requests in draft state.
++
++## What this project is
++
++The `alchemy` command, in TypeScript, Go and Rust: `canon`, `format`,
++`check`, `explain` and `run`, as alchemy's
++[`docs/language.md`](https://github.com/tabnas/alchemy/blob/main/docs/language.md)
++describes them. It is the composition root of three components that do
++not depend on each other's implementations:
++
++- **alchemy** holds the language and the shared types: the event
++  protocol (events, sinks, tables, `Fail` and its codes, limits,
++  selectors, datums) and the `Routers` and `Renderers` interfaces a
++  compiled program is lowered through.
++- **transduce** depends on alchemy's shared types and implements
++  `Routers`; its parser source reads the input document.
++- **render** depends on alchemy's shared types and implements
++  `Renderers`; its writers put the text on standard output.
++
++The command builds a transduce `Routers` and a render `Renderers`,
++passes both to alchemy's `compile`, and runs the result over the input.
++Nothing else in the fleet constructs all three, so behaviour that needs
++all three belongs here, and a library that needs one of them depends on
++that one alone.
++
++## Layout
++
++| Path | What it is |
++|---|---|
++| `ts/` | `@tabnas/alchemy-cli`: the `alchemy` bin and its tests |
++| `go/` | `github.com/tabnas/alchemy-cli/go`: the `alchemy` command and its tests |
++| `rs/` | `tabnas-alchemy-cli`: the `alchemy` binary and its tests |
++| `ci/rust/run.sh` | the Rust gate `.github/workflows/rust.yml` runs |
++
++## Build and test
++
++Every runtime builds against sibling checkouts of alchemy, transduce,
++render and the grammars they use, cloned next to this repository; the
++CI workflows name the list.
++
++- TypeScript, from `ts/`: `npm install`, then `npm test`.
++- Go, from `go/`: `gofmt -l .`, `go vet ./...`, `go test ./...`, with a
++  `go.work` outside the repositories when the siblings carry unreleased
++  changes.
++- Rust: `ci/rust/run.sh`, which runs `cargo fmt --check`, the build, the
++  tests and clippy with `--locked`.
+diff --git a/CLAUDE.md b/CLAUDE.md
+new file mode 120000
+index 0000000..47dc3e3
+--- /dev/null
++++ b/CLAUDE.md
+@@ -0,0 +1 @@
++AGENTS.md
+\ No newline at end of file
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..838a31b
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,53 @@
++# tabnas-alchemy-cli
++
++The `alchemy` command: runs programs in the
++[alchemy](https://github.com/tabnas/alchemy) language over JSON
++documents, in TypeScript, Go and Rust.
++
++alchemy is the language and the shared types: it compiles a program into
++a plan and lowers the plan onto routers and renderers that its host
++passes in. This repository is the host. It composes three components:
++
++- [tabnas-alchemy](https://github.com/tabnas/alchemy): the language, and
++  the event protocol every component shares;
++- [tabnas-transduce](https://github.com/tabnas/transduce): the routers a
++  plan's streams run through, and the parser source that turns the input
++  document into events;
++- [tabnas-render](https://github.com/tabnas/render): the renderers and
++  writers that turn events into text.
++
++A library that only needs one of them depends on that one alone; this
++command is where all of them meet.
++
++```text
++alchemy canon FILE       print the program in canonical form
++alchemy format FILE      print the program in layout form
++alchemy check FILE       parse, desugar, resolve, check and build the plan; print nothing and exit 0
++alchemy explain FILE     print the plan report
++alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++                         run the program over the JSON document INPUT
++```
++
++`FILE`, `PROGRAM` and `INPUT` may be `-` for standard input (one of them
++per run). A failure is the `Fail` as one JSON object on standard error,
++and standard output carries nothing but the answer. The language
++reference, [`docs/language.md`](https://github.com/tabnas/alchemy/blob/main/docs/language.md)
++in alchemy, describes each command, the `run` options and the exit
++statuses.
++
++## Layout
++
++| Path | What it is |
++|---|---|
++| `ts/` | `@tabnas/alchemy-cli`, the `alchemy` bin |
++| `go/` | `github.com/tabnas/alchemy-cli/go`, the `alchemy` command |
++| `rs/` | `tabnas-alchemy-cli`, the `alchemy` binary |
++
++## Build and test
++
++See [`AGENTS.md`](AGENTS.md). Each runtime builds against sibling
++checkouts of alchemy, transduce, render and the grammars they use.
++
++## License
++
++MIT. See [`LICENSE`](LICENSE).
+diff --git a/ci/polyglot/run.sh b/ci/polyglot/run.sh
+new file mode 100755
+index 0000000..8c369fc
+--- /dev/null
++++ b/ci/polyglot/run.sh
+@@ -0,0 +1,74 @@
++#!/usr/bin/env bash
++# TypeScript and Go gate. It builds each TypeScript sibling in dependency
++# order, links it into the packages that take it, and runs this package's
++# suite; then a temporary Go workspace over the sibling checkouts runs the
++# Go suite, plain and with the tabnas_nodecell build tag. The siblings are
++# the ones ci/rust/run.sh names, cloned next to this repository (the
++# workflow takes each from the branch of this one's name when it has one).
++set -euo pipefail
++
++ROOT=$(cd "$(dirname "$0")/../.." && pwd)
++FLEET_ROOT=$(cd "$ROOT/.." && pwd)
++
++SIBLINGS=$(sed -n 's/^SIBLINGS="\(.*\)"$/\1/p' "$ROOT/ci/rust/run.sh")
++# The engine and the grammars, then alchemy (its build compiles src only),
++# then transduce and render, which build on alchemy's shared types.
++TS_PACKAGES="parser json jsonic csv alchemy transduce render"
++
++for package in $TS_PACKAGES; do
++  if [[ ! -f "$FLEET_ROOT/$package/ts/package.json" ]]; then
++    echo "no $package TypeScript checkout at $FLEET_ROOT/$package/ts" >&2
++    exit 1
++  fi
++done
++
++# Replace each registry copy npm installed with a link to the sibling.
++link_siblings() {
++  local package_dir=$1 sibling name target
++  for sibling in $TS_PACKAGES; do
++    [[ "$FLEET_ROOT/$sibling/ts" != "$package_dir" ]] || continue
++    name=$(cd "$FLEET_ROOT/$sibling/ts" && node -p "require('./package.json').name")
++    target="$package_dir/node_modules/$name"
++    [[ -e "$target" || -L "$target" ]] || continue
++    rm -rf "$target"
++    mkdir -p "$(dirname "$target")"
++    ln -s "$FLEET_ROOT/$sibling/ts" "$target"
++  done
++}
++
++step=0
++total=$(( $(wc -w <<<"$TS_PACKAGES") + 1 ))
++for package in $TS_PACKAGES; do
++  step=$((step + 1))
++  package_dir="$FLEET_ROOT/$package/ts"
++  echo "typescript: $step of $total ($((step * 100 / total))%) install and build $package"
++  (cd "$package_dir" && npm install --ignore-scripts --no-save)
++  link_siblings "$package_dir"
++  (cd "$package_dir" && npm run build --if-present)
++done
++
++echo "typescript: $total of $total (100%) test alchemy-cli"
++(cd "$ROOT/ts" && npm install --ignore-scripts --no-save)
++link_siblings "$ROOT/ts"
++(cd "$ROOT/ts" && npm test)
++
++WORK_DIR=$(mktemp -d)
++trap 'rm -rf "$WORK_DIR"' EXIT
++(
++  cd "$WORK_DIR"
++  go work init
++  for sibling in $SIBLINGS; do
++    module="$FLEET_ROOT/$sibling/go"
++    [[ -f "$module/go.mod" ]] || continue
++    go work use "$module"
++  done
++  go work use "$ROOT/go"
++)
++
++echo "go: test alchemy-cli (33%)"
++(cd "$ROOT/go" && GOWORK="$WORK_DIR/go.work" go test -count=1 ./...)
++echo "go: test alchemy-cli with tabnas_nodecell (67%)"
++(cd "$ROOT/go" && GOWORK="$WORK_DIR/go.work" go test -count=1 -tags tabnas_nodecell ./...)
++echo "go: vet alchemy-cli (100%)"
++(cd "$ROOT/go" && GOWORK="$WORK_DIR/go.work" go vet ./...)
++echo "polyglot gate: green"
+diff --git a/ci/rust/run.sh b/ci/rust/run.sh
+new file mode 100755
+index 0000000..0082369
+--- /dev/null
++++ b/ci/rust/run.sh
+@@ -0,0 +1,112 @@
++#!/usr/bin/env bash
++# Rust gate. Kept in one script so local and hosted validation cannot
++# quietly drift apart: .github/workflows/rust.yml runs this file, and so can
++# you. This is the full gate.
++#
++# alchemy, transduce, render and the JSON grammar are PATH DEPENDENCIES on
++# sibling checkouts (rs/Cargo.toml: `tabnas-alchemy = { path =
++# "../../alchemy/rs" }` and the like). Clone each repository named in
++# SIBLINGS below next to this one before running.
++set -euo pipefail
++
++ROOT=$(cd "$(dirname "$0")/../.." && pwd)
++
++# Every sibling any crate in the graph takes by path: alchemy, transduce
++# and render, the JSON grammar, the engine, and csv and jsonic, which
++# transduce's line sources take. A dependency's dev-dependencies are not
++# built, so nothing else is needed.
++SIBLINGS="parser json jsonic csv alchemy transduce render"
++
++# TypeScript- and Go-only additions needed by ci/polyglot/run.sh: none.
++TS_SIBLINGS=""
++
++for SIBLING in $SIBLINGS; do
++  if [[ ! -f "$ROOT/../$SIBLING/rs/Cargo.toml" ]]; then
++    echo "no $SIBLING checkout at $ROOT/../$SIBLING/rs" >&2
++    echo "clone https://github.com/tabnas/$SIBLING as a sibling of $(basename "$ROOT")" >&2
++    exit 1
++  fi
++done
++
++cd "$ROOT/rs"
++
++# Run through the MSRV toolchain when one is available; loud when it is
++# not, because a newer toolchain accepts what the MSRV rejects.
++MSRV=$(awk -F'"' '/^rust-version = /{print $2; exit}' Cargo.toml)
++CARGO=(cargo)
++if [[ -n "$MSRV" ]] && command -v rustup >/dev/null 2>&1; then
++  # The INSTALLED toolchain's full name (`1.85.1-x86_64-...`), not the
++  # `1.85` channel: `cargo +1.85` names a release channel, which rustup
++  # would try to synchronize over the network even when 1.85.1 is already
++  # installed, and an offline checkout would fail before cargo ran.
++  TOOLCHAIN=$(rustup toolchain list 2>/dev/null | awk -v m="$MSRV" 'index($1, m) == 1 { print $1; exit }')
++  if [[ -n "$TOOLCHAIN" ]]; then
++    CARGO=(cargo "+$TOOLCHAIN")
++  else
++    echo "warning: MSRV $MSRV is not installed; running on $(rustc --version 2>/dev/null)" >&2
++    echo "         install it with: rustup toolchain install $MSRV" >&2
++  fi
++elif [[ -n "$MSRV" ]]; then
++  echo "warning: rustup is not installed; running on $(rustc --version 2>/dev/null)" >&2
++  echo "         install rustup and toolchain $MSRV to validate the MSRV locally" >&2
++fi
++
++# The lock's entry for THIS crate must match the manifest, before any cargo
++# command gets a chance to fix it up.
++CRATE=$(awk -F'"' '/^name = /{print $2; exit}' Cargo.toml)
++WANT=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
++HAVE=$(awk -v c="$CRATE" -F'"' '
++  $0 == "name = \"" c "\"" { f = 1; next }
++  f && /^version = / { print $2; exit }
++' Cargo.lock)
++if [[ "$WANT" != "$HAVE" ]]; then
++  echo "Cargo.lock records $CRATE ${HAVE:-<missing>}, but Cargo.toml says $WANT" >&2
++  echo "run a cargo command and commit the updated rs/Cargo.lock" >&2
++  exit 1
++fi
++
++# The whole resolution is compared before and after, exempting only the
++# recorded VERSION of each sibling path crate, which legitimately moves
++# whenever the sibling checkouts do. Every tabnas crate in the graph is a
++# sibling, so the exemption is by name prefix.
++lock_without_sibling_versions() {
++  awk '
++    /^\[\[package\]\]$/            { sib = 0 }
++    /^name = "tabnas-parser"$/            { sib = 1 }
++    /^name = "tabnas-[a-z0-9]+"$/  { sib = 1 }
++    sib && /^version = /           { print "version = \"<sibling>\""; next }
++                                   { print }
++  ' "$1"
++}
++
++LOCK_BEFORE=$(mktemp)
++cp Cargo.lock "$LOCK_BEFORE"
++trap 'if [ -f "$LOCK_BEFORE" ] && ! cmp -s "$LOCK_BEFORE" Cargo.lock; then cp "$LOCK_BEFORE" Cargo.lock; fi; rm -f "$LOCK_BEFORE"' EXIT
++
++# Not `--locked`: the siblings resolve from checkouts of main, and their
++# versions move under this lock. Not `--all` on fmt: that reaches into the
++# sibling checkouts.
++echo "gate: fmt"
++"${CARGO[@]}" fmt --check
++echo "gate: build"
++"${CARGO[@]}" build --all-targets
++echo "gate: test"
++"${CARGO[@]}" test --all-targets
++# No `test --doc`: the crate is a binary with no library target, which
++# cargo refuses to doc-test.
++echo "gate: clippy"
++"${CARGO[@]}" clippy --all-targets --all-features -- -D warnings
++
++if ! diff -q <(lock_without_sibling_versions "$LOCK_BEFORE") \
++             <(lock_without_sibling_versions Cargo.lock) >/dev/null; then
++  echo "rs/Cargo.lock does not match rs/Cargo.toml -- cargo rewrote it:" >&2
++  diff <(lock_without_sibling_versions "$LOCK_BEFORE") \
++       <(lock_without_sibling_versions Cargo.lock) >&2 || true
++  echo "run a cargo command and commit the updated rs/Cargo.lock" >&2
++  cp "$LOCK_BEFORE" Cargo.lock
++  exit 1
++fi
++if ! cmp -s "$LOCK_BEFORE" Cargo.lock; then
++  cp "$LOCK_BEFORE" Cargo.lock
++fi
++echo "gate: green"
+diff --git a/go/cmd/alchemy/cli_test.go b/go/cmd/alchemy/cli_test.go
+new file mode 100644
+index 0000000..1b926d6
+--- /dev/null
++++ b/go/cmd/alchemy/cli_test.go
+@@ -0,0 +1,510 @@
++// Copyright (c) 2026 tabnas, MIT License
++
++package main
++
++// cli_test.go: the alchemy binary, built and run the way a script runs it
++// (rs/tests/cli_test.rs): the five commands, standard input as -, the
++// statuses, and that nothing but the answer reaches standard output.
++//
++// The binary is built once, with the build tags this test binary has: the
++// incremental adapter (tabnas_nodecell) or not. Without it, run refuses
++// with STREAMABILITY_UNKNOWN before the document is read, so the cases
++// that run a document are skipped there, by name, and
++// TestRunRefusesWithoutTheIncrementalAdapter holds the refusal.
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	alchemy "github.com/tabnas/alchemy/go"
++	tt "github.com/tabnas/transduce/go"
++)
++
++var binary string
++
++func TestMain(m *testing.M) {
++	dir, err := os.MkdirTemp("", "alchemy-cli-")
++	if err != nil {
++		fmt.Fprintln(os.Stderr, err)
++		os.Exit(1)
++	}
++	binary = filepath.Join(dir, "alchemy")
++	args := []string{"build", "-o", binary}
++	if tt.AdapterBuilt() {
++		args = append(args, "-tags", "tabnas_nodecell")
++	}
++	build := exec.Command("go", append(args, ".")...)
++	build.Stdout, build.Stderr = os.Stderr, os.Stderr
++	if err := build.Run(); err != nil {
++		fmt.Fprintln(os.Stderr, "the alchemy binary does not build:", err)
++		os.Exit(1)
++	}
++	code := m.Run()
++	os.RemoveAll(dir)
++	os.Exit(code)
++}
++
++// output is what one run of the binary left.
++type output struct {
++	status int
++	stdout string
++	stderr string
++}
++
++func runIn(t *testing.T, dir string, args []string, stdin *string) output {
++	t.Helper()
++	cmd := exec.Command(binary, args...)
++	cmd.Dir = dir
++	if stdin != nil {
++		// A command refused before standard input is read may have exited
++		// already, closing the pipe: that is the behaviour under test, and
++		// os/exec does not count the closed pipe as a failure.
++		cmd.Stdin = strings.NewReader(*stdin)
++	}
++	var stdout, stderr bytes.Buffer
++	cmd.Stdout, cmd.Stderr = &stdout, &stderr
++	err := cmd.Run()
++	status := 0
++	var exit *exec.ExitError
++	switch {
++	case errors.As(err, &exit):
++		status = exit.ExitCode()
++	case err != nil:
++		t.Fatalf("the binary does not run: %v", err)
++	}
++	return output{status: status, stdout: stdout.String(), stderr: stderr.String()}
++}
++
++func invoke(t *testing.T, args []string, stdin *string) output {
++	t.Helper()
++	return runIn(t, "", args, stdin)
++}
++
++func text(s string) *string { return &s }
++
++// failJSON is the one JSON object on standard error.
++func failJSON(t *testing.T, o output) map[string]any {
++	t.Helper()
++	var f map[string]any
++	if err := json.Unmarshal([]byte(strings.TrimSpace(o.stderr)), &f); err != nil {
++		t.Fatalf("one JSON object on stderr, not %q", o.stderr)
++	}
++	return f
++}
++
++func tempFile(t *testing.T, name, content string) string {
++	t.Helper()
++	path := filepath.Join(t.TempDir(), name)
++	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	return path
++}
++
++// needsRun skips a case that runs a document in a build without the
++// incremental adapter.
++func needsRun(t *testing.T) {
++	t.Helper()
++	if !tt.AdapterBuilt() {
++		t.Skip("runs a document incrementally, as alchemy run does, and this build has no incremental adapter (build with -tags tabnas_nodecell)")
++	}
++}
++
++// records is the spec's worked example: aless's
++// tests/fixtures/records.json.
++const records = `{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]},{"title":"Balance","path":["account","balance"]}]},"payload":{"deep":{"records":[{"id":123,"person":{"name":"Alice"},"account":{"balance":50.25}},{"account":{"balance":72},"person":{"name":"Bob"},"id":456}]}}}}`
++
++const expectedCSV = "\"Identifier\",\"Full name\",\"Balance\"\r\n\"123\",\"Alice\",\"50.25\"\r\n\"456\",\"Bob\",\"72\"\r\n"
++
++// program is the spec's program (sections 12.1 and 13.4).
++const program = "def column-from-meta [source]\n  record\n    entry :label (get \"title\" source)\n    entry :source\n      as-path\n        get \"path\" source\n\ndef api-binding\n  record\n    entry :columns\n      path \"response\" \"metadata\" \"fields\"\n    entry :rows\n      path \"response\" \"payload\" \"deep\" \"records\" each-index\n    entry :column column-from-meta\n\ndef api-table [input]\n  table-from-json api-binding input\n\ndef export [input]\n  pipe input\n    api-table\n    csv csv-options\n"
++
++const export = "def export [input]\n  pipe input\n    table-from-json api-binding\n    csv csv-options\n"
++
++func TestCanonPrintsTheCanonicalForm(t *testing.T) {
++	o := invoke(t, []string{"canon", tempFile(t, "canon.alc", export)}, nil)
++	if o.status != 0 || o.stdout != "(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))\n" || o.stderr != "" {
++		t.Errorf("%+v", o)
++	}
++}
++
++func TestFormatPrintsTheLayoutFormAndReadsStandardInput(t *testing.T) {
++	o := invoke(t, []string{"format", "-"}, text("(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))"))
++	if o.status != 0 || o.stdout != export {
++		t.Errorf("%+v", o)
++	}
++}
++
++func TestCheckIsSilentOnAProgramThatChecks(t *testing.T) {
++	o := invoke(t, []string{"check", "-"}, text(program))
++	if o.status != 0 || o.stdout != "" || o.stderr != "" {
++		t.Errorf("%+v", o)
++	}
++}
++
++// A library definition over a selection's items, which are typed Value:
++// check passes it (the items may be records, or vectors), and run checks
++// each one and prints the result.
++func TestADefinitionOverSelectedItemsChecksAndRuns(t *testing.T) {
++	for _, c := range []struct{ name, program, input, want string }{
++		{"cols.alc", "def cols [input] (map public-column (select (path \"cols\" each-index) input))\ndef export [input] (join \",\" (map (fn [c] (get :label c)) (cols input)))\n",
++			`{"cols":[{"label":"a","source":1},{"label":"b"}]}`, "a,b"},
++		{"rows.alc", "def export [input]\n  concat-map (partial csv-row csv-options) (select (path \"rows\" each-index) input)\n",
++			`{"rows":[[1,"x"],[2,"y"]]}`, "\"1\",\"x\"\r\n\"2\",\"y\"\r\n"},
++	} {
++		path := tempFile(t, c.name, c.program)
++		if o := invoke(t, []string{"check", path}, nil); o.status != 0 {
++			t.Errorf("%s: %+v", c.name, o)
++		}
++		if !tt.AdapterBuilt() {
++			continue
++		}
++		if o := invoke(t, []string{"run", path, "-"}, text(c.input)); o.status != 0 || o.stdout != c.want {
++			t.Errorf("%s: %+v", c.name, o)
++		}
++	}
++	needsRun(t)
++}
++
++func TestCheckReportsAReaderFailureAsJSONOnStderrWithStatus2(t *testing.T) {
++	o := invoke(t, []string{"check", "-"}, text("pipe x\n  f\n  []\n"))
++	if o.status != 2 || o.stdout != "" {
++		t.Errorf("%+v", o)
++	}
++	f := failJSON(t, o)
++	if f["code"] != "DSL_PARSE_ERROR" || !strings.HasPrefix(f["message"].(string), "empty_step: ") || f["row"] != 3.0 || f["col"] != 3.0 || f["output"] != "none" {
++		t.Errorf("%v", f)
++	}
++}
++
++// check reaches the resolver and the checker: an unknown name, a reused
++// stream and a recursive definition each fail with their code, at the
++// position they name, with status 2.
++func TestCheckReportsTheResolverAndCheckerCodes(t *testing.T) {
++	// The composed program of the README names a binding it does not
++	// define.
++	o := invoke(t, []string{"check", "-"}, text(export))
++	f := failJSON(t, o)
++	if o.status != 2 || f["code"] != "DSL_TYPE_ERROR" || !strings.HasPrefix(f["message"].(string), "unknown_name: api-binding") || f["row"] != 3.0 || f["col"] != 21.0 {
++		t.Errorf("%d %v", o.status, f)
++	}
++	o = invoke(t, []string{"check", "-"}, text("def export [input] (concat (json input) (json input))"))
++	f = failJSON(t, o)
++	if o.status != 2 || f["code"] != "STREAM_REUSED" || !strings.HasPrefix(f["message"].(string), "reused: ") {
++		t.Errorf("%d %v", o.status, f)
++	}
++	o = invoke(t, []string{"check", "-"}, text("def a [x] (b x)\ndef b [x] (a x)\ndef export [input] (a input)"))
++	if o.status != 2 || failJSON(t, o)["code"] != "STREAMABILITY_UNKNOWN" {
++		t.Errorf("%+v", o)
++	}
++}
++
++func TestExplainPrintsThePlanReport(t *testing.T) {
++	o := invoke(t, []string{"explain", "-"}, text(program))
++	if o.status != 0 || o.stderr != "" ||
++		!strings.HasPrefix(o.stdout, "export: api-table → csv\n\nSource reads:          1\n") ||
++		!strings.Contains(o.stdout, "Protocol:              JsonEvents/1 → TableRows/1 → Text\n") ||
++		!strings.Contains(o.stdout, "Row capture:           one .response.payload.deep.records[*], capped at max_record_bytes\n") ||
++		!strings.HasSuffix(o.stdout, "A later error can occur after earlier output has been written.\n") {
++		t.Errorf("%+v", o)
++	}
++	o = invoke(t, []string{"explain", "-"}, text("def x 1"))
++	if o.status != 2 || !strings.HasPrefix(failJSON(t, o)["message"].(string), "no_export: ") {
++		t.Errorf("%+v", o)
++	}
++}
++
++func TestRunPrintsTheWorkedExampleCsvBothWays(t *testing.T) {
++	needsRun(t)
++	programPath := tempFile(t, "export.alc", program)
++	input := tempFile(t, "records.json", records)
++	for _, c := range []struct {
++		args  []string
++		stdin *string
++	}{
++		{[]string{"run", programPath, input}, nil},
++		{[]string{"run", "--no-native", programPath, input}, nil},
++		{[]string{"run", programPath, "-"}, text(records)},
++		{[]string{"run", "--no-native", "-", input}, text(program)},
++	} {
++		if o := invoke(t, c.args, c.stdin); o.status != 0 || o.stdout != expectedCSV || o.stderr != "" {
++			t.Errorf("%v: %+v", c.args, o)
++		}
++	}
++}
++
++func TestRunRendersATableResultAsCsvOrJSON(t *testing.T) {
++	needsRun(t)
++	table := tempFile(t, "table.alc", strings.Replace(program, "    csv csv-options\n", "", 1))
++	if o := invoke(t, []string{"run", table, "-"}, text(records)); o.status != 0 || o.stdout != expectedCSV {
++		t.Errorf("%+v", o)
++	}
++	if o := invoke(t, []string{"run", "--render", "json", table, "-"}, text(records)); o.status != 0 ||
++		o.stdout != "[{\"Identifier\":123,\"Full name\":\"Alice\",\"Balance\":50.25},{\"Identifier\":456,\"Full name\":\"Bob\",\"Balance\":72}]\n" {
++		t.Errorf("%+v", o)
++	}
++	// The echo.
++	echo := tempFile(t, "echo.alc", "def export [input] input\n")
++	if o := invoke(t, []string{"run", echo, "-"}, text(`[1.50, {"a": null}]`)); o.status != 0 || o.stdout != "[1.50,{\"a\":null}]\n" {
++		t.Errorf("%+v", o)
++	}
++}
++
++// A renderer refused for a program, before any document is read: CSV for
++// a result of JSON events, any renderer for a program that renders its
++// own text.
++func TestRunRefusesARendererBeforeReading(t *testing.T) {
++	echo := tempFile(t, "echo.alc", "def export [input] input\n")
++	o := invoke(t, []string{"run", "--render", "csv", echo, "-"}, text("[1]"))
++	if o.status != 2 || !strings.HasPrefix(failJSON(t, o)["message"].(string), "protocol_mismatch: ") {
++		t.Errorf("%+v", o)
++	}
++	own := tempFile(t, "text.alc", program)
++	o = invoke(t, []string{"run", "--render", "json", own, "-"}, text(records))
++	if o.status != 2 || !strings.HasPrefix(failJSON(t, o)["message"].(string), "render_of_text: ") {
++		t.Errorf("%+v", o)
++	}
++}
++
++// The statuses follow the code: 1 for an input or protocol failure, 5 for
++// a limit, 2 for the program; the failure is one JSON object on standard
++// error and standard output carries nothing but the answer.
++func TestRunStatusesFollowTheFailureCode(t *testing.T) {
++	// A program that does not check: status 2, nothing read from the input.
++	bad := tempFile(t, "bad.alc", "def export [input] (nope input)\n")
++	if o := invoke(t, []string{"run", bad, "-"}, text("not json")); o.status != 2 || failJSON(t, o)["code"] != "DSL_TYPE_ERROR" {
++		t.Errorf("%+v", o)
++	}
++	needsRun(t)
++	programPath := tempFile(t, "export2.alc", program)
++	// Metadata after the rows: INPUT_ORDER_VIOLATION, status 1, no output.
++	reordered := `{"response":{"payload":{"deep":{"records":[{"id":1,"person":{"name":"a"},"account":{"balance":2}}]}},"metadata":{"fields":[{"title":"Identifier","path":["id"]}]}}}`
++	o := invoke(t, []string{"run", programPath, "-"}, text(reordered))
++	f := failJSON(t, o)
++	if o.status != 1 || o.stdout != "" || f["code"] != "INPUT_ORDER_VIOLATION" || f["output"] != "none" || !strings.HasPrefix(fmt.Sprint(f["path"]), ".response.payload") {
++		t.Errorf("%d %q %v", o.status, o.stdout, f)
++	}
++	// Invalid JSON after the rows: INPUT_INVALID, status 1; the rows were
++	// buffered, not committed, so nothing reached standard output.
++	o = invoke(t, []string{"run", programPath, "-"}, text(records+" x"))
++	f = failJSON(t, o)
++	if o.status != 1 || o.stdout != "" || f["code"] != "INPUT_INVALID" || f["output"] != "none" {
++		t.Errorf("%d %q %v", o.status, o.stdout, f)
++	}
++	// A missing cell under the standard options: MISSING_VALUE, status 1.
++	missing := `{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]}]},"payload":{"deep":{"records":[{"id":1}]}}}}`
++	if o := invoke(t, []string{"run", programPath, "-"}, text(missing)); o.status != 1 || failJSON(t, o)["code"] != "MISSING_VALUE" {
++		t.Errorf("%+v", o)
++	}
++}
++
++func TestAReaderErrorCarriesTheEngineCodeAndPosition(t *testing.T) {
++	o := invoke(t, []string{"canon", "-"}, text("a\n  b\n c\n"))
++	f := failJSON(t, o)
++	if o.status != 2 || f["code"] != "DSL_PARSE_ERROR" || !strings.HasPrefix(f["message"].(string), "bad_dedent: ") || f["row"] != 3.0 || f["col"] != 2.0 {
++		t.Errorf("%d %v", o.status, f)
++	}
++}
++
++// The reader bounds nesting, so a program nested far past the bound is a
++// too_deep failure with status 2 from every command.
++func TestAProgramNestedBeyondTheBoundIsAFailureNotAnAbort(t *testing.T) {
++	depth := 100_000
++	parens := strings.Repeat("(", depth) + "x" + strings.Repeat(")", depth)
++	var indented strings.Builder
++	for level := 0; level < 600; level++ {
++		indented.WriteString(strings.Repeat("  ", level) + "x\n")
++	}
++	// Flat to the reader, one level per step to the desugarer.
++	pipe := "pipe x" + strings.Repeat(" f", depth) + "\n"
++	// The failure names the opener, the line or the form that passed the
++	// bound: the 256th paren, the line that would open the 256th level,
++	// the pipe.
++	for _, c := range []struct {
++		command, program string
++		row              float64
++	}{
++		{"canon", parens, 1}, {"format", parens, 1}, {"check", parens, 1}, {"explain", parens, 1},
++		{"canon", indented.String(), 257}, {"check", pipe, 1},
++	} {
++		o := invoke(t, []string{c.command, "-"}, text(c.program))
++		if o.status != 2 || o.stdout != "" {
++			t.Errorf("%s: %d %q", c.command, o.status, o.stdout)
++			continue
++		}
++		f := failJSON(t, o)
++		if f["code"] != "DSL_PARSE_ERROR" || !strings.HasPrefix(f["message"].(string), "too_deep: ") || f["row"] != c.row {
++			t.Errorf("%s: %v", c.command, f)
++		}
++	}
++}
++
++func TestUsageErrorsAndUnreadableFilesExit2(t *testing.T) {
++	o := invoke(t, nil, nil)
++	if o.status != 2 || !strings.Contains(o.stderr, "usage:") || o.stdout != "" {
++		t.Errorf("%+v", o)
++	}
++	// An unknown command is refused before standard input is read, so what
++	// it holds does not matter: unparsable input is not a parse error here.
++	o = invoke(t, []string{"bogus", "-"}, text("("))
++	if o.status != 2 || failJSON(t, o)["code"] != "INPUT_INVALID" || o.stdout != "" {
++		t.Errorf("%+v", o)
++	}
++	// A wrong argument count, a bad renderer, two standard inputs.
++	for _, args := range [][]string{
++		{"run", "-"},
++		{"run", "--render", "xml", "a.alc", "b.json"},
++		{"run", "--bogus", "a.alc", "b.json"},
++		{"run", "-", "-"},
++		{"explain"},
++	} {
++		o := invoke(t, args, nil)
++		if o.status != 2 || failJSON(t, o)["code"] != "INPUT_INVALID" || o.stdout != "" {
++			t.Errorf("%v: %+v", args, o)
++		}
++	}
++	o = invoke(t, []string{"canon", "/nonexistent/program.alc"}, nil)
++	if o.status != 2 || failJSON(t, o)["code"] != "INPUT_INVALID" || o.stdout != "" {
++		t.Errorf("%+v", o)
++	}
++}
++
++// A program inside the nesting bound checks, explains and runs: a pipe of
++// 245 steps.
++func TestAProgramInsideTheBoundRuns(t *testing.T) {
++	path := tempFile(t, "pipe245.alc", "def export [input]\n  pipe input\n    select (path each-index)\n"+strings.Repeat("    map (fn [x] x)\n", 245)+"    join \",\"\n")
++	for _, command := range []string{"check", "explain"} {
++		if o := invoke(t, []string{command, path}, nil); o.status != 0 {
++			t.Errorf("%s: %+v", command, o)
++		}
++	}
++	needsRun(t)
++	if o := invoke(t, []string{"run", path, "-"}, text(`["a","b"]`)); o.status != 0 || o.stdout != "a,b" {
++		t.Errorf("%+v", o)
++	}
++}
++
++// A function applied to itself is recursion with status 2 from check
++// (which builds the plan) and from run.
++func TestSelfApplicationIsAFailureNotAnAbort(t *testing.T) {
++	omega := tempFile(t, "omega.alc", "def w [f] (f f)\ndef export [input]\n  let [x (w w)]\n    json input\n")
++	o := invoke(t, []string{"check", omega}, nil)
++	f := failJSON(t, o)
++	if o.status != 2 || f["code"] != "STREAMABILITY_UNKNOWN" || !strings.HasPrefix(f["message"].(string), "recursion: ") {
++		t.Errorf("%d %v", o.status, f)
++	}
++	needsRun(t)
++	perItem := tempFile(t, "omega-item.alc", "def w [f] (f f)\ndef export [input]\n  pipe input\n    select (path each-index)\n    map (fn [x] (w w))\n    join \",\"\n")
++	o = invoke(t, []string{"run", perItem, "-"}, text("[1]"))
++	f = failJSON(t, o)
++	if o.status != 2 || f["code"] != "STREAMABILITY_UNKNOWN" || !strings.HasPrefix(f["message"].(string), "recursion: ") {
++		t.Errorf("%d %v", o.status, f)
++	}
++}
++
++// check builds the plan, so a fail on export's own path is reported
++// there, with its code (INPUT_INVALID, status 1) and the form's position,
++// although no document was read.
++func TestCheckReportsAFailThePlanReaches(t *testing.T) {
++	o := invoke(t, []string{"check", tempFile(t, "fail.alc", "def export [input] (concat \"a\" (fail \"boom\"))\n")}, nil)
++	f := failJSON(t, o)
++	if o.status != 1 || f["code"] != "INPUT_INVALID" || f["message"] != "boom" || f["row"] != 1.0 || f["col"] != 32.0 {
++		t.Errorf("%d %v", o.status, f)
++	}
++}
++
++// A failure inside the standard library names the library's file, row and
++// column in its message, and gives no row or column of the user's file; a
++// program that happens to share a library file's name is still read as
++// its own text.
++func TestALibraryFailureNamesTheLibraryFile(t *testing.T) {
++	needsRun(t)
++	lib, _ := alchemy.StdlibSource("stdlib/table.alc")
++	row, col := 0, 0
++	for i, line := range strings.Split(lib, "\n") {
++		if strings.Contains(line, `fail "Required metadata was not found"`) {
++			row, col = i+1, strings.Index(line, "fail")+1
++		}
++	}
++	dir := t.TempDir()
++	if err := os.MkdirAll(filepath.Join(dir, "stdlib"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{"export.alc", "stdlib/table.alc"} {
++		if err := os.WriteFile(filepath.Join(dir, name), []byte(program), 0o644); err != nil {
++			t.Fatal(err)
++		}
++		o := runIn(t, dir, []string{"run", "--no-native", name, "-"}, text("{}"))
++		f := failJSON(t, o)
++		if o.status != 1 || f["code"] != "INPUT_INVALID" || f["message"] != fmt.Sprintf("Required metadata was not found (at stdlib/table.alc:%d:%d)", row, col) {
++			t.Errorf("%s: %d %v", name, o.status, f)
++		}
++		if _, has := f["row"]; has {
++			t.Errorf("%s: %v", name, f)
++		}
++	}
++}
++
++// A standard error that cannot be written loses the report, not the
++// status: the failure's own status comes back, never a signal's.
++func TestAClosedStandardErrorKeepsTheStatus(t *testing.T) {
++	bad := tempFile(t, "closed.alc", "def export [input] (nope input)\n")
++	r, w, err := os.Pipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	r.Close()
++	cmd := exec.Command(binary, "check", bad)
++	cmd.Stderr = w
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	w.Close()
++	err = cmd.Wait()
++	var exit *exec.ExitError
++	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
++		t.Errorf("%v", err)
++	}
++}
++
++// --max-output-bytes bounds what run writes, and a text longer than it
++// fails with the limit named, status 5.
++func TestRunTakesAnOutputLimit(t *testing.T) {
++	programPath := tempFile(t, "limit.alc", program)
++	if o := invoke(t, []string{"run", "--max-output-bytes", "many", programPath, "-"}, text(records)); o.status != 2 || failJSON(t, o)["code"] != "INPUT_INVALID" {
++		t.Errorf("%+v", o)
++	}
++	needsRun(t)
++	o := invoke(t, []string{"run", "--max-output-bytes", "20", programPath, "-"}, text(records))
++	f := failJSON(t, o)
++	if limit, _ := f["limit"].(map[string]any); o.status != 5 || limit["name"] != "max_output_bytes" || len(o.stdout) > 20 {
++		t.Errorf("%d %v %q", o.status, f, o.stdout)
++	}
++	if o := invoke(t, []string{"run", "--max-output-bytes", "1000", programPath, "-"}, text(records)); o.status != 0 || o.stdout != expectedCSV {
++		t.Errorf("%+v", o)
++	}
++}
++
++// In a build without the incremental adapter, run refuses with the
++// source's STREAMABILITY_UNKNOWN, status 2, before the document is read
++// and writing nothing, rather than read it through the materialized walk,
++// which would not be the run the plan report promises (number lexemes
++// lost, a repeated member collapsed, the whole document held).
++func TestRunRefusesWithoutTheIncrementalAdapter(t *testing.T) {
++	if tt.AdapterBuilt() {
++		t.Skip("this build has the incremental adapter; the run cases above run instead")
++	}
++	echo := tempFile(t, "echo.alc", "def export [input] (json input)\n")
++	o := invoke(t, []string{"run", echo, "-"}, text(`{"a":[1.50,1e2],"a":2}`))
++	f := failJSON(t, o)
++	if o.status != 2 || o.stdout != "" || f["code"] != "STREAMABILITY_UNKNOWN" || f["output"] != "none" || !strings.Contains(f["message"].(string), "tabnas_nodecell") {
++		t.Errorf("%d %q %v", o.status, o.stdout, f)
++	}
++}
+diff --git a/go/cmd/alchemy/main.go b/go/cmd/alchemy/main.go
+new file mode 100644
+index 0000000..55afe93
+--- /dev/null
++++ b/go/cmd/alchemy/main.go
+@@ -0,0 +1,324 @@
++// Copyright (c) 2026 tabnas, MIT License
++
++// Command alchemy is the alchemy language's command line, the Go port of
++// rs/src/bin/alchemy.rs:
++//
++//	alchemy canon FILE       print the program in canonical form
++//	alchemy format FILE      print the program in layout form
++//	alchemy check FILE       parse, desugar, resolve, check and build the plan; print nothing and exit 0
++//	alchemy explain FILE     print the plan report
++//	alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++//	                         run the program over the JSON document INPUT
++//
++// FILE, PROGRAM and INPUT may be - for standard input (one of them per
++// run). Nothing but the answer goes to standard output. A failure is the
++// Fail as one JSON object on standard error (code, message, and path,
++// limit, row, col when they apply, and output: "partial" when bytes had
++// reached standard output). The exit status follows the code: 2 for a
++// program that does not read, resolve or check (DSL_PARSE_ERROR,
++// DSL_TYPE_ERROR, STREAM_REUSED, STREAMABILITY_UNKNOWN), for a usage error
++// and for an unreadable file; 1 for an input or protocol failure (from
++// check too, when building the plan reaches a fail); 5 for
++// RESOURCE_LIMIT_EXCEEDED; 3 for OUTPUT_FAILED; 6 for ABORTED. A standard
++// error that cannot be written loses the report, not the status.
++//
++// --max-output-bytes sets the writer's limit; the others are transduce's
++// defaults.
++//
++// run parses INPUT with the tabnas JSON grammar through transduce's
++// ParserSource, incrementally, pruning the parsed tree under the program's
++// row selector when the plan knows one; other input formats are aless's
++// business. The output goes through a coalescing writer to standard output
++// and is flushed once, at the end; a failure found after bytes were
++// written says so.
++//
++// The incremental source needs the engine's node-cell identity, which
++// transduce builds only with the tabnas_nodecell tag. A build without it
++// has no verified grammar, and run reports the source's
++// STREAMABILITY_UNKNOWN (status 2) without reading the document, rather
++// than read it some other way: the materialized walk would lose number
++// lexemes (1.50 written 1.5), keep one of a repeated member where the
++// stream reports both, and hold the whole document, which is not the run
++// the plan report promises. Build the command with -tags tabnas_nodecell.
++package main
++
++import (
++	"errors"
++	"fmt"
++	"io"
++	"io/fs"
++	"os"
++	"os/signal"
++	"strconv"
++	"strings"
++	"syscall"
++
++	alchemy "github.com/tabnas/alchemy/go"
++	tabnasjson "github.com/tabnas/json/go"
++	tr "github.com/tabnas/render/go"
++	tt "github.com/tabnas/transduce/go"
++)
++
++const usage = "usage: alchemy canon|format|check|explain FILE\n       alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT\n       (a FILE may be - for standard input)"
++
++func main() {
++	// A write to a closed standard output or standard error fails with an
++	// error the command reports (OUTPUT_FAILED, status 3) or drops (the
++	// report on standard error), as the Rust binary's does, rather than
++	// ending the process on SIGPIPE, which Go does for those two
++	// descriptors unless the signal is ignored.
++	signal.Ignore(syscall.SIGPIPE)
++	os.Exit(command(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
++}
++
++// command runs one command line and answers its exit status.
++func command(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
++	text, exit := run(args, stdin, stdout)
++	if exit != nil {
++		report(stderr, exit.fail)
++		return exit.status
++	}
++	if _, err := io.WriteString(stdout, text); err != nil {
++		return 3
++	}
++	return 0
++}
++
++// report writes the failure as one JSON object on standard error. A
++// standard error that cannot be written (a closed pipe) loses the report,
++// not the status.
++func report(stderr io.Writer, f *tt.Fail) {
++	data, err := f.MarshalJSON()
++	if err != nil {
++		return
++	}
++	_, _ = stderr.Write(append(data, '\n'))
++}
++
++// exit is a failure and the status it exits with: the code's, except that
++// a usage error and an unreadable file exit 2 although their code is
++// INPUT_INVALID, since they are the command line's fault, not the
++// document's.
++type exit struct {
++	fail   *tt.Fail
++	status int
++}
++
++func fromFail(f *tt.Fail) *exit {
++	status := 1
++	switch f.Code {
++	case tt.CodeDSLParseError, tt.CodeDSLTypeError, tt.CodeStreamReused, tt.CodeStreamabilityUnknown:
++		status = 2
++	case tt.CodeResourceLimitExceeded:
++		status = 5
++	case tt.CodeOutputFailed:
++		status = 3
++	case tt.CodeAborted:
++		status = 6
++	}
++	return &exit{fail: f, status: status}
++}
++
++func usageError() *exit { return &exit{fail: tt.InputFail(usage), status: 2} }
++
++// read is a file's text, or standard input's for "-".
++func read(file string, stdin io.Reader) (string, *exit) {
++	var data []byte
++	var err error
++	if file == "-" {
++		data, err = io.ReadAll(stdin)
++	} else {
++		data, err = os.ReadFile(file)
++	}
++	if err != nil {
++		return "", &exit{fail: tt.InputFail(fmt.Sprintf("cannot read %s: %s", file, ioMessage(err))), status: 2}
++	}
++	return string(data), nil
++}
++
++// ioMessage is an I/O error as the Rust binary's message has it, from the
++// operating system's own text and number: `No such file or directory (os
++// error 2)`.
++func ioMessage(err error) string {
++	var pathError *fs.PathError
++	if errors.As(err, &pathError) {
++		err = pathError.Err
++	}
++	var errno syscall.Errno
++	if errors.As(err, &errno) {
++		text := errno.Error()
++		if text != "" {
++			text = strings.ToUpper(text[:1]) + text[1:]
++		}
++		return fmt.Sprintf("%s (os error %d)", text, int(errno))
++	}
++	return err.Error()
++}
++
++// run is the text to print for the command line, or the failure. `run`
++// writes its answer itself and answers nothing here.
++func run(args []string, stdin io.Reader, stdout io.Writer) (string, *exit) {
++	// The command is judged before any file is read, so an unknown one is
++	// the usage error whatever the files hold, and never waits on standard
++	// input to say so.
++	if len(args) == 0 {
++		return "", usageError()
++	}
++	switch command, rest := args[0], args[1:]; command {
++	case "canon", "format", "check", "explain":
++		if len(rest) != 1 {
++			return "", usageError()
++		}
++		file := rest[0]
++		src, e := read(file, stdin)
++		if e != nil {
++			return "", e
++		}
++		switch command {
++		case "canon":
++			program, f := alchemy.ParseFile(src, file)
++			if f != nil {
++				return "", fromFail(f)
++			}
++			text := alchemy.Canonical(program)
++			if text != "" {
++				text += "\n"
++			}
++			return text, nil
++		case "format":
++			program, f := alchemy.ParseFile(src, file)
++			if f != nil {
++				return "", fromFail(f)
++			}
++			return alchemy.Format(program), nil
++		case "check":
++			if _, f := alchemy.Compile(src, file, tt.Routers(), tr.Renderers()); f != nil {
++				return "", fromFail(f)
++			}
++			return "", nil
++		}
++		program, f := alchemy.Compile(src, file, tt.Routers(), tr.Renderers())
++		if f != nil {
++			return "", fromFail(f)
++		}
++		return program.Explain(), nil
++	case "run":
++		options, e := parseRunOptions(rest)
++		if e != nil {
++			return "", e
++		}
++		src, e := read(options.program, stdin)
++		if e != nil {
++			return "", e
++		}
++		program, f := alchemy.Compile(src, options.program, tt.Routers(), tr.Renderers())
++		if f == nil && !options.native {
++			program, f = program.WithNative(false)
++		}
++		if f != nil {
++			return "", fromFail(f)
++		}
++		input, e := read(options.input, stdin)
++		if e != nil {
++			return "", e
++		}
++		limits := tt.DefaultLimits()
++		limits.MaxOutputBytes = options.maxOutputBytes
++		if f := execute(program, input, options.render, limits, stdout); f != nil {
++			return "", fromFail(f)
++		}
++		return "", nil
++	}
++	return "", usageError()
++}
++
++type runOptions struct {
++	render         alchemy.Renderer
++	native         bool
++	maxOutputBytes *uint64
++	program        string
++	input          string
++}
++
++// parseU64 reads a byte count as Rust's u64 parse does: decimal digits,
++// with an optional leading +.
++func parseU64(text string) (uint64, bool) {
++	digits := strings.TrimPrefix(text, "+")
++	if digits == "" || strings.ContainsAny(digits[:1], "+-") {
++		return 0, false
++	}
++	n, err := strconv.ParseUint(digits, 10, 64)
++	return n, err == nil
++}
++
++func parseRunOptions(args []string) (*runOptions, *exit) {
++	options := &runOptions{native: true}
++	var files []string
++	for i := 0; i < len(args); {
++		switch arg := args[i]; {
++		case arg == "--render":
++			if i+1 >= len(args) {
++				return nil, usageError()
++			}
++			name := args[i+1]
++			render, ok := alchemy.RendererNamed(name)
++			if !ok {
++				return nil, &exit{fail: tt.InputFail("--render takes csv or json, not " + strconv.Quote(name)), status: 2}
++			}
++			options.render = render
++			i += 2
++		case arg == "--no-native":
++			options.native = false
++			i++
++		case arg == "--max-output-bytes":
++			if i+1 >= len(args) {
++				return nil, usageError()
++			}
++			n, ok := parseU64(args[i+1])
++			if !ok {
++				return nil, &exit{fail: tt.InputFail("--max-output-bytes takes a number of bytes, not " + strconv.Quote(args[i+1])), status: 2}
++			}
++			options.maxOutputBytes = &n
++			i += 2
++		case strings.HasPrefix(arg, "--"):
++			return nil, usageError()
++		default:
++			files = append(files, arg)
++			i++
++		}
++	}
++	if len(files) != 2 {
++		return nil, usageError()
++	}
++	if files[0] == "-" && files[1] == "-" {
++		return nil, &exit{fail: tt.InputFail("only one of PROGRAM and INPUT may be - (standard input)"), status: 2}
++	}
++	options.program, options.input = files[0], files[1]
++	return options, nil
++}
++
++// execute runs the program over one JSON document, writing to stdout.
++func execute(program *alchemy.Program, input string, render alchemy.Renderer, limits tt.Limits, stdout io.Writer) *tt.Fail {
++	metrics := tt.NewMetrics()
++	sink, f := program.Sink(stdout, render, limits, metrics)
++	if f != nil {
++		return f
++	}
++	prune := tt.Prune{}
++	if selector, ok := program.RowSelector(); ok {
++		prune = tt.PruneUnderSelector(selector)
++	}
++	_, f = tt.NewParserSource(tabnasjson.Make(), input).
++		Grammar("json").
++		Mode(tt.IncrementalMode(prune)).
++		Limits(limits).
++		Metrics(metrics).
++		Run(sink)
++	// A failure the source found (bad JSON after the rows) knows nothing
++	// of the output; the writer's count says whether bytes had reached
++	// standard output.
++	if f != nil && metrics.OutputBytes.Load() > 0 && !f.CommittedOutput {
++		f.Committed()
++	}
++	return f
++}
+diff --git a/go/go.mod b/go/go.mod
+new file mode 100644
+index 0000000..a8defa8
+--- /dev/null
++++ b/go/go.mod
+@@ -0,0 +1,21 @@
++module github.com/tabnas/alchemy-cli/go
++
++go 1.24.7
++
++// The language, the stages its programs run on (transduce's routers and
++// render's renderers), and the JSON grammar `run` reads its document with.
++// The shared types are in no release of alchemy yet, nor are the Routers
++// and Renderers that transduce and render build on them: a go.work over
++// the sibling checkouts resolves all three until their releases do.
++require (
++	github.com/tabnas/alchemy/go v0.1.3
++	github.com/tabnas/json/go v0.5.13
++	github.com/tabnas/render/go v0.1.2
++	github.com/tabnas/transduce/go v0.1.2
++)
++
++require (
++	github.com/tabnas/csv/go v0.6.2 // indirect
++	github.com/tabnas/jsonic/go v0.7.4 // indirect
++	github.com/tabnas/parser/go v0.12.9 // indirect
++)
+diff --git a/go/go.sum b/go/go.sum
+new file mode 100644
+index 0000000..ae00e17
+--- /dev/null
++++ b/go/go.sum
+@@ -0,0 +1,40 @@
++github.com/tabnas/alchemy/go v0.1.3 h1:VXlaXgmRuKzFNynDNcgoiPxe98QN8ButSict6qTF4ew=
++github.com/tabnas/alchemy/go v0.1.3/go.mod h1:kzzbSHkpAsyczKpsC/wx7lKTrg0ad3dWIOxAYNz75yo=
++github.com/tabnas/csv/go v0.6.2 h1:dyNPUMZMqG5OKYuk6948Mp6NZCHEWmOFOiUEDXJ94ug=
++github.com/tabnas/csv/go v0.6.2/go.mod h1:EGiCf03VLWqCwk9s75dwoZL9TaIX4081VyZijYpfiQY=
++github.com/tabnas/debug/go v0.3.10 h1:C0GGfHCvEHlqknz2DyNmgraA8OmQR+YIkGYo9MZrXLE=
++github.com/tabnas/debug/go v0.3.10/go.mod h1:63LVyuZFjANfvft83beZesr0sZA0m/F6wN07di/z/VU=
++github.com/tabnas/feed/go v0.6.11 h1:ahvFPtzXJbjc7pLupzpxvsWnSVFZVDVlUAYACPjgwuM=
++github.com/tabnas/feed/go v0.6.11/go.mod h1:ppSohQxQcS7efsPWtWT8kRr0rhNURmi4s6gacpnHxLQ=
++github.com/tabnas/hoover/go v0.3.11 h1:0LK0BTgzkpSyX3ZZ8tORl6Ecf2pz+uPzkEvoCCvb6fY=
++github.com/tabnas/hoover/go v0.3.11/go.mod h1:ZpU7QowKq5Wlv7kS47kyIcb4uPPfeV7D0+8xu9oqGkM=
++github.com/tabnas/ini/go v0.5.14 h1:FOzxUsZvRAz4a4lnbV4ZoOhlBHBiTxE1yYIBnWKJfII=
++github.com/tabnas/ini/go v0.5.14/go.mod h1:op0/D6UjP08xZDtvptcoHhOUxZXaljaR3YUPFwX6810=
++github.com/tabnas/json/go v0.5.13 h1:PV1b2R2y07IM22gOwNjRF5cECMaM3ZIiqS0qj67zMag=
++github.com/tabnas/json/go v0.5.13/go.mod h1:/U4iAIUA6FkiYkuSnYAEB0WJsducYY8Ai6bmIfHD5aw=
++github.com/tabnas/json5/go v0.5.11 h1:IbDMGrVH1t6MqnbPczCbqUa9L0UDUe2gfY2i1tWwkms=
++github.com/tabnas/json5/go v0.5.11/go.mod h1:7fJebbxfkPjaPaltVd/DLDUv5txiaZ/5QNHsaPokXoo=
++github.com/tabnas/jsonc/go v0.5.10 h1:SlTZwOk8TTZb3a9IXxYUAXBcZwASn/mi7zNOXm7C0IE=
++github.com/tabnas/jsonc/go v0.5.10/go.mod h1:0pAG6SznFf4Fj3GU99D+NQh1z9dAB9uPQcEFIrNAzL0=
++github.com/tabnas/jsonic/go v0.7.4 h1:DU6t0ojo/lInIJMLOS9s8OQ8mIJTsSVkKPPKNsrf854=
++github.com/tabnas/jsonic/go v0.7.4/go.mod h1:aqF8MHI/L5bZxTW22lrrcQS34nGjzkShnDKLNtyNEQ4=
++github.com/tabnas/jsonl/go v0.1.12 h1:QXhZz/+soG1ZpUAML+MQteRyG+kulyO6BuYrGxNuzCM=
++github.com/tabnas/jsonl/go v0.1.12/go.mod h1:5lB49r9LPOl3XsEKwY500yeRdtEyR7nmsXNWWTEB6jA=
++github.com/tabnas/markdown/go v0.7.8 h1:eTUUfHSrJIs5SlHt9rmfAwd1sf2Bk69UTkaPp3PYNQM=
++github.com/tabnas/markdown/go v0.7.8/go.mod h1:9pjEwwwR2hKhbkZKTkyL7zfuZQmy2qH/TMsuu66/Pio=
++github.com/tabnas/parser/go v0.12.9 h1:O7aTPKx55UkNjEclMPqGZ7OKIxqOL9ebOpvvCSPwD/s=
++github.com/tabnas/parser/go v0.12.9/go.mod h1:WrlfEVyZ1QjEIowWiyEu3K1iHj7wxuPut5zoH9Trehk=
++github.com/tabnas/render/go v0.1.2 h1:0DZf/kTPdVpuYJVm3W+HesIOOkMQ5QLMT04Ww6bObt4=
++github.com/tabnas/render/go v0.1.2/go.mod h1:I184stdpIsQAXl1iPyADfmYixI+SRhv4OgGPRkt4XlI=
++github.com/tabnas/support/go v0.3.6 h1:5axQ6spA6kV0zzBkqeB+eQQXCRVJguXEvgu+SbZO65M=
++github.com/tabnas/support/go v0.3.6/go.mod h1:q+EGPO8fRFQAYDwRHFH4lafD5l5W/NCdY8vhN9IJOkY=
++github.com/tabnas/toml/go v0.5.11 h1:AUjWTkCQ/1XDo7zKDuQGMEAFPLDrNt6Oc9jnOIhfw/4=
++github.com/tabnas/toml/go v0.5.11/go.mod h1:L3PiJaHdmbiFG8hlqs31jg7UrsAZldAl+PEbPnw2sr0=
++github.com/tabnas/transduce/go v0.1.2 h1:Q7OFo7cTqo6hdyRdEdjML7Fxwo5tERXvmS4goJEz38A=
++github.com/tabnas/transduce/go v0.1.2/go.mod h1:tVgVI0wh4lROwtYHoVqato/w7B4cy3eZHMuHRWPUKc4=
++github.com/tabnas/xml/go v0.7.12 h1:Dv9MlQ3sVuXzAdPAf27+vL71tkxepkN0CTW7ATPpIyw=
++github.com/tabnas/xml/go v0.7.12/go.mod h1:jJQF+z3/cF8/YVjjVMmv/zcP7TOnm2wd4hhH+/cQltQ=
++github.com/tabnas/yaml/go v0.5.18 h1:vstzjSWTuLD7ov5Re/eJunXZX3XpD9mdOEkESjPxc48=
++github.com/tabnas/yaml/go v0.5.18/go.mod h1:XKEKb1SLk4r9jCJkWsMgw2xTm5iQTKTw+WxFKnOOehE=
++github.com/tabnas/zon/go v0.5.12 h1:lGzsKoh1+QdCaZrpsTxyjFYRUm6Qc8FTDkONFAscq3A=
++github.com/tabnas/zon/go v0.5.12/go.mod h1:NKGqE3pMByIKrlnMA+wOC2xPLwtVysX9G3OIMUvsRsg=
+diff --git a/rs/Cargo.lock b/rs/Cargo.lock
+new file mode 100644
+index 0000000..6c97f12
+--- /dev/null
++++ b/rs/Cargo.lock
+@@ -0,0 +1,244 @@
++# This file is automatically @generated by Cargo.
++# It is not intended for manual editing.
++version = 4
++
++[[package]]
++name = "aho-corasick"
++version = "1.1.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
++dependencies = [
++ "memchr",
++]
++
++[[package]]
++name = "equivalent"
++version = "1.0.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
++
++[[package]]
++name = "hashbrown"
++version = "0.17.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
++
++[[package]]
++name = "indexmap"
++version = "2.14.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
++dependencies = [
++ "equivalent",
++ "hashbrown",
++ "serde",
++ "serde_core",
++]
++
++[[package]]
++name = "itoa"
++version = "1.0.18"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
++
++[[package]]
++name = "memchr"
++version = "2.8.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
++
++[[package]]
++name = "proc-macro2"
++version = "1.0.107"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
++dependencies = [
++ "unicode-ident",
++]
++
++[[package]]
++name = "quote"
++version = "1.0.47"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
++dependencies = [
++ "proc-macro2",
++]
++
++[[package]]
++name = "regex"
++version = "1.13.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
++dependencies = [
++ "aho-corasick",
++ "memchr",
++ "regex-automata",
++ "regex-syntax",
++]
++
++[[package]]
++name = "regex-automata"
++version = "0.4.18"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
++dependencies = [
++ "aho-corasick",
++ "memchr",
++ "regex-syntax",
++]
++
++[[package]]
++name = "regex-syntax"
++version = "0.8.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
++
++[[package]]
++name = "serde"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
++dependencies = [
++ "serde_core",
++ "serde_derive",
++]
++
++[[package]]
++name = "serde_core"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
++dependencies = [
++ "serde_derive",
++]
++
++[[package]]
++name = "serde_derive"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn",
++]
++
++[[package]]
++name = "serde_json"
++version = "1.0.151"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
++dependencies = [
++ "indexmap",
++ "itoa",
++ "memchr",
++ "serde",
++ "serde_core",
++ "zmij",
++]
++
++[[package]]
++name = "syn"
++version = "3.0.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "unicode-ident",
++]
++
++[[package]]
++name = "tabnas-alchemy"
++version = "0.1.3"
++dependencies = [
++ "indexmap",
++ "serde_json",
++ "tabnas-json",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "tabnas-alchemy-cli"
++version = "0.1.0"
++dependencies = [
++ "serde_json",
++ "tabnas-alchemy",
++ "tabnas-json",
++ "tabnas-render",
++ "tabnas-transduce",
++]
++
++[[package]]
++name = "tabnas-csv"
++version = "0.6.2"
++dependencies = [
++ "indexmap",
++ "serde",
++ "serde_json",
++ "tabnas-jsonic",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "tabnas-json"
++version = "0.5.13"
++dependencies = [
++ "regex",
++ "serde_json",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "tabnas-jsonic"
++version = "0.7.4"
++dependencies = [
++ "indexmap",
++ "regex",
++ "serde_json",
++ "tabnas-json",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "tabnas-parser"
++version = "0.12.9"
++dependencies = [
++ "indexmap",
++ "regex",
++ "serde",
++ "serde_json",
++]
++
++[[package]]
++name = "tabnas-render"
++version = "0.1.2"
++dependencies = [
++ "tabnas-alchemy",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "tabnas-transduce"
++version = "0.1.2"
++dependencies = [
++ "indexmap",
++ "serde_json",
++ "tabnas-alchemy",
++ "tabnas-csv",
++ "tabnas-json",
++ "tabnas-parser",
++]
++
++[[package]]
++name = "unicode-ident"
++version = "1.0.26"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
++
++[[package]]
++name = "zmij"
++version = "1.0.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+diff --git a/rs/Cargo.toml b/rs/Cargo.toml
+new file mode 100644
+index 0000000..b04502b
+--- /dev/null
++++ b/rs/Cargo.toml
+@@ -0,0 +1,35 @@
++[package]
++name = "tabnas-alchemy-cli"
++version = "0.1.0"
++edition = "2021"
++rust-version = "1.85"
++authors = ["Richard Rodger <http://richardrodger.com>"]
++description = "The alchemy command: runs programs in the alchemy streaming language over JSON documents, composing tabnas-alchemy, tabnas-transduce and tabnas-render."
++license = "MIT"
++homepage = "https://tabnas.dev"
++repository = "https://github.com/tabnas/alchemy-cli"
++readme = "README.md"
++include = ["src/**", "README.md", "LICENSE"]
++keywords = ["dsl", "streaming", "transducer", "cli", "tabnas"]
++categories = ["command-line-utilities", "parsing"]
++
++# `alchemy canon | format | check | explain | run`, moved here from
++# tabnas-alchemy: the one place the language, the routers and the
++# renderers meet.
++[[bin]]
++name = "alchemy"
++path = "src/bin/alchemy.rs"
++
++[dependencies]
++# Sibling checkouts, the standard tabnas development model: the language
++# and its shared types, the routers (and the parser source `run` reads its
++# input through), the renderers, and the JSON grammar `run` parses its
++# input with.
++tabnas-alchemy = { path = "../../alchemy/rs" }
++tabnas-transduce = { path = "../../transduce/rs" }
++tabnas-render = { path = "../../render/rs" }
++tabnas-json = { path = "../../json/rs" }
++
++[dev-dependencies]
++# The failures the binary prints on standard error, read back as JSON.
++serde_json = { version = "1.0", features = ["preserve_order"] }
+diff --git a/rs/LICENSE b/rs/LICENSE
+new file mode 100644
+index 0000000..7f44163
+--- /dev/null
++++ b/rs/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 tabnas
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/rs/README.md b/rs/README.md
+new file mode 100644
+index 0000000..7278640
+--- /dev/null
++++ b/rs/README.md
+@@ -0,0 +1,25 @@
++# tabnas-alchemy-cli (Rust)
++
++The `tabnas-alchemy-cli` crate, binary `alchemy`: runs programs in the
++[alchemy](https://github.com/tabnas/alchemy) language over JSON
++documents. It compiles every program with
++[tabnas-transduce](https://github.com/tabnas/transduce)'s routers and
++[tabnas-render](https://github.com/tabnas/render)'s renderers, which
++alchemy's runtime takes by injection, and reads `run`'s input through
++transduce's parser source with the tabnas JSON grammar. See the
++repository [README](../README.md) and [AGENTS.md](../AGENTS.md).
++
++```text
++alchemy canon FILE       print the program in canonical form
++alchemy format FILE      print the program in layout form
++alchemy check FILE       parse, desugar, resolve, check and build the plan; print nothing and exit 0
++alchemy explain FILE     print the plan report
++alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++                         run the program over the JSON document INPUT
++```
++
++alchemy, transduce, render and the JSON grammar are sibling checkouts
++named by path in `Cargo.toml`. From this directory: `cargo build`,
++`cargo test --all-targets` (`tests/cli_test.rs` runs the built binary as
++a script runs it), and
++`cargo clippy --all-targets --all-features -- -D warnings`.
+diff --git a/rs/src/bin/alchemy.rs b/rs/src/bin/alchemy.rs
+new file mode 100644
+index 0000000..3a4cc3e
+--- /dev/null
++++ b/rs/src/bin/alchemy.rs
+@@ -0,0 +1,296 @@
++//! The `alchemy` command.
++//!
++//! ```text
++//! alchemy canon FILE       print the program in canonical form
++//! alchemy format FILE      print the program in layout form
++//! alchemy check FILE       parse, desugar, resolve, check and build the plan; print nothing and exit 0
++//! alchemy explain FILE     print the plan report
++//! alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++//!                          run the program over the JSON document INPUT
++//! ```
++//!
++//! `FILE`, `PROGRAM` and `INPUT` may be `-` for standard input (one of
++//! them per run). Nothing but the answer goes to standard output. A
++//! failure is the `Fail` as one JSON object on standard error (`code`,
++//! `message`, and `path`, `limit`, `row`, `col` when they apply, and
++//! `output`: `"partial"` when bytes had reached standard output). The
++//! exit status follows the code: 2 for a program that does not read,
++//! resolve or check (`DSL_PARSE_ERROR`, `DSL_TYPE_ERROR`, `STREAM_REUSED`,
++//! `STREAMABILITY_UNKNOWN`), for a usage error and for an unreadable
++//! file; 1 for an input or protocol failure (from `check` too, when
++//! building the plan reaches a `fail`); 5 for `RESOURCE_LIMIT_EXCEEDED`;
++//! 3 for `OUTPUT_FAILED`; 6 for `ABORTED`. A standard error that cannot
++//! be written loses the report, not the status.
++//!
++//! Every command runs on a thread of [`tabnas_alchemy::STACK_BYTES`], so
++//! the checker's and the evaluator's bounds are reached before the
++//! stack's end in a debug build as in a release one. `--max-output-bytes`
++//! sets the writer's limit; the others are transduce's defaults.
++//!
++//! `run` parses `INPUT` with the tabnas JSON grammar through transduce's
++//! `ParserSource`, incrementally, pruning the parsed tree under the
++//! program's row selector when the plan knows one; other input formats
++//! are aless's business. The output goes through a coalescing writer to
++//! standard output and is flushed once, at the end; a failure found after
++//! bytes were written says so.
++//!
++//! The command is where alchemy, transduce and render meet: every program
++//! is compiled with transduce's routers and render's renderers, which make
++//! the stages its plan is lowered onto.
++
++use std::io::{self, Read, Write};
++use std::process::ExitCode;
++use std::sync::Arc;
++
++use tabnas_alchemy::{canonical, format, parse_file, Program, Renderer};
++use tabnas_transduce::{Code, Fail, Limits, Metrics, ParserSource, Prune, SourceMode};
++
++const USAGE: &str = "usage: alchemy canon|format|check|explain FILE\n       alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT\n       (a FILE may be - for standard input)";
++
++fn main() -> ExitCode {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    // The whole command runs on a thread of the stack the checker and the
++    // evaluator are promised, so a program within their bounds fails with
++    // a code rather than overflowing the main thread's smaller stack.
++    let worker = std::thread::Builder::new()
++        .name("alchemy".into())
++        .stack_size(tabnas_alchemy::STACK_BYTES)
++        .spawn(move || command(&args));
++    match worker {
++        Ok(thread) => thread
++            .join()
++            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
++        Err(error) => {
++            report(&Fail::new(
++                Code::ResourceLimitExceeded,
++                format!("no thread could be started for the command: {error}"),
++            ));
++            ExitCode::from(5)
++        }
++    }
++}
++
++/// Run one command line and answer its exit status.
++fn command(args: &[String]) -> ExitCode {
++    match run(args) {
++        Ok(text) => {
++            let mut out = io::stdout().lock();
++            if out
++                .write_all(text.as_bytes())
++                .and_then(|()| out.flush())
++                .is_err()
++            {
++                return ExitCode::from(3);
++            }
++            ExitCode::SUCCESS
++        }
++        Err(exit) => {
++            report(&exit.fail);
++            ExitCode::from(exit.status)
++        }
++    }
++}
++
++/// The failure as one JSON object on standard error. A standard error
++/// that cannot be written (a closed pipe) loses the report, not the
++/// status: `eprintln!` would panic there and exit 101 in place of the
++/// failure's own status.
++fn report(fail: &Fail) {
++    let mut err = io::stderr().lock();
++    let _ = writeln!(err, "{}", fail.to_json()).and_then(|()| err.flush());
++}
++
++/// A failure and the status it exits with: the code's, except that a
++/// usage error and an unreadable file exit 2 although their code is
++/// `INPUT_INVALID`, since they are the command line's fault, not the
++/// document's.
++struct Exit {
++    fail: Fail,
++    status: u8,
++}
++
++impl From<Fail> for Exit {
++    fn from(fail: Fail) -> Exit {
++        let status = match fail.code {
++            Code::DslParseError
++            | Code::DslTypeError
++            | Code::StreamReused
++            | Code::StreamabilityUnknown => 2,
++            Code::ResourceLimitExceeded => 5,
++            Code::OutputFailed => 3,
++            Code::Aborted => 6,
++            _ => 1,
++        };
++        Exit { fail, status }
++    }
++}
++
++/// Compile `src`, named `file`, with transduce's routers and render's
++/// renderers.
++fn compile(src: &str, file: &str) -> Result<Program, Fail> {
++    tabnas_alchemy::compile(
++        src,
++        file,
++        Arc::new(tabnas_transduce::routers()),
++        Arc::new(tabnas_render::renderers()),
++    )
++}
++
++fn usage() -> Exit {
++    Exit {
++        fail: Fail::input(USAGE),
++        status: 2,
++    }
++}
++
++fn read(file: &str) -> Result<String, Exit> {
++    let mut text = String::new();
++    let outcome = if file == "-" {
++        io::stdin().lock().read_to_string(&mut text).map(|_| ())
++    } else {
++        std::fs::read_to_string(file).map(|read| text = read)
++    };
++    outcome.map_err(|error| Exit {
++        fail: Fail::input(format!("cannot read {file}: {error}")),
++        status: 2,
++    })?;
++    Ok(text)
++}
++
++/// The text to print for the command line, or the failure. `run` writes
++/// its answer itself and answers nothing here.
++fn run(args: &[String]) -> Result<String, Exit> {
++    // The command is judged before any file is read, so an unknown one is
++    // the usage error whatever the files hold, and never waits on standard
++    // input to say so.
++    let (command, rest) = args.split_first().ok_or_else(usage)?;
++    match command.as_str() {
++        "canon" | "format" | "check" | "explain" => {
++            let [file] = rest else {
++                return Err(usage());
++            };
++            let src = read(file)?;
++            match command.as_str() {
++                "canon" => {
++                    let text = canonical(&parse_file(&src, file)?);
++                    Ok(if text.is_empty() { text } else { text + "\n" })
++                }
++                "format" => Ok(format(&parse_file(&src, file)?)),
++                "check" => Ok(compile(&src, file).map(|_| String::new())?),
++                _ => Ok(compile(&src, file).map(|program| program.explain())?),
++            }
++        }
++        "run" => {
++            let options = RunOptions::parse(rest)?;
++            let src = read(&options.program)?;
++            let mut program = compile(&src, &options.program)?;
++            if !options.native {
++                program = program.with_native(false)?;
++            }
++            let input = read(&options.input)?;
++            let limits = Limits {
++                max_output_bytes: options.max_output_bytes,
++                ..Limits::default()
++            };
++            execute(&program, &input, options.render, limits)?;
++            Ok(String::new())
++        }
++        _ => Err(usage()),
++    }
++}
++
++struct RunOptions {
++    render: Option<Renderer>,
++    native: bool,
++    max_output_bytes: Option<u64>,
++    program: String,
++    input: String,
++}
++
++impl RunOptions {
++    fn parse(args: &[String]) -> Result<RunOptions, Exit> {
++        let mut render = None;
++        let mut native = true;
++        let mut max_output_bytes = None;
++        let mut files = Vec::new();
++        let mut i = 0;
++        while i < args.len() {
++            match args[i].as_str() {
++                "--render" => {
++                    let name = args.get(i + 1).ok_or_else(usage)?;
++                    render = Some(Renderer::named(name).ok_or_else(|| Exit {
++                        fail: Fail::input(format!("--render takes csv or json, not {name:?}")),
++                        status: 2,
++                    })?);
++                    i += 2;
++                }
++                "--no-native" => {
++                    native = false;
++                    i += 1;
++                }
++                "--max-output-bytes" => {
++                    let n = args.get(i + 1).ok_or_else(usage)?;
++                    max_output_bytes = Some(n.parse::<u64>().map_err(|_| Exit {
++                        fail: Fail::input(format!(
++                            "--max-output-bytes takes a number of bytes, not {n:?}"
++                        )),
++                        status: 2,
++                    })?);
++                    i += 2;
++                }
++                other if other.starts_with("--") => return Err(usage()),
++                other => {
++                    files.push(other.to_string());
++                    i += 1;
++                }
++            }
++        }
++        let [program, input] = files.as_slice() else {
++            return Err(usage());
++        };
++        if program == "-" && input == "-" {
++            return Err(Exit {
++                fail: Fail::input("only one of PROGRAM and INPUT may be - (standard input)"),
++                status: 2,
++            });
++        }
++        Ok(RunOptions {
++            render,
++            native,
++            max_output_bytes,
++            program: program.clone(),
++            input: input.clone(),
++        })
++    }
++}
++
++/// Run the program over one JSON document, writing to standard output.
++fn execute(
++    program: &Program,
++    input: &str,
++    render: Option<Renderer>,
++    limits: Limits,
++) -> Result<(), Fail> {
++    let metrics = Metrics::new();
++    let sink = program.sink(Box::new(io::stdout()), render, &limits, metrics.clone())?;
++    let prune = match program.row_selector() {
++        Some(selector) => Prune::Under(selector.clone()),
++        None => Prune::Never,
++    };
++    let (outcome, _) = ParserSource::new(tabnas_json::make(), input)
++        .grammar("json")
++        .mode(SourceMode::Incremental { prune })
++        .limits(limits)
++        .metrics(metrics.clone())
++        .run_owned(sink);
++    outcome.map(|_| ()).map_err(|fail| {
++        // A failure the source found (bad JSON after the rows) knows
++        // nothing of the output; the writer's count says whether bytes
++        // had reached standard output.
++        if Metrics::get(&metrics.output_bytes) > 0 && !fail.committed_output {
++            fail.committed()
++        } else {
++            fail
++        }
++    })
++}
+diff --git a/rs/tests/cli_test.rs b/rs/tests/cli_test.rs
+new file mode 100644
+index 0000000..d54121b
+--- /dev/null
++++ b/rs/tests/cli_test.rs
+@@ -0,0 +1,624 @@
++// The `alchemy` binary, run the way a script runs it: the five commands,
++// standard input as `-`, the statuses, and that nothing but the answer
++// reaches standard output.
++
++use std::io::Write;
++use std::path::PathBuf;
++use std::process::{Command, Output, Stdio};
++
++fn binary() -> PathBuf {
++    PathBuf::from(env!("CARGO_BIN_EXE_alchemy"))
++}
++
++fn run(args: &[&str], stdin: Option<&str>) -> Output {
++    let mut child = Command::new(binary())
++        .args(args)
++        .stdin(if stdin.is_some() {
++            Stdio::piped()
++        } else {
++            Stdio::null()
++        })
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped())
++        .spawn()
++        .expect("the alchemy binary starts");
++    if let Some(text) = stdin {
++        // A command refused before standard input is read may have exited
++        // already, closing the pipe: that is the behaviour under test, not
++        // a failure to write.
++        if let Err(error) = child
++            .stdin
++            .take()
++            .expect("a piped stdin")
++            .write_all(text.as_bytes())
++        {
++            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
++        }
++    }
++    child.wait_with_output().expect("the binary finishes")
++}
++
++fn stdout(output: &Output) -> String {
++    String::from_utf8(output.stdout.clone()).expect("utf-8 output")
++}
++
++fn stderr(output: &Output) -> String {
++    String::from_utf8(output.stderr.clone()).expect("utf-8 output")
++}
++
++fn fail_json(output: &Output) -> serde_json::Value {
++    serde_json::from_str(stderr(output).trim())
++        .unwrap_or_else(|_| panic!("one JSON object on stderr, not {:?}", stderr(output)))
++}
++
++fn temp_file(name: &str, text: &str) -> PathBuf {
++    let path = std::env::temp_dir().join(format!("alchemy-cli-{}-{name}", std::process::id()));
++    std::fs::write(&path, text).expect("the file is written");
++    path
++}
++
++/// The spec's worked example: aless's `tests/fixtures/records.json`.
++const RECORDS: &str = r#"{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]},{"title":"Balance","path":["account","balance"]}]},"payload":{"deep":{"records":[{"id":123,"person":{"name":"Alice"},"account":{"balance":50.25}},{"account":{"balance":72},"person":{"name":"Bob"},"id":456}]}}}}"#;
++
++const EXPECTED_CSV: &str =
++    "\"Identifier\",\"Full name\",\"Balance\"\r\n\"123\",\"Alice\",\"50.25\"\r\n\"456\",\"Bob\",\"72\"\r\n";
++
++/// The spec's program (sections 12.1 and 13.4).
++const PROGRAM: &str = "def column-from-meta [source]
++  record
++    entry :label (get \"title\" source)
++    entry :source
++      as-path
++        get \"path\" source
++
++def api-binding
++  record
++    entry :columns
++      path \"response\" \"metadata\" \"fields\"
++    entry :rows
++      path \"response\" \"payload\" \"deep\" \"records\" each-index
++    entry :column column-from-meta
++
++def api-table [input]
++  table-from-json api-binding input
++
++def export [input]
++  pipe input
++    api-table
++    csv csv-options
++";
++
++const EXPORT: &str =
++    "def export [input]\n  pipe input\n    table-from-json api-binding\n    csv csv-options\n";
++
++#[test]
++fn canon_prints_the_canonical_form() {
++    let file = temp_file("canon.alc", EXPORT);
++    let output = run(&["canon", file.to_str().expect("a utf-8 path")], None);
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(
++        stdout(&output),
++        "(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))\n"
++    );
++    assert_eq!(stderr(&output), "");
++}
++
++#[test]
++fn format_prints_the_layout_form_and_reads_standard_input() {
++    let output = run(
++        &["format", "-"],
++        Some("(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))"),
++    );
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(stdout(&output), EXPORT);
++}
++
++#[test]
++fn check_is_silent_on_a_program_that_checks() {
++    let output = run(&["check", "-"], Some(PROGRAM));
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "");
++    assert_eq!(stderr(&output), "");
++}
++
++/// A library definition over a selection's items, which are typed
++/// `Value`: `check` passes it (the items may be records, or vectors), and
++/// `run` checks each one and prints the result.
++#[test]
++fn a_definition_over_selected_items_checks_and_runs() {
++    let cases = [
++        (
++            "cols.alc",
++            "def cols [input] (map public-column (select (path \"cols\" each-index) input))\ndef export [input] (join \",\" (map (fn [c] (get :label c)) (cols input)))\n",
++            r#"{"cols":[{"label":"a","source":1},{"label":"b"}]}"#,
++            "a,b",
++        ),
++        (
++            "rows.alc",
++            "def export [input]\n  concat-map (partial csv-row csv-options) (select (path \"rows\" each-index) input)\n",
++            r#"{"rows":[[1,"x"],[2,"y"]]}"#,
++            "\"1\",\"x\"\r\n\"2\",\"y\"\r\n",
++        ),
++    ];
++    for (name, program, input, want) in cases {
++        let path = temp_file(name, program);
++        let path = path.to_str().unwrap();
++        let out = run(&["check", path], None);
++        assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
++        let out = run(&["run", path, "-"], Some(input));
++        assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
++        assert_eq!(stdout(&out), want, "{name}");
++    }
++}
++
++#[test]
++fn check_reports_a_reader_failure_as_json_on_stderr_with_status_2() {
++    let output = run(&["check", "-"], Some("pipe x\n  f\n  []\n"));
++    assert_eq!(output.status.code(), Some(2));
++    assert_eq!(stdout(&output), "");
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "DSL_PARSE_ERROR");
++    assert!(
++        fail["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("empty_step: ")),
++        "{fail}"
++    );
++    assert_eq!(fail["row"], 3);
++    assert_eq!(fail["col"], 3);
++    assert_eq!(fail["output"], "none");
++}
++
++/// `check` now reaches the resolver and the checker: an unknown name, a
++/// reused stream and a dynamic function each fail with their code, at
++/// the position they name, with status 2.
++#[test]
++fn check_reports_the_resolver_and_checker_codes() {
++    // The composed program of the README names a binding it does not
++    // define.
++    let output = run(&["check", "-"], Some(EXPORT));
++    assert_eq!(output.status.code(), Some(2));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "DSL_TYPE_ERROR");
++    assert!(
++        fail["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("unknown_name: api-binding")),
++        "{fail}"
++    );
++    assert_eq!(
++        (fail["row"].as_u64(), fail["col"].as_u64()),
++        (Some(3), Some(21))
++    );
++
++    let output = run(
++        &["check", "-"],
++        Some("def export [input] (concat (json input) (json input))"),
++    );
++    assert_eq!(output.status.code(), Some(2));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "STREAM_REUSED");
++    assert!(
++        fail["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("reused: ")),
++        "{fail}"
++    );
++
++    let output = run(
++        &["check", "-"],
++        Some("def a [x] (b x)\ndef b [x] (a x)\ndef export [input] (a input)"),
++    );
++    assert_eq!(output.status.code(), Some(2));
++    assert_eq!(fail_json(&output)["code"], "STREAMABILITY_UNKNOWN");
++}
++
++#[test]
++fn explain_prints_the_plan_report() {
++    let output = run(&["explain", "-"], Some(PROGRAM));
++    assert!(output.status.success(), "{}", stderr(&output));
++    let text = stdout(&output);
++    assert!(
++        text.starts_with("export: api-table → csv\n\nSource reads:          1\n"),
++        "{text}"
++    );
++    assert!(
++        text.contains("Protocol:              JsonEvents/1 → TableRows/1 → Text\n"),
++        "{text}"
++    );
++    assert!(text.contains("Row capture:           one .response.payload.deep.records[*], capped at max_record_bytes\n"), "{text}");
++    assert!(
++        text.ends_with("A later error can occur after earlier output has been written.\n"),
++        "{text}"
++    );
++    assert_eq!(stderr(&output), "");
++
++    let output = run(&["explain", "-"], Some("def x 1"));
++    assert_eq!(output.status.code(), Some(2));
++    assert!(
++        fail_json(&output)["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("no_export: ")),
++        "{}",
++        stderr(&output)
++    );
++}
++
++#[test]
++fn run_prints_the_worked_example_csv_both_ways() {
++    let program = temp_file("export.alc", PROGRAM);
++    let program = program.to_str().expect("a utf-8 path");
++    let input = temp_file("records.json", RECORDS);
++    let input = input.to_str().expect("a utf-8 path");
++    for args in [
++        vec!["run", program, input],
++        vec!["run", "--no-native", program, input],
++        vec!["run", program, "-"],
++        vec!["run", "--no-native", "-", input],
++    ] {
++        let stdin = match args.as_slice() {
++            [.., "-"] => Some(RECORDS),
++            [_, _, "-", _] => Some(PROGRAM),
++            _ => None,
++        };
++        let output = run(&args, stdin);
++        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
++        assert_eq!(stdout(&output), EXPECTED_CSV, "{args:?}");
++        assert_eq!(stderr(&output), "", "{args:?}");
++    }
++}
++
++#[test]
++fn run_renders_a_table_result_as_csv_or_json() {
++    let table = PROGRAM.replace("    csv csv-options\n", "");
++    let program = temp_file("table.alc", &table);
++    let program = program.to_str().expect("a utf-8 path");
++    let output = run(&["run", program, "-"], Some(RECORDS));
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(stdout(&output), EXPECTED_CSV);
++    let output = run(&["run", "--render", "json", program, "-"], Some(RECORDS));
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(
++        stdout(&output),
++        "[{\"Identifier\":123,\"Full name\":\"Alice\",\"Balance\":50.25},{\"Identifier\":456,\"Full name\":\"Bob\",\"Balance\":72}]\n"
++    );
++    // The echo, and a renderer refused for a program that renders itself.
++    let echo = temp_file("echo.alc", "def export [input] input\n");
++    let echo = echo.to_str().expect("a utf-8 path");
++    let output = run(&["run", echo, "-"], Some("[1.50, {\"a\": null}]"));
++    assert!(output.status.success(), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "[1.50,{\"a\":null}]\n");
++    let output = run(&["run", "--render", "csv", echo, "-"], Some("[1]"));
++    assert_eq!(output.status.code(), Some(2));
++    assert!(
++        fail_json(&output)["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("protocol_mismatch: ")),
++        "{}",
++        stderr(&output)
++    );
++    let output = run(&["run", "--render", "json", program, "-"], Some(RECORDS));
++    assert!(output.status.success());
++    let text = temp_file("text.alc", PROGRAM);
++    let output = run(
++        &[
++            "run",
++            "--render",
++            "json",
++            text.to_str().expect("a utf-8 path"),
++            "-",
++        ],
++        Some(RECORDS),
++    );
++    assert_eq!(output.status.code(), Some(2));
++    assert!(
++        fail_json(&output)["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("render_of_text: ")),
++        "{}",
++        stderr(&output)
++    );
++}
++
++/// The statuses follow the code: 1 for an input or protocol failure, 5
++/// for a limit, 2 for the program; the failure is one JSON object on
++/// standard error and standard output carries nothing but the answer.
++#[test]
++fn run_statuses_follow_the_failure_code() {
++    let program = temp_file("export2.alc", PROGRAM);
++    let program = program.to_str().expect("a utf-8 path");
++    // Metadata after the rows: INPUT_ORDER_VIOLATION, status 1, no output.
++    let reordered = r#"{"response":{"payload":{"deep":{"records":[{"id":1,"person":{"name":"a"},"account":{"balance":2}}]}},"metadata":{"fields":[{"title":"Identifier","path":["id"]}]}}}"#;
++    let output = run(&["run", program, "-"], Some(reordered));
++    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "");
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "INPUT_ORDER_VIOLATION");
++    assert_eq!(fail["output"], "none");
++    assert!(
++        fail["path"]
++            .as_str()
++            .is_some_and(|p| p.starts_with(".response.payload")),
++        "{fail}"
++    );
++    // Invalid JSON after the rows: INPUT_INVALID, status 1; the rows were
++    // buffered, not committed, so nothing reached standard output.
++    let output = run(&["run", program, "-"], Some(&format!("{RECORDS} x")));
++    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "");
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "INPUT_INVALID");
++    assert_eq!(fail["output"], "none");
++    // A missing cell under the standard options: MISSING_VALUE, status 1.
++    let missing = r#"{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]}]},"payload":{"deep":{"records":[{"id":1}]}}}}"#;
++    let output = run(&["run", program, "-"], Some(missing));
++    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
++    assert_eq!(fail_json(&output)["code"], "MISSING_VALUE");
++    // A program that does not check: status 2, nothing read from the input.
++    let bad = temp_file("bad.alc", "def export [input] (nope input)\n");
++    let output = run(
++        &["run", bad.to_str().expect("a utf-8 path"), "-"],
++        Some("not json"),
++    );
++    assert_eq!(output.status.code(), Some(2));
++    assert_eq!(fail_json(&output)["code"], "DSL_TYPE_ERROR");
++}
++
++#[test]
++fn a_reader_error_carries_the_engine_code_and_position() {
++    let output = run(&["canon", "-"], Some("a\n  b\n c\n"));
++    assert_eq!(output.status.code(), Some(2));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "DSL_PARSE_ERROR");
++    assert!(
++        fail["message"]
++            .as_str()
++            .is_some_and(|m| m.starts_with("bad_dedent: ")),
++        "{fail}"
++    );
++    assert_eq!(
++        (fail["row"].as_u64(), fail["col"].as_u64()),
++        (Some(3), Some(2))
++    );
++}
++
++/// The reader bounds nesting, so a program nested far past the bound is a
++/// `too_deep` failure with status 2 from every command, where it used to
++/// take the process down with a stack overflow (status -6, nothing on
++/// standard error but the runtime's abort).
++#[test]
++fn a_program_nested_beyond_the_bound_is_a_failure_not_an_abort() {
++    let depth = 100_000;
++    let parens = format!("{}x{}", "(".repeat(depth), ")".repeat(depth));
++    let mut indented = String::new();
++    for level in 0..600 {
++        indented.push_str(&"  ".repeat(level));
++        indented.push_str("x\n");
++    }
++    // Flat to the reader, one level per step to the desugarer.
++    let pipe = format!("pipe x{}\n", " f".repeat(depth));
++    // The failure names the opener, the line or the form that passed the
++    // bound: the 256th paren, the line that would open the 256th level,
++    // the pipe.
++    for (command, program, row) in [
++        ("canon", &parens, 1),
++        ("format", &parens, 1),
++        ("check", &parens, 1),
++        ("explain", &parens, 1),
++        ("canon", &indented, 257),
++        ("check", &pipe, 1),
++    ] {
++        let output = run(&[command, "-"], Some(program));
++        assert_eq!(
++            output.status.code(),
++            Some(2),
++            "{command}: {}",
++            stderr(&output)
++        );
++        assert_eq!(stdout(&output), "", "{command}");
++        let fail = fail_json(&output);
++        assert_eq!(fail["code"], "DSL_PARSE_ERROR", "{command}");
++        assert!(
++            fail["message"]
++                .as_str()
++                .is_some_and(|m| m.starts_with("too_deep: ")),
++            "{command}: {fail}"
++        );
++        assert_eq!(fail["row"], row, "{command}: {fail}");
++    }
++}
++
++#[test]
++fn usage_errors_and_unreadable_files_exit_2() {
++    let output = run(&[], None);
++    assert_eq!(output.status.code(), Some(2));
++    assert!(stderr(&output).contains("usage:"), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "");
++
++    // An unknown command is refused before standard input is read, so
++    // what it holds does not matter: unparsable input is not a parse
++    // error here.
++    let output = run(&["bogus", "-"], Some("("));
++    assert_eq!(output.status.code(), Some(2));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "INPUT_INVALID");
++    assert_eq!(stdout(&output), "");
++
++    // A wrong argument count, a bad renderer, two standard inputs.
++    for args in [
++        vec!["run", "-"],
++        vec!["run", "--render", "xml", "a.alc", "b.json"],
++        vec!["run", "--bogus", "a.alc", "b.json"],
++        vec!["run", "-", "-"],
++        vec!["explain"],
++    ] {
++        let output = run(&args, None);
++        assert_eq!(output.status.code(), Some(2), "{args:?}");
++        assert_eq!(fail_json(&output)["code"], "INPUT_INVALID", "{args:?}");
++        assert_eq!(stdout(&output), "", "{args:?}");
++    }
++
++    let output = run(&["canon", "/nonexistent/program.alc"], None);
++    assert_eq!(output.status.code(), Some(2));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "INPUT_INVALID");
++    assert_eq!(stdout(&output), "");
++}
++
++/// A program inside the nesting bound checks, runs and explains in a
++/// debug build too: the command runs on a thread of the stack the checker
++/// and the evaluator are promised, where the main thread's smaller one
++/// overflowed on a pipe of 245 steps.
++#[test]
++fn a_program_inside_the_bound_runs_in_a_debug_build() {
++    let program = format!(
++        "def export [input]\n  pipe input\n    select (path each-index)\n{}    join \",\"\n",
++        "    map (fn [x] x)\n".repeat(245)
++    );
++    let program = temp_file("pipe245.alc", &program);
++    let program = program.to_str().expect("a utf-8 path");
++    for args in [vec!["check", program], vec!["explain", program]] {
++        let output = run(&args, None);
++        assert_eq!(
++            output.status.code(),
++            Some(0),
++            "{args:?}: {}",
++            stderr(&output)
++        );
++    }
++    let output = run(&["run", program, "-"], Some(r#"["a","b"]"#));
++    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
++    assert_eq!(stdout(&output), "a,b");
++}
++
++/// A function applied to itself is `recursion` with status 2 from `check`
++/// (which builds the plan) and from `run`, not a stack overflow that
++/// aborts the process.
++#[test]
++fn self_application_is_a_failure_not_an_abort() {
++    let omega = temp_file(
++        "omega.alc",
++        "def w [f] (f f)\ndef export [input]\n  let [x (w w)]\n    json input\n",
++    );
++    let output = run(&["check", omega.to_str().unwrap()], None);
++    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "STREAMABILITY_UNKNOWN");
++    assert!(
++        fail["message"].as_str().unwrap().starts_with("recursion: "),
++        "{fail}"
++    );
++    let per_item = temp_file(
++        "omega-item.alc",
++        "def w [f] (f f)\ndef export [input]\n  pipe input\n    select (path each-index)\n    map (fn [x] (w w))\n    join \",\"\n",
++    );
++    let output = run(&["run", per_item.to_str().unwrap(), "-"], Some("[1]"));
++    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
++    assert_eq!(fail_json(&output)["code"], "STREAMABILITY_UNKNOWN");
++}
++
++/// `check` builds the plan, so a `fail` on `export`'s own path is reported
++/// there, with its code (`INPUT_INVALID`, status 1) and the form's
++/// position, although no document was read.
++#[test]
++fn check_reports_a_fail_the_plan_reaches() {
++    let program = temp_file(
++        "fail.alc",
++        "def export [input] (concat \"a\" (fail \"boom\"))\n",
++    );
++    let output = run(&["check", program.to_str().unwrap()], None);
++    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
++    let fail = fail_json(&output);
++    assert_eq!(fail["code"], "INPUT_INVALID");
++    assert_eq!(fail["message"], "boom");
++    assert_eq!(
++        (fail["row"].as_u64(), fail["col"].as_u64()),
++        (Some(1), Some(32))
++    );
++}
++
++/// A failure inside the standard library names the library's file, row
++/// and column in its message, and gives no row or column of the user's
++/// file; a program that happens to share a library file's name is still
++/// read as its own text.
++#[test]
++fn a_library_failure_names_the_library_file() {
++    let lib = tabnas_alchemy::stdlib::source("stdlib/table.alc").unwrap();
++    let (row, line) = lib
++        .lines()
++        .enumerate()
++        .find(|(_, l)| l.contains("fail \"Required metadata was not found\""))
++        .unwrap();
++    let (row, col) = (row + 1, line.find("fail").unwrap() + 1);
++    let dir = std::env::temp_dir().join(format!("alchemy-cli-{}-lib", std::process::id()));
++    std::fs::create_dir_all(dir.join("stdlib")).unwrap();
++    for name in ["export.alc", "stdlib/table.alc"] {
++        let path = dir.join(name);
++        std::fs::write(&path, PROGRAM).unwrap();
++        let output = Command::new(binary())
++            .current_dir(&dir)
++            .args(["run", "--no-native", name, "-"])
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .spawn()
++            .and_then(|mut child| {
++                child.stdin.take().unwrap().write_all(b"{}")?;
++                child.wait_with_output()
++            })
++            .unwrap();
++        assert_eq!(output.status.code(), Some(1), "{name}: {}", stderr(&output));
++        let fail = fail_json(&output);
++        assert_eq!(fail["code"], "INPUT_INVALID", "{name}");
++        assert_eq!(
++            fail["message"],
++            format!("Required metadata was not found (at stdlib/table.alc:{row}:{col})"),
++            "{name}"
++        );
++        assert!(fail.get("row").is_none(), "{name}: {fail}");
++    }
++}
++
++/// A standard error that cannot be written loses the report, not the
++/// status: the failure's own status comes back, never the 101 of a panic.
++#[test]
++fn a_closed_standard_error_keeps_the_status() {
++    let bad = temp_file("closed.alc", "def export [input] (nope input)\n");
++    let mut child = Command::new(binary())
++        .args(["check", bad.to_str().unwrap()])
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::piped())
++        .spawn()
++        .unwrap();
++    drop(child.stderr.take());
++    assert_eq!(child.wait().unwrap().code(), Some(2));
++}
++
++/// `--max-output-bytes` bounds what `run` writes, and a text longer than
++/// it fails with the limit named, status 5.
++#[test]
++fn run_takes_an_output_limit() {
++    let program = temp_file("limit.alc", PROGRAM);
++    let program = program.to_str().unwrap();
++    let output = run(
++        &["run", "--max-output-bytes", "20", program, "-"],
++        Some(RECORDS),
++    );
++    assert_eq!(output.status.code(), Some(5), "{}", stderr(&output));
++    let fail = fail_json(&output);
++    assert_eq!(fail["limit"]["name"], "max_output_bytes");
++    assert!(output.stdout.len() <= 20);
++    let output = run(
++        &["run", "--max-output-bytes", "1000", program, "-"],
++        Some(RECORDS),
++    );
++    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
++    assert_eq!(stdout(&output), EXPECTED_CSV);
++    let output = run(
++        &["run", "--max-output-bytes", "many", program, "-"],
++        Some(RECORDS),
++    );
++    assert_eq!(output.status.code(), Some(2));
++    assert_eq!(fail_json(&output)["code"], "INPUT_INVALID");
++}
+diff --git a/ts/.gitignore b/ts/.gitignore
+new file mode 100644
+index 0000000..527a259
+--- /dev/null
++++ b/ts/.gitignore
+@@ -0,0 +1,5 @@
++node_modules/
++dist/
++dist-test/
++package-lock.json
++*.tsbuildinfo
+diff --git a/ts/LICENSE b/ts/LICENSE
+new file mode 100644
+index 0000000..7f44163
+--- /dev/null
++++ b/ts/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 tabnas
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/ts/README.md b/ts/README.md
+new file mode 100644
+index 0000000..d31d53e
+--- /dev/null
++++ b/ts/README.md
+@@ -0,0 +1,29 @@
++# @tabnas/alchemy-cli
++
++The `alchemy` command for [alchemy](https://github.com/tabnas/alchemy), the
++small transformation language for streaming structured data through the
++tabnas parser and transducer stack.
++
++```sh
++npm install -g @tabnas/alchemy-cli
++```
++
++```
++alchemy canon FILE       print the program in canonical form
++alchemy format FILE      print the program in layout form
++alchemy check FILE       parse, desugar, resolve, check and build the plan
++alchemy explain FILE     print the plan report
++alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++                         run the program over the JSON document INPUT
++```
++
++A `FILE`, `PROGRAM` or `INPUT` may be `-` for standard input. A failure is
++one JSON object on standard error, and the exit status follows its code;
++`src/cli.ts` documents both.
++
++The command composes `@tabnas/alchemy` with the stages it compiles onto:
++`@tabnas/transduce`'s `routers` and `@tabnas/render`'s `renderers`, passed
++to alchemy's `compile`, and it reads `INPUT` with `@tabnas/json`.
++
++This package includes its TypeScript sources under `src/` alongside the
++compiled JavaScript and declarations under `dist/`.
+diff --git a/ts/bin/alchemy b/ts/bin/alchemy
+new file mode 100755
+index 0000000..0ab1b6d
+--- /dev/null
++++ b/ts/bin/alchemy
+@@ -0,0 +1,5 @@
++#!/usr/bin/env node
++'use strict'
++// The `alchemy` command: canon | format | check | explain | run. See
++// src/cli.ts, which this runs, for the arguments, outputs and statuses.
++process.exitCode = require('../dist/cli').main(process.argv.slice(2))
+diff --git a/ts/package.json b/ts/package.json
+new file mode 100644
+index 0000000..b8271d5
+--- /dev/null
++++ b/ts/package.json
+@@ -0,0 +1,60 @@
++{
++  "name": "@tabnas/alchemy-cli",
++  "version": "0.1.0",
++  "main": "dist/cli.js",
++  "type": "commonjs",
++  "types": "dist/cli.d.ts",
++  "description": "The alchemy command: check, explain and run alchemy programs over JSON with the tabnas transducers and renderers.",
++  "homepage": "https://tabnas.dev",
++  "keywords": [
++    "parser",
++    "dsl",
++    "streaming",
++    "transducer",
++    "cli"
++  ],
++  "author": "Richard Rodger (http://richardrodger.com)",
++  "license": "MIT",
++  "engines": {
++    "node": ">=24"
++  },
++  "scripts": {
++    "build": "tsc --build src && tsc --build test",
++    "watch": "tsc --build src test -w",
++    "clean": "rm -rf node_modules dist dist-test package-lock.json",
++    "reset": "npm run clean && npm i && npm run build && npm test",
++    "test": "npm run build && node --enable-source-maps --test \"dist-test/*.test.js\""
++  },
++  "files": [
++    "dist",
++    "src",
++    "bin",
++    "README.md",
++    "LICENSE"
++  ],
++  "exports": {
++    ".": "./dist/cli.js"
++  },
++  "bin": {
++    "alchemy": "bin/alchemy"
++  },
++  "peerDependencies": {
++    "@tabnas/alchemy": ">=0",
++    "@tabnas/json": ">=0",
++    "@tabnas/render": ">=0",
++    "@tabnas/transduce": ">=0"
++  },
++  "devDependencies": {
++    "@tabnas/alchemy": "*",
++    "@tabnas/json": "*",
++    "@tabnas/render": "*",
++    "@tabnas/transduce": "*",
++    "@types/node": "26.x",
++    "typescript": "7.x"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git://github.com/tabnas/alchemy-cli.git",
++    "directory": "ts"
++  }
++}
+diff --git a/ts/src/cli.ts b/ts/src/cli.ts
+new file mode 100644
+index 0000000..84cb485
+--- /dev/null
++++ b/ts/src/cli.ts
+@@ -0,0 +1,315 @@
++/* Copyright (c) 2026 tabnas, MIT License */
++
++// The `alchemy` command (alchemy's rs/src/bin/alchemy.rs), run by
++// `bin/alchemy`. It composes the language, `@tabnas/alchemy`, with the
++// stages it compiles onto: transduce's `routers` and render's `renderers`,
++// passed to `compile`, the tabnas JSON grammar, transduce's
++// `ParserSource`, and render's `FdWriter`.
++//
++//   alchemy canon FILE       print the program in canonical form
++//   alchemy format FILE      print the program in layout form
++//   alchemy check FILE       parse, desugar, resolve, check and build the plan; print nothing and exit 0
++//   alchemy explain FILE     print the plan report
++//   alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT
++//                            run the program over the JSON document INPUT
++//
++// `FILE`, `PROGRAM` and `INPUT` may be `-` for standard input (one of them
++// per run). Nothing but the answer goes to standard output. A failure is
++// the `Fail` as one JSON object on standard error (`code`, `message`, and
++// `path`, `limit`, `row`, `col` when they apply, and `output`: `"partial"`
++// when bytes had reached standard output). The exit status follows the
++// code: 2 for a program that does not read, resolve or check
++// (`DSL_PARSE_ERROR`, `DSL_TYPE_ERROR`, `STREAM_REUSED`,
++// `STREAMABILITY_UNKNOWN`), for a usage error and for an unreadable file; 1
++// for an input or protocol failure (from `check` too, when building the
++// plan reaches a `fail`); 5 for `RESOURCE_LIMIT_EXCEEDED`; 3 for
++// `OUTPUT_FAILED`; 6 for `ABORTED`. A standard error that cannot be
++// written loses the report, not the status.
++//
++// The Rust command runs on a thread of 64 MiB so the checker's and the
++// evaluator's bounds are reached before the stack's end; here they run on
++// alchemy's explicit stack (its `trampoline`), so Node's default stack is
++// enough.
++// `--max-output-bytes` sets the writer's limit; the others are transduce's
++// defaults.
++//
++// `run` parses `INPUT` with the tabnas JSON grammar through transduce's
++// `ParserSource`, incrementally, pruning the parsed tree under the
++// program's row selector when the plan knows one; other input formats are
++// aless's business. The output goes through a coalescing writer to
++// standard output and is flushed once, at the end; a failure found after
++// bytes were written says so.
++
++import { readFileSync, readSync, writeSync } from 'node:fs'
++
++import {
++  CompileOptions,
++  Program,
++  Renderer,
++  canonical,
++  compile,
++  format,
++  isFail,
++  parseFile,
++  rendererNamed,
++} from '@tabnas/alchemy'
++import { make as makeJson } from '@tabnas/json'
++import { FdWriter, renderers } from '@tabnas/render'
++import { Fail, Limits, Metrics, ParserSource, Prune, SourceMode, routers } from '@tabnas/transduce'
++
++// What every program is compiled with: transduce's routers and render's
++// renderers, the stages alchemy builds a run from.
++const OPTIONS: CompileOptions = { routers, renderers }
++
++const USAGE =
++  'usage: alchemy canon|format|check|explain FILE\n' +
++  '       alchemy run [--render csv|json] [--no-native] [--max-output-bytes N] PROGRAM INPUT\n' +
++  '       (a FILE may be - for standard input)'
++
++// A failure and the status it exits with: the code's, except that a usage
++// error and an unreadable file exit 2 although their code is
++// `INPUT_INVALID`, since they are the command line's fault, not the
++// document's.
++class Exit {
++  constructor(
++    readonly fail: Fail,
++    readonly status: number,
++  ) {}
++
++  static of(fail: Fail): Exit {
++    switch (fail.code) {
++      case 'DSL_PARSE_ERROR':
++      case 'DSL_TYPE_ERROR':
++      case 'STREAM_REUSED':
++      case 'STREAMABILITY_UNKNOWN':
++        return new Exit(fail, 2)
++      case 'RESOURCE_LIMIT_EXCEEDED':
++        return new Exit(fail, 5)
++      case 'OUTPUT_FAILED':
++        return new Exit(fail, 3)
++      case 'ABORTED':
++        return new Exit(fail, 6)
++      default:
++        return new Exit(fail, 1)
++    }
++  }
++}
++
++function usage(): Exit {
++  return new Exit(Fail.input(USAGE), 2)
++}
++
++// Write all of `text` to the descriptor, offering a non-blocking pipe the
++// rest again when it answers `EAGAIN`.
++function writeAll(fd: number, text: string): void {
++  let bytes = Buffer.from(text, 'utf8')
++  while (0 < bytes.length) {
++    let n: number
++    try {
++      n = writeSync(fd, bytes)
++    } catch (err: any) {
++      if ('EAGAIN' === err?.code) continue
++      throw err
++    }
++    bytes = bytes.subarray(n)
++  }
++}
++
++// The failure as one JSON object on standard error. A standard error that
++// cannot be written (a closed pipe) loses the report, not the status.
++function report(fail: Fail): void {
++  try {
++    writeAll(2, JSON.stringify(fail.toJSON()) + '\n')
++  } catch (_err) {
++    // The status still says what happened.
++  }
++}
++
++// All of standard input, waiting out a non-blocking descriptor's `EAGAIN`.
++function readStdin(): Buffer {
++  const chunks: Buffer[] = []
++  const chunk = Buffer.alloc(64 * 1024)
++  for (;;) {
++    let n: number
++    try {
++      n = readSync(0, chunk, 0, chunk.length, null)
++    } catch (err: any) {
++      if ('EAGAIN' === err?.code) continue
++      // A closed or absent standard input reads as empty, as Rust's does.
++      if ('EOF' === err?.code) break
++      throw err
++    }
++    if (0 === n) break
++    chunks.push(Buffer.from(chunk.subarray(0, n)))
++  }
++  return Buffer.concat(chunks)
++}
++
++const UTF8 = new TextDecoder('utf-8', { fatal: true })
++
++// A file's text, or standard input's for `-`; a file that cannot be read,
++// or that is not UTF-8, is the command line's failure (status 2).
++function read(file: string): string {
++  let bytes: Buffer
++  try {
++    bytes = '-' === file ? readStdin() : readFileSync(file)
++  } catch (err: any) {
++    throw new Exit(Fail.input(`cannot read ${file}: ${err?.message ?? err}`), 2)
++  }
++  try {
++    return UTF8.decode(bytes)
++  } catch (_err) {
++    throw new Exit(Fail.input(`cannot read ${file}: stream did not contain valid UTF-8`), 2)
++  }
++}
++
++type RunOptions = {
++  render?: Renderer
++  native: boolean
++  maxOutputBytes: number | null
++  program: string
++  input: string
++}
++
++const U64_MAX = 2n ** 64n - 1n
++
++function parseRunOptions(args: ReadonlyArray<string>): RunOptions {
++  let render: Renderer | undefined
++  let native = true
++  let maxOutputBytes: number | null = null
++  const files: string[] = []
++  let i = 0
++  while (i < args.length) {
++    const arg = args[i]
++    if ('--render' === arg) {
++      const name = args[i + 1]
++      if (undefined === name) throw usage()
++      render = rendererNamed(name)
++      if (undefined === render) {
++        throw new Exit(Fail.input(`--render takes csv or json, not ${JSON.stringify(name)}`), 2)
++      }
++      i += 2
++    } else if ('--no-native' === arg) {
++      native = false
++      i += 1
++    } else if ('--max-output-bytes' === arg) {
++      const n = args[i + 1]
++      if (undefined === n) throw usage()
++      // As Rust reads a `u64`: digits, a leading `+` allowed, no larger
++      // than 2^64 - 1.
++      if (!/^\+?[0-9]+$/.test(n) || BigInt(n) > U64_MAX) {
++        throw new Exit(Fail.input(`--max-output-bytes takes a number of bytes, not ${JSON.stringify(n)}`), 2)
++      }
++      maxOutputBytes = Number(BigInt(n))
++      i += 2
++    } else if (arg.startsWith('--')) {
++      throw usage()
++    } else {
++      files.push(arg)
++      i += 1
++    }
++  }
++  if (2 !== files.length) throw usage()
++  const [program, input] = files
++  if ('-' === program && '-' === input) {
++    throw new Exit(Fail.input('only one of PROGRAM and INPUT may be - (standard input)'), 2)
++  }
++  return { render, native, maxOutputBytes, program, input }
++}
++
++// Run the program over one JSON document, writing to standard output.
++function execute(program: Program, input: string, render: Renderer | undefined, limits: Limits): void {
++  const metrics = new Metrics()
++  const sink = program.sink(new FdWriter(1), render, limits, metrics)
++  const selector = program.rowSelector()
++  const prune = undefined === selector ? Prune.never() : Prune.under(selector)
++  try {
++    new ParserSource(makeJson(), input)
++      .grammar('json')
++      .mode(SourceMode.incremental(prune))
++      .limits(limits)
++      .metrics(metrics)
++      .run(sink)
++  } catch (err) {
++    // A failure the source found (bad JSON after the rows) knows nothing of
++    // the output; the writer's count says whether bytes had reached
++    // standard output.
++    if (isFail(err) && metrics.output_bytes > 0 && !err.committedOutput) err.committed()
++    throw err
++  }
++}
++
++// The text to print for the command line. `run` writes its answer itself
++// and answers nothing here.
++function command(args: ReadonlyArray<string>): string {
++  // The command is judged before any file is read, so an unknown one is
++  // the usage error whatever the files hold, and never waits on standard
++  // input to say so.
++  const [name, ...rest] = args
++  switch (name) {
++    case 'canon':
++    case 'format':
++    case 'check':
++    case 'explain': {
++      if (1 !== rest.length) throw usage()
++      const file = rest[0]
++      const src = read(file)
++      switch (name) {
++        case 'canon': {
++          const text = canonical(parseFile(src, file))
++          return '' === text ? text : text + '\n'
++        }
++        case 'format':
++          return format(parseFile(src, file))
++        case 'check':
++          compile(src, file, OPTIONS)
++          return ''
++        default:
++          return compile(src, file, OPTIONS).explain()
++      }
++    }
++    case 'run': {
++      const options = parseRunOptions(rest)
++      const src = read(options.program)
++      let program = compile(src, options.program, OPTIONS)
++      if (!options.native) program = program.withNative(false)
++      const input = read(options.input)
++      const limits: Limits = { ...Limits.default(), max_output_bytes: options.maxOutputBytes }
++      execute(program, input, options.render, limits)
++      return ''
++    }
++    default:
++      throw usage()
++  }
++}
++
++// The status of a defect of this package (anything thrown that is not a
++// `Fail`, from whichever copy of alchemy's shared unit: `isFail`): Rust's
++// for a panic, so a script never reads one as an input failure.
++const DEFECT = 101
++
++// Run one command line and answer its exit status.
++export function main(args: ReadonlyArray<string>): number {
++  let text: string
++  try {
++    text = command(args)
++  } catch (err) {
++    const exit = err instanceof Exit ? err : isFail(err) ? Exit.of(err) : undefined
++    if (undefined === exit) {
++      try {
++        writeAll(2, `alchemy: internal error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`)
++      } catch (_err) {
++        // The status still says what happened.
++      }
++      return DEFECT
++    }
++    report(exit.fail)
++    return exit.status
++  }
++  try {
++    writeAll(1, text)
++  } catch (_err) {
++    return 3
++  }
++  return 0
++}
+diff --git a/ts/src/tsconfig.json b/ts/src/tsconfig.json
+new file mode 100644
+index 0000000..2503180
+--- /dev/null
++++ b/ts/src/tsconfig.json
+@@ -0,0 +1,16 @@
++{
++  "compilerOptions": {
++    "esModuleInterop": true,
++    "module": "nodenext",
++    "noEmitOnError": true,
++    "outDir": "../dist",
++    "rootDir": ".",
++    "resolveJsonModule": true,
++    "sourceMap": true,
++    "strict": true,
++    "target": "es2021",
++    "declaration": true,
++    "declarationDir": "../dist",
++    "types": ["node"]
++  }
++}
+diff --git a/ts/test/cli.test.ts b/ts/test/cli.test.ts
+new file mode 100644
+index 0000000..5b1478d
+--- /dev/null
++++ b/ts/test/cli.test.ts
+@@ -0,0 +1,415 @@
++/* Copyright (c) 2026 tabnas, MIT License */
++
++// The `alchemy` command (alchemy's rs/tests/cli_test.rs), run the way a
++// script runs it: bin/alchemy in a child process, the five commands,
++// standard input as `-`, the statuses, and that nothing but the answer
++// reaches standard output.
++
++import { describe, it } from 'node:test'
++import assert from 'node:assert'
++import { SpawnSyncReturns, spawn, spawnSync } from 'node:child_process'
++import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++
++import { source } from '@tabnas/alchemy'
++
++import { EXPECTED_CSV, PROGRAM, RECORDS } from './common'
++
++// The command, as the package's `bin` names it.
++const BIN = join(__dirname, '..', 'bin', 'alchemy')
++
++const TMP = mkdtempSync(join(tmpdir(), 'alchemy-cli-'))
++
++type Output = { status: number | null; stdout: string; stderr: string }
++
++function alchemy(args: string[], stdin?: string, cwd?: string): Output {
++  const out: SpawnSyncReturns<Buffer> = spawnSync(process.execPath, [BIN, ...args], {
++    input: stdin,
++    stdio: [undefined === stdin ? 'ignore' : 'pipe', 'pipe', 'pipe'],
++    cwd,
++    maxBuffer: 64 * 1024 * 1024,
++  })
++  if (out.error) throw out.error
++  return { status: out.status, stdout: out.stdout.toString('utf8'), stderr: out.stderr.toString('utf8') }
++}
++
++// The failure: one JSON object on standard error.
++function failJson(output: Output): any {
++  try {
++    return JSON.parse(output.stderr.trim())
++  } catch (_e) {
++    assert.fail(`one JSON object on stderr, not ${JSON.stringify(output.stderr)}`)
++  }
++}
++
++function tempFile(name: string, text: string): string {
++  const path = join(TMP, name)
++  writeFileSync(path, text)
++  return path
++}
++
++const EXPORT = 'def export [input]\n  pipe input\n    table-from-json api-binding\n    csv csv-options\n'
++
++describe('cli', () => {
++  it('the bin is an executable script', () => {
++    accessSync(BIN, constants.X_OK)
++    // Its interpreter line names node, which POSIX runs and npm reads to
++    // write the shim it installs for the command on Windows.
++    assert.equal(readFileSync(BIN, 'utf8').split(/\r?\n/)[0], '#!/usr/bin/env node')
++    // Run as a script runs it: by its own interpreter line, and on Windows,
++    // which runs executables only and reads no interpreter line, by node,
++    // as that shim runs it.
++    const out =
++      'win32' === process.platform
++        ? spawnSync(process.execPath, [BIN, 'canon', '-'], { input: 'a b' })
++        : spawnSync(BIN, ['canon', '-'], { input: 'a b' })
++    if (out.error) throw out.error
++    assert.equal(out.status, 0, out.stderr.toString())
++    assert.equal(out.stdout.toString(), '(a b)\n')
++  })
++
++  it('canon prints the canonical form', () => {
++    const file = tempFile('canon.alc', EXPORT)
++    const out = alchemy(['canon', file])
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, '(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))\n')
++    assert.equal(out.stderr, '')
++  })
++
++  it('format prints the layout form and reads standard input', () => {
++    const out = alchemy(['format', '-'], '(def export [input] (pipe input (table-from-json api-binding) (csv csv-options)))')
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, EXPORT)
++  })
++
++  it('check is silent on a program that checks', () => {
++    const out = alchemy(['check', '-'], PROGRAM)
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, '')
++    assert.equal(out.stderr, '')
++  })
++
++  // A library definition over a selection's items, which are typed
++  // `Value`: `check` passes it, and `run` checks each one and prints the
++  // result.
++  it('a definition over selected items checks and runs', () => {
++    for (const [name, program, input, want] of [
++      [
++        'cols.alc',
++        'def cols [input] (map public-column (select (path "cols" each-index) input))\ndef export [input] (join "," (map (fn [c] (get :label c)) (cols input)))\n',
++        '{"cols":[{"label":"a","source":1},{"label":"b"}]}',
++        'a,b',
++      ],
++      [
++        'rows.alc',
++        'def export [input]\n  concat-map (partial csv-row csv-options) (select (path "rows" each-index) input)\n',
++        '{"rows":[[1,"x"],[2,"y"]]}',
++        '"1","x"\r\n"2","y"\r\n',
++      ],
++    ]) {
++      const path = tempFile(name, program)
++      let out = alchemy(['check', path])
++      assert.equal(out.status, 0, `${name}: ${out.stderr}`)
++      out = alchemy(['run', path, '-'], input)
++      assert.equal(out.status, 0, `${name}: ${out.stderr}`)
++      assert.equal(out.stdout, want, name)
++    }
++  })
++
++  it('check reports a reader failure as JSON on stderr with status 2', () => {
++    const out = alchemy(['check', '-'], 'pipe x\n  f\n  []\n')
++    assert.equal(out.status, 2)
++    assert.equal(out.stdout, '')
++    const fail = failJson(out)
++    assert.equal(fail.code, 'DSL_PARSE_ERROR')
++    assert.ok(fail.message.startsWith('empty_step: '), JSON.stringify(fail))
++    assert.equal(fail.row, 3)
++    assert.equal(fail.col, 3)
++    assert.equal(fail.output, 'none')
++  })
++
++  // `check` reaches the resolver and the checker: an unknown name, a reused
++  // stream and a dynamic function each fail with their code, at the
++  // position they name, with status 2.
++  it('check reports the resolver and checker codes', () => {
++    let out = alchemy(['check', '-'], EXPORT)
++    assert.equal(out.status, 2)
++    let fail = failJson(out)
++    assert.equal(fail.code, 'DSL_TYPE_ERROR')
++    assert.ok(fail.message.startsWith('unknown_name: api-binding'), JSON.stringify(fail))
++    assert.deepStrictEqual([fail.row, fail.col], [3, 21])
++    out = alchemy(['check', '-'], 'def export [input] (concat (json input) (json input))')
++    assert.equal(out.status, 2)
++    fail = failJson(out)
++    assert.equal(fail.code, 'STREAM_REUSED')
++    assert.ok(fail.message.startsWith('reused: '), JSON.stringify(fail))
++    out = alchemy(['check', '-'], 'def a [x] (b x)\ndef b [x] (a x)\ndef export [input] (a input)')
++    assert.equal(out.status, 2)
++    assert.equal(failJson(out).code, 'STREAMABILITY_UNKNOWN')
++  })
++
++  it('explain prints the plan report', () => {
++    let out = alchemy(['explain', '-'], PROGRAM)
++    assert.equal(out.status, 0, out.stderr)
++    const text = out.stdout
++    assert.ok(text.startsWith('export: api-table → csv\n\nSource reads:          1\n'), text)
++    assert.ok(text.includes('Protocol:              JsonEvents/1 → TableRows/1 → Text\n'), text)
++    assert.ok(
++      text.includes('Row capture:           one .response.payload.deep.records[*], capped at max_record_bytes\n'),
++      text,
++    )
++    assert.ok(text.endsWith('A later error can occur after earlier output has been written.\n'), text)
++    assert.equal(out.stderr, '')
++    out = alchemy(['explain', '-'], 'def x 1')
++    assert.equal(out.status, 2)
++    assert.ok(failJson(out).message.startsWith('no_export: '), out.stderr)
++  })
++
++  it('run prints the worked example csv both ways', () => {
++    const program = tempFile('export.alc', PROGRAM)
++    const input = tempFile('records.json', RECORDS)
++    for (const args of [
++      ['run', program, input],
++      ['run', '--no-native', program, input],
++      ['run', program, '-'],
++      ['run', '--no-native', '-', input],
++    ]) {
++      const stdin = '-' === args[args.length - 1] ? RECORDS : '-' === args[2] ? PROGRAM : undefined
++      const out = alchemy(args, stdin)
++      assert.equal(out.status, 0, `${args}: ${out.stderr}`)
++      assert.equal(out.stdout, EXPECTED_CSV, String(args))
++      assert.equal(out.stderr, '', String(args))
++    }
++  })
++
++  it('run renders a table result as csv or json', () => {
++    const program = tempFile('table.alc', PROGRAM.replace('    csv csv-options\n', ''))
++    let out = alchemy(['run', program, '-'], RECORDS)
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, EXPECTED_CSV)
++    out = alchemy(['run', '--render', 'json', program, '-'], RECORDS)
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(
++      out.stdout,
++      '[{"Identifier":123,"Full name":"Alice","Balance":50.25},{"Identifier":456,"Full name":"Bob","Balance":72}]\n',
++    )
++    // The echo, and a renderer refused for a program that renders itself.
++    const echo = tempFile('echo.alc', 'def export [input] input\n')
++    out = alchemy(['run', echo, '-'], '[1.50, {"a": null}]')
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, '[1.50,{"a":null}]\n')
++    out = alchemy(['run', '--render', 'csv', echo, '-'], '[1]')
++    assert.equal(out.status, 2)
++    assert.ok(failJson(out).message.startsWith('protocol_mismatch: '), out.stderr)
++    const text = tempFile('text.alc', PROGRAM)
++    out = alchemy(['run', '--render', 'json', text, '-'], RECORDS)
++    assert.equal(out.status, 2)
++    assert.ok(failJson(out).message.startsWith('render_of_text: '), out.stderr)
++  })
++
++  // The statuses follow the code: 1 for an input or protocol failure, 5 for
++  // a limit, 2 for the program; the failure is one JSON object on standard
++  // error and standard output carries nothing but the answer.
++  it('run statuses follow the failure code', () => {
++    const program = tempFile('export2.alc', PROGRAM)
++    // Metadata after the rows: INPUT_ORDER_VIOLATION, status 1, no output.
++    const reordered =
++      '{"response":{"payload":{"deep":{"records":[{"id":1,"person":{"name":"a"},"account":{"balance":2}}]}},"metadata":{"fields":[{"title":"Identifier","path":["id"]}]}}}'
++    let out = alchemy(['run', program, '-'], reordered)
++    assert.equal(out.status, 1, out.stderr)
++    assert.equal(out.stdout, '')
++    let fail = failJson(out)
++    assert.equal(fail.code, 'INPUT_ORDER_VIOLATION')
++    assert.equal(fail.output, 'none')
++    assert.ok(String(fail.path).startsWith('.response.payload'), JSON.stringify(fail))
++    // Invalid JSON after the rows: INPUT_INVALID, status 1; the rows were
++    // buffered, not committed, so nothing reached standard output.
++    out = alchemy(['run', program, '-'], `${RECORDS} x`)
++    assert.equal(out.status, 1, out.stderr)
++    assert.equal(out.stdout, '')
++    fail = failJson(out)
++    assert.equal(fail.code, 'INPUT_INVALID')
++    assert.equal(fail.output, 'none')
++    // A missing cell under the standard options: MISSING_VALUE, status 1.
++    const missing =
++      '{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]}]},"payload":{"deep":{"records":[{"id":1}]}}}}'
++    out = alchemy(['run', program, '-'], missing)
++    assert.equal(out.status, 1, out.stderr)
++    assert.equal(failJson(out).code, 'MISSING_VALUE')
++    // A program that does not check: status 2, nothing read from the input.
++    const bad = tempFile('bad.alc', 'def export [input] (nope input)\n')
++    out = alchemy(['run', bad, '-'], 'not json')
++    assert.equal(out.status, 2)
++    assert.equal(failJson(out).code, 'DSL_TYPE_ERROR')
++  })
++
++  it('a reader error carries the engine code and position', () => {
++    const out = alchemy(['canon', '-'], 'a\n  b\n c\n')
++    assert.equal(out.status, 2)
++    const fail = failJson(out)
++    assert.equal(fail.code, 'DSL_PARSE_ERROR')
++    assert.ok(fail.message.startsWith('bad_dedent: '), JSON.stringify(fail))
++    assert.deepStrictEqual([fail.row, fail.col], [3, 2])
++  })
++
++  // The reader bounds nesting, so a program nested far past the bound is a
++  // `too_deep` failure with status 2 from every command, never a stack
++  // overflow.
++  it('a program nested beyond the bound is a failure, not an abort', () => {
++    const depth = 100_000
++    const parens = `${'('.repeat(depth)}x${')'.repeat(depth)}`
++    let indented = ''
++    for (let level = 0; level < 600; level++) indented += '  '.repeat(level) + 'x\n'
++    // Flat to the reader, one level per step to the desugarer.
++    const pipe = `pipe x${' f'.repeat(depth)}\n`
++    // The failure names the opener, the line or the form that passed the
++    // bound: the 256th paren, the line that would open the 256th level, the
++    // pipe.
++    for (const [command, program, row] of [
++      ['canon', parens, 1],
++      ['format', parens, 1],
++      ['check', parens, 1],
++      ['explain', parens, 1],
++      ['canon', indented, 257],
++      ['check', pipe, 1],
++    ] as Array<[string, string, number]>) {
++      const out = alchemy([command, '-'], program)
++      assert.equal(out.status, 2, `${command}: ${out.stderr}`)
++      assert.equal(out.stdout, '', command)
++      const fail = failJson(out)
++      assert.equal(fail.code, 'DSL_PARSE_ERROR', command)
++      assert.ok(fail.message.startsWith('too_deep: '), `${command}: ${JSON.stringify(fail)}`)
++      assert.equal(fail.row, row, `${command}: ${JSON.stringify(fail)}`)
++    }
++  })
++
++  it('usage errors and unreadable files exit 2', () => {
++    let out = alchemy([])
++    assert.equal(out.status, 2)
++    assert.ok(out.stderr.includes('usage:'), out.stderr)
++    assert.equal(out.stdout, '')
++    // An unknown command is refused before standard input is read, so what
++    // it holds does not matter: unparsable input is not a parse error here.
++    out = alchemy(['bogus', '-'], '(')
++    assert.equal(out.status, 2)
++    assert.equal(failJson(out).code, 'INPUT_INVALID')
++    assert.equal(out.stdout, '')
++    // A wrong argument count, a bad renderer, two standard inputs.
++    for (const args of [
++      ['run', '-'],
++      ['run', '--render', 'xml', 'a.alc', 'b.json'],
++      ['run', '--bogus', 'a.alc', 'b.json'],
++      ['run', '-', '-'],
++      ['explain'],
++    ]) {
++      out = alchemy(args)
++      assert.equal(out.status, 2, String(args))
++      assert.equal(failJson(out).code, 'INPUT_INVALID', String(args))
++      assert.equal(out.stdout, '', String(args))
++    }
++    out = alchemy(['canon', '/nonexistent/program.alc'])
++    assert.equal(out.status, 2)
++    assert.equal(failJson(out).code, 'INPUT_INVALID')
++    assert.equal(out.stdout, '')
++  })
++
++  // A program inside the nesting bound checks, runs and explains: the
++  // evaluator's stack is its own, where a pipe of 245 steps once overflowed
++  // the Rust crate's main thread.
++  it('a program inside the bound runs', () => {
++    const program = tempFile(
++      'pipe245.alc',
++      `def export [input]\n  pipe input\n    select (path each-index)\n${'    map (fn [x] x)\n'.repeat(245)}    join ","\n`,
++    )
++    for (const args of [
++      ['check', program],
++      ['explain', program],
++    ]) {
++      const out = alchemy(args)
++      assert.equal(out.status, 0, `${args}: ${out.stderr}`)
++    }
++    const out = alchemy(['run', program, '-'], '["a","b"]')
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, 'a,b')
++  })
++
++  // A function applied to itself is `recursion` with status 2 from `check`
++  // (which builds the plan) and from `run`, not a stack overflow.
++  it('self-application is a failure, not an abort', () => {
++    const omega = tempFile('omega.alc', 'def w [f] (f f)\ndef export [input]\n  let [x (w w)]\n    json input\n')
++    let out = alchemy(['check', omega])
++    assert.equal(out.status, 2, out.stderr)
++    const fail = failJson(out)
++    assert.equal(fail.code, 'STREAMABILITY_UNKNOWN')
++    assert.ok(fail.message.startsWith('recursion: '), JSON.stringify(fail))
++    const perItem = tempFile(
++      'omega-item.alc',
++      'def w [f] (f f)\ndef export [input]\n  pipe input\n    select (path each-index)\n    map (fn [x] (w w))\n    join ","\n',
++    )
++    out = alchemy(['run', perItem, '-'], '[1]')
++    assert.equal(out.status, 2, out.stderr)
++    assert.equal(failJson(out).code, 'STREAMABILITY_UNKNOWN')
++  })
++
++  // `check` builds the plan, so a `fail` on `export`'s own path is reported
++  // there, with its code (`INPUT_INVALID`, status 1) and the form's
++  // position, although no document was read.
++  it('check reports a fail the plan reaches', () => {
++    const program = tempFile('fail.alc', 'def export [input] (concat "a" (fail "boom"))\n')
++    const out = alchemy(['check', program])
++    assert.equal(out.status, 1, out.stderr)
++    const fail = failJson(out)
++    assert.equal(fail.code, 'INPUT_INVALID')
++    assert.equal(fail.message, 'boom')
++    assert.deepStrictEqual([fail.row, fail.col], [1, 32])
++  })
++
++  // A failure inside the standard library names the library's file, row
++  // and column in its message, and gives no row or column of the user's
++  // file; a program that happens to share a library file's name is still
++  // read as its own text.
++  it('a library failure names the library file', () => {
++    const lib = source('stdlib/table.alc') as string
++    const lines = lib.split('\n')
++    const index = lines.findIndex((l) => l.includes('fail "Required metadata was not found"'))
++    const [row, col] = [index + 1, lines[index].indexOf('fail') + 1]
++    const dir = join(TMP, 'lib')
++    mkdirSync(join(dir, 'stdlib'), { recursive: true })
++    for (const name of ['export.alc', 'stdlib/table.alc']) {
++      writeFileSync(join(dir, name), PROGRAM)
++      const out = alchemy(['run', '--no-native', name, '-'], '{}', dir)
++      assert.equal(out.status, 1, `${name}: ${out.stderr}`)
++      const fail = failJson(out)
++      assert.equal(fail.code, 'INPUT_INVALID', name)
++      assert.equal(fail.message, `Required metadata was not found (at stdlib/table.alc:${row}:${col})`, name)
++      assert.equal(fail.row, undefined, `${name}: ${JSON.stringify(fail)}`)
++    }
++  })
++
++  // A standard error that cannot be written loses the report, not the
++  // status: the failure's own status comes back.
++  it('a closed standard error keeps the status', async () => {
++    const bad = tempFile('closed.alc', 'def export [input] (nope input)\n')
++    const child = spawn(process.execPath, [BIN, 'check', bad], { stdio: ['ignore', 'ignore', 'pipe'] })
++    child.stderr!.destroy()
++    const status = await new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))
++    assert.equal(status, 2)
++  })
++
++  // `--max-output-bytes` bounds what `run` writes, and a text longer than
++  // it fails with the limit named, status 5.
++  it('run takes an output limit', () => {
++    const program = tempFile('limit.alc', PROGRAM)
++    let out = alchemy(['run', '--max-output-bytes', '20', program, '-'], RECORDS)
++    assert.equal(out.status, 5, out.stderr)
++    assert.equal(failJson(out).limit.name, 'max_output_bytes')
++    assert.ok(Buffer.byteLength(out.stdout) <= 20)
++    out = alchemy(['run', '--max-output-bytes', '1000', program, '-'], RECORDS)
++    assert.equal(out.status, 0, out.stderr)
++    assert.equal(out.stdout, EXPECTED_CSV)
++    out = alchemy(['run', '--max-output-bytes', 'many', program, '-'], RECORDS)
++    assert.equal(out.status, 2)
++    assert.equal(failJson(out).code, 'INPUT_INVALID')
++  })
++})
+diff --git a/ts/test/common.ts b/ts/test/common.ts
+new file mode 100644
+index 0000000..8ee67fd
+--- /dev/null
++++ b/ts/test/common.ts
+@@ -0,0 +1,17 @@
++/* Copyright (c) 2026 tabnas, MIT License */
++
++// What the command's tests share with alchemy's own (alchemy's
++// test/common.ts, where these are defined first): the spec's worked
++// example, its expected CSV and the spec's program.
++
++// The spec's worked example, byte for byte as aless's fixture has it
++// (329 bytes; the metadata before the rows; Bob's members in another
++// order; `50.25` and `72` as written).
++export const RECORDS =
++  '{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]},{"title":"Balance","path":["account","balance"]}]},"payload":{"deep":{"records":[{"id":123,"person":{"name":"Alice"},"account":{"balance":50.25}},{"account":{"balance":72},"person":{"name":"Bob"},"id":456}]}}}}'
++
++export const EXPECTED_CSV = '"Identifier","Full name","Balance"\r\n"123","Alice","50.25"\r\n"456","Bob","72"\r\n'
++
++// The spec's program (sections 12.1 and 13.4).
++export const PROGRAM =
++  'def column-from-meta [source]\n  record\n    entry :label (get "title" source)\n    entry :source\n      as-path\n        get "path" source\n\ndef api-binding\n  record\n    entry :columns\n      path "response" "metadata" "fields"\n    entry :rows\n      path "response" "payload" "deep" "records" each-index\n    entry :column column-from-meta\n\ndef api-table [input]\n  table-from-json api-binding input\n\ndef export [input]\n  pipe input\n    api-table\n    csv csv-options\n'
+diff --git a/ts/test/tsconfig.json b/ts/test/tsconfig.json
+new file mode 100644
+index 0000000..5ce27c2
+--- /dev/null
++++ b/ts/test/tsconfig.json
+@@ -0,0 +1,14 @@
++{
++  "compilerOptions": {
++    "esModuleInterop": true,
++    "module": "nodenext",
++    "noEmitOnError": true,
++    "outDir": "../dist-test",
++    "rootDir": ".",
++    "resolveJsonModule": true,
++    "sourceMap": true,
++    "strict": true,
++    "target": "es2021",
++    "types": ["node"]
++  }
++}
+-- 
+2.43.0
+

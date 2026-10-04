@@ -1,0 +1,1208 @@
+{
+ "packages": [
+  {
+   "repo": "abnf",
+   "file": "ts/package.json",
+   "name": "@tabnas/abnf",
+   "version": "0.4.17",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0.12.8",
+    "@tabnas/bnf": ">=0.1.24"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "alchemy",
+   "file": "ts/package.json",
+   "name": "@tabnas/alchemy",
+   "version": "0.1.3",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/json": ">=0",
+    "@tabnas/parser": ">=0",
+    "@tabnas/render": ">=0",
+    "@tabnas/transduce": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "bnf",
+   "file": "ts/package.json",
+   "name": "@tabnas/bnf",
+   "version": "0.1.25",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0.9.5"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "c",
+   "file": "ts/package.json",
+   "name": "@tabnas/c",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/expr": ">=0",
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "chess",
+   "file": "ts/package.json",
+   "name": "@tabnas/chess",
+   "version": "0.1.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "chess",
+   "file": "web/package.json",
+   "name": "@tabnas/chess-view",
+   "version": "0.1.5",
+   "private": false,
+   "deps": {},
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "css",
+   "file": "ts/package.json",
+   "name": "@tabnas/css",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "csv",
+   "file": "test/suites/csv-spectrum/package.json",
+   "name": "csv-spectrum",
+   "version": "2.0.0",
+   "private": false,
+   "deps": {},
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "csv",
+   "file": "ts/package.json",
+   "name": "@tabnas/csv",
+   "version": "0.6.2",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "debug",
+   "file": "ts/package.json",
+   "name": "@tabnas/debug",
+   "version": "0.3.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "directive",
+   "file": "ts/package.json",
+   "name": "@tabnas/directive",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "ebnf",
+   "file": "ts/package.json",
+   "name": "@tabnas/ebnf",
+   "version": "0.1.11",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0.12.8",
+    "@tabnas/bnf": ">=0.1.24"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "expr",
+   "file": "ts/package.json",
+   "name": "@tabnas/expr",
+   "version": "0.5.12",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "feed",
+   "file": "ts/package.json",
+   "name": "@tabnas/feed",
+   "version": "0.6.11",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0",
+    "@tabnas/xml": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "gbnf",
+   "file": "ts/package.json",
+   "name": "@tabnas/gbnf",
+   "version": "0.1.14",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/bnf": ">=0.1.24",
+    "@tabnas/parser": ">=0.12.8"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "hoover",
+   "file": "ts/package.json",
+   "name": "@tabnas/hoover",
+   "version": "0.3.11",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "ini",
+   "file": "ts/package.json",
+   "name": "@tabnas/ini",
+   "version": "0.5.14",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/hoover": ">=0",
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "json5",
+   "file": "ts/package.json",
+   "name": "@tabnas/json5",
+   "version": "0.5.11",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "json",
+   "file": "ts/package.json",
+   "name": "@tabnas/json",
+   "version": "0.5.13",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "jsonc",
+   "file": "ts/package.json",
+   "name": "@tabnas/jsonc",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "jsonic-cli",
+   "file": "ts/package.json",
+   "name": "@tabnas/jsonic-cli",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/debug": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "jsonic",
+   "file": "ts/package.json",
+   "name": "@tabnas/jsonic",
+   "version": "0.7.4",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/json": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "jsonl",
+   "file": "ts/package.json",
+   "name": "@tabnas/jsonl",
+   "version": "0.1.12",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/json": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "lsp",
+   "file": "editors/vscode/package.json",
+   "name": "tabnas-lsp-vscode",
+   "version": "0.1.0",
+   "private": false,
+   "deps": {
+    "vscode-languageclient": "^10.1.1"
+   },
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "lsp",
+   "file": "ts/package.json",
+   "name": "@tabnas/lsp",
+   "version": "0.1.4",
+   "private": false,
+   "deps": {
+    "vscode-languageserver": "^10.1.1",
+    "vscode-languageserver-textdocument": "^1.0.14"
+   },
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "markdown",
+   "file": "ts/package.json",
+   "name": "@tabnas/markdown",
+   "version": "0.7.8",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "mcp",
+   "file": "ts/package.json",
+   "name": "@tabnas/mcp",
+   "version": "0.1.17",
+   "private": false,
+   "deps": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "ajv": "^8.20.0"
+   },
+   "peers": {
+    "@tabnas/parser": ">=0",
+    "@tabnas/support": ">=0.3.2"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "multisource",
+   "file": "ts/package.json",
+   "name": "@tabnas/multisource",
+   "version": "0.5.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/directive": ">=0",
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0",
+    "@tabnas/path": ">=0"
+   },
+   "optional": {},
+   "peerOptional": [
+    "@tabnas/path"
+   ]
+  },
+  {
+   "repo": "parser",
+   "file": "ts/package.json",
+   "name": "@tabnas/parser",
+   "version": "0.12.9",
+   "private": false,
+   "deps": {},
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "path",
+   "file": "ts/package.json",
+   "name": "@tabnas/path",
+   "version": "0.3.10",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "proto",
+   "file": "ts/package.json",
+   "name": "@tabnas/proto",
+   "version": "0.6.3",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/abnf": ">=0.4.16",
+    "@tabnas/parser": ">=0.12.8"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "railroad",
+   "file": "ts/package.json",
+   "name": "@tabnas/railroad",
+   "version": "0.3.9",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "render",
+   "file": "ts/package.json",
+   "name": "@tabnas/render",
+   "version": "0.1.2",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/transduce": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "semver",
+   "file": "ts/package.json",
+   "name": "@tabnas/semver",
+   "version": "0.0.6",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/abnf": ">=0.4.16",
+    "@tabnas/parser": ">=0.12.8"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "skills",
+   "file": "package.json",
+   "name": "tabnas-skills",
+   "private": true,
+   "deps": {},
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "status",
+   "file": "package.json",
+   "name": "tabnas-status",
+   "private": true,
+   "deps": {},
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "support",
+   "file": "ts/package.json",
+   "name": "@tabnas/support",
+   "version": "0.3.6",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": [
+    "@tabnas/parser"
+   ]
+  },
+  {
+   "repo": "toml",
+   "file": "ts/package.json",
+   "name": "@tabnas/toml",
+   "version": "0.5.12",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "transduce",
+   "file": "ts/package.json",
+   "name": "@tabnas/transduce",
+   "version": "0.1.2",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/csv": ">=0",
+    "@tabnas/json": ">=0"
+   },
+   "optional": {},
+   "peerOptional": [
+    "@tabnas/csv",
+    "@tabnas/json"
+   ]
+  },
+  {
+   "repo": "web",
+   "file": "package.json",
+   "name": "web",
+   "private": true,
+   "deps": {
+    "@astrojs/cloudflare": "12.6.13",
+    "@astrojs/mdx": "4.3.14",
+    "@astrojs/sitemap": "3.7.4",
+    "@tabnas/abnf": "0.4.17",
+    "@tabnas/bnf": "0.1.25",
+    "@tabnas/chess-view": "0.1.5",
+    "@tabnas/expr": "0.5.12",
+    "@tabnas/gbnf": "0.1.14",
+    "@tabnas/json": "0.5.13",
+    "@tabnas/jsonic": "0.7.4",
+    "@tabnas/parser": "0.12.9",
+    "@tabnas/semver": "0.0.6",
+    "astro": "5.18.2",
+    "typescript": "7.0.2"
+   },
+   "peers": {},
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "xml",
+   "file": "ts/package.json",
+   "name": "@tabnas/xml",
+   "version": "0.7.12",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "yaml",
+   "file": "ts/package.json",
+   "name": "@tabnas/yaml",
+   "version": "0.5.19",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  },
+  {
+   "repo": "zon",
+   "file": "ts/package.json",
+   "name": "@tabnas/zon",
+   "version": "0.5.12",
+   "private": false,
+   "deps": {},
+   "peers": {
+    "@tabnas/jsonic": ">=0",
+    "@tabnas/parser": ">=0"
+   },
+   "optional": {},
+   "peerOptional": []
+  }
+ ],
+ "edges": [
+  {
+   "from": "@tabnas/abnf",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.12.8",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/abnf",
+   "to": "@tabnas/bnf",
+   "kind": "peer",
+   "range": ">=0.1.24",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/alchemy",
+   "to": "@tabnas/json",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/alchemy",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/alchemy",
+   "to": "@tabnas/render",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/alchemy",
+   "to": "@tabnas/transduce",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/bnf",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.9.5",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/c",
+   "to": "@tabnas/expr",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/c",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/c",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/chess",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/css",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/css",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/csv",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/csv",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/debug",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/directive",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/ebnf",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.12.8",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/ebnf",
+   "to": "@tabnas/bnf",
+   "kind": "peer",
+   "range": ">=0.1.24",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/expr",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/expr",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/feed",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/feed",
+   "to": "@tabnas/xml",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/gbnf",
+   "to": "@tabnas/bnf",
+   "kind": "peer",
+   "range": ">=0.1.24",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/gbnf",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.12.8",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/hoover",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/ini",
+   "to": "@tabnas/hoover",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/ini",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/ini",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/json5",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/json5",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/json",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonc",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonc",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonic-cli",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonic-cli",
+   "to": "@tabnas/debug",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonic",
+   "to": "@tabnas/json",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonic",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonl",
+   "to": "@tabnas/json",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/jsonl",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/lsp",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/markdown",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/mcp",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/mcp",
+   "to": "@tabnas/support",
+   "kind": "peer",
+   "range": ">=0.3.2",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/multisource",
+   "to": "@tabnas/directive",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/multisource",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/multisource",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/multisource",
+   "to": "@tabnas/path",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": true,
+   "known": true
+  },
+  {
+   "from": "@tabnas/path",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/proto",
+   "to": "@tabnas/abnf",
+   "kind": "peer",
+   "range": ">=0.4.16",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/proto",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.12.8",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/railroad",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/render",
+   "to": "@tabnas/transduce",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/semver",
+   "to": "@tabnas/abnf",
+   "kind": "peer",
+   "range": ">=0.4.16",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/semver",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0.12.8",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/support",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": true,
+   "known": true
+  },
+  {
+   "from": "@tabnas/toml",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/toml",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/transduce",
+   "to": "@tabnas/csv",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": true,
+   "known": true
+  },
+  {
+   "from": "@tabnas/transduce",
+   "to": "@tabnas/json",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": true,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/abnf",
+   "kind": "dep",
+   "range": "0.4.17",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/bnf",
+   "kind": "dep",
+   "range": "0.1.25",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/chess-view",
+   "kind": "dep",
+   "range": "0.1.5",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/expr",
+   "kind": "dep",
+   "range": "0.5.12",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/gbnf",
+   "kind": "dep",
+   "range": "0.1.14",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/json",
+   "kind": "dep",
+   "range": "0.5.13",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/jsonic",
+   "kind": "dep",
+   "range": "0.7.4",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/parser",
+   "kind": "dep",
+   "range": "0.12.9",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "web",
+   "to": "@tabnas/semver",
+   "kind": "dep",
+   "range": "0.0.6",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/xml",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/xml",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/yaml",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/yaml",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/zon",
+   "to": "@tabnas/jsonic",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/zon",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  }
+ ]
+}

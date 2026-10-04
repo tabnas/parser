@@ -1,0 +1,172 @@
+<title>Tabnas Peer Dependencies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a left-to-right dependency stack. The engine is a bar on the left, packages sit in
+   columns by chain depth, and the full data follows in tables. One accent: the engine. */
+:root {
+  --bg: #f3f5f8;
+  --fg: #16202b;
+  --muted: #5a6776;
+  --line: #d6dde5;
+  --line-strong: #9eabb9;
+  --card: #ffffff;
+  --edge: #a3afbc;
+  --edge-strong: #3e4b5a;
+  --accent: #0b6d62;
+  --accent-soft: #ddf0ec;
+  --accent-ink: #0a4d45;
+  --stale: #a14a05;
+  --stale-soft: #fbecdd;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141a; --fg: #e3e9ef; --muted: #98a6b5; --line: #263240; --line-strong: #4b5b6d; --card: #161f29;
+    --edge: #556677; --edge-strong: #bcc7d3; --accent: #45c2af; --accent-soft: #12302c; --accent-ink: #a4e6dc;
+    --stale: #f0a463; --stale-soft: #3a2614; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141a; --fg: #e3e9ef; --muted: #98a6b5; --line: #263240; --line-strong: #4b5b6d; --card: #161f29;
+  --edge: #556677; --edge-strong: #bcc7d3; --accent: #45c2af; --accent-soft: #12302c; --accent-ink: #a4e6dc;
+  --stale: #f0a463; --stale-soft: #3a2614; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 56px; display: grid; gap: 34px; }
+header { display: grid; gap: 10px; max-width: 72ch; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 22px; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.dek { color: var(--muted); font-size: 16px; }
+code { font-family: var(--mono); font-size: .9em; }
+.findings { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; max-width: 78ch; }
+.findings li { padding-left: 18px; position: relative; }
+.findings li::before { content: ""; position: absolute; left: 0; top: .62em; width: 7px; height: 7px; border-radius: 2px; background: var(--accent); }
+figure { margin: 0; display: grid; gap: 12px; }
+.figscroll { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding-block: 8px; }
+.figscroll svg { display: block; width: 100%; height: auto; margin-inline: auto; }
+figcaption { color: var(--muted); font-size: 14px; max-width: 86ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 13px; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend svg { width: 38px; height: 12px; }
+svg .colhead { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+svg .rule { stroke: var(--line); stroke-width: 1; }
+svg .bar rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+svg .bar text { font-family: var(--mono); font-size: 12.5px; font-weight: 500; fill: var(--accent-ink); }
+svg .edge { fill: none; stroke: var(--edge); stroke-width: 1.15; }
+svg .edge.floored { stroke: var(--edge-strong); stroke-width: 1.3; }
+svg .edge.optional { stroke-dasharray: 4 3; }
+svg .ah { fill: var(--edge); }
+svg .ahs { fill: var(--edge-strong); }
+svg .floorlabel { font-family: var(--mono); font-size: 10px; fill: var(--muted); paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
+svg .node rect { fill: var(--card); stroke: var(--line-strong); stroke-width: 1; }
+svg .node.hub rect { stroke: var(--accent); stroke-width: 1.8; }
+svg .node text { font-family: var(--mono); font-size: 12.5px; fill: var(--fg); }
+svg .node.hub text { font-weight: 500; }
+svg .node.free rect { stroke-dasharray: 4 3; }
+svg .node .ext { font-size: 10px; fill: var(--muted); }
+svg .node:hover rect { stroke: var(--fg); }
+section { display: grid; gap: 14px; }
+.lead { color: var(--muted); max-width: 80ch; font-size: 14px; }
+.tablescroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-weight: 500; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+code.pkg { font-weight: 500; }
+code.sha { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.floor { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.none { color: var(--muted); }
+.was { margin-top: 5px; font-size: 12.5px; color: var(--muted); }
+.was .stale { margin-right: 6px; }
+a { color: var(--accent-ink); text-underline-offset: 2px; }
+.stale { font-family: var(--mono); font-size: 12px; color: var(--stale); background: var(--stale-soft); padding: 1px 7px; border-radius: 99px; }
+.ok { font-family: var(--mono); font-size: 12px; color: var(--accent-ink); background: var(--accent-soft); padding: 1px 7px; border-radius: 99px; }
+.outside { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; max-width: 86ch; }
+.outside li { display: grid; gap: 2px; }
+.outside b { font-weight: 600; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 28px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+footer { color: var(--muted); font-size: 13px; max-width: 86ch; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">tabnas · TypeScript production dependencies</div>
+    <h1>Tabnas Peer Dependencies</h1>
+    <p class="dek">What each npm package needs at run time, read from <code>dependencies</code> and <code>peerDependencies</code> in every <code>package.json</code> on the default branch of {{N_REPOS}} tabnas repositories on {{READ_DAY}}. <code>devDependencies</code> are left out.</p>
+  </header>
+
+  <ul class="findings">
+    <li>No published package lists another tabnas package under <code>dependencies</code>. All {{N_PEER_EDGES}} tabnas edges are peer dependencies, {{N_OPT_PEER_EDGES}} of them optional, so a plugin uses the engine the application installs instead of bringing its own copy.</li>
+    <li>{{ENGINE_FINDING}} The next hub is <code>jsonic</code>, the relaxed-JSON base grammar, with {{JSONIC_IN}} dependents.</li>
+    {{UNRELEASED_LI}}
+    <li>Only {{THIRD_PARTY}} have third-party run-time dependencies.</li>
+    <li>The private <code>web</code> site is the one consumer that pins exact versions. {{WEB_FINDING}}</li>
+  </ul>
+
+  <figure>
+    <div class="legend" aria-hidden="true">
+      <span><svg viewBox="0 0 38 12"><line x1="36" y1="6" x2="4" y2="6" stroke="var(--edge)" stroke-width="1.3"/><path d="M2 6 L8 3 L8 9 z" fill="var(--edge)"/></svg>peers on, any version</span>
+      <span><svg viewBox="0 0 38 12"><line x1="36" y1="6" x2="4" y2="6" stroke="var(--edge-strong)" stroke-width="1.4"/><path d="M2 6 L8 3 L8 9 z" fill="var(--edge-strong)"/></svg>peers on, with a version floor</span>
+      <span><svg viewBox="0 0 38 12"><line x1="36" y1="6" x2="4" y2="6" stroke="var(--edge)" stroke-width="1.3" stroke-dasharray="4 3"/><path d="M2 6 L8 3 L8 9 z" fill="var(--edge)"/></svg>optional peer, left out of an install</span>
+      <span><svg viewBox="0 0 38 12"><rect x="1" y="1" width="36" height="10" rx="3" fill="var(--card)" stroke="var(--accent)" stroke-width="1.6"/></svg>hub: most format plugins build on it</span>
+      <span><svg viewBox="0 0 38 12"><rect x="1" y="1" width="36" height="10" rx="3" fill="var(--card)" stroke="var(--line-strong)" stroke-width="1.2" stroke-dasharray="4 3"/></svg>installs without the engine</span>
+    </div>
+    <div class="figscroll">{{SVG}}</div>
+    <figcaption>Each arrow points from a package to a package it peers on. A package's depth is its longest chain of required peers down to the engine, so {{DEEPEST}}. Dashed arrows are optional peers, which npm leaves out of an install and which add no depth: {{OPTIONAL_PEERS}}. {{BACKWARD_NOTE}} {{ENGINE_CAPTION}} Dashed boxes install without the engine. The dark arrows carry a version floor: {{EDGE_FLOORS}}. The floors on the engine itself are {{PARSER_FLOORS}}. Every other range is <code>&gt;=0</code>. <code>+2 npm</code> marks third-party dependencies. Hover a box for its peers.</figcaption>
+  </figure>
+
+  <section>
+    <h2>Since the last read</h2>
+    <p class="lead">{{SINCE_LEAD}}</p>
+    <div class="tablescroll">
+      <table style="min-width:620px">
+        <thead><tr><th>Package</th><th>Peer change on main</th><th>Depth</th><th>Pull request</th></tr></thead>
+        <tbody>{{SINCEROWS}}</tbody>
+      </table>
+    </div>
+    {{WEB_SINCE_P}}
+  </section>
+
+  <section>
+    <h2>Every package</h2>
+    <p class="lead">Every value comes from the repository's <code>package.json</code> on <code>main</code>, the version included. Depth 0 is the engine. A package is one deeper than its deepest required peer, so one with no required peer but the engine, or none at all, is depth 1. Where npm's release of the same version declares other peers, the row says so.</p>
+    <div class="tablescroll">
+      <table>
+        <thead><tr><th>Package</th><th>Version</th><th>Depth</th><th>Peers on</th><th>Third-party</th><th>Read from</th></tr></thead>
+        <tbody>{{TABLE}}</tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="cols">
+    <div style="display:grid;gap:14px;min-width:0">
+      <h2>Outside the graph</h2>
+      <ul class="outside">
+        <li><b><code>@tabnas/chess-view</code> {{CHESSVIEW_V}}</b><span>Published from <code>chess/web</code> with no dependencies at all, so it is the one published package with no tabnas peer.</span></li>
+        <li><b><code>web</code></b><span>The private site. It is the one consumer that lists tabnas packages under <code>dependencies</code>, each pinned to an exact version; the table beside this list compares the pins with the versions on <code>main</code>.</span></li>
+        <li><b><code>tabnas-lsp-vscode</code></b><span>The VS Code extension in <code>lsp/editors/vscode</code>. Its one run-time dependency is {{LSPEXT_DEP}}.</span></li>
+        <li><b><code>tabnas-skills</code>, <code>tabnas-status</code></b><span>Private, with no dependencies.</span></li>
+        <li><b><code>csv-spectrum</code></b><span>A test-suite fixture inside <code>csv/test/suites</code>, not shipped.</span></li>
+      </ul>
+    </div>
+    <div style="display:grid;gap:14px;min-width:0">
+      <h2>What <code>web</code> pins</h2>
+      <div class="tablescroll">
+        <table style="min-width:420px">
+          <thead><tr><th>Package</th><th>Pinned</th><th>On main</th><th></th></tr></thead>
+          <tbody>{{WEBROWS}}</tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <footer>Read on {{READ_DAY}} at about {{READ_TIME}} UTC from every <code>package.json</code> in a shallow clone of each repository's default branch, with npm's manifest for each package's version read from the registry straight after. Edges come from <code>dependencies</code>, <code>peerDependencies</code> and <code>optionalDependencies</code>, and no package uses the last; <code>peerDependenciesMeta</code> marks the optional peers, and <code>devDependencies</code> are left out. Versions are each file's own <code>version</code> field. The engine is <code>@tabnas/parser</code> {{PARSER_V}}.</footer>
+</div>
