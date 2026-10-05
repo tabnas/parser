@@ -41,11 +41,30 @@ changed), each through a reviewed bump PR and a `release.yml` dispatch on
 Then alchemy#43 and alchemy-cli#3 moved their go.mod requires to the three
 releases, which cleared the `GOWORK=off` step in both.
 
+**alchemy-cli is published and releases through its workflows.**
+- **0.1.0, by hand:** the maintainer published it to npm, and to crates.io
+  with `tasks/crates/publish-first.sh` from the `ts/v0.1.0` tag, then
+  registered both trusted publishers, each naming `release.yml`.
+- **The release setup, alchemy-cli#4:**
+  - `.tabnas-kind` is `TOOL`;
+  - five workflows come from transduce's (`release.yml`,
+    `crates-release.yml`, `github-release.yml`, `notify-status.yml`,
+    `scorecard.yml`), mirrored in admin (admin#115);
+  - there is one `VERSION` per port, each held to `ts/package.json` by a
+    test.
+- **0.1.1, the test release** (alchemy-cli#5): a `release.yml` dispatch
+  published npm and crates.io through the trusted publishers, and tagged
+  `ts/v0.1.1` and `go/v0.1.1`. npm's `gitHead`, both tags, the Go proxy
+  and the GitHub Release all name the release commit, `03f733d`.
+
 ## Pushed and open
 
-| PR | State |
-|---|---|
-| rjrodger/aless#45 | Step 8 of the previous page. `claude/alchemy-injected` plus one commit: every tabnas pin in `Cargo.lock` at its repository's current main, 21 crates. The three alone could not move: every tabnas crate shares one engine and one json, and the other pins sat on revisions that require parser 0.12.8. Only tabnas packages change. The four AGENTS.md gates passed locally (325 of 325 tests). |
+Nothing. rjrodger/aless#45 (step 8 of the previous page) is merged:
+`claude/alchemy-injected` plus one commit putting every tabnas pin in
+`Cargo.lock` at its repository's current main, 21 crates. The three alone
+could not move: every tabnas crate shares one engine and one json, and the
+other pins sat on revisions that require parser 0.12.8. Only tabnas
+packages changed; 325 of 325 tests, and CI on all three platforms.
 
 ## One red check, and why
 
@@ -76,12 +95,10 @@ TypeScript coverage today (Linux). The fix is the maintainer's to choose
      workflow's polyglot gate (Linux only);
    - make the shared types compare structurally (no private members on
      `AbortFlag` and the like), so that two copies agree.
-2. **alchemy-cli's first npm and crates.io publish** is by hand, as for
-   any new package, before `release.yml` can publish it.
-3. **The 34 port-deps register entries** each end "Undecided: awaits the
+2. **The 34 port-deps register entries** each end "Undecided: awaits the
    maintainer's ruling" (ADR-24). `docs/deps/README.md` in admin lists
    them with their reasons and repairs.
-4. From the previous page, still open: the TypeScript install footprint
+3. From the previous page, still open: the TypeScript install footprint
    (transduce and render peer on alchemy, whose required peers npm then
    installs); render's `tabnas` and transduce's `indexmap` and
    `serde_json` in Rust; the structural items from the dependency review;
@@ -117,5 +134,5 @@ be closed (ruling 6 of the previous page).
 
 - Worktrees for this session's PRs are under
   `~/Projects/tabnas-worktrees/release-0.2.0/` on the maintainer's
-  machine; every branch in them is merged or is aless#45's.
+  machine; every branch in them is merged.
 - No subscriptions or check-ins carry over.
