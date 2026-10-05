@@ -416,6 +416,9 @@ const backwardNote = backwardCount
   ? `Because an optional peer adds no depth, it can sit to the right of the package that names it, or in its column, as ${joinNames(backwardList)} ${backwardCount === 1 ? 'does' : 'do'}.`
   : ''
 
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const dayOf = (d) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`
+
 // Since the previous read.
 const prevReadAt = new Date(fs.readFileSync('prev/read-at.txt', 'utf8').trim())
 const hhmm = (d) => `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
@@ -436,13 +439,13 @@ for (const n of [...new Set([...P.byShort.keys(), ...M.byShort.keys()])]) {
   const moved = (M.req.get(n) || []).filter((d) => P.byShort.has(d) && P.depth(d) !== M.depth(d)).sort(bySeed)
   const change = own.length ? joinNames(own) : `none of its own; its peer${moved.length === 1 ? '' : 's'} ${joinNames(moved.map(code))} moved`
   const repo = (M.byShort.get(n) || P.byShort.get(n)).repo
-  sinceRows.push({ n, d0, d1, html: `<tr><td><code class="pkg">${esc(n)}</code></td><td>${change}</td><td class="num">${d0 === d1 ? d1 : `${d0} → ${d1}`}</td><td>${own.length ? prsOf(repo).join(', ') || '' : '<span class="none">—</span>'}</td></tr>` })
+  sinceRows.push({ n, d0, d1, html: `<tr><td><code class="pkg">${esc(n)}</code></td><td>${change}</td><td class="num">${d0 === d1 ? d1 : `${d0 == null ? 'new' : d0} → ${d1}`}</td><td>${own.length ? prsOf(repo).join(', ') || '' : '<span class="none">—</span>'}</td></tr>` })
 }
 // The largest depth change first, and within it from the bottom of the chain up.
 sinceRows.sort((x, y) => (y.d0 - y.d1) - (x.d0 - x.d1) || x.d1 - y.d1 || bySeed(x.n, y.n))
 const prevMax = Math.max(...[...P.byShort.keys()].map(P.depth))
 const mergedCount = Object.values(changes).reduce((s, c) => s + c.commits.filter((x) => x.pr).length, 0)
-const sinceLead = `${Word(mergedCount)} pull requests merged since the read at ${hhmm(prevReadAt)} UTC moved ${word(Object.keys(changes).length)} <code>main</code> branches. ` +
+const sinceLead = `${Word(mergedCount)} pull requests merged since the read on ${dayOf(prevReadAt)} at ${hhmm(prevReadAt)} UTC moved ${word(Object.keys(changes).length)} <code>main</code> branches. ` +
   (prevMax !== maxDepth ? `The deepest chain went from ${word(prevMax)} steps to ${word(maxDepth)}. ` : '') +
   `Only these packages changed peers or depth.`
 const webSince = (webPrev.behind.length !== webNow.behind.length)
@@ -454,7 +457,6 @@ const unreleasedFinding = unreleased.length
 
 // When the package.json files were read: read-at.txt, written as the survey fetched each main.
 const readAt = new Date(fs.readFileSync('read-at.txt', 'utf8').trim())
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const readDay = `${readAt.getUTCDate()} ${MONTHS[readAt.getUTCMonth()]} ${readAt.getUTCFullYear()}`
 const html = fs.readFileSync('template.html', 'utf8')
   .replace('{{SVG}}', svg)
