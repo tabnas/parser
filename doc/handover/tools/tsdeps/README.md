@@ -8,8 +8,9 @@ artifact <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>, private to
 the maintainer's account, updated in place on each redraw. (The earlier
 copy, `EbqCuLdZ4mh1wSGQdTfjKZ`, could not be reached from the maintainer's
 machine on 2026-10-05, so the redraw was published afresh.) It was last
-read at 2026-10-05 18:04 UTC (`last-read/`), after the shared-types pull
-requests and the 0.2.0 releases.
+read at 2026-10-05 18:37 UTC (`last-read/`), after the shared-types pull
+requests, the 0.2.0 releases, and multisource dropping jsonic
+(tabnas/multisource#73).
 
 | File | What it does |
 |---|---|

@@ -136,7 +136,8 @@ be closed (ruling 6 of the previous page).
   `~/Projects/tabnas-worktrees/release-0.2.0/` on the maintainer's
   machine; every branch in them is merged.
 - The TypeScript peer-dependency page (`tools/tsdeps/`) was redrawn on
-  2026-10-05 after the shared-types merges and the 0.2.0 releases, and
+  2026-10-05 after the shared-types merges, the 0.2.0 releases and
+  multisource dropping jsonic and json (multisource#73, admin#116), and
   published afresh at <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>:
   the earlier copy could not be reached from the maintainer's machine.
   admin's `docs/deps` (ADR-24) already showed the new edges.

@@ -396,7 +396,6 @@
    "deps": {},
    "peers": {
     "@tabnas/directive": ">=0",
-    "@tabnas/jsonic": ">=0",
     "@tabnas/parser": ">=0",
     "@tabnas/path": ">=0"
    },
@@ -990,14 +989,6 @@
   {
    "from": "@tabnas/multisource",
    "to": "@tabnas/directive",
-   "kind": "peer",
-   "range": ">=0",
-   "optionalPeer": false,
-   "known": true
-  },
-  {
-   "from": "@tabnas/multisource",
-   "to": "@tabnas/jsonic",
    "kind": "peer",
    "range": ">=0",
    "optionalPeer": false,
