@@ -4,10 +4,12 @@ Regenerates the page of every tabnas TypeScript package's `@tabnas` peers,
 read from each repository's `main`: the layered graph, the deepest chains,
 the packages that need the engine, what changed since the previous read,
 and npm's own manifests for the same versions. The published copy is the
-artifact <https://claude.ai/artifact/EbqCuLdZ4mh1wSGQdTfjKZ>, private to
-the maintainer's account, updated in place on each redraw. It was last
-read at 2026-10-04 13:15 UTC (`last-read/`), before the shared-types
-pull requests.
+artifact <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>, private to
+the maintainer's account, updated in place on each redraw. (The earlier
+copy, `EbqCuLdZ4mh1wSGQdTfjKZ`, could not be reached from the maintainer's
+machine on 2026-10-05, so the redraw was published afresh.) It was last
+read at 2026-10-05 18:04 UTC (`last-read/`), after the shared-types pull
+requests and the 0.2.0 releases.
 
 | File | What it does |
 |---|---|
@@ -28,7 +30,7 @@ one tested script.
 
    ```bash
    date -u +%Y-%m-%dT%H:%M:%SZ > read-at.txt
-   repos="parser support json debug path hoover directive railroad jsonic bnf abnf ebnf gbnf css csv expr json5 jsonc jsonl markdown toml xml yaml zon proto semver c ini feed transduce render alchemy multisource jsonic-cli mcp lsp chess web skills status"
+   repos="parser support json debug path hoover directive railroad jsonic bnf abnf ebnf gbnf css csv expr json5 jsonc jsonl markdown toml xml yaml zon proto semver c ini feed alchemy transduce render alchemy-cli multisource jsonic-cli mcp lsp chess web skills status"
    total=$(echo $repos | wc -w); n=0; : > shas.txt
    for r in $repos; do n=$((n+1))
      [ -d $r ] || timeout 120 git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/tabnas/$r $r 2>/dev/null
