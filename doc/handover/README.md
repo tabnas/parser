@@ -57,6 +57,28 @@ releases, which cleared the `GOWORK=off` step in both.
   `ts/v0.1.1` and `go/v0.1.1`. npm's `gitHead`, both tags, the Go proxy
   and the GitHub Release all name the release commit, `03f733d`.
 
+## On 2026-10-06
+
+- **multisource dropped jsonic, and json with it** (multisource#73), on the
+  maintainer's instruction: it depends on no grammar in any port, ships
+  no `json` processor (an application registers one), and its C library
+  runs on the bare engine with the caller's GrammarSpec (admin#116).
+  Released as **0.6.0** (multisource#74): npm, `go/v0.6.0`, the crate and
+  the C library Release all name commit `92ed3f5`, and npm's 0.6.0
+  declares no jsonic peer. A GitHub Actions outage (about an hour on
+  2026-10-05) cancelled its PR checks twice; they were rerun.
+- **Docs and website**: tabnas/web gains a Streaming tier (alchemy,
+  transduce, render 0.2.0) and alchemy-cli 0.1.1 under Command line, with
+  multisource 0.6.0 and its how-to's JSON section; alchemy-cli's README
+  says how to install it in each runtime (each install was tested against
+  the registries); alchemy's language guide points at alchemy-cli for the
+  command; multisource's release steps name every version site. admin's
+  `docs/deps` and the TypeScript peer-dependency page were redrawn.
+- **Port parity** is unchanged otherwise: 18 repositories differ in 34
+  dependencies, all registered (decision 2). Twelve of them (11 grammars
+  and feed) are the shape multisource had, a Go port reaching the engine
+  through jsonic's aliases.
+
 ## Pushed and open
 
 Nothing. rjrodger/aless#45 (step 8 of the previous page) is merged:
