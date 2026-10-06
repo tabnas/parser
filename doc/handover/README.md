@@ -1,4 +1,4 @@
-# Handover: the fleet's PRs merged, and alchemy, transduce and render at 0.2.0, 2026-10-05
+# Handover: the fleet's PRs merged and released, 2026-10-05 and 2026-10-06
 
 This session ran on the maintainer's machine on 2026-10-05, with `gh` as
 the maintainer, from the maintainer's instruction "Check each tabnas repo -
@@ -109,53 +109,167 @@ releases, which cleared the `GOWORK=off` step in both.
   reuse to beat rebuild-per-parse by more than 4x and measured 3.4x and
   4.0x. It has failed on chess `main` since 2026-10-05.
 
+### Still later on 2026-10-06: the maintainer's list, and the release wave
+
+The maintainer's instruction "do this work" named five items. Each is
+done:
+
+- **The engine release wave.** Every repository whose Go module required
+  engine v0.12.10, and every one changed below, was released: 37 in all,
+  in dependency order. Each went through a release PR (admin `publish.sh`'s
+  own step 2, run in a worktree), a green `main`, and a `release.yml`
+  dispatch. Each was verified: npm `gitHead`, the `ts/v` and `go/v` tags,
+  the Go proxy, crates.io and the GitHub Release all name the release
+  commit.
+  - support 0.3.7, bnf 0.1.26, chess 0.1.11, lsp 0.1.5;
+  - json 0.5.14, debug 0.3.11, directive 0.5.11, hoover 0.3.12, markdown
+    0.7.9, path 0.3.11, abnf 0.4.18, ebnf 0.1.12, gbnf 0.1.15, mcp 0.1.18;
+  - jsonic 0.7.5, railroad 0.3.10, jsonl 0.1.13, semver 0.0.7, proto
+    0.6.4;
+  - css 0.5.12, csv 0.6.3, expr 0.5.13, json5 0.5.12, jsonc 0.5.11, xml
+    0.7.13, yaml 0.5.20, zon 0.5.13, ini 0.5.15, toml 0.5.13, jsonic-cli
+    0.5.12, multisource 0.6.1;
+  - c 0.5.11, feed 0.6.13, alchemy 0.2.1, transduce 0.2.1, render 0.2.1,
+    alchemy-cli 0.1.2.
+
+  parser was not re-released (only docs since 0.12.10). The skills pin
+  follows mcp 0.1.18 (skills#13). web#55 moves the website's pins,
+  fallback versions and skills data.
+- **alchemy's red `ci / ts`: structural shared types** (the maintainer's
+  choice). alchemy#46 removed every `private` member from
+  `ts/src/shared`, so two installed copies compare by shape. The shared
+  `isFail` stays `instanceof`-only by design; `src/fail.ts`'s is the
+  tolerant one. CI stayed red until the structural classes were on npm.
+  After alchemy 0.2.1, `main`'s `ci / ts` is green on Linux, macOS and
+  Windows.
+- **Port parity: the 11 grammars and feed.** Their Go ports now name the
+  engine directly (`tabnas "github.com/tabnas/parser/go"`), as the other
+  ports do: expr#84, feed#74, json5#90, jsonc#80, yaml#118, css#62,
+  csv#94, xml#83, zon#91, ini#96, toml#100. jsonc#80 had dropped
+  jsonc.go's jsonic import. But `Jsonc` reads its grammar with
+  `GrammarText`, which needs the text parser only jsonic registers (in
+  its `init`). A program importing only jsonc and the engine then failed
+  with "no text parser registered". jsonc#81 restores the import (blank,
+  with the reason) and adds a test that keeps it; it shipped in 0.5.11.
+  admin's `docs/deps` recorded 23 differences across 8 repositories after
+  these, down from 34 across 18, all registered (admin#122, admin#123).
+  The C-library fix below adds one (24 across 9, admin#124).
+- **The older decisions:**
+  - **alchemy's install footprint:** its json and engine peers are
+    optional (alchemy#46). alchemy-cli, which runs the language, declares
+    the engine itself (alchemy-cli#8).
+  - **Rust manifests:** render's engine is a dev-dependency (render#17).
+    transduce drops `indexmap`, and `serde_json` is test-only
+    (transduce#36).
+  - **semver and proto ship their grammars precompiled** (semver#34,
+    proto#60), so abnf and bnf are build-only in every port:
+    - **semver** has one `semver-grammar.json`, shared by all three ports.
+    - **proto** has one per port, because the TypeScript compiler writes
+      the keyword guard as a lookahead, which Go's and Rust's regex
+      engines cannot run.
+    - **Staleness:** a test in each port recompiles and fails when the
+      committed file is stale.
+    - **What still parses the same:** every value, error code and
+      position, over 111,111 semver strings and proto's 646 inputs.
+    - **Visible changes:**
+      - semver Go's diagnostics use the TypeScript names for three
+        character-class tokens;
+      - proto TS leaves no `tn.abnf` behind after `use(Proto)`;
+      - its errors list `["Proto"]` as plugins.
+  - **json instead of jsonic** for css, csv, xml, zon, ini and toml: tried
+    in every port, and kept nowhere. Every port reads its
+    `*-grammar.jsonic` with jsonic at run time, and json cannot read it
+    (it stops at the first `#`). So the swap would add json rather than
+    replace jsonic. With json as the base:
+    - csv, ini and toml fail most of their suites: json closes a pair
+      only on `,` or `}`, rejects empty input, and turns off text and
+      comments;
+    - xml and css fail fewer, on whitespace, embed mode and empty input;
+    - **ZON came close.** Its tests pass on json if the grammar's six
+      close rules take json's `@setval$`/`@push$` and NaN leaves json's
+      `result.fail`. The grammar would then work only on json, and would
+      have to reach the runtimes as JSON (decision 3 below).
+  - **admin's TypeScript peer check** (admin#121, ADR-25):
+    `tasks/ts-peers.js --check` holds each `ts/package.json`'s @tabnas
+    declarations to what `ts/src` imports, in both directions. It runs in
+    the `port-deps` workflow. Four exceptions are allowlisted with
+    reasons: expr's jsonic, lsp's engine, multisource's path, and
+    alchemy-cli's engine.
+- **chess's timing test is robust** (chess#49): best of three rounds,
+  rebuild more than 2x reuse.
+- **The final audit.**
+  - **`make dist`:** all 38 repositories match their checkouts on every
+    surface. Its one disagreement, the site advertising mcp 0.1.17, cleared
+    with web#55.
+  - **`make verify`:** three findings.
+    - **Pending, the known test-only cycle:** alchemy's go.mod requires
+      render and transduce 0.2.0 for its end-to-end tests, and those were
+      released after it.
+    - **A CLIB error:** since feed#74 and xml#83, neither library imports
+      jsonic, yet both C libraries were hosted on jsonic. That breaks ADR-22
+      (a C library adds no dependency). admin#124 moves both hosts to the
+      engine, as multisource's moved in admin#116, and feed#76 and xml#85
+      restamp `go/clib/core.go`. A probe parsed every input under each
+      repo's `test/` both ways:
+      - xml: 3,420 inputs, all identical;
+      - feed: 4,037 inputs, 5 different. The same 5 also differ between two
+        jsonic-hosted parsers (see "Session notes").
+
+      jsonic is now a runtime dependency of xml's and feed's other ports only:
+      xml registers a new difference, and feed's narrows to Rust. The CLIB
+      check is current for all 30 stamps. These re-hosts are on `main` and
+      not released; they ride the next xml and feed releases.
+    - **Five stale plugin descriptors** (`tabnas.plugin.json`, checked by
+      `tasks/ax-descriptor.sh`): css, feed, proto, semver and toml.
+      - **Caused today:** proto's names `@tabnas/abnf` as its base, which
+        proto#60 made build-only; semver's has the same base change.
+      - **Stale before today**, checked against each previous release's
+        commit:
+        - css since 2026-09-19 (a hand-added `rust` field the generator
+          does not emit);
+        - feed since feed#71 (xml became derivable as its base);
+        - semver's field order and its `.abnf` grammar field;
+        - toml's field order and error codes.
+      - **Left alone:** regenerating would drop the hand-kept fields, and
+        would change the plugin catalog bundled in mcp (a release) and on
+        the website (decision 6 below).
+
 ## Pushed and open
 
-Nothing. rjrodger/aless#45 (step 8 of the previous page) is merged:
-`claude/alchemy-injected` plus one commit putting every tabnas pin in
-`Cargo.lock` at its repository's current main, 21 crates. The three alone
-could not move: every tabnas crate shares one engine and one json, and the
-other pins sat on revisions that require parser 0.12.8. Only tabnas
-packages changed; 325 of 325 tests, and CI on all three platforms.
+Nothing. Every PR from this session is merged, the last being admin#124
+(feed's and xml's C-library hosts) and web#55 (the site's pins and data).
 
-## One red check, and why
+## No red checks
 
-**alchemy's `ci / ts`** (the org's shared `polyglot-ci.yml`) is red on
-every OS, and nothing in alchemy's code causes it. alchemy's tests import
-transduce and render, which the shared workflow builds from `main` as
-siblings. Each of those has its own `node_modules/@tabnas/alchemy`, the
-published copy, because the workflow links siblings into the repository
-under test but never the repository under test into its siblings. So
-alchemy's tests see two copies of the shared classes, and TypeScript
-refuses to assign one to the other (`AbortFlag`, `Routers`). Before the
-release the same gap showed as `Cannot find module '@tabnas/alchemy/shared'`.
-
-The `rust` workflow's `ci/polyglot/run.sh` builds alchemy first and links
-it into transduce and render, and it is green: that is alchemy's
-TypeScript coverage today (Linux). The fix is the maintainer's to choose
-(decision 1 below).
+alchemy's `ci / ts` is green on every OS since alchemy 0.2.1 put the
+structural shared types on npm. Adding a `private` or `protected` member,
+or a `#` field, to a class in alchemy's `ts/src/shared` brings it back: two
+installed copies would compare nominally again. `ts/src/shared/index.ts`
+says so.
 
 ## Decisions waiting on the maintainer
 
-1. **alchemy's shared `ci / ts`.** Options:
-   - teach `tabnas/.github` `polyglot-ci.yml` to link the repository under
-     test into the siblings that installed it, and give alchemy a
-     `build-order` with alchemy before transduce and render. That fixes
-     Linux and macOS. Windows copies instead of linking, so the two-copy
-     problem stays there;
-   - set `run-ts: false` in alchemy's `ci.yml` and rely on the `rust`
-     workflow's polyglot gate (Linux only);
-   - make the shared types compare structurally (no private members on
-     `AbortFlag` and the like), so that two copies agree.
-2. **The 34 port-deps register entries** each end "Undecided: awaits the
-   maintainer's ruling" (ADR-24). `docs/deps/README.md` in admin lists
-   them with their reasons and repairs.
-3. From the previous page, still open: the TypeScript install footprint
-   (transduce and render peer on alchemy, whose required peers npm then
-   installs); render's `tabnas` and transduce's `indexmap` and
-   `serde_json` in Rust; the structural items from the dependency review;
-   deleting the duplicate diagram artifact `5UQXW2KkB9Gv7LSdW7fwhQ`.
-   Version numbers for the releases are settled (0.2.0).
+1. **The 24 port-deps register entries** each still end "Undecided:
+   awaits the maintainer's ruling" (ADR-24). admin's `docs/deps/README.md`
+   lists them with their reasons and repairs.
+2. **The duplicate diagram artifact** `5UQXW2KkB9Gv7LSdW7fwhQ`: delete it,
+   or keep it.
+3. **ZON on json**: it works only if the grammar reaches the runtimes as
+   JSON and its six close rules take json's actions. Then the grammar works
+   only on json. Every other json-for-jsonic trial was a clear no.
+4. **semver's Rust port** dropped `tabnas-abnf` altogether, since no test
+   needs it. Keep that, or keep the crate as a dev-dependency?
+5. **The precompiled grammars are not regenerated at release.**
+   semver's and proto's `gen-grammar` is not under
+   `tabnas.release.generate`, because those files decide what parses.
+   After an abnf or bnf release that changes the compiler's output, their
+   staleness tests fail until someone regenerates the files and reviews
+   them. `publish.sh` prints a note about the undeclared script.
+6. **The five stale plugin descriptors** (above): regenerate them with
+   `tasks/ax-descriptor.sh --apply`, which drops css's `rust` and semver's
+   `.abnf` `grammar`, or teach the generator those fields first. Either
+   way, mcp's `data/plugins.json` (an mcp release) and the website's
+   follow.
 
 ## Carried over
 
@@ -181,16 +295,40 @@ be closed (ruling 6 of the previous page).
   the `rust` check, which takes siblings by branch, was the gate.
 - **npm can take a minute or two to serve a version `npm publish` has
   accepted.** Poll the version document before calling a release missing.
+- **A release wave as PRs.** Admin `publish.sh`'s helper functions and its
+  step-2 block run cleanly in a worktree (`eval`ed, with `ROOT` at a
+  folder of sibling checkouts). That gives every version site, the Go
+  requires, nested modules and Rust locks without hand edits. Two gaps
+  needed filling:
+  - a committed lockfile's own `version` moves only when a dependency did;
+  - mcp's `release.yml` takes no `go` input.
+  Fast-forward every `main` checkout before each dependency level.
+- **Generators and checks that enumerate siblings skip symlinks**
+  (port-deps `--write`, web's gen-ax-data and check-ax, mcp's gen-data).
+  Run them with `--root` at the real checkouts, or move the worktree among
+  them with `git worktree move`.
+- **npm's CDN can serve a 404 for a tarball minutes after publishing.**
+  Two alchemy PR checks failed that way on ini 0.5.15. Rerun before
+  reading anything into it.
 
 ## Session notes
 
-- Worktrees for this session's PRs are under
-  `~/Projects/tabnas-worktrees/release-0.2.0/` on the maintainer's
-  machine; every branch in them is merged.
-- The TypeScript peer-dependency page (`tools/tsdeps/`) was redrawn on
-  2026-10-05 after the shared-types merges, the 0.2.0 releases and
-  multisource dropping jsonic and json (multisource#73, admin#116), and
-  published afresh at <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>:
-  the earlier copy could not be reached from the maintainer's machine.
-  admin's `docs/deps` (ADR-24) already showed the new edges.
+- Worktrees for this session's PRs were under
+  `~/Projects/tabnas-worktrees/` (`wave/`, `precompiled/`,
+  `json-not-jsonic/`). Every branch in them is merged, and they are
+  removed.
+- The TypeScript peer-dependency page (`tools/tsdeps/`) was redrawn after
+  the wave, and published to the same artifact,
+  <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>.
+- Found, not fixed (outside the maintainer's list):
+  - the Rust engine panics on a lone U+FEFF when the text matcher is off
+    (`parser/rs/src/lexer.rs:1413`, `self.advance().unwrap()`); the
+    engine catches it and returns an `internal` error;
+  - two engines from `tabnas_json::make()` cannot be merged in Rust,
+    though two jsonic engines can;
+  - ini's and toml's AGENTS.md still describe `">=2"` peers and `file:`
+    devDependencies that `package.json` no longer has;
+  - feed's Go port serializes XHTML content with its attributes in Go map
+    iteration order, so the same input can give different output on
+    different runs (5 of the 4,037 inputs under feed's `test/`).
 - No subscriptions or check-ins carry over.

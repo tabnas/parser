@@ -8,9 +8,11 @@ artifact <https://claude.ai/artifact/R5c6Hag7eawFfUZrJitjaU>, private to
 the maintainer's account, updated in place on each redraw. (The earlier
 copy, `EbqCuLdZ4mh1wSGQdTfjKZ`, could not be reached from the maintainer's
 machine on 2026-10-05, so the redraw was published afresh.) It was last
-read at 2026-10-06 09:22 UTC (`last-read/`), after engine 0.12.10 and the
-releases of css, feed and jsonic-cli: npm's manifests now match `main` for
-every package.
+read at 2026-10-06 19:37 UTC (`last-read/`), after the release wave of
+that day: 37 packages released, alchemy's engine and json peers optional,
+alchemy-cli declaring the engine, and semver and proto peering only on
+the engine. npm's manifests match `main` for every package, and the
+website's pins are current.
 
 | File | What it does |
 |---|---|
