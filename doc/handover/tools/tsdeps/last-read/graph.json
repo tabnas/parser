@@ -4,7 +4,7 @@
    "repo": "abnf",
    "file": "ts/package.json",
    "name": "@tabnas/abnf",
-   "version": "0.4.17",
+   "version": "0.4.18",
    "private": false,
    "deps": {},
    "peers": {
@@ -18,12 +18,13 @@
    "repo": "alchemy-cli",
    "file": "ts/package.json",
    "name": "@tabnas/alchemy-cli",
-   "version": "0.1.1",
+   "version": "0.1.2",
    "private": false,
    "deps": {},
    "peers": {
     "@tabnas/alchemy": ">=0",
     "@tabnas/json": ">=0",
+    "@tabnas/parser": ">=0",
     "@tabnas/render": ">=0",
     "@tabnas/transduce": ">=0"
    },
@@ -34,7 +35,7 @@
    "repo": "alchemy",
    "file": "ts/package.json",
    "name": "@tabnas/alchemy",
-   "version": "0.2.0",
+   "version": "0.2.1",
    "private": false,
    "deps": {},
    "peers": {
@@ -42,13 +43,16 @@
     "@tabnas/parser": ">=0"
    },
    "optional": {},
-   "peerOptional": []
+   "peerOptional": [
+    "@tabnas/json",
+    "@tabnas/parser"
+   ]
   },
   {
    "repo": "bnf",
    "file": "ts/package.json",
    "name": "@tabnas/bnf",
-   "version": "0.1.25",
+   "version": "0.1.26",
    "private": false,
    "deps": {},
    "peers": {
@@ -61,7 +65,7 @@
    "repo": "c",
    "file": "ts/package.json",
    "name": "@tabnas/c",
-   "version": "0.5.10",
+   "version": "0.5.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -76,7 +80,7 @@
    "repo": "chess",
    "file": "ts/package.json",
    "name": "@tabnas/chess",
-   "version": "0.1.10",
+   "version": "0.1.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -100,7 +104,7 @@
    "repo": "css",
    "file": "ts/package.json",
    "name": "@tabnas/css",
-   "version": "0.5.11",
+   "version": "0.5.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -125,7 +129,7 @@
    "repo": "csv",
    "file": "ts/package.json",
    "name": "@tabnas/csv",
-   "version": "0.6.2",
+   "version": "0.6.3",
    "private": false,
    "deps": {},
    "peers": {
@@ -139,7 +143,7 @@
    "repo": "debug",
    "file": "ts/package.json",
    "name": "@tabnas/debug",
-   "version": "0.3.10",
+   "version": "0.3.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -152,7 +156,7 @@
    "repo": "directive",
    "file": "ts/package.json",
    "name": "@tabnas/directive",
-   "version": "0.5.10",
+   "version": "0.5.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -165,7 +169,7 @@
    "repo": "ebnf",
    "file": "ts/package.json",
    "name": "@tabnas/ebnf",
-   "version": "0.1.11",
+   "version": "0.1.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -179,7 +183,7 @@
    "repo": "expr",
    "file": "ts/package.json",
    "name": "@tabnas/expr",
-   "version": "0.5.12",
+   "version": "0.5.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -193,7 +197,7 @@
    "repo": "feed",
    "file": "ts/package.json",
    "name": "@tabnas/feed",
-   "version": "0.6.12",
+   "version": "0.6.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -207,7 +211,7 @@
    "repo": "gbnf",
    "file": "ts/package.json",
    "name": "@tabnas/gbnf",
-   "version": "0.1.14",
+   "version": "0.1.15",
    "private": false,
    "deps": {},
    "peers": {
@@ -221,7 +225,7 @@
    "repo": "hoover",
    "file": "ts/package.json",
    "name": "@tabnas/hoover",
-   "version": "0.3.11",
+   "version": "0.3.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -234,7 +238,7 @@
    "repo": "ini",
    "file": "ts/package.json",
    "name": "@tabnas/ini",
-   "version": "0.5.14",
+   "version": "0.5.15",
    "private": false,
    "deps": {},
    "peers": {
@@ -249,7 +253,7 @@
    "repo": "json5",
    "file": "ts/package.json",
    "name": "@tabnas/json5",
-   "version": "0.5.11",
+   "version": "0.5.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -263,7 +267,7 @@
    "repo": "json",
    "file": "ts/package.json",
    "name": "@tabnas/json",
-   "version": "0.5.13",
+   "version": "0.5.14",
    "private": false,
    "deps": {},
    "peers": {
@@ -276,7 +280,7 @@
    "repo": "jsonc",
    "file": "ts/package.json",
    "name": "@tabnas/jsonc",
-   "version": "0.5.10",
+   "version": "0.5.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -290,7 +294,7 @@
    "repo": "jsonic-cli",
    "file": "ts/package.json",
    "name": "@tabnas/jsonic-cli",
-   "version": "0.5.11",
+   "version": "0.5.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -304,7 +308,7 @@
    "repo": "jsonic",
    "file": "ts/package.json",
    "name": "@tabnas/jsonic",
-   "version": "0.7.4",
+   "version": "0.7.5",
    "private": false,
    "deps": {},
    "peers": {
@@ -318,7 +322,7 @@
    "repo": "jsonl",
    "file": "ts/package.json",
    "name": "@tabnas/jsonl",
-   "version": "0.1.12",
+   "version": "0.1.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -345,7 +349,7 @@
    "repo": "lsp",
    "file": "ts/package.json",
    "name": "@tabnas/lsp",
-   "version": "0.1.4",
+   "version": "0.1.5",
    "private": false,
    "deps": {
     "vscode-languageserver": "^10.1.1",
@@ -361,7 +365,7 @@
    "repo": "markdown",
    "file": "ts/package.json",
    "name": "@tabnas/markdown",
-   "version": "0.7.8",
+   "version": "0.7.9",
    "private": false,
    "deps": {},
    "peers": {
@@ -374,7 +378,7 @@
    "repo": "mcp",
    "file": "ts/package.json",
    "name": "@tabnas/mcp",
-   "version": "0.1.17",
+   "version": "0.1.18",
    "private": false,
    "deps": {
     "@modelcontextprotocol/sdk": "^1.30.1",
@@ -391,7 +395,7 @@
    "repo": "multisource",
    "file": "ts/package.json",
    "name": "@tabnas/multisource",
-   "version": "0.6.0",
+   "version": "0.6.1",
    "private": false,
    "deps": {},
    "peers": {
@@ -419,7 +423,7 @@
    "repo": "path",
    "file": "ts/package.json",
    "name": "@tabnas/path",
-   "version": "0.3.10",
+   "version": "0.3.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -432,11 +436,10 @@
    "repo": "proto",
    "file": "ts/package.json",
    "name": "@tabnas/proto",
-   "version": "0.6.3",
+   "version": "0.6.4",
    "private": false,
    "deps": {},
    "peers": {
-    "@tabnas/abnf": ">=0.4.16",
     "@tabnas/parser": ">=0.12.8"
    },
    "optional": {},
@@ -446,7 +449,7 @@
    "repo": "railroad",
    "file": "ts/package.json",
    "name": "@tabnas/railroad",
-   "version": "0.3.9",
+   "version": "0.3.10",
    "private": false,
    "deps": {},
    "peers": {
@@ -459,7 +462,7 @@
    "repo": "render",
    "file": "ts/package.json",
    "name": "@tabnas/render",
-   "version": "0.2.0",
+   "version": "0.2.1",
    "private": false,
    "deps": {},
    "peers": {
@@ -472,11 +475,10 @@
    "repo": "semver",
    "file": "ts/package.json",
    "name": "@tabnas/semver",
-   "version": "0.0.6",
+   "version": "0.0.7",
    "private": false,
    "deps": {},
    "peers": {
-    "@tabnas/abnf": ">=0.4.16",
     "@tabnas/parser": ">=0.12.8"
    },
    "optional": {},
@@ -506,7 +508,7 @@
    "repo": "support",
    "file": "ts/package.json",
    "name": "@tabnas/support",
-   "version": "0.3.6",
+   "version": "0.3.7",
    "private": false,
    "deps": {},
    "peers": {
@@ -521,7 +523,7 @@
    "repo": "toml",
    "file": "ts/package.json",
    "name": "@tabnas/toml",
-   "version": "0.5.12",
+   "version": "0.5.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -535,7 +537,7 @@
    "repo": "transduce",
    "file": "ts/package.json",
    "name": "@tabnas/transduce",
-   "version": "0.2.0",
+   "version": "0.2.1",
    "private": false,
    "deps": {},
    "peers": {
@@ -558,15 +560,15 @@
     "@astrojs/cloudflare": "12.6.13",
     "@astrojs/mdx": "4.3.14",
     "@astrojs/sitemap": "3.7.4",
-    "@tabnas/abnf": "0.4.17",
-    "@tabnas/bnf": "0.1.25",
+    "@tabnas/abnf": "0.4.18",
+    "@tabnas/bnf": "0.1.26",
     "@tabnas/chess-view": "0.1.5",
-    "@tabnas/expr": "0.5.12",
-    "@tabnas/gbnf": "0.1.14",
-    "@tabnas/json": "0.5.13",
-    "@tabnas/jsonic": "0.7.4",
+    "@tabnas/expr": "0.5.13",
+    "@tabnas/gbnf": "0.1.15",
+    "@tabnas/json": "0.5.14",
+    "@tabnas/jsonic": "0.7.5",
     "@tabnas/parser": "0.12.10",
-    "@tabnas/semver": "0.0.6",
+    "@tabnas/semver": "0.0.7",
     "astro": "5.18.2",
     "typescript": "7.0.2"
    },
@@ -578,7 +580,7 @@
    "repo": "xml",
    "file": "ts/package.json",
    "name": "@tabnas/xml",
-   "version": "0.7.12",
+   "version": "0.7.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -592,7 +594,7 @@
    "repo": "yaml",
    "file": "ts/package.json",
    "name": "@tabnas/yaml",
-   "version": "0.5.19",
+   "version": "0.5.20",
    "private": false,
    "deps": {},
    "peers": {
@@ -606,7 +608,7 @@
    "repo": "zon",
    "file": "ts/package.json",
    "name": "@tabnas/zon",
-   "version": "0.5.12",
+   "version": "0.5.13",
    "private": false,
    "deps": {},
    "peers": {
@@ -652,6 +654,14 @@
   },
   {
    "from": "@tabnas/alchemy-cli",
+   "to": "@tabnas/parser",
+   "kind": "peer",
+   "range": ">=0",
+   "optionalPeer": false,
+   "known": true
+  },
+  {
+   "from": "@tabnas/alchemy-cli",
    "to": "@tabnas/render",
    "kind": "peer",
    "range": ">=0",
@@ -671,7 +681,7 @@
    "to": "@tabnas/json",
    "kind": "peer",
    "range": ">=0",
-   "optionalPeer": false,
+   "optionalPeer": true,
    "known": true
   },
   {
@@ -679,7 +689,7 @@
    "to": "@tabnas/parser",
    "kind": "peer",
    "range": ">=0",
-   "optionalPeer": false,
+   "optionalPeer": true,
    "known": true
   },
   {
@@ -1020,14 +1030,6 @@
   },
   {
    "from": "@tabnas/proto",
-   "to": "@tabnas/abnf",
-   "kind": "peer",
-   "range": ">=0.4.16",
-   "optionalPeer": false,
-   "known": true
-  },
-  {
-   "from": "@tabnas/proto",
    "to": "@tabnas/parser",
    "kind": "peer",
    "range": ">=0.12.8",
@@ -1047,14 +1049,6 @@
    "to": "@tabnas/alchemy",
    "kind": "peer",
    "range": ">=0",
-   "optionalPeer": false,
-   "known": true
-  },
-  {
-   "from": "@tabnas/semver",
-   "to": "@tabnas/abnf",
-   "kind": "peer",
-   "range": ">=0.4.16",
    "optionalPeer": false,
    "known": true
   },
@@ -1118,7 +1112,7 @@
    "from": "web",
    "to": "@tabnas/abnf",
    "kind": "dep",
-   "range": "0.4.17",
+   "range": "0.4.18",
    "optionalPeer": false,
    "known": true
   },
@@ -1126,7 +1120,7 @@
    "from": "web",
    "to": "@tabnas/bnf",
    "kind": "dep",
-   "range": "0.1.25",
+   "range": "0.1.26",
    "optionalPeer": false,
    "known": true
   },
@@ -1142,7 +1136,7 @@
    "from": "web",
    "to": "@tabnas/expr",
    "kind": "dep",
-   "range": "0.5.12",
+   "range": "0.5.13",
    "optionalPeer": false,
    "known": true
   },
@@ -1150,7 +1144,7 @@
    "from": "web",
    "to": "@tabnas/gbnf",
    "kind": "dep",
-   "range": "0.1.14",
+   "range": "0.1.15",
    "optionalPeer": false,
    "known": true
   },
@@ -1158,7 +1152,7 @@
    "from": "web",
    "to": "@tabnas/json",
    "kind": "dep",
-   "range": "0.5.13",
+   "range": "0.5.14",
    "optionalPeer": false,
    "known": true
   },
@@ -1166,7 +1160,7 @@
    "from": "web",
    "to": "@tabnas/jsonic",
    "kind": "dep",
-   "range": "0.7.4",
+   "range": "0.7.5",
    "optionalPeer": false,
    "known": true
   },
@@ -1182,7 +1176,7 @@
    "from": "web",
    "to": "@tabnas/semver",
    "kind": "dep",
-   "range": "0.0.6",
+   "range": "0.0.7",
    "optionalPeer": false,
    "known": true
   },
