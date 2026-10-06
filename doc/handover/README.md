@@ -79,6 +79,36 @@ releases, which cleared the `GOWORK=off` step in both.
   and feed) are the shape multisource had, a Go port reaching the engine
   through jsonic's aliases.
 
+### Later on 2026-10-06: the engine and three packages released
+
+- **parser 0.12.10** (parser#293): the engine changes on `main` since
+  0.12.9. npm, `ts/v`, `rs/v` and `go/v`, the Go proxy, crates.io and the
+  C library Release all name `33f4419`.
+- **The cascade**: every Go module that requires the engine moved to
+  v0.12.10 in its own PR (33 repositories, `deps/parser-v0.12.10`). Four
+  needed more than `go.mod`, as publish.sh's release step would have done:
+  - support, json and lsp commit `ts/package-lock.json`, which their
+    engine-pin tests compare with the built engine, so its `@tabnas`
+    entries moved with `npm update` (json's debug and railroad too);
+  - json's nested `go/debugtest` replaces the engine, but also replaces
+    json with the parent module, so its require had to move as well;
+  - mcp (no Go module) moved its lockfile, and its `data/` copies of the
+    engine's registry and DIVERGENCE.md were regenerated (`npm run
+    gen-data`).
+- **css 0.5.11, feed 0.6.12, jsonic-cli 0.5.11**: each released with the
+  engine bump, and verified on every surface, except that
+  **`tabnas-jsonic-cli` 0.5.11 is not on crates.io**. Its crates job
+  failed: no trusted publisher was ever registered for the hand-published
+  crate (admin#120 adds it to the scripts). Register it, then rerun the
+  failed crates job of jsonic-cli's release run.
+- **Tidy-up**: admin's workflow copies refreshed from the live files
+  (admin#118); expr's stamp made current without losing its hand-added
+  test (admin#119, expr#82); the website pins the engine at 0.12.10
+  (web#54); the TypeScript peer-dependency page shows npm matching `main`.
+- **chess's TypeScript perf test is flaky on shared runners**: it requires
+  reuse to beat rebuild-per-parse by more than 4x and measured 3.4x and
+  4.0x. It has failed on chess `main` since 2026-10-05.
+
 ## Pushed and open
 
 Nothing. rjrodger/aless#45 (step 8 of the previous page) is merged:

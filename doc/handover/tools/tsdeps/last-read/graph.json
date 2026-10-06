@@ -100,7 +100,7 @@
    "repo": "css",
    "file": "ts/package.json",
    "name": "@tabnas/css",
-   "version": "0.5.10",
+   "version": "0.5.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -193,7 +193,7 @@
    "repo": "feed",
    "file": "ts/package.json",
    "name": "@tabnas/feed",
-   "version": "0.6.11",
+   "version": "0.6.12",
    "private": false,
    "deps": {},
    "peers": {
@@ -290,7 +290,7 @@
    "repo": "jsonic-cli",
    "file": "ts/package.json",
    "name": "@tabnas/jsonic-cli",
-   "version": "0.5.10",
+   "version": "0.5.11",
    "private": false,
    "deps": {},
    "peers": {
@@ -408,7 +408,7 @@
    "repo": "parser",
    "file": "ts/package.json",
    "name": "@tabnas/parser",
-   "version": "0.12.9",
+   "version": "0.12.10",
    "private": false,
    "deps": {},
    "peers": {},
@@ -565,7 +565,7 @@
     "@tabnas/gbnf": "0.1.14",
     "@tabnas/json": "0.5.13",
     "@tabnas/jsonic": "0.7.4",
-    "@tabnas/parser": "0.12.9",
+    "@tabnas/parser": "0.12.10",
     "@tabnas/semver": "0.0.6",
     "astro": "5.18.2",
     "typescript": "7.0.2"
@@ -1174,7 +1174,7 @@
    "from": "web",
    "to": "@tabnas/parser",
    "kind": "dep",
-   "range": "0.12.9",
+   "range": "0.12.10",
    "optionalPeer": false,
    "known": true
   },
