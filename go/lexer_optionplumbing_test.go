@@ -136,7 +136,7 @@ func TestSpecLexTextLineTerminator(t *testing.T) {
 //
 // The last two rows are the boundary: a text run may CONTAIN a quote, but a
 // source that STARTS with one is still a string, and an unterminated one is
-// still an error in both runtimes.
+// still an error in every runtime.
 func TestSpecLexTextQuote(t *testing.T) {
 	for _, row := range loadSpecTSV(t, "lex-text-quote") {
 		src := preprocessEscapes(tsvCol(row.cols, 0))

@@ -2,14 +2,14 @@
 
 // Every shared parity fixture must be executed by all three runtimes.
 //
-// The shared corpus only means anything if both ports actually run it. This
+// The shared corpus only means anything if every port actually runs it. This
 // repo has been on the wrong side of that: before the ownership split, most
 // of test/spec/ was referenced by neither runner — files that looked like a
 // cross-port corpus and measured nothing, reporting green throughout. The
 // sibling gate in jsonic found 39 such fixtures there.
 //
-// This makes it a build failure: add a .tsv without wiring it into both
-// ports and this test says so. Fixtures that are deliberately not parity
+// This makes it a build failure: add a .tsv without wiring it into every
+// port and this test says so. Fixtures that are deliberately not parity
 // fixtures go in nonParity with the reason, and that list is asserted to
 // stay honest — an entry that IS referenced by all runners fails too, so
 // an exemption cannot outlive its justification.

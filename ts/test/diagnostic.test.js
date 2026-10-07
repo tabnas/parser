@@ -4,9 +4,10 @@
 // Structured diagnostics: TabnasError.toJSON (reached via
 // JSON.stringify(err)) emits the shape documented in
 // schema/diagnostic.schema.json. The shared parity fixture
-// test/spec/diagnostic.tsv is run here and by the Go port
-// (go/diagnostic_spec_test.go); each row asserts the JSON SUBSET both
-// runtimes must emit byte-identically. Only the error `code` is
+// test/spec/diagnostic.tsv is run here, by the Go port
+// (go/diagnostic_spec_test.go) and by the Rust port
+// (rs/tests/diagnostic_spec_test.rs); each row asserts the JSON SUBSET
+// every runtime must emit byte-identically. Only the error `code` is
 // contractual across runtimes; the subset rows additionally pin the new
 // structural fields (rule/ruleStack/expected/token/len/...) that are
 // designed to be runtime-identical.

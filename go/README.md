@@ -7,7 +7,7 @@ matcher-based lexer, exposed as the `tabnas.Tabnas` type. The package
 ships **no grammar** of its own: every grammar is a plugin that you
 (or another package) supply, matching the canonical TypeScript package.
 
-This is a Go port of the [TypeScript reference](../ts/); both runtimes
+This is a Go port of the [TypeScript reference](../ts/); all three runtimes
 share the spec fixtures under [`../test/spec/`](../test/spec/) to stay
 aligned.
 

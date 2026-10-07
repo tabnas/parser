@@ -80,9 +80,11 @@ Every fixture here, and the runner that executes it:
 | `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |
 | `repaired.tsv` | `ts/test/divergent.test.js` | `go/divergent_test.go` | `rs/tests/divergent_spec_test.rs` |
 
-Both strict-JSON runners go through the strict-JSON grammar that lives as
-a test fixture in each runtime (`ts/test/json-plugin.ts`,
-`go/jsonplugin_test.go`) — the engine itself ships no grammar.
+The TypeScript and Go strict-JSON runners go through the strict-JSON grammar
+that lives as a test fixture in each (`ts/test/json-plugin.ts`,
+`go/jsonplugin_test.go`), since neither engine ships a grammar. The Rust
+runner uses `Tabnas::make_json()` from the crate (`rs/src/lib.rs`), the same
+rule set over stricter options.
 
 `bad-token.tsv` is the one fixture whose rows need code a serialized
 grammar cannot carry: a custom lex matcher that returns bad tokens. Its
@@ -91,10 +93,10 @@ grammars are serialized (`ts/test/json-builder.fixture.json`, and the
 `# @grammar` lines in the file), so all three runtimes install the same
 ones.
 
-Both loaders (`ts/test/utility.js`, `go/spec_test.go`) must stay in step
-on escape handling and on what counts as a row; a divergence there makes
-the two runtimes read the same file differently, which is worse than not
-sharing it at all.
+The loaders (`ts/test/utility.js`, `go/spec_test.go` and the readers in
+`rs/tests/*_spec_test.rs`) must stay in step on escape handling and on what
+counts as a row; a divergence there makes the runtimes read the same file
+differently, which is worse than not sharing it at all.
 
 ## Rules
 

@@ -7,7 +7,8 @@ package tabnas
 // input must fail to parse, and the JSON SUBSET in the diagnostic column
 // must deep-equal the corresponding keys of json.Marshal(err). The
 // canonical TypeScript suite runs the same fixture
-// (ts/test/diagnostic.test.js), keeping the two runtimes coupled on the
+// (ts/test/diagnostic.test.js), and so does the Rust suite
+// (rs/tests/diagnostic_spec_test.rs), keeping the runtimes coupled on the
 // structural diagnostic fields (rule/ruleStack/expected/token/len/...).
 
 import (

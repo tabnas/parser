@@ -400,10 +400,15 @@ consumer's own bump is not done until it has been checked against the
   ```bash
   (
     cd go
-    go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod still has a replace'; exit 1; }
+    go mod edit -json | jq -e '.Replace == null' >/dev/null || { echo 'go.mod still has a replace'; exit 1; }
     GOWORK=off go test ./...
   )
   ```
+
+  The check asks `jq`, not `grep`: current Go leaves the `Replace` key out
+  when there is no replace, where older Go printed `"Replace": null`, and
+  `jq` reads a missing key as null, so the check passes on a clean `go.mod`
+  and fails on a replace either way.
 - TypeScript: deleting the gitignored `package-lock.json` is necessary and
   **not sufficient** — it leaves `node_modules` exactly as it was, symlinked
   siblings included. Remove `node_modules` and reinstall, which is what
@@ -470,8 +475,8 @@ VERSION` in `rs/src/lib.rs`. Drift within each runtime is caught by
 before it ships.
 The sixth is `schema/error-codes.json`, which
 embeds the engine version in its payload — so **a version bump on its own
-makes the registry stale**, with no code change involved. Both runtimes then
-fail:
+makes the registry stale**, with no code change involved. Every runtime's
+suite then fails:
 
 ```
 schema/error-codes.json is stale: run npm run gen-registry
@@ -529,15 +534,18 @@ is JSON, or `ERROR:<code>` for error cases. Loaders:
 `ts/test/utility.js` (`loadTSV`) and `go/spec_test.go`
 (`runParserTSV` / `runErrorTSV`; `specDir` resolves `../test/spec`), plus
 `go/utility_spec_test.go` (`loadSpecTSV`) for the `utility-*.tsv` set.
-The two loaders' escape handling must stay in step — see
-`unescape` (TS) and `preprocessEscapes` (Go).
+In Rust each spec test reads its own file (`load_tsv` in
+`rs/tests/json_spec_test.rs`, and the like in the other
+`rs/tests/*_spec_test.rs`). Their escape handling must stay in step — see
+`unescape` (TS), `preprocessEscapes` (Go) and `preprocess_escapes`
+(Rust, `rs/tests/json_spec_test.rs`).
 
 ## Verify your work
 
 The commands that prove a change is correct:
 
 ```bash
-make build && make test      # both runtimes, LOCALLY
+make build && make test      # all three runtimes, LOCALLY
 make -C ts test              # TypeScript alone, when iterating
 (cd go && go test ./...)     # Go alone
 (cd rs && cargo test --all-targets) # Rust slice alone
@@ -603,10 +611,10 @@ What "correct" means here, in order of authority:
      is not a parity claim.
 
    If you are unsure, ask whether the same input yields a different value. If
-   yes it belongs in `DIVERGENCE.md`; if it is about how the two APIs are
-   shaped, it belongs in `go/doc/differences.md`.
+   yes it belongs in `DIVERGENCE.md`; if it is about how the Go and
+   TypeScript APIs are shaped, it belongs in `go/doc/differences.md`.
 3. **Downstream still passes.** This is the root of the dependency graph, so a
-   change here reaches every grammar plugin in both runtimes, and downstream
+   change here reaches every grammar plugin in every runtime, and downstream
    cannot fix it — the value is already decided by the time a plugin sees a
    token. Do not dismiss a downstream failure as someone else's problem.
 
@@ -616,10 +624,11 @@ What "correct" means here, in order of authority:
    red, and every check in this repository green. `ci/fleet/run-fleet.sh` is
    the command that answers this criterion.
 
-Two loader details that are easy to break: the TS and Go TSV loaders
-(`ts/test/utility.js`, `go/spec_test.go`) must keep their escape handling in
-step, and this repo does **not** use `@tabnas/support` — it carries its own
-loaders, so a fix there does not arrive here automatically.
+Two loader details that are easy to break: the TS, Go and Rust TSV loaders
+(`ts/test/utility.js`, `go/spec_test.go` and the readers in
+`rs/tests/*_spec_test.rs`) must keep their escape handling in step, and this
+repo does **not** use `@tabnas/support` — it carries its own loaders, so a
+fix there does not arrive here automatically.
 
 ## Rule state: `n`, `u`, `k` — and which of them propagate
 
@@ -639,7 +648,7 @@ want it to stay local to one rule, put it in `u`. That is the whole
 distinction, and picking the wrong bag is silent — nothing errors, the
 value simply does or does not appear further down.
 
-Both runtimes agree, on **push and on replace alike**:
+All three runtimes agree, on **push and on replace alike**:
 
 - TypeScript copies `rawn()` and `rawk()` into the new rule at
   `ts/src/rules.ts:662-671` (push) and `:686-695` (replace). `rawu()`
@@ -647,6 +656,10 @@ Both runtimes agree, on **push and on replace alike**:
 - Go copies `r.N` and `r.K` at `go/rule.go:1224-1236` (push) and
   `:1249-1261` (replace). `EnsureU()` is called only by the merge
   (`:1161`), never by the propagation.
+- Rust hands the new rule the current rule's `n` and `k` with `Rc::clone`
+  at `rs/src/parser.rs:3384-3385` (push) and `:3489-3490` (replace), and
+  copies a bag on its first write (`Rule::n_mut` and `k_mut`, through
+  `Rc::make_mut`), which has the effect of a copy. `u` is not handed on.
 
 Two consequences worth holding on to:
 
@@ -664,7 +677,7 @@ Two consequences worth holding on to:
 When adding a builtin, an option, or a grammar that stashes state on a
 rule, say in its doc comment which bag it uses and why. The propagation
 rule is contract, not implementation detail: it is observable from any
-grammar, in both runtimes, and a port has to reproduce it exactly.
+grammar, in every runtime, and a port has to reproduce it exactly.
 
 ## Repetition is replacement, never a push chain
 
@@ -717,16 +730,18 @@ proof.
 ## Error codes
 
 The engine declares the base error codes every grammar inherits, in
-`ts/src/defaults.ts` (`error`/`hint`) and its Go counterpart:
+`ts/src/defaults.ts` (`error`/`hint`) and its Go and Rust counterparts
+(`go/tabnas.go`, `rs/src/error.rs`):
 
 `unknown`, `unexpected`, `invalid_unicode`, `invalid_ascii`, `unprintable`,
 `unterminated_string`, `unterminated_comment`, `unknown_rule`, `end_of_source`,
 `cancel`
 
 Those ten are the **cross-runtime** set — `cancel` included: the budget
-feature raises it in both runtimes (`ts/src/parser.ts`, `go/parser.go`), and
+feature raises it in every runtime (`ts/src/parser.ts`, `go/parser.go`,
+`rs/src/parser.rs`), and
 [`schema/error-codes.json`](schema/error-codes.json), which is generated and
-gated in both test suites, has always carried it. Go reserves one more: `internal`,
+gated in all three test suites, has always carried it. Go reserves one more: `internal`,
 declared with its own message and hint in `go/tabnas.go`, which the engine
 produces when it recovers a panic from a plugin callback or matcher
 (`go/parser.go`, `go/plugin.go`). TypeScript has no equivalent. A Go plugin
@@ -740,32 +755,34 @@ base code to mean something else.
 **The code is the contract, not the message.** Fixtures pin `ERROR:<code>`, and
 two runtimes rejecting the same input with different codes have agreed on
 nothing. Renaming or removing a base code is therefore a breaking change across
-every plugin in the fleet, in both runtimes — treat it as one.
+every plugin in the fleet, in every runtime — treat it as one.
 
 The machine-readable registry of these codes, with their message and hint
 templates, is [`schema/error-codes.json`](schema/error-codes.json): generated
 from the TS merged catalogues by `npm run gen-registry` (from `ts/`, script
-`ts/tools/gen-error-codes.js`) and staleness-checked in both runtimes' tests
-(`ts/test/schema.test.js`, `go/schema_test.go`) — see
-[`schema/README.md`](schema/README.md). Note that `end_of_source` is declared
-by both engines but currently raised by neither — declared-but-dead, recorded
-here rather than silently removed (a grammar may still raise it: the TS
-strict-JSON test fixture does, via `ctx.t0.err`, when `rule.finish` is off).
+`ts/tools/gen-error-codes.js`) and staleness-checked in every runtime's tests
+(`ts/test/schema.test.js`, `go/schema_test.go`, `rs/tests/schema_test.rs`) —
+see [`schema/README.md`](schema/README.md). Note that `end_of_source` is
+declared by all three engines but currently raised by none —
+declared-but-dead, recorded here rather than silently removed (a grammar may
+still raise it: the TS strict-JSON test fixture does, via `ctx.t0.err`, when
+`rule.finish` is off).
 One more name is dead in a different way: `invalid_lex_state`, a string
-constant at `ts/src/utility.ts:110` that appears nowhere else in either
+constant at `ts/src/utility.ts:110` that appears nowhere else in any
 runtime and is in no catalogue. It is not a base code — do not transcribe it
 into a port as an eleventh.
 
 ### Structured diagnostics
 
 Serializing a parse error — `JSON.stringify(err)` in TypeScript (via
-`TabnasError.toJSON`), `json.Marshal(err)` in Go (via `MarshalJSON`) — emits a
+`TabnasError.toJSON`), `json.Marshal(err)` in Go (via `MarshalJSON`),
+`serde_json::to_value(&err)` in Rust (via `TabnasError`'s `Serialize`) — emits a
 structured diagnostic object: status, code, message, hint, row/col/pos/len,
 rule, ruleStack, token {name, src}, expected, src (the failing line), plugins,
 version. The shape is documented in
 [`schema/diagnostic.schema.json`](schema/diagnostic.schema.json), and the
-parity fixture `test/spec/diagnostic.tsv` pins the structural fields in both
-runtimes. As above, only `code` is contractual across runtimes:
+parity fixture `test/spec/diagnostic.tsv` pins the structural fields in all
+three runtimes. As above, only `code` is contractual across runtimes:
 message/hint/src are informative text, `expected` is an over-approximation of
 what could have matched, and `len` counts Unicode code points OF THE TOKEN
 SOURCE — the counting unit never diverges, but the lexers can cut different

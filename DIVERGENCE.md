@@ -18,8 +18,8 @@ definition of a divergence, and things that belonged here were filed
 there instead: the rule-iteration budget (repaired, P7) and the `\s` /
 `(?i)` regex non-equivalences (permanent, P8, and now recorded below).
 Both were accurately DESCRIBED — and neither was pinned, because that
-file is prose and this one is backed by tests in both ports. When adding
-to either, the test is not "is this about the Go port?" but "can the two
+file is prose and this one is backed by tests in every port. When adding
+to either, the test is not "is this about the Go port?" but "can the
 engines produce a different result for the same input?" If yes, it
 belongs here, whatever else is true about it.
 
@@ -45,7 +45,7 @@ Fix this file to match it, never the other way round.
 ## Why this matters more here than elsewhere
 
 This engine is the root of a dependency graph. A divergence here reaches
-every downstream grammar, in both runtimes, and downstream cannot fix it —
+every downstream grammar, in every runtime, and downstream cannot fix it —
 the value is already decided by the time a plugin sees a token. Two
 consumers have carried shims against divergences in this file, and
 [`rjrodger/aontu`](https://github.com/rjrodger/aontu) recorded one as a
