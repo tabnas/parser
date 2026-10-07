@@ -48,7 +48,7 @@ const divergentMaxTokens = 64
 
 // divergentValHex renders a string as lowercase UTF-16 code units,
 // dot-joined: the one rendering that shows the lone-surrogate split
-// without either port having to spell a character it cannot hold. Go
+// without any port having to spell a character it cannot hold. Go
 // strings are UTF-8, so this encodes to UTF-16 first; the TS twin reads
 // the units directly, because JS strings already are UTF-16.
 func divergentValHex(v any) string {
@@ -260,7 +260,7 @@ func divergentProbeLex(arg map[string]any, input string) (string, error) {
 		if tk == nil || tk.Name == "#ZZ" {
 			break
 		}
-		// Never produced here today; skipped anyway so the two runners
+		// Never produced here today; skipped anyway so the runners
 		// retain the same list if that ever changes.
 		if tk.Name == "#SP" {
 			continue
@@ -318,7 +318,7 @@ func divergentErrField(te *TabnasError, field string) (string, error) {
 }
 
 // divergentProbeSpec installs a serialized GrammarSpec and parses. A spec
-// is pure JSON, so the SAME text drives both ports — which is what lets a
+// is pure JSON, so the SAME text drives every port — which is what lets a
 // grammar-level row be registered here at all.
 func divergentProbeSpec(
 	arg map[string]any, input string, specs map[string]string,
@@ -443,7 +443,7 @@ func TestDivergentRegister(t *testing.T) {
 		}
 
 		// Decode escapes in EVERY column, as ts/test/utility.js::loadTSV
-		// does. The two loaders must read the same file the same way, or
+		// does. The loaders must read the same file the same way, or
 		// sharing it is worse than not sharing it (test/AGENTS.md).
 		cols := make([]string, len(row.cols))
 		for i, c := range row.cols {
@@ -643,12 +643,12 @@ func TestDivergenceRegisterCoversEveryEntry(t *testing.T) {
 	}
 	// Walk in file order so each row is attributed to the group it sits
 	// under, and record whether that group still holds a row where the
-	// two ports actually DISAGREE.
+	// ports actually DISAGREE.
 	//
 	// The marker alone is not registration. Without this, repairing a
 	// divergence and deleting its divergent row — or simply editing both
 	// expected columns to the same value — leaves the marker, the control
-	// row, both runners and this gate all green, and the DIVERGENCE.md
+	// row, every runner and this gate all green, and the DIVERGENCE.md
 	// entry outlives the executable evidence that is the entire point of
 	// ADR-14. The gate would then be asserting that prose exists, which
 	// prose is quite capable of doing by itself.

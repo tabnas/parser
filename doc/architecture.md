@@ -3,7 +3,7 @@
 This document explains how the tabnas engine is put together and why.
 It is background reading. For step-by-step instructions see the
 tutorials, and for exact signatures see the reference docs. The design
-is shared by both runtimes; where they differ, see
+is shared by every runtime; where Go differs, see
 [differences from TypeScript](../go/doc/differences.md).
 
 ## The engine is grammar-free
@@ -21,10 +21,11 @@ follows from it:
 - The relaxed-JSON ("jsonic") behaviour that gives the project its name
   is just the most common plugin, not a privileged built-in.
 
-In both runtimes the strict-JSON grammar lives as a test fixture
+In TypeScript and Go the strict-JSON grammar lives as a test fixture
 ([`ts/test/json-plugin.ts`](../ts/test/json-plugin.ts),
-[`go/jsonplugin_test.go`](../go/jsonplugin_test.go)); richer grammars,
-including the relaxed-JSON one, come from companion packages.
+[`go/jsonplugin_test.go`](../go/jsonplugin_test.go)), and in Rust as
+`Tabnas::make_json()`; richer grammars, including the relaxed-JSON one,
+come from companion packages.
 
 ## Two stages: lexer then parser
 
@@ -105,13 +106,14 @@ set) is re-evaluated for the child rather than copied stale.
 
 ## Errors
 
-Both runtimes produce a structured error carrying an error code, source
+Every runtime produces a structured error carrying an error code, source
 location (row, column, position), the offending source fragment, a
 human-readable message with a source-context extract, and an optional
 hint. Messages and hints are templates with `{key}` placeholders, so
 they can be customised or localised. The difference is delivery:
 TypeScript throws, Go returns an `error` value (and the Go API never
-panics, since internal failures are converted to error results).
+panics, since internal failures are converted to error results), and Rust
+returns `Err` with a `TabnasError`.
 
 ## Where to go next
 

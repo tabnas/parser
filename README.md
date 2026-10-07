@@ -393,12 +393,12 @@ authoritative unless a recorded decision says otherwise.
 |---|---|---|
 | **TypeScript / JavaScript**. Original & canonical | `@tabnas/parser` (npm) | [`ts/README.md`](ts/README.md) |
 | **Go**. Port that follows the TS engine | `github.com/tabnas/parser/go` | [`go/README.md`](go/README.md) |
-| **Rust**. Native engine slice | `rs/` workspace crate | [`rs/README.md`](rs/README.md) |
+| **Rust**. Native engine slice | `tabnas-parser` on crates.io | [`rs/README.md`](rs/README.md) |
 
 ## Documentation
 
-The docs are organised by what you are trying to do, symmetrically for both
-runtimes:
+The docs are organised by what you are trying to do, symmetrically for the
+TypeScript and Go runtimes:
 
 - **Learning the basics**. Tutorials walk you from an empty file to a
   working parse: [TypeScript tutorial](ts/doc/tutorial.md) ·
@@ -422,7 +422,7 @@ runtimes:
 | [`ts/`](ts/) | The canonical TypeScript engine (the `@tabnas/parser` npm package). |
 | [`go/`](go/) | The Go port (`github.com/tabnas/parser/go`). Grammar-free, same layout as TS. |
 | [`rs/`](rs/) | The Rust lexer/rule-engine slice (`tabnas` crate); see its README for current scope. |
-| [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by both runtimes. |
+| [`test/spec/`](test/spec/) | Shared `.tsv` conformance fixtures, run by all three runtimes. |
 | [`doc/`](doc/) | Language-neutral docs: the [syntax reference](doc/syntax.md) and the [architecture explanation](doc/architecture.md). |
 
 Working on the codebase itself? Start with [`AGENTS.md`](AGENTS.md) for

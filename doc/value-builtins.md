@@ -68,8 +68,9 @@ has left it.
 | `k` / `K` | **keep** props, your own data | **YES**. Push and replace |
 
 So a `k` you set is visible to every rule pushed or replaced beneath it,
-in both runtimes (`ts/src/rules.ts:662-671`, `:686-695`;
-`go/rule.go:1224-1236`, `:1249-1261`). It is rule-scoped, not
+in every runtime (`ts/src/rules.ts:662-671`, `:686-695`;
+`go/rule.go:1224-1236`, `:1249-1261`). Rust does the same at
+`rs/src/parser.rs:3384-3385` and `:3489-3490`. It is rule-scoped, not
 alternate-scoped: it accumulates across every alternate that fires. If you
 need a value to stay local to one rule, put it in `u`, which is exactly
 what `@key$` does (`r.u[cfg.slot || 'key']`), so a captured key cannot

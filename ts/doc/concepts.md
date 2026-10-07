@@ -7,7 +7,7 @@ signatures see the [API](api.md) and [options](options.md) references.
 
 The engine model (grammar-as-plugin, the lexer/parser split, the
 open/close rule machinery, grammar-declared lookahead, instance derivation)
-is shared by both runtimes and described once in
+is shared by every runtime and described once in
 [../../doc/architecture.md](../../doc/architecture.md). This document
 covers only what is specific to the TypeScript port.
 

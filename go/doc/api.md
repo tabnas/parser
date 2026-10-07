@@ -704,6 +704,6 @@ tabnas.ValidateGrammar(gs, nil)
 
 ```go
 // Always equal to ts/package.json "version"; asserted by
-// TestVersionMatchesPackageJSON in both runtimes.
+// TestVersionMatchesPackageJSON and the other runtimes' version tests.
 const VERSION string
 ```

@@ -3,8 +3,9 @@ const { join } = require('path')
 
 // Fixture fields escape \n, \r and \t (a raw tab would be a column
 // separator). Must stay in step with the Go loader's preprocessEscapes
-// (go/spec_test.go) so a shared fixture means the same thing in both
-// runtimes.
+// (go/spec_test.go) and the Rust spec tests' readers (preprocess_escapes
+// in rs/tests/json_spec_test.rs, and the like) so a shared fixture means
+// the same thing in every runtime.
 function unescape(str) {
   return str.replace(/\\r\\n|\\n|\\r|\\t/g, (m) => {
     if (m === '\\r\\n') return '\r\n'

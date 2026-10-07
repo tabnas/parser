@@ -44,7 +44,7 @@ A vertical ASCII version is in [`doc/taste.txt`](doc/taste.txt).
 - [Concepts](doc/concepts.md). How the TypeScript engine is put
   together, and why.
 
-Shared design docs for both runtimes live at the top of the repo:
+Shared design docs for every runtime live at the top of the repo:
 
 - [Architecture](../doc/architecture.md). The engine model.
 - [Syntax](../doc/syntax.md). The relaxed-JSON syntax reference.

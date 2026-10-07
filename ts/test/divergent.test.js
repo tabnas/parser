@@ -37,7 +37,7 @@ const MAX_TOKENS = 64
 // its Go twin by construction.
 
 // UTF-16 code units, lowercase, dot-joined: the one rendering of a string
-// value that shows the lone-surrogate split without either port having to
+// value that shows the lone-surrogate split without any port having to
 // spell a character it cannot hold. JS strings ARE UTF-16, so this reads
 // the units directly; Go's twin encodes to UTF-16 first.
 function valhex(v) {
@@ -164,7 +164,7 @@ function errField(e, field) {
 }
 
 // Install a serialized GrammarSpec and parse. A spec is pure JSON, so the
-// SAME text drives both ports — which is what lets a grammar-level row be
+// SAME text drives every port — which is what lets a grammar-level row be
 // registered here at all.
 function probeSpec(arg, input, specs) {
   let spec = arg.spec

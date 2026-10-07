@@ -17,7 +17,8 @@ Report privately, either:
    `[SECURITY]`.
 
 Please include the affected version(s), which implementation is affected
-(TypeScript, Go, or both), the impact, and a reproduction if you have one.
+(TypeScript, Go, Rust, or more than one), the impact, and a reproduction if
+you have one.
 
 ## What to expect
 

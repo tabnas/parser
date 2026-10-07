@@ -19,8 +19,9 @@
 #   default root: the parent of this repo.
 #
 # TS wiring: each downstream ts/ gets node_modules/@tabnas/* symlinked
-# to the sibling checkouts (idempotent; matches the file:../../parser/ts
-# dependency the repos use in CI).
+# to the sibling checkouts (idempotent). The repos declare registry
+# ranges, not file: paths; CI's polyglot-ci.yml links its clones over
+# node_modules/@tabnas/* the same way.
 # Go wiring: a throwaway go.work (in a temp dir, via GOWORK) points every
 # module at the sibling checkouts — no repo files are modified.
 set -euo pipefail

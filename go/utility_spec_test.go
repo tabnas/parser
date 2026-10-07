@@ -4,7 +4,7 @@ package tabnas
 
 // Shared utility-*.tsv conformance fixtures.
 //
-// AGENTS.md states that both runtimes run the shared utility-*.tsv
+// test/AGENTS.md states that all three runtimes run the shared utility-*.tsv
 // fixtures; the canonical TypeScript drivers live in
 // ts/test/utility.test.js (the 'str', 'deep', 'modlist' and 'strinject'
 // cases). These tests mirror those drivers row-for-row so the Go ports of

@@ -657,7 +657,7 @@ describe('lex', function () {
   // The last two rows are the boundary, and are why this is a fixture rather
   // than a one-liner: a text run may CONTAIN a quote, but a source that
   // STARTS with one is still a string, and an unterminated one is still an
-  // error in both runtimes.
+  // error in every runtime.
   it('text-quote-spec', () => {
     for (const { cols, row } of loadTSV('lex-text-quote')) {
       const [src, expected] = cols
