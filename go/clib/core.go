@@ -2,7 +2,7 @@
 
 // core.go — the library's behaviour, in plain Go.
 //
-// tabnas-clib-template: v5 (stamped by admin tasks/adopt-clib.sh
+// tabnas-clib-template: v6 (stamped by admin tasks/adopt-clib.sh
 // from tasks/clib-template/; edit the template and re-stamp, not this
 // file — admin's verify gate fails on a stale stamp).
 //
@@ -20,6 +20,8 @@ package main
 import (
 	"encoding/json"
 	"math/big"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -28,7 +30,7 @@ import (
 )
 
 const (
-	templateVersion = "v5"
+	templateVersion = "v6"
 	libName         = "libtabnasparser"
 	formatName      = "parser"
 	valueOut        = true
@@ -268,8 +270,7 @@ func acceptDoc(val any) string {
 			// answer: accept stays true, and the value stays
 			// retrievable through a native runtime.
 			doc["valueError"] = "value contains " + why +
-				" that JSON encoding would corrupt; retrieve it via a" +
-				" native tabnas runtime"
+				"; retrieve it via a native tabnas runtime"
 		} else if b, jerr := json.Marshal(val); jerr == nil {
 			doc["value"] = json.RawMessage(b)
 		} else {
@@ -279,32 +280,219 @@ func acceptDoc(val any) string {
 	return reply(doc)
 }
 
-// jsonUnsafe walks val and reports (as a short reason, or "") anything
-// encoding/json would corrupt rather than refuse: invalid UTF-8 in
-// strings or keys (folded to U+FFFD), and arbitrary-precision numbers
-// (emitted as bare JSON numbers that IEEE-754 decoders round).
-func jsonUnsafe(val any) string {
-	switch v := val.(type) {
-	case string:
-		if !utf8.ValidString(v) {
-			return "non-UTF-8 string bytes"
+// The reasons jsonUnsafe gives; each completes "value contains …".
+const (
+	unsafeUTF8   = "non-UTF-8 string bytes that JSON encoding would corrupt"
+	unsafeNumber = "arbitrary-precision numbers that JSON encoding would corrupt"
+	unsafeCycle  = "a reference to itself, which JSON cannot represent"
+	unsafeOpaque = "a part this library could not inspect"
+)
+
+// enginePkg is the engine's import path. This package imports only what
+// its row's construct needs: the format's own package, and the host
+// column's module, which adopt-clib.sh holds to modules the repository's
+// library already imports (ADR-22). So the engine's object node is
+// recognised by import path and type name (orderedNode), not named
+// through an import of the engine that no row declares.
+const enginePkg = "github.com/tabnas/parser/go"
+
+var (
+	rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+	bigIntType     = reflect.TypeOf(big.Int{})
+	bigFloatType   = reflect.TypeOf(big.Float{})
+)
+
+// jsonUnsafe walks val as encoding/json will marshal it, and reports (as
+// a reason, or "") anything encoding/json would corrupt rather than
+// refuse: bytes that are not UTF-8 in a string or key (folded to U+FFFD)
+// or in a raw JSON fragment (copied through, so the reply itself would
+// not be UTF-8), and arbitrary-precision numbers (emitted as bare JSON
+// numbers that IEEE-754 decoders round).
+//
+// The walk reaches every container a parse result can hold, because a
+// check that stops at the containers it knows passes whatever the others
+// hold: the engine's object node (*tabnas.OrderedMap, in Keys order),
+// maps and slices of any element type, pointers and interfaces, and
+// structs, whose fields it walks as encoding/json emits them. Format
+// plugins return their own structs (chess, feed and proto do), and the
+// engine's MapRef, ListRef and Text wrappers are structs too.
+func jsonUnsafe(val any) (why string) {
+	// acceptDoc runs outside safeParse, so a panic here would cross the
+	// C ABI and abort the host process. A value that cannot be walked is
+	// withheld instead.
+	defer func() {
+		if r := recover(); r != nil {
+			why = unsafeOpaque
 		}
-	case *big.Int, *big.Float:
-		return "arbitrary-precision numbers"
-	case map[string]any:
-		for k, e := range v {
-			if !utf8.ValidString(k) {
-				return "non-UTF-8 string bytes"
+	}()
+	w := unsafeWalk{onPath: map[pathKey]bool{}}
+	return w.value(reflect.ValueOf(val))
+}
+
+// unsafeWalk is one jsonUnsafe walk. onPath holds the containers between
+// the root and the value being walked, so that a value that contains
+// itself is reported instead of walked forever. Leaving such a value to
+// encoding/json is no answer: it detects a cycle only within one
+// encoder, and the object node's MarshalJSON starts a new encoder for
+// every member, so a cycle through one recurses until the Go stack
+// overflows, which is a fatal error that no recover contains.
+type unsafeWalk struct{ onPath map[pathKey]bool }
+
+// pathKey identifies a container on the path by its address, its length
+// (a slice and a shorter slice of it share an address) and its type (so
+// do a struct and its first field).
+type pathKey struct {
+	addr uintptr
+	n    int
+	t    reflect.Type
+}
+
+func (w *unsafeWalk) value(v reflect.Value) string {
+	if !v.IsValid() {
+		return "" // a nil interface, which encodes as null
+	}
+	switch t := v.Type(); {
+	case t == rawMessageType:
+		if !utf8.Valid(v.Bytes()) {
+			return unsafeUTF8
+		}
+		return ""
+	case t == bigIntType, t == bigFloatType,
+		t.Kind() == reflect.Pointer && (t.Elem() == bigIntType || t.Elem() == bigFloatType):
+		return unsafeNumber
+	}
+	switch v.Kind() {
+	case reflect.String:
+		if !utf8.ValidString(v.String()) {
+			return unsafeUTF8
+		}
+	case reflect.Interface:
+		return w.value(v.Elem())
+	case reflect.Pointer, reflect.Map, reflect.Slice:
+		return w.container(v)
+	case reflect.Array:
+		return w.elems(v)
+	case reflect.Struct:
+		return w.fields(v)
+	}
+	return ""
+}
+
+// container walks a pointer, map or slice, unless it is already on the
+// path.
+func (w *unsafeWalk) container(v reflect.Value) string {
+	if v.IsNil() {
+		return "" // null
+	}
+	k := pathKey{addr: v.Pointer(), t: v.Type()}
+	if v.Kind() == reflect.Slice {
+		if v.Len() == 0 || v.Type().Elem().Kind() == reflect.Uint8 {
+			return "" // [], or bytes, which encode as base64
+		}
+		k.n = v.Len()
+	}
+	if w.onPath[k] {
+		return unsafeCycle
+	}
+	w.onPath[k] = true
+	defer delete(w.onPath, k)
+
+	switch v.Kind() {
+	case reflect.Map:
+		return w.entries(v)
+	case reflect.Slice:
+		return w.elems(v)
+	}
+	if keys, vals, ok := orderedNode(v); ok {
+		return w.ordered(keys, vals)
+	}
+	return w.value(v.Elem())
+}
+
+// orderedNode returns the keys and values of the engine's object node,
+// *tabnas.OrderedMap, or false for any other pointer. Its MarshalJSON
+// emits Keys, in order, each with its Vals entry, and nothing else.
+// Anything that only resembles it is walked as a plain struct, which
+// visits every key and value it holds.
+func orderedNode(v reflect.Value) ([]string, map[string]any, bool) {
+	s := v.Elem()
+	if s.Kind() != reflect.Struct || s.Type().PkgPath() != enginePkg ||
+		s.Type().Name() != "OrderedMap" {
+		return nil, nil, false
+	}
+	kf, vf := s.FieldByName("Keys"), s.FieldByName("Vals")
+	if !kf.IsValid() || !vf.IsValid() || !kf.CanInterface() || !vf.CanInterface() {
+		return nil, nil, false
+	}
+	keys, kok := kf.Interface().([]string)
+	vals, vok := vf.Interface().(map[string]any)
+	return keys, vals, kok && vok
+}
+
+// ordered walks the object node as it is emitted: each key in Keys
+// order, and then that key's value.
+func (w *unsafeWalk) ordered(keys []string, vals map[string]any) string {
+	for _, k := range keys {
+		if !utf8.ValidString(k) {
+			return unsafeUTF8
+		}
+		if why := w.value(reflect.ValueOf(vals[k])); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// entries walks a map's string keys and its values. String keys are
+// visited sorted, the order encoding/json emits them in, so the reason
+// given never depends on map iteration order.
+func (w *unsafeWalk) entries(v reflect.Value) string {
+	keys := v.MapKeys()
+	strKeys := v.Type().Key().Kind() == reflect.String
+	if strKeys {
+		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	}
+	for _, k := range keys {
+		if strKeys && !utf8.ValidString(k.String()) {
+			return unsafeUTF8
+		}
+		if why := w.value(v.MapIndex(k)); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+func (w *unsafeWalk) elems(v reflect.Value) string {
+	for i := 0; i < v.Len(); i++ {
+		if why := w.value(v.Index(i)); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// fields walks the struct fields encoding/json emits: the exported ones,
+// and embedded structs, whose exported fields it promotes. A field
+// tagged `json:"-"` is never emitted, so it is not walked.
+func (w *unsafeWalk) fields(v reflect.Value) string {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Tag.Get("json") == "-" {
+			continue
+		}
+		if !f.IsExported() {
+			ft := f.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
 			}
-			if why := jsonUnsafe(e); why != "" {
-				return why
+			if !f.Anonymous || ft.Kind() != reflect.Struct {
+				continue
 			}
 		}
-	case []any:
-		for _, e := range v {
-			if why := jsonUnsafe(e); why != "" {
-				return why
-			}
+		if why := w.value(v.Field(i)); why != "" {
+			return why
 		}
 	}
 	return ""

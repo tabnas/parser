@@ -1,6 +1,6 @@
 /* tabnas.h — the uniform C ABI of the per-format tabnas clibs (ADR-12).
  *
- * tabnas-clib-template: v5
+ * tabnas-clib-template: v6
  *
  * Every per-format library (libtabnasjson, libtabnastoml, …) exports
  * exactly these five symbols; the format is fixed at build time by
@@ -16,6 +16,10 @@
  *     input outside the language is {"ok":true,"accept":false,
  *     "error":{…}}; accepted input is {"ok":true,"accept":true} plus
  *     "value" where the format's parse result is JSON-representable.
+ *     A value JSON cannot carry faithfully (bytes that are not UTF-8 in
+ *     a string or key, arbitrary-precision numbers, a value that
+ *     contains itself) is withheld: "valueError", a message, takes the
+ *     place of "value".
  *   - Lengths are explicit byte counts; buffers are NOT read as
  *     NUL-terminated strings. (NULL, 0) is the empty buffer.
  *   - Handles are safe to use from several threads; each carries a
