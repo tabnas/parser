@@ -324,9 +324,10 @@ the website:
 - transduce's and alchemy's `Cargo.lock` still listed jsonic under xml
   and feed. publish.sh's bump stamps version lines only, so those were
   refreshed by hand (in the transduce release PR, and in alchemy#48).
-- mcp's MCP-registry publish hit a 504 and succeeded on a rerun. Later
-  the registry stopped answering at all, so `make dist` can't confirm the
-  0.1.19 entry. Re-run `make dist` once it is back.
+- mcp's MCP-registry publish hit a 504 and succeeded on a rerun. The
+  registry then stopped answering for a few hours. Once it was back,
+  `make dist` confirmed the 0.1.19 entry, and every surface of all 38
+  repositories matched.
 - npm sometimes took over 12 minutes to serve a new version's `gitHead`.
 
 **`make verify` passes** (exit 0) for the first time in these sessions.
