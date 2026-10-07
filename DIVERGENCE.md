@@ -666,6 +666,53 @@ fixed or quietly dropped.
   pusher read back past four hops through its child's snapshots in
   Rust".
 
+- **A custom matcher that moves the cursor and declines, in Rust.** Never
+  recorded here, and found under the xml plugin, whose matcher steps over
+  a byte-order mark at the start of the source and goes on, in the same
+  call, to look for a tag. TypeScript's matchers each start at the live
+  `lex.pnt`, and its first-character dispatch, read once when a fetch
+  begins, lists every built-in matcher for a character from U+0100 up;
+  Go's each start at `l.pnt`. Rust kept the point and the character the
+  fetch began on. The built-in matchers after the custom one tested the
+  old character and put their tokens at the old point. Three places took
+  a character that a matcher stepping over the last one had left them
+  without, and panicked, which the engine reports as `internal`: the line
+  matcher's branch for U+2028 and U+2029, the string matcher, and the
+  fallback that names an unclaimed character. Separately, a custom
+  matcher that declined during a negotiated re-cut lifted the request for
+  every matcher after it, because putting the cursor back also ended the
+  negotiation, where TypeScript's `Lex.speculate` leaves `want` alone. A
+  serialized grammar cannot reach any of it, since no matcher it can carry
+  moves the cursor and declines, and on its own all three runtimes already
+  agreed. With the matcher and the `text` grammar of
+  `test/spec/bad-token.tsv`, whose matcher now steps over a U+FEFF at the
+  start of the source:
+
+  | input | options | TypeScript and Go | Rust before |
+  |---|---|---|---|
+  | U+FEFF | text off, or on | `unexpected` at 1:2, naming nothing | `internal` at 1:1 |
+  | U+FEFF `1` | text off | `1` | `unexpected` at 1:1 |
+  | U+FEFF `1` | text on | `1` | the text `"1"` |
+  | U+FEFF `"a"` | text on | `unexpected` at 1:2, a string | the text `"\"a\""` |
+
+  Rust now moves the point and the character on with the cursor, raises
+  an unclaimed character where the cursor stands and names none at the
+  end of the source, keeps the request when a custom matcher declines,
+  and, once the cursor has moved, asks TypeScript's dispatch question
+  about the character the fetch began on. So for a Latin-1 first character
+  it tries what TypeScript tries: a matcher that steps over `~` leaves
+  `~1` the text `1` in TypeScript and Rust, where Go, which tries every
+  matcher, reads the number 1, a split this does not settle. Over a
+  matrix of 240 cases, three grammars by eight inputs in four modes and
+  the lexer's token stream, with and without the matcher, Rust now gives
+  TypeScript's answer on every case, where it panicked on 15 and differed
+  on 69, all of them with the matcher. No input of xml's xmlconf corpus
+  reaches the path: none of 13,544 parses, decoded and raw with the text
+  matcher on and off, gives `internal` or changes. A document that is a
+  lone byte-order mark does reach it, and now gives `unexpected`. Pinned
+  in all three runtimes by the byte-order-mark rows of
+  `test/spec/bad-token.tsv`, and in Rust by `rs/tests/moved_cursor_test.rs`.
+
 ### Rule-iteration budget: a fractional `rule.maxmul`
 
 The runaway guard's multiplier is a `number` in TypeScript and a `*int` in

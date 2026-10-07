@@ -87,11 +87,12 @@ runner uses `Tabnas::make_json()` from the crate (`rs/src/lib.rs`), the same
 rule set over stricter options.
 
 `bad-token.tsv` is the one fixture whose rows need code a serialized
-grammar cannot carry: a custom lex matcher that returns bad tokens. Its
-header specifies that matcher, and each runner builds it natively; the
-grammars are serialized (`ts/test/json-builder.fixture.json`, and the
-`# @grammar` lines in the file), so all three runtimes install the same
-ones.
+grammar cannot carry: a custom lex matcher that returns bad tokens, and
+that steps over a byte-order mark at the start of the source and declines,
+as the xml plugin's does. Its header specifies that matcher, and each
+runner builds it natively; the grammars are serialized
+(`ts/test/json-builder.fixture.json`, and the `# @grammar` lines in the
+file), so all three runtimes install the same ones.
 
 The loaders (`ts/test/utility.js`, `go/spec_test.go` and the readers in
 `rs/tests/*_spec_test.rs`) must stay in step on escape handling and on what
