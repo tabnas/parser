@@ -2,7 +2,7 @@
 # .github/workflows/. A restamp lands in this repository's own reviewed
 # pull request (ADR-8, as amended 2026-09-24).
 #
-# tabnas-clib-template: v5
+# tabnas-clib-template: v6
 #
 # PR gate for the clib: build the shared library on the portable lane's
 # host and run the contract tests under -race. Artifact production for

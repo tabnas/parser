@@ -2,7 +2,7 @@
 
 // The library's contract, tested where it is testable.
 //
-// tabnas-clib-template: v5 (stamped by admin tasks/adopt-clib.sh;
+// tabnas-clib-template: v6 (stamped by admin tasks/adopt-clib.sh;
 // edit the template and re-stamp, not this file).
 //
 // The cgo shim in tabnas_c.go cannot be unit-tested (Go forbids cgo in
@@ -13,8 +13,11 @@ package main
 
 import (
 	"encoding/json"
+	"math/big"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 const (
@@ -25,6 +28,14 @@ const (
 	// built from: the tsv `opts` column, "" for a row that defines no
 	// options (which is (NULL, 0) at the C boundary).
 	optsSample = "{\"v\":2,\"options\":{\"tokenSet\":{\"KEY\":[\"#ST\"],\"VAL\":[\"#ST\",\"#NR\",\"#VL\"]}},\"rule\":{\"val\":{\"open\":[{\"s\":\"#OB\",\"p\":\"map\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#OS\",\"p\":\"list\",\"b\":1,\"a\":\"@reset$\"},{\"s\":\"#VAL\",\"a\":\"@reset$\"}],\"close\":[{\"s\":\"#ZZ\",\"a\":\"@value$\"},{\"b\":1,\"a\":\"@value$\"}]},\"map\":{\"open\":[{\"s\":\"#OB #CB\",\"b\":1,\"a\":\"@object$\"},{\"s\":\"#OB\",\"p\":\"pair\",\"a\":\"@object$\"}],\"close\":[{\"s\":\"#CB\"}]},\"list\":{\"open\":[{\"s\":\"#OS #CS\",\"b\":1,\"a\":\"@array$\"},{\"s\":\"#OS\",\"p\":\"elem\",\"a\":\"@array$\"}],\"close\":[{\"s\":\"#CS\"}]},\"pair\":{\"open\":[{\"s\":\"#KEY #CL\",\"p\":\"val\",\"u\":{\"pair\":true},\"a\":\"@key$\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"pair\",\"a\":\"@setval$\"},{\"s\":\"#CB\",\"b\":1,\"a\":\"@setval$\"}]},\"elem\":{\"open\":[{\"p\":\"val\"}],\"close\":[{\"s\":\"#CA\",\"r\":\"elem\",\"a\":\"@push$\"},{\"s\":\"#CS\",\"b\":1,\"a\":\"@push$\"}]}}}"
+
+	// Inputs the format accepts whose parsed value holds a byte that is
+	// not UTF-8 in an object member's key, in an object member's value,
+	// and inside an array: the tsv utf8_key, utf8_value and utf8_array
+	// columns, "" where the format cannot express the case.
+	utf8KeySample   = "{\"\xff\":1}"
+	utf8ValueSample = "{\"a\":\"\xff\"}"
+	utf8ArraySample = "[\"\xff\"]"
 )
 
 func decode(t *testing.T, doc string) map[string]any {
@@ -91,6 +102,139 @@ func TestRejectsInvalidSample(t *testing.T) {
 	}
 	if _, has := m["error"]; !has {
 		t.Fatalf("rejection carries no error payload: %v", m)
+	}
+}
+
+// encoding/json folds a byte that is not UTF-8 to U+FFFD without an
+// error, so a value holding one is withheld rather than corrupted: the
+// reply is an accept with valueError and no value. The samples put the
+// byte where this format's own parse result keeps it: an object member's
+// key, its value, and inside an array. That is the regression this
+// guards: a check that missed a container (the engine's ordered object
+// node, a plugin's struct) let such a value through, altered.
+func TestInvalidUTF8IsWithheld(t *testing.T) {
+	if !valueOut {
+		t.Skip("accept/reject only: this library returns no value")
+	}
+	for _, c := range []struct{ where, src string }{
+		{"object member key", utf8KeySample},
+		{"object member value", utf8ValueSample},
+		{"array", utf8ArraySample},
+	} {
+		t.Run(c.where, func(t *testing.T) {
+			if c.src == "" {
+				t.Skip("the format cannot express invalid UTF-8 here (recorded, not hidden)")
+			}
+			if utf8.ValidString(c.src) {
+				t.Fatalf("sample %q holds no invalid UTF-8", c.src)
+			}
+			h := loadHandle(t)
+			defer freeGrammar(h)
+			m := decode(t, parseWith(h, c.src))
+			if m["ok"] != true || m["accept"] != true {
+				t.Fatalf("sample %q must be accepted: %v", c.src, m)
+			}
+			if v, has := m["value"]; has {
+				t.Fatalf("sample %q: value emitted with its bytes replaced: %v", c.src, v)
+			}
+			if ve, _ := m["valueError"].(string); !strings.Contains(ve, "UTF-8") {
+				t.Fatalf("sample %q: no UTF-8 valueError: %v", c.src, m)
+			}
+		})
+	}
+}
+
+// The value check walks every container a parse result can hold, built
+// here directly so that each library holds the walk to the whole set,
+// whatever its own format returns. The engine's object node is not built
+// here (this package does not import the engine); the samples above
+// reach it through the formats that return it. The local types have the
+// shapes of the engine's MapRef, ListRef and Text wrappers, and of the
+// structs format plugins return.
+func TestJSONUnsafeWalksEveryContainer(t *testing.T) {
+	const bad = "\xff"
+	type text struct{ Quote, Str string }
+	type listRef struct {
+		Val      []any
+		Implicit bool
+		Child    any
+		Meta     map[string]any
+	}
+	type mapRef struct {
+		Val      map[string]any
+		Implicit bool
+		Meta     map[string]any
+	}
+	type Line struct {
+		Moves []*text `json:"moves"`
+	}
+	type game struct {
+		Tags map[string]string `json:"tags"`
+		Line
+		note   string
+		Hidden string `json:"-"`
+	}
+	for _, c := range []struct {
+		name string
+		val  any
+		want string
+	}{
+		{"string", bad, unsafeUTF8},
+		{"map key", map[string]any{bad: 1.0}, unsafeUTF8},
+		{"map value", map[string]any{"a": bad}, unsafeUTF8},
+		{"array element", []any{"x", bad}, unsafeUTF8},
+		{"nested", map[string]any{"a": []any{map[string]any{"b": bad}}}, unsafeUTF8},
+		{"typed map key", map[string]int{bad: 1}, unsafeUTF8},
+		{"typed map value", map[string]string{"a": bad}, unsafeUTF8},
+		{"typed array", []string{"x", bad}, unsafeUTF8},
+		{"Text field", text{Quote: `"`, Str: bad}, unsafeUTF8},
+		{"ListRef element", listRef{Val: []any{bad}}, unsafeUTF8},
+		{"ListRef child", &listRef{Child: bad}, unsafeUTF8},
+		{"MapRef key", mapRef{Val: map[string]any{bad: 1.0}}, unsafeUTF8},
+		{"struct map value", []*game{{Tags: map[string]string{"Event": bad}}}, unsafeUTF8},
+		{"embedded struct field", &game{Line: Line{Moves: []*text{{Str: bad}}}}, unsafeUTF8},
+		{"unexported field, never emitted", game{note: bad}, ""},
+		{`json:"-" field, never emitted`, game{Hidden: bad}, ""},
+		{"raw JSON", json.RawMessage(`["` + bad + `"]`), unsafeUTF8},
+		{"bytes, emitted as base64", []byte(bad), ""},
+		{"big number in a struct", struct{ N *big.Int }{big.NewInt(1)}, unsafeNumber},
+		{"clean", map[string]any{"a": []any{"é", 1.0, true, nil, text{Str: "x"}}}, ""},
+	} {
+		if got := jsonUnsafe(c.val); got != c.want {
+			t.Errorf("%s: jsonUnsafe = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// A value that contains itself is refused, not walked forever; one
+	// that only shares a part is not a cycle.
+	self := []any{nil}
+	self[0] = self
+	loop := map[string]any{}
+	loop["loop"] = []any{loop}
+	ref := &listRef{}
+	ref.Child = ref
+	shared := []any{"x"}
+	for name, c := range map[string]struct {
+		val  any
+		want string
+	}{
+		"array":           {self, unsafeCycle},
+		"map":             {loop, unsafeCycle},
+		"pointer":         {ref, unsafeCycle},
+		"shared, acyclic": {[]any{shared, map[string]any{"a": shared}}, ""},
+	} {
+		if got := jsonUnsafe(c.val); got != c.want {
+			t.Errorf("%s: jsonUnsafe = %q, want %q", name, got, c.want)
+		}
+	}
+
+	// Through the reply: withheld with a reason, never emitted altered.
+	if valueOut {
+		m := decode(t, acceptDoc(map[string]any{"a": []any{bad}}))
+		ve, _ := m["valueError"].(string)
+		if _, has := m["value"]; has || !strings.Contains(ve, "UTF-8") {
+			t.Fatalf("value with invalid UTF-8 was not withheld: %v", m)
+		}
 	}
 }
 

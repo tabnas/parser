@@ -1,6 +1,6 @@
 # libtabnasparser — the parser parser as a C ABI
 
-<!-- tabnas-clib-template: v5 — stamped by admin tasks/adopt-clib.sh;
+<!-- tabnas-clib-template: v6 — stamped by admin tasks/adopt-clib.sh;
      edit the template and re-stamp, not this file. -->
 
 The parser format parser as a C shared library, so languages with no
@@ -20,9 +20,9 @@ ZIG=/path/to/zig ./build.sh all
 
 | Function | Returns |
 |---|---|
-| `tabnas_version()` | `{"ok":true,"lib":"libtabnasparser","format":"parser","template":"v5"}` |
+| `tabnas_version()` | `{"ok":true,"lib":"libtabnasparser","format":"parser","template":"v6"}` |
 | `tabnas_grammar(opts, len)` | `{"ok":true,"handle":N}` — opts reserved, pass `(NULL, 0)`, unless the format notes below define them |
-| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true[,"value":…]}` or `{"ok":true,"accept":false,"error":{…}}` |
+| `tabnas_parse(handle, src, len)` | `{"ok":true,"accept":true[,"value":…]}`, with `valueError` in place of `value` when the value is withheld (rule 2), or `{"ok":true,"accept":false,"error":{…}}` |
 | `tabnas_grammar_free(handle)` | — |
 | `tabnas_free(str)` | — |
 
@@ -35,7 +35,13 @@ The rules every tabnas clib shares, each load-bearing:
 2. **Three outcomes, not two.** A broken call is `ok:false` with a
    code; input outside the language is `ok:true, accept:false`; an
    accepted input is `ok:true, accept:true` — plus `value` where the
-   parse result is JSON-representable.
+   parse result is JSON-representable. A value that JSON cannot carry
+   faithfully is withheld, never sent altered: `valueError`, a message,
+   takes the place of `value`, and `accept` stays true. That is a value
+   with bytes that are not UTF-8 in any string or object key, however
+   deep (JSON encoders replace them with U+FFFD, without an error), with
+   an arbitrary-precision number (JSON decoders round it), or that
+   contains itself. A native tabnas runtime still returns the value.
 3. **A rejection is an answer, not a failure.**
 4. **Lengths are explicit.** Buffers are not read as NUL-terminated C
    strings; input may legitimately contain a zero byte.
@@ -75,6 +81,8 @@ The engine ships no grammar, so this is the one library whose `tabnas_grammar` a
   out, nothing else. (Go forbids cgo in `_test.go`, which is why the
   behaviour lives in `core.go`.)
 - `core_test.go` — the contract: accept/reject samples, unknown-handle,
-  reserved options, double-free, concurrency under `-race`.
+  reserved options, double-free, concurrency under `-race`, and values
+  withheld rather than corrupted (bytes that are not UTF-8, in every
+  container a parse result can hold).
 - `include/tabnas.h`, `tabnas.pc.in` — the header and pkg-config file
   for C-header-native consumers.
