@@ -12,8 +12,9 @@ import "testing"
 // empty Chars is indistinguishable from an unset one. The default quote
 // characters stay in force. TypeScript CAN say it — `{string:{chars:”}}`
 // distinguishes ” from undefined — so a plugin ported field-for-field
-// diverges silently, which is what happened to @tabnas/css (see #24
-// there, and StringOptions.Chars here).
+// diverges silently, which is what happened to @tabnas/css (fixed there
+// in tabnas/css#56, which replaced Chars:"" with Lex:false; see
+// StringOptions.Chars here).
 //
 // This asserts the CURRENT behaviour, deliberately. If Chars becomes a
 // *string, as the comment on it proposes, this test fails — which is the

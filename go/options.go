@@ -301,14 +301,14 @@ type StringOptions struct {
 	// both ports declared `string: { chars: '' }`, and on the input a"b
 	// TypeScript raised jsonic/unexpected while Go raised
 	// jsonic/unterminated_string, having kept the default quotes. Fixed
-	// there by also saying Lex:false — see tabnas/css#24.
+	// there in tabnas/css#56, which replaced Chars:"" with Lex:false.
 	//
 	// The repair here is Chars *string, matching Lex, AllowUnknown and
 	// EscapeStrict above and below, which are pointers for exactly this
-	// reason. It is a breaking change across sixteen call sites in a
-	// published module, so it is not made here; this comment exists so
-	// the next plugin author does not have to rediscover it by measuring
-	// two ports against each other.
+	// reason. It is a breaking change for every plugin that sets one of
+	// these fields (DIVERGENCE.md counts the call sites), so it is not
+	// made here; this comment exists so the next plugin author does not
+	// have to rediscover it by measuring two ports against each other.
 	Chars string
 
 	// MultiChars lists the multiline quote characters. Default: "`".

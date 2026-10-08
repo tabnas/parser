@@ -650,12 +650,13 @@ value simply does or does not appear further down.
 
 All three runtimes agree, on **push and on replace alike**:
 
-- TypeScript copies `rawn()` and `rawk()` into the new rule at
-  `ts/src/rules.ts:662-671` (push) and `:686-695` (replace). `rawu()`
-  exists (`:94`) but is never copied.
-- Go copies `r.N` and `r.K` at `go/rule.go:1224-1236` (push) and
-  `:1249-1261` (replace). `EnsureU()` is called only by the merge
-  (`:1161`), never by the propagation.
+- TypeScript copies `rawn()` and `rawk()` into the new rule in
+  `RuleSpec.process`, at `ts/src/rules.ts:895-904` (push) and
+  `:936-945` (replace). `rawu()` exists (`:101`) but is never copied.
+- Go copies `r.N` and `r.K` in `(*Rule).Process`, at
+  `go/rule.go:1567-1578` (push) and `:1609-1620` (replace).
+  `EnsureU()` is called only by the merge (`:1476`), never by the
+  propagation.
 - Rust hands the new rule the current rule's `n` and `k` with `Rc::clone`
   at `rs/src/parser.rs:3384-3385` (push) and `:3489-3490` (replace), and
   copies a bag on its first write (`Rule::n_mut` and `k_mut`, through
@@ -664,14 +665,14 @@ All three runtimes agree, on **push and on replace alike**:
 Two consequences worth holding on to:
 
 1. **`k` is rule-scoped, not alternate-scoped.** The merge is
-   `rule.k = Object.assign(rule.k, alt.k)` (`ts/src/rules.ts:605`) and
-   its Go twin (`go/rule.go:1166-1170`), both running *before* the alt
+   `rule.k = Object.assign(rule.k, alt.k)` (`ts/src/rules.ts:825`) and
+   its Go twin (`go/rule.go:1481-1486`), both running *before* the alt
    action. So `k` accumulates across every alternate that fires on a
    rule, and then descends. An alternate that sets `k` is not scoping
    that value to itself.
 2. **`u` is the right bag for per-rule scratch.** `@key$` uses it
-   deliberately — `r.u[cfg.slot || 'key']` (`ts/src/builtins.ts:264`),
-   read back by `@setval$` (`:276`) on the same rule — precisely because
+   deliberately — `r.u[cfg.slot || 'key']` (`ts/src/builtins.ts:288`),
+   read back by `@setval$` (`:321`) on the same rule — precisely because
    a captured key must not leak into child rules.
 
 When adding a builtin, an option, or a grammar that stashes state on a
@@ -768,7 +769,7 @@ declared-but-dead, recorded here rather than silently removed (a grammar may
 still raise it: the TS strict-JSON test fixture does, via `ctx.t0.err`, when
 `rule.finish` is off).
 One more name is dead in a different way: `invalid_lex_state`, a string
-constant at `ts/src/utility.ts:110` that appears nowhere else in any
+constant at `ts/src/utility.ts:141` that appears nowhere else in any
 runtime and is in no catalogue. It is not a base code — do not transcribe it
 into a port as an eleventh.
 
@@ -827,7 +828,9 @@ file to one job:
   complete.
 - **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
-  `ts/doc/{bnf-to-tabnas,gbnf,lsp}-feasibility.md` reports and the
+  `ts/doc/{gbnf,lsp}-feasibility.md` reports, the engine design notes
+  [`doc/rule-history-bound.md`](doc/rule-history-bound.md) and
+  [`doc/per-rule-cost.md`](doc/per-rule-cost.md), and the
   language-neutral five-document Rust-port series —
   [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md),
   [`doc/rust-callback-porting-strategy.md`](doc/rust-callback-porting-strategy.md),
@@ -835,17 +838,25 @@ file to one job:
   [`doc/engine-changes-for-portability.md`](doc/engine-changes-for-portability.md)
   and [`doc/rust-port-implementation-plan.md`](doc/rust-port-implementation-plan.md),
   the last of which reviews the other four and carries the consolidated
-  plan) covers design and rationale.
+  plan — with the callback-contract spec that followed it
+  ([`doc/rust-callback-contract-spec.md`](doc/rust-callback-contract-spec.md)
+  and its [open items](doc/rust-callback-contract-open-items.md)) and the
+  [Verus experiment](doc/rust-verus-experiment.md)) covers design and
+  rationale.
 
 The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
 `ts/doc/` and `go/doc/`; the top-level [`doc/`](doc/) holds only what is
 language-neutral — `syntax.md` (syntax spec), `architecture.md`,
 `value-builtins.md`, `STYLE-GUIDE.md` (how every page is written, and
-what the prose gate enforces), and the five Rust-port documents
+what the prose gate enforces), the engine design notes
+`rule-history-bound.md` and `per-rule-cost.md`, the Rust-port documents
 (`rust-port-feasibility.md`, `rust-callback-porting-strategy.md`,
 `rust-port-risks.md`, `engine-changes-for-portability.md`,
-`rust-port-implementation-plan.md`), which concern a prospective third
-runtime and so belong to neither existing one.
+`rust-port-implementation-plan.md`, `rust-callback-contract-spec.md`,
+`rust-callback-contract-open-items.md` and `rust-verus-experiment.md`),
+which record how the third runtime was designed and so belong to no one
+runtime's folder, and `handover/`, the pages each working session leaves
+for the next.
 
 READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the

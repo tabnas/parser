@@ -229,7 +229,7 @@ describe('rule-budget', () => {
     // written there at all. Not repaired: it is the option TYPE, and
     // narrowing TypeScript's to an integer would break callers for a
     // setting nobody tunes fractionally. Recorded in DIVERGENCE.md under
-    // "Rule-iteration budget: fractional maxmul".
+    // "Rule-iteration budget: a fractional `rule.maxmul`".
     //
     // The floor still protects short parses, which is why the assertion
     // is about BIG and not about a small document.
