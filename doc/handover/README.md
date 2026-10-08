@@ -135,7 +135,8 @@ for, most of it caught in review:
   them), the fallback versions of 38 packages in `src/consts.ts`, and the
   generated `error-codes.json` and `skills.json`. Every check in
   `npm run check` passes, and so does the Vale gate with its recorded
-  counts. WEB-DEPLOY
+  counts. Since the merge, tabnas.dev's `versions.json` names exactly
+  the pinned versions, and every check on the merge commit is green.
 - admin#136: `scripts/verify.sh`'s workflow-template check compared
   nothing in a container whose `gh` is installed but not logged in.
   Every template's repository read as nonexistent, and the check printed
@@ -158,7 +159,17 @@ pending, as expected:
 parser, ok at 0.12.11, becomes the fourth pending when this page merges,
 one documentation commit past its release.
 
-FLEET-PARAGRAPH
+Every workflow run on the head of `main` is green in all 41 of them and
+in aless. One had been red: parser's scheduled `fleet` run at 10:32 UTC
+failed in feed's Go suite alone. It cloned feed 0.6.14, the latest feed
+then, with xml 0.7.15, released about twenty minutes before. xml 0.7.15
+gives attributes to Go as a `*tabnas.OrderedMap`, and feed reads that
+form only from feed#81, first released in 0.6.15. So every attribute
+read as absent: an Atom link's `href` came out empty, and
+`<rss version="0.91">` was detected as RSS 2.0. Re-run once feed 0.6.15
+was out, the same job ended `FLEET PASS`. A Go program that requires xml
+0.7.15 or later and feed 0.6.14 or earlier gets the same wrong answer, and
+feed 0.6.15 is its fix.
 
 ## Pushed and open
 
