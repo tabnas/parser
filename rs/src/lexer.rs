@@ -362,6 +362,51 @@ impl<'a> Lexer<'a> {
             .is_none_or(|wanted| wanted.contains(&tin))
     }
 
+    /// Bring a fetch's point and current character up to the live cursor.
+    ///
+    /// A custom matcher, or an imperative check, may move the cursor and
+    /// then decline: xml's steps over a byte-order mark and goes on to
+    /// look for a tag. Every matcher after it starts where it left the
+    /// cursor, as TypeScript's do (each reads `lex.pnt`) and Go's do (each
+    /// reads `l.pnt`), and the current character is `None` once the cursor
+    /// is at the end of the source. Reading the character the fetch began
+    /// on instead put the built-in matchers' tokens at the wrong place,
+    /// sent them looking for a character that was no longer there, and,
+    /// when the matcher had stepped over the LAST character, panicked on
+    /// the missing one.
+    #[inline]
+    fn resync(&self, point: &mut Point, current: &mut Option<char>) {
+        if self.idx != point.site.pos {
+            *point = self.current_point();
+            *current = self.peek();
+        }
+    }
+
+    /// Whether TypeScript would try a built-in matcher at all in a fetch
+    /// that began on `first` and whose cursor has since been moved by a
+    /// matcher that declined.
+    ///
+    /// TypeScript chooses the matchers a fetch tries from a table indexed
+    /// by the character the fetch begins on (`buildLexDispatch` in
+    /// ts/src/utility.ts, read in `Lex.next`): a built-in is listed for a
+    /// Latin-1 character only when a token it makes could start with it,
+    /// unless it carries a check, and every built-in is listed for a
+    /// character from U+0100 up. The table is not consulted again when a
+    /// custom matcher moves the cursor, so this asks it about `first`, and
+    /// the matcher then tests the character under the cursor as usual.
+    /// Before the cursor moves the two are the same character and the
+    /// matcher's own test is the whole answer, so this is `true`.
+    #[inline]
+    fn listed(
+        &self,
+        entry: usize,
+        first: char,
+        has_check: bool,
+        could_start: impl FnOnce(char) -> bool,
+    ) -> bool {
+        self.idx == entry || u32::from(first) >= 256 || has_check || could_start(first)
+    }
+
     fn run_check(&mut self, check: Option<LexCheck>, point: Point) -> CheckFlow {
         let Some(check) = check else {
             return CheckFlow::Continue;
@@ -413,13 +458,12 @@ impl<'a> Lexer<'a> {
         &mut self,
         index: &mut usize,
         before: f64,
-        point: Point,
         plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
     ) -> Option<Token> {
         if *index >= self.options.lex.matchers.len() {
             return None;
         }
-        self.run_remaining_custom_matchers(index, before, point, plugin)
+        self.run_remaining_custom_matchers(index, before, plugin)
     }
 
     #[inline(never)]
@@ -427,7 +471,6 @@ impl<'a> Lexer<'a> {
         &mut self,
         index: &mut usize,
         before: f64,
-        point: Point,
         plugin: &mut Option<(&mut crate::Rule, &mut crate::Context)>,
     ) -> Option<Token> {
         while let Some(matcher) = self
@@ -440,6 +483,11 @@ impl<'a> Lexer<'a> {
             .cloned()
         {
             *index += 1;
+            // Each matcher starts where the one before it left the cursor:
+            // one may step over a character and decline, as xml's does over
+            // a byte-order mark, and TypeScript's matchers all read the
+            // live `lex.pnt`.
+            let point = self.current_point();
             let remaining = &self.src[self.byte_position()..];
             let saved = self.state();
             let token = if let Some(callback) = matcher.imperative.as_ref() {
@@ -461,7 +509,7 @@ impl<'a> Lexer<'a> {
             };
             let Some(mut token) = token else {
                 if self.want.is_some() {
-                    self.restore(saved);
+                    self.rewind(saved);
                 }
                 continue;
             };
@@ -475,7 +523,7 @@ impl<'a> Lexer<'a> {
                 token.tin
             };
             if tin < 0 || !self.wants(tin) {
-                self.restore(saved);
+                self.rewind(saved);
                 continue;
             }
             if matcher.imperative.is_none() {
@@ -728,6 +776,19 @@ impl<'a> Lexer<'a> {
         self.want = None;
     }
 
+    /// Put the cursor back after a custom matcher's speculative attempt and
+    /// keep the request being negotiated, as TypeScript's `Lex.speculate`
+    /// restores the point and leaves `want` alone. [`Lexer::restore`] ends
+    /// a negotiation, so the first custom matcher to decline during a
+    /// re-cut used to lift the request for every matcher after it, and a
+    /// string matcher could then cut the `#ST` the re-cut was there to
+    /// avoid.
+    fn rewind(&mut self, state: LexerState) {
+        let want = self.want.take();
+        self.restore(state);
+        self.want = want;
+    }
+
     fn next_raw(&mut self, expected_match_tins: Option<&[crate::Tin]>) -> LexResult<Token> {
         // Only a lexer being driven directly needs these, and building
         // them costs a whole `Options` clone. A parse reaches the lexer
@@ -818,15 +879,20 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        let pnt = self.current_point();
-        let c = self.peek().unwrap();
+        // The fetch begins on `first`, at `entry`. `pnt` and `c`, the point
+        // a token starts at and the character under the cursor, follow the
+        // cursor whenever a custom matcher or a check moves it and declines
+        // (`resync`); `c` is `None` once the cursor is at the end.
+        let entry = self.idx;
+        let first = self.chars[entry];
+        let mut pnt = self.current_point();
+        let mut c = Some(first);
         let mut custom_index = 0;
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 1_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 1_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // User-declared match tokens occupy the 1e6 matcher priority band.
         let match_skipped = if self.options.match_lex
@@ -845,6 +911,7 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
         let remaining = &self.src[self.byte_position()..];
         let custom_value = (self.options.match_lex && !match_skipped && self.want.is_none())
             .then(|| {
@@ -1017,11 +1084,10 @@ impl<'a> Lexer<'a> {
             return Ok(Token::new(name, tin, value, matched, pnt));
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 2_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 2_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // Fixed literals occupy the 2e6 band and use longest-match wins.
         let fixed_skipped = if self.options.fixed.lex {
@@ -1033,6 +1099,15 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
+        let fixed_skipped = fixed_skipped
+            || !self.listed(entry, first, self.options.fixed.check.is_some(), |ch| {
+                self.options
+                    .fixed
+                    .tokens
+                    .values()
+                    .any(|token| token.source.starts_with(ch))
+            });
         let remaining = &self.src[self.byte_position()..];
         // The winner is carried out of the table as its position, not as a
         // copy of its text. `Token::new` takes the name and the source text
@@ -1084,11 +1159,10 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 3_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 3_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 1. Whitespace
         let space_skipped = if self.options.space.lex && self.wants(TIN_SP) {
@@ -1100,10 +1174,14 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
         if self.options.space.lex
             && !space_skipped
             && self.wants(TIN_SP)
-            && self.char_sets.space.contains(c)
+            && c.is_some_and(|ch| self.char_sets.space.contains(ch))
+            && self.listed(entry, first, self.options.space.check.is_some(), |ch| {
+                self.char_sets.space.contains(ch)
+            })
         {
             let mut src = String::new();
             while let Some(ch) = self.peek() {
@@ -1123,11 +1201,10 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 4_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 4_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 2. Line ending
         let line_skipped = if self.options.line.lex && self.wants(TIN_LN) {
@@ -1139,10 +1216,15 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
+        let line_skipped = line_skipped
+            || !self.listed(entry, first, self.options.line.check.is_some(), |ch| {
+                self.char_sets.line_ends.contains(ch)
+            });
         if self.options.line.lex
             && !line_skipped
             && self.wants(TIN_LN)
-            && (self.char_sets.line_ends.contains(c))
+            && c.is_some_and(|ch| self.char_sets.line_ends.contains(ch))
         {
             let mut src = String::new();
             let mut seen = std::collections::HashSet::new();
@@ -1165,29 +1247,26 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        if self.options.line.lex
-            && !line_skipped
-            && self.wants(TIN_LN)
-            && (c == '\u{2028}' || c == '\u{2029}')
-        {
-            let bad_char = self.advance().expect("peeked character must advance");
-            let err = TabnasError::new(
-                "unexpected",
-                bad_char.to_string(),
-                "",
-                pnt.site.pos,
-                pnt.site.ri,
-                pnt.site.ci,
-            );
-            self.err = Some(err.clone());
-            return Err(Box::new(err));
+        if let Some(bad_char @ ('\u{2028}' | '\u{2029}')) = c {
+            if self.options.line.lex && !line_skipped && self.wants(TIN_LN) {
+                self.advance();
+                let err = TabnasError::new(
+                    "unexpected",
+                    bad_char.to_string(),
+                    "",
+                    pnt.site.pos,
+                    pnt.site.ri,
+                    pnt.site.ci,
+                );
+                self.err = Some(err.clone());
+                return Err(Box::new(err));
+            }
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 5_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 5_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 3. Quoted strings. These precede comments in the canonical matcher
         // order, so an overlapping quote/comment opener is a string unless
@@ -1201,13 +1280,18 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
-        if self.options.string.lex
-            && !string_skipped
-            && self.wants(TIN_ST)
-            && self.char_sets.string.contains(c)
-        {
+        self.resync(&mut pnt, &mut c);
+        let quote = c.filter(|ch| self.char_sets.string.contains(*ch));
+        if let Some(quote) = quote.filter(|_| {
+            self.options.string.lex
+                && !string_skipped
+                && self.wants(TIN_ST)
+                && self.listed(entry, first, self.options.string.check.is_some(), |ch| {
+                    self.char_sets.string.contains(ch)
+                })
+        }) {
             let start = (self.idx, self.ri, self.ci);
-            match self.match_string(c, pnt) {
+            match self.match_string(quote, pnt) {
                 result @ Ok(_) => return result,
                 Err(error) if !self.options.string.abandon => return Err(error),
                 Err(_) => {
@@ -1217,11 +1301,10 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 6_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 6_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 4. Comments (longest opening marker wins; ties sort by name).
         let comment_skipped = if self.options.comment.lex && self.wants(TIN_CM) {
@@ -1233,17 +1316,27 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
-        if self.options.comment.lex && !comment_skipped && self.wants(TIN_CM) {
+        self.resync(&mut pnt, &mut c);
+        if self.options.comment.lex
+            && !comment_skipped
+            && self.wants(TIN_CM)
+            && self.listed(entry, first, self.options.comment.check.is_some(), |ch| {
+                self.options
+                    .comment
+                    .definitions
+                    .values()
+                    .any(|definition| definition.start.starts_with(ch))
+            })
+        {
             if let Some(token) = self.match_comment(pnt)? {
                 return Ok(token);
             }
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 7_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 7_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 5. Numbers
         let number_skipped = if self.options.number.lex && self.wants(TIN_NR) {
@@ -1255,21 +1348,29 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
+        let could_start_number =
+            |ch: char| ch == '-' || ch == '+' || ch == '.' || ch.is_ascii_digit();
         if self.options.number.lex
             && !number_skipped
             && self.wants(TIN_NR)
-            && (c == '-' || c == '+' || c == '.' || c.is_ascii_digit())
+            && c.is_some_and(could_start_number)
+            && self.listed(
+                entry,
+                first,
+                self.options.number.check.is_some(),
+                could_start_number,
+            )
         {
             if let Some(tkn) = self.match_number(pnt)? {
                 return Ok(tkn);
             }
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, 8_000_000.0, pnt, &mut plugin)
-        {
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, 8_000_000.0, &mut plugin) {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
         // 6. Text and named/regex values share the same delimited run.
         // Negotiated lexing gates this combined family by its primary token
@@ -1289,6 +1390,7 @@ impl<'a> Lexer<'a> {
         } else {
             false
         };
+        self.resync(&mut pnt, &mut c);
         if (text_lex || value_lex) && !text_skipped && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
             // Only a `value` definition declaring `consume` looks at the
@@ -1403,17 +1505,24 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if let Some(token) =
-            self.run_custom_matchers(&mut custom_index, f64::INFINITY, pnt, &mut plugin)
+        if let Some(token) = self.run_custom_matchers(&mut custom_index, f64::INFINITY, &mut plugin)
         {
             return Ok(token);
         }
+        self.resync(&mut pnt, &mut c);
 
-        // 7. Unclaimed character -> Error: unexpected
-        let bad_char = self.advance().unwrap();
+        // 7. Unclaimed character -> Error: unexpected, raised where the
+        // cursor stands, as TypeScript's `Lex.next` builds its #BD at the
+        // live `pnt` and Go's `nextUnfiltered2` at `l.pnt`. A matcher that
+        // stepped over the last character and declined leaves no character
+        // to name: the error then names none, at the end of the source, as
+        // it does in both. This took a character unconditionally, and so
+        // panicked on a lone byte-order mark under the xml plugin, whose
+        // matcher steps over a mark at the start of the source.
+        let bad_source = self.advance().map_or_else(String::new, String::from);
         let err = TabnasError::new(
             "unexpected",
-            bad_char.to_string(),
+            bad_source,
             "",
             pnt.site.pos,
             pnt.site.ri,

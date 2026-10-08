@@ -18,10 +18,17 @@ const JSON_GRAMMAR = require('./json-builder.fixture.json')
 
 // The custom matcher the fixture header specifies: a bad token at `?`, one
 // running to the end of the source at `%`, and one at `!` with only its err
-// set, none moving the cursor.
+// set, none moving the cursor; before any of them, a byte-order mark at the
+// very start of the source is stepped over, one character and one column,
+// as the xml plugin's matcher steps over one.
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff)
 const bad = {
   order: 1.5e6,
   make: () => (lex) => {
+    if (0 === lex.pnt.sI && BYTE_ORDER_MARK === lex.src[0]) {
+      lex.pnt.sI += 1
+      lex.pnt.cI += 1
+    }
     const sI = lex.pnt.sI
     const c = lex.src[sI]
     if ('?' === c) return lex.bad('custom_bad', sI, sI + 1)

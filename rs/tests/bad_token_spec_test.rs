@@ -17,6 +17,10 @@ const FIXTURE: &str = "../test/spec/bad-token.tsv";
 /// The `opts` cell that asks for `continuations(input)` instead of a parse.
 const CONTINUATIONS: &str = "continuations";
 
+/// U+FEFF, which the fixture's matcher steps over at the start of the
+/// source.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
 fn decode(field: &str) -> String {
     field
         .replace("\\r\\n", "\r\n")
@@ -27,9 +31,14 @@ fn decode(field: &str) -> String {
 
 /// The custom matcher the fixture header specifies: a bad token at `?`, one
 /// running to the end of the source at `%`, and one at `!` with only its
-/// `err` set, none moving the cursor.
+/// `err` set, none moving the cursor; before any of them, a byte-order mark
+/// at the very start of the source is stepped over, one character and one
+/// column, as the xml plugin's matcher steps over one.
 fn bad_matcher() -> LexMatcher {
     let matcher: ImperativeLexMatcher = Arc::new(|lexer, _rule, _context| {
+        if lexer.point().site.pos == 0 && lexer.remaining().starts_with(BYTE_ORDER_MARK) {
+            lexer.advance_chars(1);
+        }
         let at = lexer.point().site.pos;
         let rest = lexer.remaining();
         if rest.starts_with('?') {
