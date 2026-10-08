@@ -166,9 +166,10 @@ fn matchers_after_a_moved_cursor_start_where_it_left_off() {
 /// token with a Latin-1 character is not tried, even after a custom matcher
 /// has moved the cursor onto a character it could match: `~1` is the text
 /// `1`, `~"a"` is text, and `~ 1` meets no matcher at the space. Rust
-/// follows TypeScript. Go tries every matcher and answers the number 1,
-/// the string `a` and 1: a split between those two that this does not
-/// settle.
+/// follows TypeScript. Go tries every matcher and answers the number 1, a
+/// string token the grammar refuses, and 1: a split between those two that
+/// this does not settle (DIVERGENCE.md "The matchers tried after a custom
+/// matcher steps over a Latin-1 character").
 #[test]
 fn a_moved_cursor_keeps_the_matchers_the_first_character_chose() {
     let parser = parser(Some('~'), "{}");

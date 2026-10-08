@@ -226,6 +226,646 @@ here, nil in Go, Null in Rust'), `go/divergence_test.go`
 `TestNoValueParseIsNil` and `rs/tests/divergent_spec_test.rs`
 `no_value_parse_is_null`.
 
+### Rule-iteration budget: a fractional `rule.maxmul`
+
+The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
+Go, so a value between 0 and 1 shrinks the budget in one port and cannot
+be written in the other.
+
+| options | TypeScript | Go |
+|---|---|---|
+| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; through an options map it truncates to `0`, which coerces to the default `3`, and parses |
+
+That Go column was not true when first written: `MapToOptions` handled
+`rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
+entirely, so a shared options blob set the multiplier in TypeScript and
+left Go on its default with nothing to notice. Plumbed, and pinned by
+`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. The other
+numeric options that path once dropped (`rewind.history`, the
+`parse.recover` caps, `parse.budget.checkEveryN`) are carried now, and
+a reflection gate keeps every data leaf on the surface; see "The
+serialized options surface" in
+[`go/doc/differences.md`](go/doc/differences.md).
+
+Everything else about this guard is aligned, and was not. Three separate
+ways it produced a different result for the same input, all repaired:
+TypeScript honoured a zero or negative multiplier literally; Go wrapped
+the product and met its own floor of 100, so a LARGER multiplier was a
+STRICTER guard; and the two ports measured source length in different
+units — UTF-16 code units in TypeScript, bytes in Go — so any source
+above U+007F got a different budget in each. See "Rule-Iteration Budget"
+in [`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
+
+Not repaired here, because the fix is to the option's TYPE. Narrowing
+TypeScript's `maxmul` to an integer would break callers for a setting
+nobody tunes fractionally, and widening Go's would put a float in a
+loop counter. The floor of 100 bounds the damage: a fractional multiplier
+cannot make a SHORT parse fail in either port.
+
+Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
+expressible here and not in Go') alongside the aligned cases, so the two
+are read together.
+
+### Regex dialect in serialized terminals
+
+A grammar spec can carry a match token as a serialized regex
+(`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
+`RegExp` in TypeScript, RE2 in Go, and `regex` in Rust — and the dialects disagree on two
+constructs. **It diverges in both directions.**
+
+| pattern | input | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** | accepted |
+| `@/^\s+/` | U+2028, U+2000, U+3000 | accepted | **rejected** | accepted |
+| `@/^\s+/` | U+FEFF | accepted | **rejected** | **rejected** |
+| `@/^\s+/` | U+0020, U+0009 | accepted | accepted | accepted |
+| `@/^k/i` | `k`, `K` | accepted | accepted | accepted |
+| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted | accepted |
+
+JS `\s` uses its own Unicode-derived set; RE2's is the Perl class
+`[\t\n\f\r ]`; Rust uses Unicode `White_Space`, which excludes U+FEFF. JS
+`/i` without `u` does not fold U+212A to `k`; RE2 and Rust case-fold by
+Unicode rules and do.
+
+**And two constructs that do not diverge in the result but in whether the
+grammar loads at all**, which for a grammar author is worse:
+
+| pattern | TypeScript | Go | Rust |
+|---|---|---|---|
+| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** | **install error** |
+| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** | **install error** |
+
+RE2 implements neither, by design — both need backtracking. `go/utility.go`
+refuses them at compile time and `Grammar()` reports it, which is the right
+failure mode, but it means a spec written and tested against TypeScript can
+be unloadable in Go. The `v` flag is the same story. Treat "compiles in JS"
+as no evidence that a serialized terminal is portable.
+
+**This is recorded rather than fixed, and the reason is worth stating
+plainly, because the two halves are not equally hard.**
+
+`\s` is mechanically repairable: a compile-time rewrite could expand it to
+the explicit JS class before handing the pattern to RE2. That is not free —
+it means this engine ships a regex-dialect translation layer, which has to
+parse enough of the pattern to know a `\s` inside a character class from a
+`\\s` that is a literal backslash, and it then owns that translation for
+every downstream grammar in both runtimes. `(?i)` is not repairable the same
+way: RE2 has no ASCII-only case-folding flag, so matching JS would mean
+rewriting the pattern into explicit alternations.
+
+Adding the layer for one of the two is a decision for the maintainer, not a
+mechanical fix, so it is written down here with the cost attached instead of
+being taken unilaterally.
+
+**The workaround, measured rather than assumed — and spelled the JS way.**
+An explicit class in the serialized terminal makes the two agree exactly:
+
+```
+@/^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/
+```
+
+**The `\uXXXX` spelling is load-bearing.** A serialized pattern is JS source:
+TypeScript hands it to `new RegExp`, and Go lowers it to RE2. Writing the
+class the RE2 way (`\x{00a0}`) makes it a *SyntaxError in TypeScript* — a
+"portable" workaround that only works in one runtime, which is the very
+defect this entry records. The first draft of this entry had it that way
+round; it was caught in review, which is why the workaround is now pinned in
+both runtimes rather than only written down.
+
+With the pattern above both runtimes accept U+0020, U+0009, U+00A0, U+2028,
+U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
+`\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
+compile.
+
+Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect`, the
+matching case in `ts/test/divergence.test.js`, and the Rust divergence
+register runner, which assert the recorded
+results on purpose. Both drive a real `GrammarSpec` through
+`grammar()` / `Grammar()` and parse: the gap was previously known only at
+the regex-engine layer, so "a shared grammar that depends on either will
+differ" was a prediction until this was wired.
+
+### `@push$` with `chain: false` and a grammar that breaks its promise
+
+`@push$` takes an opt-in `chain: false` (schema v5 config, alongside
+`src`). It tells the engine that the grammar never reads a rule that has
+been replaced, so the grown list need not be re-published back along the
+replacement chain. TypeScript and Rust hand out one array object, so
+every holder sees every element and the key is a no-op in both. A Go
+slice is a value, so in that port the key is the difference between
+O(elements) and O(elements^2) on a grammar whose element rule replaces
+itself per separator, which is the shape `@tabnas/json` uses.
+
+| grammar | input | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `chain: false`, parent reads the replaced rule | `1,2` | `["1","2"]` | **`["1"]`** | `["1","2"]` |
+| same grammar, key absent | `1,2` | `["1","2"]` | `["1","2"]` | `["1","2"]` |
+
+The divergent row is a grammar declaring the key and then doing the one
+thing the key promises not to do: a rule lifts the list with `@bubble$`
+and replaces itself, and the parent reads the rule it replaced. **The
+loader cannot check that promise** -- it is a claim about which paths the
+grammar will resolve, not about the spec's shape -- so the different
+result is reachable for the same serialized grammar and input, and is
+registered rather than argued away.
+
+Repairing it means one of two things, and both are worse than recording
+it. Removing the opt-out puts `@push$` back to quadratic on the shape the
+shipped JSON grammar uses: 15,127,750 walk steps for 5,500 elements,
+11.9 seconds on `numeric-edge-1mb` against 230 ms with the key. Making
+the walk unconditional but cheap is the open problem
+`go/doc/differences.md` records three blocked attempts at.
+
+Registered as `push-chain-off`, with `push-chain-on` as its control.
+
+## Deferred, not deliberate
+
+Live splits that are defects, each waiting on a ruling, a breaking change
+or a scheduled repair, and each naming the runtime that changes. When one
+is repaired its rows move to `test/spec/repaired.tsv` and the entry moves
+under "Repaired, and what replaced them" below.
+
+### An explicitly empty option cannot be expressed in Go
+
+**Deferred, not deliberate** — this is a defect awaiting a breaking
+change, recorded here so consumers are not told it does not exist.
+
+`String.Chars`, `String.MultiChars`, `String.EscapeChar`, `Space.Chars`,
+`Line.Chars` and `Line.RowChars` are plain `string` in the Go options, so
+`""` is their zero value and an explicitly empty value is
+indistinguishable from an unset one. Each config branch tests `!= ""` and
+restores the default when empty.
+
+TypeScript distinguishes `''` from `undefined` and honours it; Go cannot,
+so the defaults stay in force.
+
+Six fields, not four: `Line.RowChars` and `String.EscapeChar` were missed
+on the first pass, and they are not cosmetic — `rowChars: ''` changes
+reported POSITIONS and `escapeChar: ''` changes string-token CONTENT.
+
+The consequence is a **different result for the same input** whenever a
+plugin configures its lexer that way. `@tabnas/css` declared
+`string: { chars: '' }` in both ports:
+
+| input | TypeScript | Go |
+| --- | --- | --- |
+| `a"b` | `jsonic/unexpected` | `jsonic/unterminated_string` |
+
+The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
+`EscapeStrict`, which are pointers for exactly this reason. It is a
+breaking change across a published module, so it is outstanding rather
+than done — and the blocking constraint is specific enough to write down.
+
+The adoption cost, counted across the fleet excluding tests:
+
+| repo | affected call sites |
+| --- | --- |
+| `parser` | its own config branches |
+| `jsonic` | 3 |
+| `ini` | 3 |
+| `json`, `chess`, `zon` | 2 each |
+| `csv`, `yaml` | 1 each |
+
+**Consumers are not broken by the merge.** Each requires a released
+`parser/go` version, so a type change on `main` reaches them only when
+someone bumps that require. The fourteen call sites are an ADOPTION cost
+paid at upgrade, not a coordination cost paid at merge.
+
+That makes this a **release-policy decision** rather than a scheduling
+puzzle: whether to spend a breaking bump on it, and when. Not a call to
+make as a side effect of a parity sweep, which is why it is recorded here
+instead of done.
+
+A non-breaking half-measure exists and is deliberately not taken: an
+additive `CharsSet *string` preferred when non-nil would give Go a way to
+SAY "no quote characters" without changing any existing caller. It closes
+the capability gap and leaves the divergence — `Chars: ""` would still
+mean two different things in the two ports — so it trades a recorded
+defect for an unrecorded one plus a second way to spell the same option. `TestEmptyCharsMeansUnset` pins the current
+behaviour and **fails when the repair lands** — the signal to delete this
+entry along with it.
+
+Sibling ports are not exposed: of the three call sites in the fleet
+that set an empty value, none is live. `csv` sets `Lex: false`
+alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
+never a quote character to begin with. css's was the live one until
+tabnas/css#56 replaced its `Chars: ""` with `Lex: false`, the Go way to
+turn string matching off, and pinned the TypeScript verdicts in its
+`test/spec/quotes.tsv`.
+
+### Forward traversal of a replacement chain in Rust
+
+**Deferred, not deliberate** — a Rust defect with a designed repair
+already scheduled, recorded here so nobody is told the rule graph is at
+parity when a grammar can still see the difference.
+
+`rule.child` names the rule its parent PUSHED in all three ports, and a
+rule that replaces itself leaves the parent on the first link of the
+chain. That is what `@fold$` exists to work around, and all three ports
+now agree on it, on the link's node, and on its immediate `next` — the
+replacement that took its place.
+
+They part company on the SECOND hop. TypeScript and Go hold a replaced
+rule as a live object, so its `next` goes on being written long after the
+parent stopped looking, and `child.next.next` reaches the chain's third
+link. Rust cannot: it holds a frozen record, taken when each link stopped
+being the current rule, and that record's `next_rule` is its successor as
+the successor stood at its own creation — before it had a successor of
+its own.
+
+| grammar | path read on the parent's close | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `child` replaced by `child2`, `child2` by `child3` | `child.next.name` | `child2` | `child2` | `child2` |
+| same | `child.next.next.name` | `child3` | `child3` | **nothing** |
+| same | `child.next.next.next.name` | `top` | `top` | **nothing** |
+
+Repair direction: **Rust changes.** TypeScript defines the language and
+Go already agrees with it.
+
+Not repaired here because the forward pointer cannot be patched in place
+once it is stored: by the time the grandchild exists, the successor's
+record is shared through an `Rc` and the link that would have to be
+rewritten sits in the middle of the chain. The chain IS still reachable,
+backwards, through `prev_rule` — every link holds the one it replaced —
+and resolving a successor from that walk instead of from a stored
+forward pointer is item **R7** of
+[`doc/rust-callback-contract-spec.md`](doc/rust-callback-contract-spec.md),
+announced by its `[V4]` release note. Writing a second mechanism here
+would collide with that one and add a cost to every pop, so the split is
+registered until R7 lands.
+
+Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
+`chain-next-one-hop` as their control. **The control row is the load-bearing
+one:** it is what tells a later reader that the child link itself is at
+parity and only the walk past it is not.
+
+### A multi-character block-comment end is cut short in Rust
+
+**Deferred, not deliberate** — a Rust defect measured while the block
+comment with no end marker was being registered (now under "Repaired").
+
+A block comment whose end marker is longer than one character closes
+one character early in Rust. Under `comment.def.hash: {line: false,
+end: '@@'}`, `a # x @@ b` lexes to a `#CM` token `# x @` where
+TypeScript and Go give `# x @@`, and the marker's last `@` is lexed
+again, as text at column 8, before `b`; under `end: '@@@'` the token is
+`# x @@`. The span is the marker less its last character, not a fixed
+length, and what follows the comment differs with it.
+
+| `comment.def.hash` | input | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{line: false, end: '@'}` | `a # x @ b` | `#CM` `# x @` | `#CM` `# x @` | `#CM` `# x @` |
+| `{line: false, end: '@@'}` | `a # x @@ b` | `#CM` `# x @@` | `#CM` `# x @@` | **`#CM` `# x @`**, then `@` |
+| `{line: false, end: '@@@'}` | `a # x @@@ b` | `#CM` `# x @@@` | `#CM` `# x @@@` | **`#CM` `# x @@`**, then `@` |
+
+Repair direction: **Rust changes.** TypeScript defines the language and
+Go agrees with it: the token spans the whole end marker and the cursor
+moves past it.
+
+Registered as `block-comment-two-char-end` and
+`block-comment-three-char-end`, with `block-comment-end-control` as
+their control: a one-character end, where the three ports agree.
+
+### A `string.escape` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired. Rust's split is older than that PR, which briefly moved Go to
+Rust's side of it.
+
+TypeScript looks the escape map up by `src[sI]`, the one code unit after
+the escape character (`makeStringMatcher` in `ts/src/lexer.ts`), so a key
+of two units or more never matches. An escaped character above U+FFFF,
+two units, is then copied as an unknown escape, and a key of two
+characters is never consulted at all. Go looks the map up only for an
+escaped character of one UTF-16 unit, which gives TypeScript's answer by
+another route, and its map, keyed by string, never matches a longer key
+either. Rust keys the map by character (`HashMap<char, String>` in
+`rs/src/options.rs`), so it applies a key above U+FFFF, and it refuses a
+key of more than one character when the options load.
+
+| `string.escape` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"\é"` | `E` | `E` | `E` |
+| same | `"\😀"` | `😀` | `😀` | **`X`** |
+| `{ab: 'X'}` | `"\abc"` | `abc` | `abc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answers
+follow from its UTF-16 index, not from a decision anyone made about keys.
+If a key is a character, TypeScript moves, looking the map up by code
+point, and Go goes with it, back to the whole-character lookup #263 first
+wrote. If a key is one code unit, Rust moves and matches no key above
+U+FFFF. Either ruling also settles a key of two characters: refused when
+the options load, as in Rust, or accepted and never matched, as in
+TypeScript and Go.
+
+Registered as `escape-key-astral` and `escape-key-two-chars`, with
+`escape-key-bmp-control` as their control: a key of one unit under the
+same options, applied in every port.
+
+### A `string.replace` key longer than one UTF-16 unit
+
+**Deferred, not deliberate**, for a ruling: the replace-map half of the
+entry above, measured with it.
+
+TypeScript keys the replace map by the first code unit of each key
+(`c.charCodeAt(0)` in `makeStringMatcher`) and reads the source one code
+unit at a time. A key above U+FFFF therefore replaces its high surrogate
+alone and leaves the low surrogate in the value, and a key of two
+characters replaces its first character wherever that appears. Go keys
+the map by a key's first character, which is TypeScript's key for every
+character in the BMP. For one above U+FFFF it keys the whole character,
+as its native `map[rune]string` option always has, because TypeScript's
+answer there is a lone surrogate, which a Go string cannot hold. Before
+#263 Go keyed by a key's first byte, so this key never applied and the
+split had three answers. Rust keys by character, replaces the whole of an
+astral one, and refuses a longer key when the options load.
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{é: 'E', 😀: 'X'}` | `"aéb"` | `aEb` | `aEb` | `aEb` |
+| same | `"a😀b"` | **`aX`, U+DE00, `b`** | `aXb` | `aXb` |
+| `{ab: 'X'}` | `"abc"` | `Xbc` | `Xbc` | **load fault** |
+
+Repair direction: **the maintainer's ruling.** TypeScript's answer
+follows from its UTF-16 index, and neither port can give it, since a lone
+surrogate folds to U+FFFD in Go and Rust (see "Lone surrogates in quoted
+strings"). So the astral split closes only if TypeScript moves, keying
+and reading the map by code point as Go and Rust do; the alternative is
+to accept it as a consequence of the string models. A key of two
+characters is the question the entry above asks.
+
+Registered as `replace-key-astral` and `replace-key-two-chars`, with
+`replace-key-bmp-control` as their control.
+
+### An escaped row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for a ruling: measured while #263 was
+repaired.
+
+An escape whose character is in `line.rowChars`, a line continuation,
+puts that character in the value in every port. TypeScript copies it as
+an unknown escape and counts one column (`buf.push(ec); sI++; cI++` in
+`ts/src/lexer.ts`), and Go does the same. Rust steps over it with
+`advance` in `rs/src/lexer.rs`, which counts a row for every character
+in `line.rowChars`, so every position after the string is a row further
+on:
+
+| input, position of `y` | options | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `"a\qb" y` | default | 1:8 | 1:8 | 1:8 |
+| `"a\<LF>b" y` | default | 1:8 | 1:8 | **2:4** |
+| `` `a\<LF>b` y `` | default | 1:8 | 1:8 | **2:4** |
+| `"a\<U+2028>b" y` | json5's line characters | 1:8 | 1:8 | **2:4** |
+
+The value is the same in every port. The last row was 1:10 in Go before
+#263, which read the escaped character one byte at a time.
+
+Repair direction: **Rust changes, by ADR-13's default.** TypeScript
+defines the language, Go agrees with it, and the fix is to step over an
+escaped character as one column. It is recorded rather than made because
+the default may be the wrong way round: Rust's row is where `y` stands in
+the source, and TypeScript's count leaves every later position a row
+behind it, which is a defect of its own if a position names a source
+line. If the maintainer rules so, TypeScript and Go move instead and
+count a row for an escaped row character. The rows hold the split until
+then.
+
+Registered as `escape-lf`, `escape-lf-multi` and `escape-ls-json5`, with
+`escape-row-char-control` as their control: an escaped ordinary
+character, one column in every port.
+
+### A replaced row character inside a string counts a row in Rust
+
+**Deferred, not deliberate**, for the ruling the entry above asks for,
+and measured with it.
+
+TypeScript consults the replace map first after the closing quote, before
+a line character can count a row, so a replaced row character becomes its
+replacement and counts one column, in a single-line string and a
+multi-line one alike. Rust replaces the character too, but steps over it
+with `advance`, which counts a row. Go agrees with TypeScript for a row
+character outside the control range, U+2028 under json5's line
+characters, since #263 made it read a replace key by character; a
+control one, LF, it refuses as `unprintable` before it reads the map,
+which is the entry "The `string.replace` map consulted after the escape
+and control checks in Go" below:
+
+| `string.replace` | input, position of `y` | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{x: 'X'}` | `"axb" y` | 1:7 | 1:7 | 1:7 |
+| `{U+2028: 'L'}`, json5's line characters | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+| `{U+2028: 'L'}`, json5's line characters, `"` multi-line | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
+| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | `unprintable` | **2:4** |
+| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | `unprintable` | **2:4** |
+
+Every value agrees where Go answers. Before #263 Go answered 1:7 on the
+multi-line U+2028 row only because it read the key by its first byte and
+never replaced the character; while #263 was in review, its wider
+multi-line test made that unreplaced character a row, 2:4.
+
+`tabnas/jsonic`'s ledger carries the same split through its grammar as
+`string-replace-control-row`, where a raw CR after a replaced LF is
+`unprintable` at 2:6 in TypeScript and Go and at 3:1 in Rust.
+
+Repair direction: **Rust changes, by ADR-13's default**, stepping over a
+replaced character as one column. If the maintainer rules that a row
+character counts a row wherever an escape or a replacement consumes it,
+TypeScript and Go move instead. One ruling settles this entry and the one
+above.
+
+Registered as `replace-ls-single` and `replace-ls-json5`, with
+`replace-row-char-control` as their control: a replaced ordinary
+character, one column in every port. The LF rows are not registered
+here. Go's answer there is a lex error, and the `lex` probe renders the
+source of a lex error, which would be the LF itself, a character no
+register cell may hold; Go's refusal is pinned instead, through the
+`spec` probe, under the entry below.
+
+### The `string.replace` map consulted after the escape and control checks in Go
+
+**Deferred, not deliberate**, and held on purpose: measured while #263 was
+repaired, with the repair written, measured and taken out again. Tracked
+as [#287](https://github.com/tabnas/parser/issues/287).
+
+Inside a string body TypeScript tests the closing quote, then the replace
+map, then the escape character, then the control range
+(`makeStringMatcher` in `ts/src/lexer.ts`), and Rust consults the replace
+map in the same place. Go's `matchString` in `go/lexer.go` tests the
+escape character, then the control range, and reads the replace map
+last. So a `string.replace` key for a control character is refused as
+`unprintable` before the map is read, and a key for the escape character
+begins an escape instead of being replaced:
+
+| `string.replace` | input, value | TypeScript | Go | Rust |
+|---|---|---|---|---|
+| `{x: 'X'}` | `"axb"` | `aXb` | `aXb` | `aXb` |
+| `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | **`unprintable`** | `aTb` |
+| `{LF: 'N'}` | `"a<LF>b"` | `aNb` | **`unprintable`** | `aNb` |
+| `{'\\': '/'}` | `"a\bc"` | `a/bc` | **`a`, U+0008, `c`** | `a/bc` |
+
+Repair direction: **Go changes**, to TypeScript's order, reading the
+replace map right after the closing quote. TypeScript defines the
+language and Rust agrees with it. The repair moves one block in
+`matchString`, and #287 carries it.
+
+It is held because a downstream ledger pins Go's present answer.
+`tabnas/jsonic`'s divergence ledger carries the replaced-LF case, through
+its grammar, as `string-replace-control`, with Go at `unprintable`, and
+that ledger fails a row whose divergence has been repaired until the row
+is deleted. This repository's `gate` job runs jsonic from its `main`, and
+the fleet gate runs jsonic at its latest release, so the repair lands
+once the row is gone from both: delete the row in tabnas/jsonic, release
+jsonic, then land the reorder and close this group in the same change.
+
+Registered as `replace-tab`, `replace-lf-value` and `replace-escape-char`,
+with `replace-order-control` as their control: a replaced ordinary
+character, parsed alike in every port. The control, the TAB and the LF go
+through the `spec` probe, a grammar that takes one string token, because
+the `lex` probe renders the source of a lex error and Go's would be the
+TAB or the LF itself; the escape character goes through the `lex` probe,
+whose value Go decodes rather than refuses.
+
+### A pusher read back past four hops through its child's snapshots in Rust
+
+**Deferred, not deliberate**: what the repair of "A pusher read back
+through its child's snapshot in Rust" (under "Repaired") does not reach.
+
+TypeScript and Go link a pushed child to its pusher as live rules, so
+from the child every `parent.child` is the child itself, however often
+the path repeats it. Rust links snapshots. With no history bound the
+push arm links the child a second time, from a snapshot that carries the
+pusher with the child linked, and that carries the read through four
+hops. Two hops further the snapshots end at the pusher as it stood
+before the push, whose `child` is the child pushed before. With `list`
+pushing `first` from its open phase and `second` from its close phase:
+
+| path read on `second` | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `parent.child.parent.child.name` | `second` | `second` | `second` |
+| `parent.child.parent.child.parent.child.name` | `second` | `second` | `first` |
+
+The same model shows from the pusher's side, during the pushing
+alternate's after actions. TypeScript and Go have linked the live rules
+before those actions run, so a state action on the pusher's close reads
+`child.parent.child` as the child just pushed. Rust relinks after the
+actions, so the same action reads the child pushed before, or nothing on
+the pusher's first push. No row can carry this face, because a
+serialized grammar has no after action that reads a path; per-runtime
+tests pin it instead.
+
+No fleet grammar reads either path: the survey in
+[`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
+past three hops.
+
+Repair direction: **Rust changes**, by a mechanism the maintainer
+chooses. Relinking further costs two more records per push without a
+bound for each further pair of hops. Resolving a child's `parent` as the
+live rule in the path readers gives TypeScript's answer at every depth
+for a condition path at no memory cost, though not to a subscriber
+walking the raw links or to an after action. Linking live rules, as the
+canonical engine does, is the full repair.
+
+Registered as `pusher-six-hops`, with `pusher-four-hops-control` as its
+control: the four-hop read, where the three runtimes agree. The
+after-action face is pinned by `ts/test/divergence.test.js` ('a pusher's
+after action reads the child just pushed here and in Go, the child
+pushed before in Rust'), `go/divergence_test.go`
+`TestPusherAfterActionReadsTheChildJustPushed` and
+`rs/tests/rule_history_test.rs`
+`an_after_action_on_the_pusher_reads_the_child_pushed_before`.
+
+### Decorations reach a derived child after the plugins in Go
+
+A derived child (`make()` in TypeScript, `derive` in Rust, `Derive` in
+Go) is built from the parent's options and re-runs the parent's plugins,
+so option-conditional grammar is rebuilt against the child's options.
+It also inherits the parent's decorations: the own properties a plugin
+puts on the instance in TypeScript, the `decorate` entries in Go and
+Rust. The two steps run in a different order. TypeScript copies the
+parent's properties onto the child before it re-runs the plugins (the
+`Object.keys(parent)` loop ahead of `this.use(plugin)` in the `Tabnas`
+constructor, `ts/src/tabnas.ts`), and Rust does the same
+(`child.decorations = self.decorations.clone()` ahead of the
+`use_plugin` loop in `Tabnas::derive`, `rs/src/lib.rs`). Go re-applies
+the plugins first and copies the decorations after (`Derive` in
+`go/plugin.go`).
+
+What a plugin sees of the instance while it re-runs on the child:
+
+| a plugin that writes a different value on each run | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| during its re-run on the child, its decoration from the parent is already there | yes | no | yes |
+| the child's decoration once the derive returns | what the re-run wrote | the parent's, copied over what the re-run wrote | what the re-run wrote |
+
+Found by tabnas/yaml (#244): the Rust plugin guarded its install with a
+decoration, so on a child it found its own mark, returned early, and
+the child parsed `a: 1` to null with no error, where the same guard in
+Go would have installed. A guard belongs on the rules, as jsonic's is
+and tabnas-yaml's now is (tabnas/yaml#113). What remains is the
+order, with two faces: a plugin that reads a parent decoration during
+its re-run, to inherit state, finds it in TypeScript and Rust and not
+in Go; and a value the re-run writes, one computed from the child's
+options say, is what the child carries in TypeScript and Rust, where
+Go's copy afterwards puts the parent's value over it.
+
+Repair direction: **Go changes.** TypeScript defines the order and
+Rust follows it: the child carries its parent's decorations before
+any plugin runs on it.
+
+Not registered: the observable is what a plugin sees of the instance
+during its re-run, which no row-shaped probe drives. Pinned per
+runtime by `ts/test/divergence.test.js` ('a derived child carries its
+decorations into the plugin re-run here and in Rust, after it in Go'),
+`go/divergence_test.go` `TestDerivedChildGetsDecorationsAfterThePlugins`
+and `rs/tests/divergent_spec_test.rs`
+`derived_child_carries_decorations_into_the_plugin_rerun`.
+
+### The matchers tried after a custom matcher steps over a Latin-1 character
+
+**Deferred, not deliberate**, for a ruling: measured while "A custom
+matcher that moves the cursor and declines, in Rust" (under "Repaired")
+was repaired.
+
+TypeScript picks the built-in matchers a fetch tries from a table indexed
+by the character the fetch begins on (`buildLexDispatch` in
+`ts/src/utility.ts`, read once in `Lex.next`). For a Latin-1 character it
+lists a built-in only when a token it makes could start with that
+character, or when the built-in carries a check. A custom matcher that
+steps over the first character and declines does not send the fetch back
+to the table, so the built-ins still tried are the ones listed for the
+character stepped over, each testing the character now under the cursor.
+Go has no such table and tries every matcher. Rust follows TypeScript.
+With a custom matcher that steps over a `~` at the start of the source and
+declines, and the `text` grammar of `test/spec/bad-token.tsv` (one `#NR`
+or one `#TX`):
+
+| input | TypeScript and Rust | Go |
+|---|---|---|
+| `~1` | the text `1` | the number `1` |
+| `~ 1` | `unexpected` at 1:2, the space | the number `1` |
+| `~"a"` | the text `"a"` | `unexpected` at 1:2, the string `"a"` |
+
+From U+0100 up the table lists every built-in, so a step over a byte-order
+mark, as xml's matcher makes, gives one answer in all three runtimes.
+
+Repair direction: **for a ruling.** By ADR-13 the default is that Go
+changes and picks its built-ins by the first character as TypeScript does.
+The other reading is that the table is a dispatch optimisation whose
+answer should not outlive the character it was read for, in which case
+TypeScript consults it again when the cursor moves, Rust drops its
+`listed` check, and all three try what the character under the cursor
+allows, Go's answers above.
+
+Not registered: the register's probes install serialized grammars, and
+the split needs a custom matcher that moves the cursor, which no
+serialized spec can carry. Pinned per runtime by
+`ts/test/divergence.test.js` ('a matcher that steps over a Latin-1
+character keeps the matchers its first character chose here and in Rust,
+not in Go'), `go/divergence_test.go`
+`TestStepOverALatin1CharacterTriesEveryMatcher` and
+`rs/tests/moved_cursor_test.rs`
+`a_moved_cursor_keeps_the_matchers_the_first_character_chose`.
+
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a
@@ -702,7 +1342,9 @@ fixed or quietly dropped.
   about the character the fetch began on. So for a Latin-1 first character
   it tries what TypeScript tries: a matcher that steps over `~` leaves
   `~1` the text `1` in TypeScript and Rust, where Go, which tries every
-  matcher, reads the number 1, a split this does not settle. Over a
+  matcher, reads the number 1, a split this does not settle: the live
+  entry "The matchers tried after a custom matcher steps over a Latin-1
+  character". Over a
   matrix of 240 cases, three grammars by eight inputs in four modes and
   the lexer's token stream, with and without the matcher, Rust now gives
   TypeScript's answer on every case, where it panicked on 15 and differed
@@ -712,591 +1354,6 @@ fixed or quietly dropped.
   lone byte-order mark does reach it, and now gives `unexpected`. Pinned
   in all three runtimes by the byte-order-mark rows of
   `test/spec/bad-token.tsv`, and in Rust by `rs/tests/moved_cursor_test.rs`.
-
-### Rule-iteration budget: a fractional `rule.maxmul`
-
-The runaway guard's multiplier is a `number` in TypeScript and a `*int` in
-Go, so a value between 0 and 1 shrinks the budget in one port and cannot
-be written in the other.
-
-| options | TypeScript | Go |
-|---|---|---|
-| `rule.maxmul: 0.01`, 61-element array | `ERROR unexpected` | not expressible; through an options map it truncates to `0`, which coerces to the default `3`, and parses |
-
-That Go column was not true when first written: `MapToOptions` handled
-`rule.start`, `finish`, `include` and `exclude` and dropped `maxmul`
-entirely, so a shared options blob set the multiplier in TypeScript and
-left Go on its default with nothing to notice. Plumbed, and pinned by
-`go/rule_budget_test.go` `TestMaxMulSurvivesTheOptionsMap`. The other
-numeric options that path once dropped (`rewind.history`, the
-`parse.recover` caps, `parse.budget.checkEveryN`) are carried now, and
-a reflection gate keeps every data leaf on the surface; see "The
-serialized options surface" in
-[`go/doc/differences.md`](go/doc/differences.md).
-
-Everything else about this guard is aligned, and was not. Three separate
-ways it produced a different result for the same input, all repaired:
-TypeScript honoured a zero or negative multiplier literally; Go wrapped
-the product and met its own floor of 100, so a LARGER multiplier was a
-STRICTER guard; and the two ports measured source length in different
-units — UTF-16 code units in TypeScript, bytes in Go — so any source
-above U+007F got a different budget in each. See "Rule-Iteration Budget"
-in [`go/doc/differences.md`](go/doc/differences.md) and audit item P7.
-
-Not repaired here, because the fix is to the option's TYPE. Narrowing
-TypeScript's `maxmul` to an integer would break callers for a setting
-nobody tunes fractionally, and widening Go's would put a float in a
-loop counter. The floor of 100 bounds the damage: a fractional multiplier
-cannot make a SHORT parse fail in either port.
-
-Pinned by `ts/test/rule-budget.test.js` ('a fractional maxmul is
-expressible here and not in Go') alongside the aligned cases, so the two
-are read together.
-
-### Regex dialect in serialized terminals
-
-A grammar spec can carry a match token as a serialized regex
-(`"#WS": "@/^\\s+/"`). Each runtime compiles it with its own engine — JS
-`RegExp` in TypeScript, RE2 in Go, and `regex` in Rust — and the dialects disagree on two
-constructs. **It diverges in both directions.**
-
-| pattern | input | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `@/^\s+/` | U+00A0 NBSP | accepted | **rejected** | accepted |
-| `@/^\s+/` | U+2028, U+2000, U+3000 | accepted | **rejected** | accepted |
-| `@/^\s+/` | U+FEFF | accepted | **rejected** | **rejected** |
-| `@/^\s+/` | U+0020, U+0009 | accepted | accepted | accepted |
-| `@/^k/i` | `k`, `K` | accepted | accepted | accepted |
-| `@/^k/i` | U+212A KELVIN SIGN | **rejected** | accepted | accepted |
-
-JS `\s` uses its own Unicode-derived set; RE2's is the Perl class
-`[\t\n\f\r ]`; Rust uses Unicode `White_Space`, which excludes U+FEFF. JS
-`/i` without `u` does not fold U+212A to `k`; RE2 and Rust case-fold by
-Unicode rules and do.
-
-**And two constructs that do not diverge in the result but in whether the
-grammar loads at all**, which for a grammar author is worse:
-
-| pattern | TypeScript | Go | Rust |
-|---|---|---|---|
-| `@/^(?=x)x/` (lookahead) | installs, matches `x` | **install error** | **install error** |
-| `@/^(a)\1/` (backreference) | installs, matches `aa` | **install error** | **install error** |
-
-RE2 implements neither, by design — both need backtracking. `go/utility.go`
-refuses them at compile time and `Grammar()` reports it, which is the right
-failure mode, but it means a spec written and tested against TypeScript can
-be unloadable in Go. The `v` flag is the same story. Treat "compiles in JS"
-as no evidence that a serialized terminal is portable.
-
-**This is recorded rather than fixed, and the reason is worth stating
-plainly, because the two halves are not equally hard.**
-
-`\s` is mechanically repairable: a compile-time rewrite could expand it to
-the explicit JS class before handing the pattern to RE2. That is not free —
-it means this engine ships a regex-dialect translation layer, which has to
-parse enough of the pattern to know a `\s` inside a character class from a
-`\\s` that is a literal backslash, and it then owns that translation for
-every downstream grammar in both runtimes. `(?i)` is not repairable the same
-way: RE2 has no ASCII-only case-folding flag, so matching JS would mean
-rewriting the pattern into explicit alternations.
-
-Adding the layer for one of the two is a decision for the maintainer, not a
-mechanical fix, so it is written down here with the cost attached instead of
-being taken unilaterally.
-
-**The workaround, measured rather than assumed — and spelled the JS way.**
-An explicit class in the serialized terminal makes the two agree exactly:
-
-```
-@/^[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/
-```
-
-**The `\uXXXX` spelling is load-bearing.** A serialized pattern is JS source:
-TypeScript hands it to `new RegExp`, and Go lowers it to RE2. Writing the
-class the RE2 way (`\x{00a0}`) makes it a *SyntaxError in TypeScript* — a
-"portable" workaround that only works in one runtime, which is the very
-defect this entry records. The first draft of this entry had it that way
-round; it was caught in review, which is why the workaround is now pinned in
-both runtimes rather than only written down.
-
-With the pattern above both runtimes accept U+0020, U+0009, U+00A0, U+2028,
-U+2000, U+3000 and U+FEFF and both reject `A` — the verdicts TS gives for
-`\s`. Prefer it over `\s` in any serialized terminal a Go runtime will
-compile.
-
-Pinned by `go/divergence_test.go` `TestDivergenceRegexDialect`, the
-matching case in `ts/test/divergence.test.js`, and the Rust divergence
-register runner, which assert the recorded
-results on purpose. Both drive a real `GrammarSpec` through
-`grammar()` / `Grammar()` and parse: the gap was previously known only at
-the regex-engine layer, so "a shared grammar that depends on either will
-differ" was a prediction until this was wired.
-
-### `@push$` with `chain: false` and a grammar that breaks its promise
-
-`@push$` takes an opt-in `chain: false` (schema v5 config, alongside
-`src`). It tells the engine that the grammar never reads a rule that has
-been replaced, so the grown list need not be re-published back along the
-replacement chain. TypeScript and Rust hand out one array object, so
-every holder sees every element and the key is a no-op in both. A Go
-slice is a value, so in that port the key is the difference between
-O(elements) and O(elements^2) on a grammar whose element rule replaces
-itself per separator, which is the shape `@tabnas/json` uses.
-
-| grammar | input | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `chain: false`, parent reads the replaced rule | `1,2` | `["1","2"]` | **`["1"]`** | `["1","2"]` |
-| same grammar, key absent | `1,2` | `["1","2"]` | `["1","2"]` | `["1","2"]` |
-
-The divergent row is a grammar declaring the key and then doing the one
-thing the key promises not to do: a rule lifts the list with `@bubble$`
-and replaces itself, and the parent reads the rule it replaced. **The
-loader cannot check that promise** -- it is a claim about which paths the
-grammar will resolve, not about the spec's shape -- so the different
-result is reachable for the same serialized grammar and input, and is
-registered rather than argued away.
-
-Repairing it means one of two things, and both are worse than recording
-it. Removing the opt-out puts `@push$` back to quadratic on the shape the
-shipped JSON grammar uses: 15,127,750 walk steps for 5,500 elements,
-11.9 seconds on `numeric-edge-1mb` against 230 ms with the key. Making
-the walk unconditional but cheap is the open problem
-`go/doc/differences.md` records three blocked attempts at.
-
-Registered as `push-chain-off`, with `push-chain-on` as its control.
-
-### An explicitly empty option cannot be expressed in Go
-
-**Deferred, not deliberate** — this is a defect awaiting a breaking
-change, recorded here so consumers are not told it does not exist.
-
-`String.Chars`, `String.MultiChars`, `String.EscapeChar`, `Space.Chars`,
-`Line.Chars` and `Line.RowChars` are plain `string` in the Go options, so
-`""` is their zero value and an explicitly empty value is
-indistinguishable from an unset one. Each config branch tests `!= ""` and
-restores the default when empty.
-
-TypeScript distinguishes `''` from `undefined` and honours it; Go cannot,
-so the defaults stay in force.
-
-Six fields, not four: `Line.RowChars` and `String.EscapeChar` were missed
-on the first pass, and they are not cosmetic — `rowChars: ''` changes
-reported POSITIONS and `escapeChar: ''` changes string-token CONTENT.
-
-The consequence is a **different result for the same input** whenever a
-plugin configures its lexer that way. `@tabnas/css` declared
-`string: { chars: '' }` in both ports:
-
-| input | TypeScript | Go |
-| --- | --- | --- |
-| `a"b` | `jsonic/unexpected` | `jsonic/unterminated_string` |
-
-The repair is `Chars *string`, matching `Lex`, `AllowUnknown` and
-`EscapeStrict`, which are pointers for exactly this reason. It is a
-breaking change across a published module, so it is outstanding rather
-than done — and the blocking constraint is specific enough to write down.
-
-The adoption cost, counted across the fleet excluding tests:
-
-| repo | affected call sites |
-| --- | --- |
-| `parser` | its own config branches |
-| `jsonic` | 3 |
-| `ini` | 3 |
-| `json`, `chess`, `zon` | 2 each |
-| `css`, `csv`, `yaml` | 1 each |
-
-**Consumers are not broken by the merge.** They pin the engine — `ini`,
-`zon`, `csv` and `yaml` all require `parser/go v0.8.10` — so a type change
-on `main` reaches them only when someone bumps that pin. The fifteen call
-sites are an ADOPTION cost paid at upgrade, not a coordination cost paid
-at merge.
-
-That makes this a **release-policy decision** rather than a scheduling
-puzzle: whether to spend a breaking bump on it, and when. Not a call to
-make as a side effect of a parity sweep, which is why it is recorded here
-instead of done.
-
-A non-breaking half-measure exists and is deliberately not taken: an
-additive `CharsSet *string` preferred when non-nil would give Go a way to
-SAY "no quote characters" without changing any existing caller. It closes
-the capability gap and leaves the divergence — `Chars: ""` would still
-mean two different things in the two ports — so it trades a recorded
-defect for an unrecorded one plus a second way to spell the same option. `TestEmptyCharsMeansUnset` pins the current
-behaviour and **fails when the repair lands** — the signal to delete this
-entry along with it.
-
-Sibling ports are not all exposed: of the four call sites in the fleet
-that set an empty value, only css's was live. `csv` sets `Lex: false`
-alongside; `json` and `chess` set `MultiChars: ""` where the backtick was
-never a quote character to begin with.
-
-### Forward traversal of a replacement chain in Rust
-
-**Deferred, not deliberate** — a Rust defect with a designed repair
-already scheduled, recorded here so nobody is told the rule graph is at
-parity when a grammar can still see the difference.
-
-`rule.child` names the rule its parent PUSHED in all three ports, and a
-rule that replaces itself leaves the parent on the first link of the
-chain. That is what `@fold$` exists to work around, and all three ports
-now agree on it, on the link's node, and on its immediate `next` — the
-replacement that took its place.
-
-They part company on the SECOND hop. TypeScript and Go hold a replaced
-rule as a live object, so its `next` goes on being written long after the
-parent stopped looking, and `child.next.next` reaches the chain's third
-link. Rust cannot: it holds a frozen record, taken when each link stopped
-being the current rule, and that record's `next_rule` is its successor as
-the successor stood at its own creation — before it had a successor of
-its own.
-
-| grammar | path read on the parent's close | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `child` replaced by `child2`, `child2` by `child3` | `child.next.name` | `child2` | `child2` | `child2` |
-| same | `child.next.next.name` | `child3` | `child3` | **nothing** |
-| same | `child.next.next.next.name` | `top` | `top` | **nothing** |
-
-Repair direction: **Rust changes.** TypeScript defines the language and
-Go already agrees with it.
-
-Not repaired here because the forward pointer cannot be patched in place
-once it is stored: by the time the grandchild exists, the successor's
-record is shared through an `Rc` and the link that would have to be
-rewritten sits in the middle of the chain. The chain IS still reachable,
-backwards, through `prev_rule` — every link holds the one it replaced —
-and resolving a successor from that walk instead of from a stored
-forward pointer is item **R7** of
-[`doc/rust-callback-contract-spec.md`](doc/rust-callback-contract-spec.md),
-announced by its `[V4]` release note. Writing a second mechanism here
-would collide with that one and add a cost to every pop, so the split is
-registered until R7 lands.
-
-Registered as `chain-next-two-hops` and `chain-next-three-hops`, with
-`chain-next-one-hop` as their control. **The control row is the load-bearing
-one:** it is what tells a later reader that the child link itself is at
-parity and only the walk past it is not.
-
-### A multi-character block-comment end is cut short in Rust
-
-**Deferred, not deliberate** — a Rust defect measured while the block
-comment with no end marker was being registered (now under "Repaired").
-
-A block comment whose end marker is longer than one character closes
-one character early in Rust. Under `comment.def.hash: {line: false,
-end: '@@'}`, `a # x @@ b` lexes to a `#CM` token `# x @` where
-TypeScript and Go give `# x @@`, and the marker's last `@` is lexed
-again, as text at column 8, before `b`; under `end: '@@@'` the token is
-`# x @@`. The span is the marker less its last character, not a fixed
-length, and what follows the comment differs with it.
-
-| `comment.def.hash` | input | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{line: false, end: '@'}` | `a # x @ b` | `#CM` `# x @` | `#CM` `# x @` | `#CM` `# x @` |
-| `{line: false, end: '@@'}` | `a # x @@ b` | `#CM` `# x @@` | `#CM` `# x @@` | **`#CM` `# x @`**, then `@` |
-| `{line: false, end: '@@@'}` | `a # x @@@ b` | `#CM` `# x @@@` | `#CM` `# x @@@` | **`#CM` `# x @@`**, then `@` |
-
-Repair direction: **Rust changes.** TypeScript defines the language and
-Go agrees with it: the token spans the whole end marker and the cursor
-moves past it.
-
-Registered as `block-comment-two-char-end` and
-`block-comment-three-char-end`, with `block-comment-end-control` as
-their control: a one-character end, where the three ports agree.
-
-### A `string.escape` key longer than one UTF-16 unit
-
-**Deferred, not deliberate**, for a ruling: measured while #263 was
-repaired. Rust's split is older than that PR, which briefly moved Go to
-Rust's side of it.
-
-TypeScript looks the escape map up by `src[sI]`, the one code unit after
-the escape character (`makeStringMatcher` in `ts/src/lexer.ts`), so a key
-of two units or more never matches. An escaped character above U+FFFF,
-two units, is then copied as an unknown escape, and a key of two
-characters is never consulted at all. Go looks the map up only for an
-escaped character of one UTF-16 unit, which gives TypeScript's answer by
-another route, and its map, keyed by string, never matches a longer key
-either. Rust keys the map by character (`HashMap<char, String>` in
-`rs/src/options.rs`), so it applies a key above U+FFFF, and it refuses a
-key of more than one character when the options load.
-
-| `string.escape` | input, value | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{é: 'E', 😀: 'X'}` | `"\é"` | `E` | `E` | `E` |
-| same | `"\😀"` | `😀` | `😀` | **`X`** |
-| `{ab: 'X'}` | `"\abc"` | `abc` | `abc` | **load fault** |
-
-Repair direction: **the maintainer's ruling.** TypeScript's answers
-follow from its UTF-16 index, not from a decision anyone made about keys.
-If a key is a character, TypeScript moves, looking the map up by code
-point, and Go goes with it, back to the whole-character lookup #263 first
-wrote. If a key is one code unit, Rust moves and matches no key above
-U+FFFF. Either ruling also settles a key of two characters: refused when
-the options load, as in Rust, or accepted and never matched, as in
-TypeScript and Go.
-
-Registered as `escape-key-astral` and `escape-key-two-chars`, with
-`escape-key-bmp-control` as their control: a key of one unit under the
-same options, applied in every port.
-
-### A `string.replace` key longer than one UTF-16 unit
-
-**Deferred, not deliberate**, for a ruling: the replace-map half of the
-entry above, measured with it.
-
-TypeScript keys the replace map by the first code unit of each key
-(`c.charCodeAt(0)` in `makeStringMatcher`) and reads the source one code
-unit at a time. A key above U+FFFF therefore replaces its high surrogate
-alone and leaves the low surrogate in the value, and a key of two
-characters replaces its first character wherever that appears. Go keys
-the map by a key's first character, which is TypeScript's key for every
-character in the BMP. For one above U+FFFF it keys the whole character,
-as its native `map[rune]string` option always has, because TypeScript's
-answer there is a lone surrogate, which a Go string cannot hold. Before
-#263 Go keyed by a key's first byte, so this key never applied and the
-split had three answers. Rust keys by character, replaces the whole of an
-astral one, and refuses a longer key when the options load.
-
-| `string.replace` | input, value | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{é: 'E', 😀: 'X'}` | `"aéb"` | `aEb` | `aEb` | `aEb` |
-| same | `"a😀b"` | **`aX`, U+DE00, `b`** | `aXb` | `aXb` |
-| `{ab: 'X'}` | `"abc"` | `Xbc` | `Xbc` | **load fault** |
-
-Repair direction: **the maintainer's ruling.** TypeScript's answer
-follows from its UTF-16 index, and neither port can give it, since a lone
-surrogate folds to U+FFFD in Go and Rust (see "Lone surrogates in quoted
-strings"). So the astral split closes only if TypeScript moves, keying
-and reading the map by code point as Go and Rust do; the alternative is
-to accept it as a consequence of the string models. A key of two
-characters is the question the entry above asks.
-
-Registered as `replace-key-astral` and `replace-key-two-chars`, with
-`replace-key-bmp-control` as their control.
-
-### An escaped row character inside a string counts a row in Rust
-
-**Deferred, not deliberate**, for a ruling: measured while #263 was
-repaired.
-
-An escape whose character is in `line.rowChars`, a line continuation,
-puts that character in the value in every port. TypeScript copies it as
-an unknown escape and counts one column (`buf.push(ec); sI++; cI++` in
-`ts/src/lexer.ts`), and Go does the same. Rust steps over it with
-`advance` in `rs/src/lexer.rs`, which counts a row for every character
-in `line.rowChars`, so every position after the string is a row further
-on:
-
-| input, position of `y` | options | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `"a\qb" y` | default | 1:8 | 1:8 | 1:8 |
-| `"a\<LF>b" y` | default | 1:8 | 1:8 | **2:4** |
-| `` `a\<LF>b` y `` | default | 1:8 | 1:8 | **2:4** |
-| `"a\<U+2028>b" y` | json5's line characters | 1:8 | 1:8 | **2:4** |
-
-The value is the same in every port. The last row was 1:10 in Go before
-#263, which read the escaped character one byte at a time.
-
-Repair direction: **Rust changes, by ADR-13's default.** TypeScript
-defines the language, Go agrees with it, and the fix is to step over an
-escaped character as one column. It is recorded rather than made because
-the default may be the wrong way round: Rust's row is where `y` stands in
-the source, and TypeScript's count leaves every later position a row
-behind it, which is a defect of its own if a position names a source
-line. If the maintainer rules so, TypeScript and Go move instead and
-count a row for an escaped row character. The rows hold the split until
-then.
-
-Registered as `escape-lf`, `escape-lf-multi` and `escape-ls-json5`, with
-`escape-row-char-control` as their control: an escaped ordinary
-character, one column in every port.
-
-### A replaced row character inside a string counts a row in Rust
-
-**Deferred, not deliberate**, for the ruling the entry above asks for,
-and measured with it.
-
-TypeScript consults the replace map first after the closing quote, before
-a line character can count a row, so a replaced row character becomes its
-replacement and counts one column, in a single-line string and a
-multi-line one alike. Rust replaces the character too, but steps over it
-with `advance`, which counts a row. Go agrees with TypeScript for a row
-character outside the control range, U+2028 under json5's line
-characters, since #263 made it read a replace key by character; a
-control one, LF, it refuses as `unprintable` before it reads the map,
-which is the entry "The `string.replace` map consulted after the escape
-and control checks in Go" below:
-
-| `string.replace` | input, position of `y` | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{x: 'X'}` | `"axb" y` | 1:7 | 1:7 | 1:7 |
-| `{U+2028: 'L'}`, json5's line characters | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
-| `{U+2028: 'L'}`, json5's line characters, `"` multi-line | `"a<U+2028>b" y` | 1:7 | 1:7 | **2:4** |
-| `{LF: 'N'}` | `"a<LF>b" y` | 1:7 | `unprintable` | **2:4** |
-| `{LF: 'N'}` | `` `a<LF>b` y `` | 1:7 | `unprintable` | **2:4** |
-
-Every value agrees where Go answers. Before #263 Go answered 1:7 on the
-multi-line U+2028 row only because it read the key by its first byte and
-never replaced the character; while #263 was in review, its wider
-multi-line test made that unreplaced character a row, 2:4.
-
-`tabnas/jsonic`'s ledger carries the same split through its grammar as
-`string-replace-control-row`, where a raw CR after a replaced LF is
-`unprintable` at 2:6 in TypeScript and Go and at 3:1 in Rust.
-
-Repair direction: **Rust changes, by ADR-13's default**, stepping over a
-replaced character as one column. If the maintainer rules that a row
-character counts a row wherever an escape or a replacement consumes it,
-TypeScript and Go move instead. One ruling settles this entry and the one
-above.
-
-Registered as `replace-ls-single` and `replace-ls-json5`, with
-`replace-row-char-control` as their control: a replaced ordinary
-character, one column in every port. The LF rows are not registered
-here. Go's answer there is a lex error, and the `lex` probe renders the
-source of a lex error, which would be the LF itself, a character no
-register cell may hold; Go's refusal is pinned instead, through the
-`spec` probe, under the entry below.
-
-### The `string.replace` map consulted after the escape and control checks in Go
-
-**Deferred, not deliberate**, and held on purpose: measured while #263 was
-repaired, with the repair written, measured and taken out again. Tracked
-as [#287](https://github.com/tabnas/parser/issues/287).
-
-Inside a string body TypeScript tests the closing quote, then the replace
-map, then the escape character, then the control range
-(`makeStringMatcher` in `ts/src/lexer.ts`), and Rust consults the replace
-map in the same place. Go's `matchString` in `go/lexer.go` tests the
-escape character, then the control range, and reads the replace map
-last. So a `string.replace` key for a control character is refused as
-`unprintable` before the map is read, and a key for the escape character
-begins an escape instead of being replaced:
-
-| `string.replace` | input, value | TypeScript | Go | Rust |
-|---|---|---|---|---|
-| `{x: 'X'}` | `"axb"` | `aXb` | `aXb` | `aXb` |
-| `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | **`unprintable`** | `aTb` |
-| `{LF: 'N'}` | `"a<LF>b"` | `aNb` | **`unprintable`** | `aNb` |
-| `{'\\': '/'}` | `"a\bc"` | `a/bc` | **`a`, U+0008, `c`** | `a/bc` |
-
-Repair direction: **Go changes**, to TypeScript's order, reading the
-replace map right after the closing quote. TypeScript defines the
-language and Rust agrees with it. The repair moves one block in
-`matchString`, and #287 carries it.
-
-It is held because a downstream ledger pins Go's present answer.
-`tabnas/jsonic`'s divergence ledger carries the replaced-LF case, through
-its grammar, as `string-replace-control`, with Go at `unprintable`, and
-that ledger fails a row whose divergence has been repaired until the row
-is deleted. This repository's `gate` job runs jsonic from its `main`, and
-the fleet gate runs jsonic at its latest release, so the repair lands
-once the row is gone from both: delete the row in tabnas/jsonic, release
-jsonic, then land the reorder and close this group in the same change.
-
-Registered as `replace-tab`, `replace-lf-value` and `replace-escape-char`,
-with `replace-order-control` as their control: a replaced ordinary
-character, parsed alike in every port. The control, the TAB and the LF go
-through the `spec` probe, a grammar that takes one string token, because
-the `lex` probe renders the source of a lex error and Go's would be the
-TAB or the LF itself; the escape character goes through the `lex` probe,
-whose value Go decodes rather than refuses.
-
-### A pusher read back past four hops through its child's snapshots in Rust
-
-**Deferred, not deliberate**: what the repair of "A pusher read back
-through its child's snapshot in Rust" (under "Repaired") does not reach.
-
-TypeScript and Go link a pushed child to its pusher as live rules, so
-from the child every `parent.child` is the child itself, however often
-the path repeats it. Rust links snapshots. With no history bound the
-push arm links the child a second time, from a snapshot that carries the
-pusher with the child linked, and that carries the read through four
-hops. Two hops further the snapshots end at the pusher as it stood
-before the push, whose `child` is the child pushed before. With `list`
-pushing `first` from its open phase and `second` from its close phase:
-
-| path read on `second` | TypeScript | Go | Rust |
-| --- | --- | --- | --- |
-| `parent.child.parent.child.name` | `second` | `second` | `second` |
-| `parent.child.parent.child.parent.child.name` | `second` | `second` | `first` |
-
-The same model shows from the pusher's side, during the pushing
-alternate's after actions. TypeScript and Go have linked the live rules
-before those actions run, so a state action on the pusher's close reads
-`child.parent.child` as the child just pushed. Rust relinks after the
-actions, so the same action reads the child pushed before, or nothing on
-the pusher's first push. No row can carry this face, because a
-serialized grammar has no after action that reads a path; per-runtime
-tests pin it instead.
-
-No fleet grammar reads either path: the survey in
-[`doc/rule-history-bound.md`](doc/rule-history-bound.md) found none
-past three hops.
-
-Repair direction: **Rust changes**, by a mechanism the maintainer
-chooses. Relinking further costs two more records per push without a
-bound for each further pair of hops. Resolving a child's `parent` as the
-live rule in the path readers gives TypeScript's answer at every depth
-for a condition path at no memory cost, though not to a subscriber
-walking the raw links or to an after action. Linking live rules, as the
-canonical engine does, is the full repair.
-
-Registered as `pusher-six-hops`, with `pusher-four-hops-control` as its
-control: the four-hop read, where the three runtimes agree. The
-after-action face is pinned by `ts/test/divergence.test.js` ('a pusher's
-after action reads the child just pushed here and in Go, the child
-pushed before in Rust'), `go/divergence_test.go`
-`TestPusherAfterActionReadsTheChildJustPushed` and
-`rs/tests/rule_history_test.rs`
-`an_after_action_on_the_pusher_reads_the_child_pushed_before`.
-
-### Decorations reach a derived child after the plugins in Go
-
-A derived child (`make()` in TypeScript, `derive` in Rust, `Derive` in
-Go) is built from the parent's options and re-runs the parent's plugins,
-so option-conditional grammar is rebuilt against the child's options.
-It also inherits the parent's decorations: the own properties a plugin
-puts on the instance in TypeScript, the `decorate` entries in Go and
-Rust. The two steps run in a different order. TypeScript copies the
-parent's properties onto the child before it re-runs the plugins (the
-`Object.keys(parent)` loop ahead of `this.use(plugin)` in the `Tabnas`
-constructor, `ts/src/tabnas.ts`), and Rust does the same
-(`child.decorations = self.decorations.clone()` ahead of the
-`use_plugin` loop in `Tabnas::derive`, `rs/src/lib.rs`). Go re-applies
-the plugins first and copies the decorations after (`Derive` in
-`go/plugin.go`).
-
-What a plugin sees of the instance while it re-runs on the child:
-
-| a plugin that writes a different value on each run | TypeScript | Go | Rust |
-| --- | --- | --- | --- |
-| during its re-run on the child, its decoration from the parent is already there | yes | no | yes |
-| the child's decoration once the derive returns | what the re-run wrote | the parent's, copied over what the re-run wrote | what the re-run wrote |
-
-Found by tabnas/yaml (#244): the Rust plugin guarded its install with a
-decoration, so on a child it found its own mark, returned early, and
-the child parsed `a: 1` to null with no error, where the same guard in
-Go would have installed. A guard belongs on the rules, as jsonic's is
-and tabnas-yaml's now is (tabnas/yaml#113). What remains is the
-order, with two faces: a plugin that reads a parent decoration during
-its re-run, to inherit state, finds it in TypeScript and Rust and not
-in Go; and a value the re-run writes, one computed from the child's
-options say, is what the child carries in TypeScript and Rust, where
-Go's copy afterwards puts the parent's value over it.
-
-Repair direction: **Go changes.** TypeScript defines the order and
-Rust follows it: the child carries its parent's decorations before
-any plugin runs on it.
-
-Not registered: the observable is what a plugin sees of the instance
-during its re-run, which no row-shaped probe drives. Pinned per
-runtime by `ts/test/divergence.test.js` ('a derived child carries its
-decorations into the plugin re-run here and in Rust, after it in Go'),
-`go/divergence_test.go` `TestDerivedChildGetsDecorationsAfterThePlugins`
-and `rs/tests/divergent_spec_test.rs`
-`derived_child_carries_decorations_into_the_plugin_rerun`.
 
 ## Not divergences
 

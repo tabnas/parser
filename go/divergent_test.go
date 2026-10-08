@@ -604,6 +604,14 @@ var notRegistered = map[string]string{
 		"would show OK:null three times; pinned per runtime by " +
 		"TestNoValueParseIsNil, the TS divergence test 'a parse that sets no " +
 		"value' and the Rust no_value_parse_is_null",
+	"The matchers tried after a custom matcher steps over a Latin-1 character": "cannot " +
+		"be registered by the probe set: the split needs a custom lex matcher " +
+		"that moves the cursor and declines, which no serialized grammar can " +
+		"carry; pinned per runtime by the TS divergence test 'a matcher that " +
+		"steps over a Latin-1 character keeps the matchers its first character " +
+		"chose here and in Rust, not in Go', " +
+		"TestStepOverALatin1CharacterTriesEveryMatcher and the Rust " +
+		"a_moved_cursor_keeps_the_matchers_the_first_character_chose",
 	"Decorations reach a derived child after the plugins in Go": "cannot be " +
 		"registered by the probe set: the observable is what a plugin sees of " +
 		"the instance while it re-runs on a derived child, which no row-shaped " +
