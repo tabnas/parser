@@ -19,12 +19,23 @@ import (
 	"testing"
 )
 
+// badTokenByteOrderMark is U+FEFF in UTF-8, spelled as bytes so that no
+// invisible character sits in this file.
+const badTokenByteOrderMark = "\xef\xbb\xbf"
+
 // badTokenMatcher is the custom matcher the fixture header specifies: a
 // bad token at `?`, one running to the end of the source at `%`, and one
-// at `!` with only its Err set, none moving the cursor.
+// at `!` with only its Err set, none moving the cursor; before any of
+// them, a byte-order mark at the very start of the source is stepped
+// over, one character and one column, as the xml plugin's matcher steps
+// over one.
 func badTokenMatcher(cfg *LexConfig, opts *Options) LexMatcher {
 	return func(lex *Lex, rule *Rule) *Token {
 		pnt := lex.Cursor()
+		if pnt.SI == 0 && strings.HasPrefix(lex.Src, badTokenByteOrderMark) {
+			pnt.SI += len(badTokenByteOrderMark)
+			pnt.CI++
+		}
 		if pnt.SI >= len(lex.Src) {
 			return nil
 		}

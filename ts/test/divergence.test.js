@@ -468,4 +468,47 @@ describe('divergence', () => {
     assert.strictEqual(child.mark, 'run2')
   })
 
+  it('a matcher that steps over a Latin-1 character keeps the matchers its first character chose here and in Rust, not in Go', () => {
+    // DIVERGENCE.md "The matchers tried after a custom matcher steps over
+    // a Latin-1 character". The fetch picks its built-in matchers from the
+    // dispatch table by the character it begins on, once, so after a
+    // custom matcher steps over `~` and declines, the number, string and
+    // space matchers stay unlisted, though each would match the character
+    // now under the cursor. Go tries every matcher: the number 1, the
+    // string a, and 1 again.
+    const TEXT = {
+      options: { rule: { start: 'top' } },
+      rule: {
+        top: {
+          open: [
+            { s: '#NR', a: '@value$' },
+            { s: '#TX', a: '@value$' },
+          ],
+        },
+      },
+    }
+    const step = {
+      order: 1.5e6,
+      make: () => (lex) => {
+        if (0 === lex.pnt.sI && '~' === lex.src[0]) {
+          lex.pnt.sI += 1
+          lex.pnt.cI += 1
+        }
+        return undefined
+      },
+    }
+    const tn = new Tabnas({ lex: { match: { step } } })
+    tn.grammar(TEXT)
+    assert.strictEqual(tn.parse('~1'), '1')
+    assert.strictEqual(tn.parse('~"a"'), '"a"')
+    assert.throws(
+      () => tn.parse('~ 1'),
+      (e) => {
+        const d = e.toJSON()
+        assert.deepEqual([d.code, d.row, d.col], ['unexpected', 1, 2])
+        return true
+      },
+    )
+  })
+
 })

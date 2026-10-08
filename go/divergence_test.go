@@ -692,3 +692,57 @@ func TestDerivedChildGetsDecorationsAfterThePlugins(t *testing.T) {
 			"re-run's run2", child.Decoration("mark"))
 	}
 }
+
+// DIVERGENCE.md "The matchers tried after a custom matcher steps over a
+// Latin-1 character": a custom matcher that steps over a `~` at the start
+// of the source and declines leaves this port trying every built-in at the
+// character now under the cursor, so `~1` is the number 1, `~ 1` the
+// number 1 after the space, and `~"a"` a string the grammar refuses
+// (unexpected at 1:2). TypeScript picks the
+// built-ins once, by the character the fetch began on, and `~` lists
+// neither the number, the string nor the space matcher; Rust follows it
+// (rs/tests/moved_cursor_test.rs).
+func TestStepOverALatin1CharacterTriesEveryMatcher(t *testing.T) {
+	step := func(cfg *LexConfig, opts *Options) LexMatcher {
+		return func(lex *Lex, rule *Rule) *Token {
+			pnt := lex.Cursor()
+			if pnt.SI == 0 && strings.HasPrefix(lex.Src, "~") {
+				pnt.SI++
+				pnt.CI++
+			}
+			return nil
+		}
+	}
+	j := Make(Options{Lex: &LexOptions{Match: map[string]*MatchSpec{
+		"step": {Order: 1500000, Make: step},
+	}}})
+	gs, err := GrammarSpecFromJSON([]byte(`{"options":{"rule":{"start":"top"}},` +
+		`"rule":{"top":{"open":[{"s":"#NR","a":"@value$"},{"s":"#TX","a":"@value$"}]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Grammar(gs); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		in   string
+		want any
+	}{{"~1", float64(1)}, {"~ 1", float64(1)}} {
+		got, err := j.Parse(c.in)
+		if err != nil {
+			t.Errorf("%q: %v, want %#v", c.in, err, c.want)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%q: %#v, want %#v (if this now gives TypeScript's answer, "+
+				"the split is repaired: delete the DIVERGENCE.md entry and this test)",
+				c.in, got, c.want)
+		}
+	}
+	// The string matcher cuts `"a"`, which the grammar does not take.
+	_, err = j.Parse(`~"a"`)
+	te, ok := err.(*TabnasError)
+	if !ok || te.Code != "unexpected" || te.Row != 1 || te.Col != 2 {
+		t.Errorf(`~"a": %v, want unexpected at 1:2 on the string "a"`, err)
+	}
+}

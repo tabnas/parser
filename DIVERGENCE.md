@@ -820,6 +820,52 @@ decorations into the plugin re-run here and in Rust, after it in Go'),
 and `rs/tests/divergent_spec_test.rs`
 `derived_child_carries_decorations_into_the_plugin_rerun`.
 
+### The matchers tried after a custom matcher steps over a Latin-1 character
+
+**Deferred, not deliberate**, for a ruling: measured while "A custom
+matcher that moves the cursor and declines, in Rust" (under "Repaired")
+was repaired.
+
+TypeScript picks the built-in matchers a fetch tries from a table indexed
+by the character the fetch begins on (`buildLexDispatch` in
+`ts/src/utility.ts`, read once in `Lex.next`). For a Latin-1 character it
+lists a built-in only when a token it makes could start with that
+character, or when the built-in carries a check. A custom matcher that
+steps over the first character and declines does not send the fetch back
+to the table, so the built-ins still tried are the ones listed for the
+character stepped over, each testing the character now under the cursor.
+Go has no such table and tries every matcher. Rust follows TypeScript.
+With a custom matcher that steps over a `~` at the start of the source and
+declines, and the `text` grammar of `test/spec/bad-token.tsv` (one `#NR`
+or one `#TX`):
+
+| input | TypeScript and Rust | Go |
+|---|---|---|
+| `~1` | the text `1` | the number `1` |
+| `~ 1` | `unexpected` at 1:2, the space | the number `1` |
+| `~"a"` | the text `"a"` | `unexpected` at 1:2, the string `"a"` |
+
+From U+0100 up the table lists every built-in, so a step over a byte-order
+mark, as xml's matcher makes, gives one answer in all three runtimes.
+
+Repair direction: **for a ruling.** By ADR-13 the default is that Go
+changes and picks its built-ins by the first character as TypeScript does.
+The other reading is that the table is a dispatch optimisation whose
+answer should not outlive the character it was read for, in which case
+TypeScript consults it again when the cursor moves, Rust drops its
+`listed` check, and all three try what the character under the cursor
+allows, Go's answers above.
+
+Not registered: the register's probes install serialized grammars, and
+the split needs a custom matcher that moves the cursor, which no
+serialized spec can carry. Pinned per runtime by
+`ts/test/divergence.test.js` ('a matcher that steps over a Latin-1
+character keeps the matchers its first character chose here and in Rust,
+not in Go'), `go/divergence_test.go`
+`TestStepOverALatin1CharacterTriesEveryMatcher` and
+`rs/tests/moved_cursor_test.rs`
+`a_moved_cursor_keeps_the_matchers_the_first_character_chose`.
+
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a
@@ -1259,6 +1305,55 @@ fixed or quietly dropped.
   read from the pusher during those after actions, is the live entry "A
   pusher read back past four hops through its child's snapshots in
   Rust".
+
+- **A custom matcher that moves the cursor and declines, in Rust.** Never
+  recorded here, and found under the xml plugin, whose matcher steps over
+  a byte-order mark at the start of the source and goes on, in the same
+  call, to look for a tag. TypeScript's matchers each start at the live
+  `lex.pnt`, and its first-character dispatch, read once when a fetch
+  begins, lists every built-in matcher for a character from U+0100 up;
+  Go's each start at `l.pnt`. Rust kept the point and the character the
+  fetch began on. The built-in matchers after the custom one tested the
+  old character and put their tokens at the old point. Three places took
+  a character that a matcher stepping over the last one had left them
+  without, and panicked, which the engine reports as `internal`: the line
+  matcher's branch for U+2028 and U+2029, the string matcher, and the
+  fallback that names an unclaimed character. Separately, a custom
+  matcher that declined during a negotiated re-cut lifted the request for
+  every matcher after it, because putting the cursor back also ended the
+  negotiation, where TypeScript's `Lex.speculate` leaves `want` alone. A
+  serialized grammar cannot reach any of it, since no matcher it can carry
+  moves the cursor and declines, and on its own all three runtimes already
+  agreed. With the matcher and the `text` grammar of
+  `test/spec/bad-token.tsv`, whose matcher now steps over a U+FEFF at the
+  start of the source:
+
+  | input | options | TypeScript and Go | Rust before |
+  |---|---|---|---|
+  | U+FEFF | text off, or on | `unexpected` at 1:2, naming nothing | `internal` at 1:1 |
+  | U+FEFF `1` | text off | `1` | `unexpected` at 1:1 |
+  | U+FEFF `1` | text on | `1` | the text `"1"` |
+  | U+FEFF `"a"` | text on | `unexpected` at 1:2, a string | the text `"\"a\""` |
+
+  Rust now moves the point and the character on with the cursor, raises
+  an unclaimed character where the cursor stands and names none at the
+  end of the source, keeps the request when a custom matcher declines,
+  and, once the cursor has moved, asks TypeScript's dispatch question
+  about the character the fetch began on. So for a Latin-1 first character
+  it tries what TypeScript tries: a matcher that steps over `~` leaves
+  `~1` the text `1` in TypeScript and Rust, where Go, which tries every
+  matcher, reads the number 1, a split this does not settle: the live
+  entry "The matchers tried after a custom matcher steps over a Latin-1
+  character". Over a
+  matrix of 240 cases, three grammars by eight inputs in four modes and
+  the lexer's token stream, with and without the matcher, Rust now gives
+  TypeScript's answer on every case, where it panicked on 15 and differed
+  on 69, all of them with the matcher. No input of xml's xmlconf corpus
+  reaches the path: none of 13,544 parses, decoded and raw with the text
+  matcher on and off, gives `internal` or changes. A document that is a
+  lone byte-order mark does reach it, and now gives `unexpected`. Pinned
+  in all three runtimes by the byte-order-mark rows of
+  `test/spec/bad-token.tsv`, and in Rust by `rs/tests/moved_cursor_test.rs`.
 
 ## Not divergences
 
