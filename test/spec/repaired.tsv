@@ -106,3 +106,9 @@ replace-two-byte	lex	{"opts":{"string":{"replace":{"é":"E"}}},"show":["valhex"]
 replace-lead-byte	lex	{"opts":{"string":{"replace":{"é":"E"}}},"show":["valhex"]}	"aÃb"	0061.00c3.0062
 replace-three-byte	lex	{"opts":{"string":{"replace":{"€":"EUR"}}},"show":["valhex"]}	"a€b"	0061.0045.0055.0052.0062
 replace-ls-json5-value	lex	{"opts":{"line":{"chars":"\u000a\u2028\u2029","rowChars":"\u000a\u2028\u2029"},"string":{"multiChars":"\"","replace":{"\u2028":"L"}}},"show":["valhex"]}	"a b"	0061.004c.0062
+#
+# @repaired: The `string.replace` map consulted after the escape and control checks in Go
+replace-order-control	spec	{"spec":{"options":{"rule":{"start":"top"},"string":{"replace":{"x":"X"}}},"rule":{"top":{"open":[{"s":["#ST"],"a":"@value$"}],"close":[{}]}}}}	"axb"	OK:"aXb"
+replace-tab	spec	{"spec":{"options":{"rule":{"start":"top"},"string":{"replace":{"\u0009":"T"}}},"rule":{"top":{"open":[{"s":["#ST"],"a":"@value$"}],"close":[{}]}}}}	"a\tb"	OK:"aTb"
+replace-lf-value	spec	{"spec":{"options":{"rule":{"start":"top"},"string":{"replace":{"\u000a":"N"}}},"rule":{"top":{"open":[{"s":["#ST"],"a":"@value$"}],"close":[{}]}}}}	"a\nb"	OK:"aNb"
+replace-escape-char	lex	{"opts":{"string":{"replace":{"\\":"/"}}},"show":["valhex"]}	"a\bc"	0061.002f.0062.0063
