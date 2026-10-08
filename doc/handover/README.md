@@ -1,4 +1,4 @@
-# Handover: engine 0.12.11 and the fleet released on it, 2026-10-08
+# Handover: engine 0.12.11, the fleet released on it, and alchemy's cycle broken, 2026-10-08
 
 This session ran in a cloud container on 2026-10-08, from the
 maintainer's instructions "Review the current state of the tabnas parser
@@ -8,6 +8,10 @@ publishing once work done." It began from the previous page, now
 [`2026-10-07.md`](2026-10-07.md). What is still open from that page is
 under "Carried over".
 
+The first version of this page went up in #304. The maintainer then
+answered the open questions, and a second round of work followed. Its
+rulings are 5 to 10 below, and its work is under "The second round".
+
 ## The maintainer's rulings (2026-10-08)
 
 1. **parser #287 lands**: jsonic's ledger row first and a jsonic patch
@@ -16,8 +20,31 @@ under "Carried over".
    at 0.12.10 moves to 0.12.11 in its own PR, and every changed package
    is released, in dependency order.
 3. **aless stays on git pins**, moved to the latest releases; #28 gets a
-   comment on what still blocks crates.io and stays open.
+   comment on what still blocks crates.io and stays open. Ruling 5
+   replaced this one.
 4. **aless prints a path the way jq takes it**: `.[0].name`.
+
+From the open questions, in the second round:
+
+5. **aless moves to crates.io** (#28). CI clones tabnas/yaml at the tag of
+   the tabnas-yaml that `Cargo.lock` pins. `tests/yaml_render.rs` reads
+   that checkout through `TABNAS_YAML_DIR`, and fails rather than skips
+   without it. The git pins and the `[patch]` tables go.
+6. **No release for a commit that ships nothing.** parser's handover page,
+   json's lockfile pins and lsp's test line stay unreleased.
+7. **chess-view 0.1.6**: the maintainer pushes the `web/v0.1.6` tag.
+8. **Fix now**: xml's embed check, the census's located cells, and
+   alchemy's cycle, the last "as designed". alchemy's tests that run
+   programs move to alchemy-cli, and alchemy stops depending on transduce
+   and render.
+9. **alchemy-cli's test-only dependencies are approved.**
+   - Rust: path dev-dependencies on support, the engine, ini, json5,
+     jsonc, jsonl, markdown, toml, xml, yaml and zon.
+   - Go: the same modules at their newest releases, with hoover indirect.
+   - TypeScript: `"*"` devDependencies on csv, ini, json5, jsonc, jsonic,
+     jsonl, markdown, support, toml, xml, yaml and zon.
+10. **Windows CI**: the shared polyglot workflow makes real links, and
+    takes released siblings from npm.
 
 ## What landed
 
@@ -145,27 +172,115 @@ for, most of it caught in review:
 - admin: `docs/deps` is fresh (`node tasks/port-deps.js --fresh`), since
   the cascade moved versions and no dependency edges.
 
+### The second round
+
+- **chess-view 0.1.6** (ruling 7). chess#59 moved `web/` to 0.1.6, which
+  bundles `@tabnas/chess` 0.1.13 and engine 0.12.11. The maintainer then
+  pushed `web/v0.1.6`, and npm serves 0.1.6 with `gitHead` `714db96`, the
+  merge commit. chess#60 moved the CDN examples in `README.md`,
+  `web/README.md` and `web/demo.html` to 0.1.6.
+- **aless#48** (closes #28, ruling 5). Every tabnas crate comes from
+  crates.io, and the `[patch]` tables are gone. `scripts/yaml-fixtures.sh`
+  clones tabnas/yaml at `go/v<version>` (else `ts/v<version>`) of the
+  tabnas-yaml that `Cargo.lock` pins, into
+  `target/yaml-fixtures/<version>`, and prints the export line. CI runs it
+  before the tests. `tests/yaml_render.rs` fails when `TABNAS_YAML_DIR` is
+  unset, or names a checkout of another version.
+- **xml's embed check** needed nothing more. xml#89 had already made embed
+  mode identify a jsonic host by jsonic's own alternates, in every port,
+  and xml 0.7.15 shipped it.
+- **The census.** admin#131 already read the code in an
+  `ERROR:<code>@row:col` cell. alchemy#55 dropped the eight bare rows that
+  alchemy's `check.tsv` carried only for the census.
+- **alchemy's cycle** (ruling 8). admin#137 records it as ADR-26.
+  - alchemy-cli#15 took over alchemy's tests that run programs, in all
+    three runtimes: `run.tsv` (natively and interpreted), the catalogue
+    test over all four fixture files, the lowering, events, linked
+    sources, the translation parts, and the standard library's
+    differential test.
+  - alchemy#56 then dropped transduce and render from alchemy's
+    manifests, in every runtime. Each port compiles a program without the
+    stages, on its own copy of render's number formatter. The TypeScript
+    API keeps `shortestNumber(renderers, value)` and
+    `numberText(renderers, value, lexeme)` as deprecated overloads.
+  - alchemy's new `downstream.yml` runs alchemy-cli's two gates against
+    every alchemy change, at the same branch name where alchemy-cli has
+    one.
+  - With four dependencies left, alchemy's `ci / ts (windows-latest)`
+    takes about a minute.
+- **The releases on it**, made and checked as in the first round, in
+  `publish.sh` order:
+
+  | Repo | Version | PR | Release commit | Published |
+  |---|---|---|---|---|
+  | alchemy | 0.2.4 | alchemy#57 | `2ddd50b` | npm, Go, crate, C library |
+  | transduce | 0.2.5 | transduce#44 | `66d5242` | npm, Go, crate |
+  | render | 0.2.4 | render#22 | `46c535c` | npm, Go, crate |
+  | alchemy-cli | 0.1.6 | alchemy-cli#16 | `fbe55cf` | npm, Go, crate |
+
+- **aless#49**: `Cargo.toml`'s floors and `Cargo.lock` take alchemy
+  0.2.4, transduce 0.2.5 and render 0.2.4. `cargo update` also moved seven
+  transitive crates to their newest compatible releases, each declaring a
+  `rust-version` at or below aless's 1.88. Every gate passed, locally and
+  in CI, the `msrv` job included.
+- **web#59** pins `@tabnas/chess-view` at 0.1.6, and moves the `/releases`
+  fallback versions of chess-view, alchemy, transduce, render and
+  alchemy-cli. Every other pin and version was already npm's latest, and
+  the generated site data was current. `npm run check` and the Vale gate
+  pass.
+- **Windows CI** (ruling 10, admin#138). The shared `polyglot-ci.yml`
+  template now makes real links on Windows. Git Bash's plain `ln -s`
+  deep-copies a tree and exits 0, and on alchemy's 18 dependencies the
+  copies took 1,075 s of a 1,224 s job. It now makes an NTFS symlink, else
+  a junction, else a copy, and logs which. It also takes a dependency from
+  npm when its `ts/` is what its latest release was built from, it
+  declares nothing the run builds from source, and the repo under test
+  does not read its build by path. transduce#43 and debug#81 ran it as
+  trials, closed unmerged afterwards. transduce's Windows TS job took
+  71 s with the defaults and 163 s with every dependency built from
+  source, against 952 s on `main`. The template is merged in admin; it
+  reaches `tabnas/.github` only when the maintainer applies it (see
+  "Decisions waiting").
+- **admin#139**: with `gh` logged out, `verify.sh` now asks GitHub, with
+  `git ls-remote`, about a template's repository that has no checkout
+  beside admin, where it used to take it for absent (see "No red checks").
+  `apply-workflows.sh`'s scope check, which ended silently when no one was
+  logged in, now says to log in with the `workflow` scope.
+
 ## No red checks
 
-With web#58 and admin#136 merged, `scripts/verify.sh` reports no problem
-in any of the 41 tabnas repositories cloned here. 38 are ok and 3 are
-pending, as expected:
+At the end of the second round, `scripts/verify.sh` finds no problem in
+any of the 41 tabnas repositories cloned here. 37 are ok, and 4 are
+pending, each past its release only by commits that ship nothing, which
+ruling 6 leaves unreleased:
 
-- alchemy, whose test-only requires stay one release behind (see
-  "Carried over");
-- json and lsp, each one commit past its release (json#107 and lsp#43),
-  neither of which changes a published artifact.
+- chess, two commits past `ts/v0.1.13`: chess#59 changed `web/`, which
+  ships as chess-view under its own tag, and chess#60 is documentation;
+- json and lsp, one commit each (json#107 and lsp#43);
+- parser, this page, whose second version is one more documentation
+  commit.
 
-parser, ok at 0.12.11, becomes the fourth pending when this page merges,
-one documentation commit past its release.
+alchemy is ok at 0.2.4: ADR-26 removed the test-only requires that kept
+it pending after the first round.
 
-Every workflow run on the head of `main` is green in all 41 of them and
-in aless. One had been red: parser's scheduled `fleet` run at 10:32 UTC
-failed in feed's Go suite alone. It cloned feed 0.6.14, the latest feed
-then, with xml 0.7.15, released about twenty minutes before. xml 0.7.15
-gives attributes to Go as a `*tabnas.OrderedMap`, and feed reads that
-form only from feed#81, first released in 0.6.15. So every attribute
-read as absent: an Atom link's `href` came out empty, and
+At the fleet level `verify.sh` reports one problem, `staged-workflows`.
+The shared `polyglot-ci.yml` template from admin#138 is ahead of the copy
+deployed in `tabnas/.github`, and stays so until the maintainer applies
+it (see "Decisions waiting"). A session in a container has seen this only
+since admin#139. Before it, with `gh` logged out, `verify.sh` took
+`.github`, `measure` and `status` for repositories that do not exist, and
+compared none of their nine templates.
+
+Every check run on the head of `main` is green in all 41 repositories and
+in aless: each of the 42 heads has check runs, none failed or still
+running, and no commit status is failing.
+
+In the first round one run had been red: parser's scheduled `fleet` run
+at 10:32 UTC failed in feed's Go suite alone. It cloned feed 0.6.14, the
+latest feed then, with xml 0.7.15, released about twenty minutes before.
+xml 0.7.15 gives attributes to Go as a `*tabnas.OrderedMap`, and feed
+reads that form only from feed#81, first released in 0.6.15. So every
+attribute read as absent: an Atom link's `href` came out empty, and
 `<rss version="0.91">` was detected as RSS 2.0. Re-run once feed 0.6.15
 was out, the same job ended `FLEET PASS`. A Go program that requires xml
 0.7.15 or later and feed 0.6.14 or earlier gets the same wrong answer, and
@@ -173,32 +288,41 @@ feed 0.6.15 is its fix.
 
 ## Pushed and open
 
-Nothing. Every pull request this session opened is merged, and this
-page goes up in its own.
+Nothing. Every pull request of both rounds is merged or, for the two
+trials, closed; this page's second version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-Unchanged from [`2026-10-07.md`](2026-10-07.md): the engine's loose
-TypeScript types, xml's loose embed check, alchemy's wording
-inconsistencies, and the census's `ERROR:<code>@row:col` cells.
+- **Apply admin#138 to `tabnas/.github`.** A session cannot attach that
+  repository, so the shared workflow moves only when the maintainer
+  applies the template. From admin, read the dry run's diff first:
+
+  ```bash
+  rollout/apply-workflows.sh --only 'dot-github__polyglot-ci.yml'
+  rollout/apply-workflows.sh --apply --only 'dot-github__polyglot-ci.yml'
+  ```
+
+  Until then, `scripts/verify.sh` reports `staged-workflows`, with the
+  template ahead of the deployed copy.
+- **The engine's loose TypeScript types**, unchanged from
+  [`2026-10-07.md`](2026-10-07.md). The other three items on that list
+  are done: xml's embed check (xml#89), alchemy's wording (alchemy#51)
+  and the census's located cells (admin#131, with alchemy#55).
 
 ## Carried over
 
 - From [`2026-10-04.md`](2026-10-04.md), "Carried over", unchanged:
   Engine 3, the jsonic/go alignment, the Engine 1 and 2 follow-ups, the
   css citations in this repository, and css's linear selector-group scan.
-- **Open issues**: parser #258. aless #28 has a comment on what blocks
-  the move to crates.io (see aless above). aless #29 waits on its owner:
-  this session's credentials cannot delete branches.
+- **Open issues**: parser #258. aless #29 waits on its owner: this
+  session's credentials cannot delete branches. aless#48 closed #28.
 - **Found, not fixed** on the previous page and still open: two engines
   from `tabnas_json::make()` cannot be merged in Rust. (The U+FEFF panic,
   feed's attribute order, and ini's and toml's stale AGENTS.md lines are
   fixed.)
-- **chess-view**: the chess repository's `web/` package is released by a
-  `web/v*` tag, which only the maintainer can push.
-- **alchemy's test-only requires** on transduce and render, and their
-  `rs/Cargo.lock` entries, stay one release behind until alchemy's next
-  release (the cycle admin#114 recorded).
+- **chess-view** is released by a `web/v*` tag, which only the
+  maintainer can push. 0.1.6 is out; the next release needs the same
+  step.
 
 ## Working method that held up
 
@@ -213,10 +337,19 @@ inconsistencies, and the census's `ERROR:<code>@row:col` cells.
   release rewrites each path into a caret requirement on the newest
   version, so nothing broke; `publish.sh`'s ORDER still puts lsp last,
   and that is the order to keep.
-- **alchemy's `ci / ts (windows-latest)` takes about 25 minutes**, nearly
-  all of it building its 17 siblings. It is slow, not stuck. This session
-  cancelled and re-ran it once believing otherwise; the re-run took 25
-  minutes and passed.
+- **A long `ci / ts (windows-latest)` was copying trees, not stuck.**
+  alchemy's took about 25 minutes with 18 siblings, and this session
+  cancelled and re-ran it once believing otherwise. Since alchemy#56 it
+  takes about a minute. transduce's, with 18 as well, took 8 to 16
+  minutes in this session, and will until admin#138 reaches
+  `tabnas/.github`.
+- **The shared Go job's workspace takes every `go.mod` it finds**,
+  nested test modules included. json's `go/debugtest` replaces
+  `github.com/tabnas/debug/go` with `../../../debug/go`, so a caller whose
+  `deps` clones json must clone debug too, or its Go jobs fail. alchemy-cli
+  found it.
+- **Read a SHA; never type one.** A merge with a typed full SHA got a 409.
+  Take it from `git rev-parse` or `git ls-remote`.
 - **Never ask the Go proxy for a version before its tag exists.**
   proxy.golang.org caches the not-found answer: this session's waiter
   polled `alchemy/go/@v/v0.2.3.info` while the release was still
@@ -232,7 +365,10 @@ inconsistencies, and the census's `ERROR:<code>@row:col` cells.
   calling a red run a regression.
 - **The disk allowance runs out across a fleet of Rust builds.** One
   shared `CARGO_TARGET_DIR` for every prep reached 23G and left 1.1G
-  free; it is rebuildable, so clear it between levels.
+  free; it is rebuildable, so clear it between levels. In the second
+  round six per-task target directories, from work already merged, held
+  15 GB, and a release prep's link failed with `No space left on device`.
+  Delete each one when its work merges.
 - **Read-only subagents watched CI**, one line per PR or commit, which
   kept the fleet's check-run JSON out of the main context. A watcher that
   waits for Codex must not wait for a re-review after a push: Codex
@@ -255,6 +391,21 @@ inconsistencies, and the census's `ERROR:<code>@row:col` cells.
     `claude/verify-org-list-fallback`;
   - aless: `claude/agent-contract-fixes` and `claude/aless-pins-0.12.11`,
     which add to #29's list.
+
+  And from the second round, merged or closed:
+  - `claude/release-<repo>-<version>` for the second table's four
+    releases;
+  - chess: `claude/chess-view-0.1.6` and `claude/chess-view-cdn-0.1.6`;
+  - aless: `claude/aless-crates-io` and `claude/aless-alchemy-stack`;
+  - alchemy: `claude/census-rows-located` and `claude/alchemy-tests-to-cli`;
+  - alchemy-cli: `claude/alchemy-tests-to-cli`;
+  - admin: `claude/alchemy-no-stage-deps`,
+    `claude/polyglot-windows-links` and
+    `claude/verify-unchecked-template-repos`;
+  - transduce and debug: `claude/try-polyglot-links`, the closed trials;
+  - web: `claude/web-alchemy-stack-2026-10-08`;
+  - parser: `claude/handover-2026-10-08-second-round`, this page's
+    second version.
 - `scripts/verify.sh` takes every git checkout beside admin for a tabnas
   repository. In a container whose `/home/user` holds aless too, it
   reports aless as a PROBLEM for having no `.tabnas-kind`; name the
