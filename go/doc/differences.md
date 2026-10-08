@@ -223,6 +223,32 @@ Pinned cross-runtime by the shared fixture `test/spec/lex-string-control.tsv`
 (`TestSpecLexStringControl` in `go/lexer_optionplumbing_test.go`,
 `string-allow-control-spec` in `ts/test/lex.test.js`).
 
+### `string.replace` before the escape and control checks: aligned, was a Go defect
+
+`string.replace` (`Options.String.Replace` in Go) maps a character inside a
+string body to replacement text. TypeScript consults the map right after the
+closing-quote check, before the escape character and the control range, and
+Rust does the same. Go's `matchString` consulted it last, so a key for a
+control character met the control check first and a key for the escape
+character began an escape:
+
+| `string.replace` | input | TypeScript and Rust | Go, before |
+|---|---|---|---|
+| `{TAB: 'T'}` | `"a<TAB>b"` | `aTb` | `unprintable` |
+| `{LF: 'N'}` | `"a<LF>b"` | `aNb` | `unprintable` |
+| `{'\\': '/'}` | `"a\bc"` | `a/bc` | `a`, U+0008, `c` |
+
+The replace block now sits right after the closing-quote check, in
+TypeScript's order. Both body scans already stopped on a replace key before
+the line and control classes, so only the dispatch order moved, as
+tabnas/parser#287 measured. A key for neither a control character nor the
+escape character, a printable letter or a multi-byte character, met
+neither check, and gives the same answer as before.
+
+Pinned by the register group "The `string.replace` map consulted after the
+escape and control checks in Go" in `test/spec/repaired.tsv`, which all
+three suites run, with the parity record in [`DIVERGENCE.md`](../../DIVERGENCE.md).
+
 ### Empty / Whitespace Input
 
 Both implementations short-circuit exact empty-string input (`""`) before the
