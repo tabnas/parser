@@ -303,9 +303,9 @@ dependencies' licences, whether jless is still the base code, and for
 the man page and the completions to follow community practice.
 
 - **aless#53**:
-  - The tap formula installs the man page in `man1` and the bash, zsh
-    and fish completions where Homebrew's formulas put theirs, with a
-    test for `brew test`. `publish-homebrew.yml`, aless's own, replaces
+  - The tap formula installs the man page in `man1` and the bash, zsh,
+    fish and PowerShell completions where Homebrew's formulas put theirs,
+    with a test for `brew test`. `publish-homebrew.yml`, aless's own, replaces
     dist's Homebrew job: it runs `scripts/homebrew-formula.py` over the
     formula dist writes, and pushes the result to the tap. Checked with
     Homebrew itself, from a local tap: `brew test` passed, and
