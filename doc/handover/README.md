@@ -1,4 +1,4 @@
-# Handover: engine 0.12.11, the fleet released on it, and alchemy's cycle broken, 2026-10-08
+# Handover: engine 0.12.11, the fleet released on it, alchemy's cycle broken, and aless ready to release, 2026-10-08 and 2026-10-09
 
 This session ran in a cloud container on 2026-10-08, from the
 maintainer's instructions "Review the current state of the tabnas parser
@@ -10,7 +10,10 @@ under "Carried over".
 
 The first version of this page went up in #304. The maintainer then
 answered the open questions, and a second round of work followed. Its
-rulings are 5 to 10 below, and its work is under "The second round".
+rulings are 5 to 10 below, and its work is under "The second round". A
+third round, on 2026-10-09, made aless ready to release as a tool of its
+own. Its work is under "The third round", and the steps that only the
+maintainer can take are under "Decisions waiting".
 
 ## The maintainer's rulings (2026-10-08)
 
@@ -247,6 +250,61 @@ for, most of it caught in review:
   `apply-workflows.sh`'s scope check, which ended silently when no one was
   logged in, now says to log in with the `workflow` scope.
 
+### The third round: aless as a released tool, 2026-10-09
+
+The maintainer then asked: "Report on the status of aless. Can it now be
+prepared as a standalone cmd line utility in rust?"; "Prepare to match the
+distribution options of jless.io; then search for best modern practices
+for releasing a cross platform command line tool and tui like this"; and
+"ensure that the help provided by the aless utility is full and
+comprehensive so that agents can easily drive it, then do everything to
+prepare up to the point that you need manual actions by me".
+
+- **aless#50**: [dist](https://github.com/axodotdev/cargo-dist) 0.33.0
+  builds and publishes aless. `dist-workspace.toml` is the configuration,
+  and dist generates `.github/workflows/release.yml` from it; a pull
+  request's `plan` job fails when the two disagree.
+  - A release is a `workflow_dispatch` with the tag to make (`dry-run`
+    by default). The `host` job creates the GitHub Release, and with it
+    the tag, so a session never pushes one.
+  - Eight targets, each built on a native runner: Linux x86_64 and
+    aarch64 (glibc 2.35, and static musl), macOS x86_64 and aarch64,
+    Windows x86_64 and aarch64.
+  - Shell and PowerShell installers, a Homebrew formula pushed to
+    `rjrodger/homebrew-tap`, and crates.io through
+    `.github/workflows/publish-crates.yml`, by trusted publishing.
+  - Build-provenance attestations, a CycloneDX SBOM, and cargo-auditable
+    binaries. Every action is pinned by commit.
+  - RELEASING.md, PACKAGING.md and CHANGELOG.md say how, and what the
+    owner does once.
+- **aless#51**: every option is in one table, `cli::OPTIONS`, and the
+  parser refuses any option the table does not list. `--help` is the
+  whole reference an agent needs: every option, what each output prints,
+  every error kind with its fields, the exit statuses, paths, positions,
+  formats and limits. `-h` is a summary. `--generate` writes the man page,
+  completions for bash, zsh, fish and PowerShell, and the Agent Skill,
+  from the same table. `man/aless.1` and `completions/` are committed,
+  checked current by `tests/agent.rs`, and carried by every archive and
+  by the crate.
+- **aless#52**: the changelog's section is `[0.1.0] - 2026-10-09`, which
+  dist takes as the Release's notes, and the man page takes its date.
+- **A dry run** of `release.yml` was dispatched on `main` at `eae2e4f`,
+  #51's merge, to build all eight archives without publishing; its
+  result is added here when it ends.
+
+Two things are the maintainer's to decide, and neither blocks 0.1.0:
+
+- **A licence bundle for the binaries.** The archives carry aless's
+  licence and THIRD_PARTY_NOTICES.md (jless and the AQL aless), and the
+  SBOM names every crate and its licence, but not the licences' texts.
+  cargo-about can write them, either committed and checked by CI (which
+  then fails on each dependency bump until it is regenerated), or made in
+  the release workflow as one more Release asset.
+- **The tap formula installs only the binary.** dist's formula puts the
+  man page and the completions in `$(brew --prefix)/share/aless/`. A
+  formula in homebrew-core takes them from `aless --generate`, as
+  PACKAGING.md shows.
+
 ## No red checks
 
 At the end of the second round, `scripts/verify.sh` finds no problem in
@@ -288,11 +346,35 @@ feed 0.6.15 is its fix.
 
 ## Pushed and open
 
-Nothing. Every pull request of both rounds is merged or, for the two
-trials, closed; this page's second version goes up in its own.
+Nothing. Every pull request of the three rounds is merged or, for the two
+trials, closed; this page's third version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
+- **Release aless 0.1.0.** `main` is the release commit. RELEASING.md
+  says how, and these steps need the owner's accounts:
+  1. Create the public repository `rjrodger/homebrew-tap` with any first
+     commit. Make a fine-grained token whose only repository is that one,
+     with *Contents: Read and write*, and store it in aless as the
+     Actions secret `HOMEBREW_TAP_TOKEN`.
+  2. Publish 0.1.0 to crates.io by hand: crates.io takes a trusted
+     publisher only for a crate that exists. From a clean checkout of
+     `main`, `cargo publish --locked`, with a token limited to the crate
+     `aless`, the `publish-new` and `publish-update` scopes, and a day's
+     expiry. Then add the trusted publisher (GitHub, `rjrodger`, `aless`,
+     workflow `release.yml`, environment `release`), require trusted
+     publishing, and revoke the token. `publish-crates.yml` then finds
+     0.1.0 there and skips.
+  3. Recommended: turn on release immutability, and give the `release`
+     environment a required reviewer.
+  4. Dispatch `release.yml` on `main` with the tag `v0.1.0`, and check
+     the Release as RELEASING.md's step 4 says.
+
+  After it: the starting points in PACKAGING.md for the AUR, a Scoop
+  bucket and winget, and homebrew-core once aless meets its acceptance
+  policy.
+- **A licence bundle for aless's binaries**, and **the tap formula's man
+  page and completions**: see the end of "The third round".
 - **Apply admin#138 to `tabnas/.github`.** A session cannot attach that
   repository, so the shared workflow moves only when the maintainer
   applies the template. From admin, read the dry run's diff first:
@@ -406,6 +488,11 @@ trials, closed; this page's second version goes up in its own.
   - web: `claude/web-alchemy-stack-2026-10-08`;
   - parser: `claude/handover-2026-10-08-second-round`, this page's
     second version.
+
+  And from the third round, all merged:
+  - aless: `claude/release-distribution`, `claude/help-and-release-prep`
+    and `claude/release-0.1.0`;
+  - parser: `claude/handover-2026-10-09`, this page's third version.
 - `scripts/verify.sh` takes every git checkout beside admin for a tabnas
   repository. In a container whose `/home/user` holds aless too, it
   reports aless as a PROBLEM for having no `.tabnas-kind`; name the
