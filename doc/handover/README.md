@@ -338,6 +338,12 @@ Every check run on the head of `main` is green in all 41 repositories and
 in aless: each of the 42 heads has check runs, none failed or still
 running, and no commit status is failing.
 
+After the third round, aless's `main` is green at `44c0a91`, the
+release commit: `ci` on Linux, macOS and Windows, and the minimum Rust,
+1.88. The dry run of the release ran at `eae2e4f`, which differs from it
+only in the changelog's heading, the man page's date and the README's
+Install section.
+
 In the first round one run had been red: parser's scheduled `fleet` run
 at 10:32 UTC failed in feed's Go suite alone. It cloned feed 0.6.14, the
 latest feed then, with xml 0.7.15, released about twenty minutes before.
