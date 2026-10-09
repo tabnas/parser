@@ -290,25 +290,41 @@ prepare up to the point that you need manual actions by me".
   dist takes as the Release's notes, and the man page takes its date.
   The README's Install section leads with the release channels: the
   archives and crates.io ship the release commit's README, as Codex's
-  review pointed out. Its merge, `44c0a91`, is the commit to release.
+  review pointed out. Its merge is `44c0a91`.
 - **A dry run** of `release.yml` on `main` at `eae2e4f`, #51's merge
   (run 37916812440), built all eight archives without publishing, and
   passed. Each archive carries `man/aless.1` and `completions/`, the
   Windows zips with LF, as `.gitattributes` pins them. The released
   Linux binary writes the same man page and completions it ships.
 
-Two things are the maintainer's to decide, and neither blocks 0.1.0:
+The maintainer then asked whether the tap is a GitHub repository, for a
+compliant crate description, for the community practice on the
+dependencies' licences, whether jless is still the base code, and for
+the man page and the completions to follow community practice.
 
-- **A licence bundle for the binaries.** The archives carry aless's
-  licence and THIRD_PARTY_NOTICES.md (jless and the AQL aless), and the
-  SBOM names every crate and its licence, but not the licences' texts.
-  cargo-about can write them, either committed and checked by CI (which
-  then fails on each dependency bump until it is regenerated), or made in
-  the release workflow as one more Release asset.
-- **The tap formula installs only the binary.** dist's formula puts the
-  man page and the completions in `$(brew --prefix)/share/aless/`. A
-  formula in homebrew-core takes them from `aless --generate`, as
-  PACKAGING.md shows.
+- **aless#53**:
+  - The tap formula installs the man page in `man1` and the bash, zsh
+    and fish completions where Homebrew's formulas put theirs, with a
+    test for `brew test`. `publish-homebrew.yml`, aless's own, replaces
+    dist's Homebrew job: it runs `scripts/homebrew-formula.py` over the
+    formula dist writes, and pushes the result to the tap. Checked with
+    Homebrew itself, from a local tap: `brew test` passed, and
+    `brew audit --strict` reported nothing.
+  - The zsh completion also loads from `~/.zshrc`
+    (`eval "$(aless --generate complete-zsh)"`), as bash's and fish's
+    do from theirs.
+  - A unit test holds `Cargo.toml`'s description to Homebrew's rules for
+    a formula's `desc`, which it already kept.
+  - THIRD_PARTY_NOTICES.md credits jless alone. aless is an independent
+    implementation of jless's interface, and none of jless's code is in
+    it. The OpenAPI example in `examples/` is one written for aless.
+- **No licence bundle.** The comparable tools ship none: the release
+  archives of ripgrep 14.1.1, bat 0.24.0, fd 10.2.0, jless 0.9.0, delta
+  0.18.2, zoxide 0.9.6, uv 0.4.30 and starship 1.21.1 carry at most their
+  own licence, and none of their dependencies' licence texts. aless's
+  archives carry its licence and jless's notice, and its CycloneDX SBOM
+  names every crate and its licence. If a bundle is ever wanted,
+  [cargo-about](https://github.com/EmbarkStudios/cargo-about) writes one.
 
 ## No red checks
 
@@ -358,16 +374,18 @@ feed 0.6.15 is its fix.
 ## Pushed and open
 
 Nothing. Every pull request of the three rounds is merged or, for the two
-trials, closed; this page's third version goes up in its own.
+trials, closed; this page's fourth version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-- **Release aless 0.1.0.** `main`, at `44c0a91`, is the release commit.
-  RELEASING.md says how, and these steps need the owner's accounts:
-  1. Create the public repository `rjrodger/homebrew-tap` with any first
-     commit. Make a fine-grained token whose only repository is that one,
-     with *Contents: Read and write*, and store it in aless as the
-     Actions secret `HOMEBREW_TAP_TOKEN`.
+- **Release aless 0.1.0.** `main`, at aless#53's merge, is the release
+  commit. RELEASING.md says how, and these steps need the owner's
+  accounts:
+  1. On GitHub, create the public repository `rjrodger/homebrew-tap`,
+     with a README so that it has a first commit; Homebrew reads
+     `rjrodger/tap` as that repository. Make a fine-grained token whose
+     only repository is that one, with *Contents: Read and write*, and
+     store it in aless as the Actions secret `HOMEBREW_TAP_TOKEN`.
   2. Publish 0.1.0 to crates.io by hand: crates.io takes a trusted
      publisher only for a crate that exists. From a clean checkout of
      `main`, `cargo publish --locked`, with a token limited to the crate
@@ -384,8 +402,6 @@ trials, closed; this page's third version goes up in its own.
   After it: the starting points in PACKAGING.md for the AUR, a Scoop
   bucket and winget, and homebrew-core once aless meets its acceptance
   policy.
-- **A licence bundle for aless's binaries**, and **the tap formula's man
-  page and completions**: see the end of "The third round".
 - **Apply admin#138 to `tabnas/.github`.** A session cannot attach that
   repository, so the shared workflow moves only when the maintainer
   applies the template. From admin, read the dry run's diff first:
