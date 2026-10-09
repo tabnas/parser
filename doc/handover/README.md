@@ -13,7 +13,8 @@ answered the open questions, and a second round of work followed. Its
 rulings are 5 to 10 below, and its work is under "The second round". A
 third round, on 2026-10-09, made aless ready to release as a tool of its
 own. Its work is under "The third round", and the steps that only the
-maintainer can take are under "Decisions waiting".
+maintainer can take are under "Decisions waiting". A fourth, the same
+day, gave aless a homepage, under "The fourth round".
 
 ## The maintainer's rulings (2026-10-08)
 
@@ -326,6 +327,40 @@ the man page and the completions to follow community practice.
   names every crate and its licence. If a bundle is ever wanted,
   [cargo-about](https://github.com/EmbarkStudios/cargo-about) writes one.
 
+### The fourth round: a homepage for aless, 2026-10-09
+
+The maintainer then asked for "a github page for aless, so that the
+utility has homepage", documented on the principles of Diátaxis, at
+`aless.tabnas.dev` with GitHub Pages' custom-domain (CNAME) support.
+
+- **aless#54**: the site, Markdown under aless's `site/`, a directory
+  for each of Diátaxis's kinds: two tutorials, thirteen how-to guides,
+  the reference and six explanations, with a home page, `llms.txt`, a
+  sitemap and a Markdown twin of every page. Its merge is `b51eb8e`.
+  - The reference's two pages are written from the binary, never by
+    hand: `cli::reference_html()`, new, renders the topics `--help`
+    prints, and the keys page is the help F1 shows.
+  - `tests/site.rs` builds the site with tabnas-markdown, already a
+    dependency, and checks it in every `cargo test`: links and anchors,
+    the options each example names, the output of every `console`
+    example (33 commands, run against the published example files), and
+    the house style, with this repository's Vale reject list copied to
+    `site/reject.txt`.
+  - `.github/workflows/pages.yml` builds the site on every push to
+    `main` and deploys it once Pages is enabled. Until then it builds and
+    checks the site and skips the deploy with a notice, so `main` stays
+    green.
+  - `Cargo.toml`'s `homepage` is now `https://aless.tabnas.dev`, so the
+    crate's page and the Homebrew formula link there, and `--help`'s SEE
+    ALSO names it.
+  - Codex's review found three faults, each fixed before the merge: two
+    pages without the Markdown twin the site promises, a missing `order`
+    that sorted a page first in silence, and a CI recipe that split
+    filenames with spaces in them.
+- **DNS, checked from outside**: `tabnas.dev` is served by Cloudflare,
+  nothing verifies it for GitHub Pages, and `aless.tabnas.dev` does not
+  exist yet, with no wildcard record to shadow it.
+
 ## No red checks
 
 At the end of the second round, `scripts/verify.sh` finds no problem in
@@ -354,11 +389,14 @@ Every check run on the head of `main` is green in all 41 repositories and
 in aless: each of the 42 heads has check runs, none failed or still
 running, and no commit status is failing.
 
-After aless#53, aless's `main` is green at `f66bd6a`, the release
-commit: `ci` on Linux, macOS and Windows, and the minimum Rust, 1.88.
+After aless#54, aless's `main` is green at `b51eb8e`, the release
+commit: `ci` on Linux, macOS and Windows, the minimum Rust, 1.88, and
+`pages`, which built and checked the site and skipped the deploy.
 aless#53 changed the release workflow, so the release was dry-run again
 at `f66bd6a` (run 37928005725). All eight archives were built, each with
-the man page and the completions, and nothing was published.
+the man page and the completions, and nothing was published. aless#54
+left the release workflow and its configuration as they were, and
+RELEASING.md dry-runs every release before it publishes.
 
 A dry run skips the publish jobs, so their formula step was then run by
 hand on that run's own `aless.rb`, and `scripts/homebrew-formula.py`
@@ -381,20 +419,30 @@ feed 0.6.15 is its fix.
 
 ## Pushed and open
 
-Nothing. Every pull request of the three rounds is merged or, for the two
-trials, closed; this page's fourth version goes up in its own.
+Nothing. Every pull request of the four rounds is merged or, for the two
+trials, closed; this page's fifth version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-- **Release aless 0.1.0.** `main`, at `f66bd6a`, aless#53's merge, is
+- **Release aless 0.1.0.** `main`, at `b51eb8e`, aless#54's merge, is
   the release commit. RELEASING.md says how, and these steps need the
   owner's accounts:
-  1. On GitHub, create the public repository `rjrodger/homebrew-tap`,
+  1. The homepage, first, since the certificate can take a day
+     (RELEASING.md's step 3): in aless's *Settings → Pages*, set the
+     source to *GitHub Actions* and the custom domain to
+     `aless.tabnas.dev`, before any DNS record exists. Then, in
+     Cloudflare's DNS for `tabnas.dev`, add `CNAME aless` to
+     `rjrodger.github.io`, *DNS only*. Run `pages`, and tick *Enforce
+     HTTPS* when it is offered. Verifying `aless.tabnas.dev` for the
+     account is recommended; verifying `tabnas.dev` would keep the
+     tabnas organisation's repositories off `tabnas.dev` and every name
+     directly under it.
+  2. On GitHub, create the public repository `rjrodger/homebrew-tap`,
      with a README so that it has a first commit; Homebrew reads
      `rjrodger/tap` as that repository. Make a fine-grained token whose
      only repository is that one, with *Contents: Read and write*, and
      store it in aless as the Actions secret `HOMEBREW_TAP_TOKEN`.
-  2. Publish 0.1.0 to crates.io by hand: crates.io takes a trusted
+  3. Publish 0.1.0 to crates.io by hand: crates.io takes a trusted
      publisher only for a crate that exists. From a clean checkout of
      `main`, `cargo publish --locked`, with a token limited to the crate
      `aless`, the `publish-new` and `publish-update` scopes, and a day's
@@ -402,9 +450,9 @@ trials, closed; this page's fourth version goes up in its own.
      workflow `release.yml`, environment `release`), require trusted
      publishing, and revoke the token. `publish-crates.yml` then finds
      0.1.0 there and skips.
-  3. Recommended: turn on release immutability, and give the `release`
+  4. Recommended: turn on release immutability, and give the `release`
      environment a required reviewer.
-  4. Dispatch `release.yml` on `main` with the tag `v0.1.0`, and check
+  5. Dispatch `release.yml` on `main` with the tag `v0.1.0`, and check
      the Release as RELEASING.md's step 4 says.
 
   After it: the starting points in PACKAGING.md for the AUR, a Scoop
