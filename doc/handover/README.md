@@ -288,6 +288,9 @@ prepare up to the point that you need manual actions by me".
   by the crate.
 - **aless#52**: the changelog's section is `[0.1.0] - 2026-10-09`, which
   dist takes as the Release's notes, and the man page takes its date.
+  The README's Install section leads with the release channels: the
+  archives and crates.io ship the release commit's README, as Codex's
+  review pointed out. Its merge, `44c0a91`, is the commit to release.
 - **A dry run** of `release.yml` on `main` at `eae2e4f`, #51's merge
   (run 37916812440), built all eight archives without publishing, and
   passed. Each archive carries `man/aless.1` and `completions/`, the
@@ -353,8 +356,8 @@ trials, closed; this page's third version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-- **Release aless 0.1.0.** `main` is the release commit. RELEASING.md
-  says how, and these steps need the owner's accounts:
+- **Release aless 0.1.0.** `main`, at `44c0a91`, is the release commit.
+  RELEASING.md says how, and these steps need the owner's accounts:
   1. Create the public repository `rjrodger/homebrew-tap` with any first
      commit. Make a fine-grained token whose only repository is that one,
      with *Contents: Read and write*, and store it in aless as the
