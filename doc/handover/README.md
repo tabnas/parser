@@ -378,9 +378,9 @@ trials, closed; this page's fourth version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-- **Release aless 0.1.0.** `main`, at aless#53's merge, is the release
-  commit. RELEASING.md says how, and these steps need the owner's
-  accounts:
+- **Release aless 0.1.0.** `main`, at `f66bd6a`, aless#53's merge, is
+  the release commit. RELEASING.md says how, and these steps need the
+  owner's accounts:
   1. On GitHub, create the public repository `rjrodger/homebrew-tap`,
      with a README so that it has a first commit; Homebrew reads
      `rjrodger/tap` as that repository. Make a fine-grained token whose
