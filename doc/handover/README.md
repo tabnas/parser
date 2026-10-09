@@ -288,9 +288,11 @@ prepare up to the point that you need manual actions by me".
   by the crate.
 - **aless#52**: the changelog's section is `[0.1.0] - 2026-10-09`, which
   dist takes as the Release's notes, and the man page takes its date.
-- **A dry run** of `release.yml` was dispatched on `main` at `eae2e4f`,
-  #51's merge, to build all eight archives without publishing; its
-  result is added here when it ends.
+- **A dry run** of `release.yml` on `main` at `eae2e4f`, #51's merge
+  (run 37916812440), built all eight archives without publishing, and
+  passed. Each archive carries `man/aless.1` and `completions/`, the
+  Windows zips with LF, as `.gitattributes` pins them. The released
+  Linux binary writes the same man page and completions it ships.
 
 Two things are the maintainer's to decide, and neither blocks 0.1.0:
 
