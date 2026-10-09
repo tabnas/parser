@@ -354,11 +354,19 @@ Every check run on the head of `main` is green in all 41 repositories and
 in aless: each of the 42 heads has check runs, none failed or still
 running, and no commit status is failing.
 
-After the third round, aless's `main` is green at `44c0a91`, the
-release commit: `ci` on Linux, macOS and Windows, and the minimum Rust,
-1.88. The dry run of the release ran at `eae2e4f`, which differs from it
-only in the changelog's heading, the man page's date and the README's
-Install section.
+After aless#53, aless's `main` is green at `f66bd6a`, the release
+commit: `ci` on Linux, macOS and Windows, and the minimum Rust, 1.88.
+aless#53 changed the release workflow, so the release was dry-run again
+at `f66bd6a` (run 37928005725). All eight archives were built, each with
+the man page and the completions, and nothing was published.
+
+A dry run skips the publish jobs, so their formula step was then run by
+hand on that run's own `aless.rb`, and `scripts/homebrew-formula.py`
+patched it. Homebrew installed the run's Linux x86_64 archive with that
+formula, under dist's own checksum:
+- every file was in its place;
+- `brew test` passed;
+- after `brew style --fix`, `brew audit --strict` reported nothing.
 
 In the first round one run had been red: parser's scheduled `fleet` run
 at 10:32 UTC failed in feed's Go suite alone. It cloned feed 0.6.14, the
