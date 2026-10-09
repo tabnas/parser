@@ -393,13 +393,13 @@ Every check run on the head of `main` is green in all 41 repositories and
 in aless: each of the 42 heads has check runs, none failed or still
 running, and no commit status is failing.
 
-After aless#54, aless's `main` is green at `b51eb8e`, the release
+After aless#55, aless's `main` is green at `c22f80b`, the release
 commit: `ci` on Linux, macOS and Windows, the minimum Rust, 1.88, and
 `pages`, which built and checked the site and skipped the deploy.
 aless#53 changed the release workflow, so the release was dry-run again
 at `f66bd6a` (run 37928005725). All eight archives were built, each with
 the man page and the completions, and nothing was published. aless#54
-left the release workflow and its configuration as they were, and
+and #55 left the release workflow and its configuration as they were, and
 RELEASING.md dry-runs every release before it publishes.
 
 A dry run skips the publish jobs, so their formula step was then run by
@@ -428,7 +428,7 @@ trials, closed; this page's fifth version goes up in its own.
 
 ## Decisions waiting on the maintainer
 
-- **Release aless 0.1.0.** `main`, at `b51eb8e`, aless#54's merge, is
+- **Release aless 0.1.0.** `main`, at `c22f80b`, aless#55's merge, is
   the release commit. RELEASING.md says how, and these steps need the
   owner's accounts:
   1. The homepage, first, since the certificate can take a day
