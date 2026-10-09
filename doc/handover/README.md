@@ -357,6 +357,10 @@ utility has homepage", documented on the principles of Diátaxis, at
     pages without the Markdown twin the site promises, a missing `order`
     that sorted a page first in silence, and a CI recipe that split
     filenames with spaces in them.
+- **aless#55**: RELEASING.md verifies the domain first, as GitHub
+  recommends before a domain is added to a repository; it had listed
+  verification last, as a recommendation. Codex's review of this page's
+  pull request found the order.
 - **DNS, checked from outside**: `tabnas.dev` is served by Cloudflare,
   nothing verifies it for GitHub Pages, and `aless.tabnas.dev` does not
   exist yet, with no wildcard record to shadow it.
@@ -428,15 +432,18 @@ trials, closed; this page's fifth version goes up in its own.
   the release commit. RELEASING.md says how, and these steps need the
   owner's accounts:
   1. The homepage, first, since the certificate can take a day
-     (RELEASING.md's step 3): in aless's *Settings → Pages*, set the
-     source to *GitHub Actions* and the custom domain to
-     `aless.tabnas.dev`, before any DNS record exists. Then, in
-     Cloudflare's DNS for `tabnas.dev`, add `CNAME aless` to
-     `rjrodger.github.io`, *DNS only*. Run `pages`, and tick *Enforce
-     HTTPS* when it is offered. Verifying `aless.tabnas.dev` for the
-     account is recommended; verifying `tabnas.dev` would keep the
-     tabnas organisation's repositories off `tabnas.dev` and every name
-     directly under it.
+     (RELEASING.md's step 3, as aless#55 orders it):
+     1. Verify `aless.tabnas.dev` for the `rjrodger` account before
+        adding it anywhere, as GitHub recommends: the profile's
+        *Settings → Pages → Add a domain*, and the TXT record
+        `_github-pages-challenge-rjrodger.aless` in Cloudflare, kept.
+        Not `tabnas.dev`, which would keep the tabnas organisation's
+        repositories off `tabnas.dev` and every name directly under it.
+     2. In aless's *Settings → Pages*, set the source to *GitHub
+        Actions* and the custom domain to `aless.tabnas.dev`, before the
+        `CNAME` record exists.
+     3. In Cloudflare, add `CNAME aless` to `rjrodger.github.io`, *DNS
+        only*. Run `pages`, and tick *Enforce HTTPS* when it is offered.
   2. On GitHub, create the public repository `rjrodger/homebrew-tap`,
      with a README so that it has a first commit; Homebrew reads
      `rjrodger/tap` as that repository. Make a fine-grained token whose
