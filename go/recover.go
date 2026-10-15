@@ -391,8 +391,12 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 	lex.Err = nil
 
 	if !rec.PopUntilValid {
-		// Fixed-depth pop: exactly one rule.
+		// Fixed-depth pop: exactly one rule. The erroring rule is dropped,
+		// so close the probes it opened.
 		freezeHistoryChild(rule, nil, ctx.Cfg.RuleHistory)
+		if rule != nil && rule != NoRule {
+			ctx.probeAbandon(rule)
+		}
 		if 0 < ctx.RSI {
 			ctx.RSI--
 			return ctx.RS[ctx.RSI]
@@ -436,11 +440,16 @@ func attemptRecover(tkn *Token, rule *Rule, ctx *Context, isOpen bool) *Rule {
 // without a close pass, so outline and folding consumers see open and
 // close paired even through recovery.
 func forceClose(ctx *Context, r *Rule) {
-	if r == nil || r == NoRule || 0 == len(ctx.RuleDoneSubs) {
+	if r == nil || r == NoRule {
+		return
+	}
+	// Close the probes the abandoned rule opened, subscribed or not.
+	probe := ctx.probeAbandon(r)
+	if 0 == len(ctx.RuleDoneSubs) {
 		return
 	}
 	publishedBefore := publishedHistoryChildSnapshot(r, ctx.Cfg.RuleHistory)
-	done := RuleDone{State: CLOSE, Alt: nil, Forced: true, Probe: ctx.Probe > 0}
+	done := RuleDone{State: CLOSE, Alt: nil, Forced: true, Probe: probe}
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}

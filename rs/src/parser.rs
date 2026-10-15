@@ -1191,6 +1191,7 @@ impl Parser {
         &self,
         rule: &Rule,
         context: &Context,
+        probe: bool,
         src: &str,
         stack: &[Rule],
     ) -> Result<(), TabnasError> {
@@ -1201,7 +1202,7 @@ impl Parser {
             state: RuleState::Close,
             alt: None,
             forced: true,
-            probe: 0 < context.probe,
+            probe,
         };
         let mut site_rule = rule.clone();
         site_rule.state = RuleState::Close;
@@ -1388,6 +1389,8 @@ impl Parser {
             // skipped for the whole parse when this option is off, so
             // nothing is parked to see.
             if let Some(parent) = stack.pop() {
+                // The erroring rule is dropped: close the probes it opened.
+                context.probe_abandon(current_rule);
                 *current_rule = parent;
                 return Ok(true);
             }
@@ -1403,14 +1406,17 @@ impl Parser {
             return Ok(true);
         }
 
-        self.notify_forced_close(current_rule, context, &src, stack)?;
+        // Close the probes each abandoned rule opened, subscribed or not.
+        let probe = context.probe_abandon(current_rule);
+        self.notify_forced_close(current_rule, context, probe, &src, stack)?;
         while let Some(mut parent) = stack.pop() {
             parent.accept_child(current_rule);
             if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
                 *current_rule = parent;
                 return Ok(true);
             }
-            self.notify_forced_close(&parent, context, &src, stack)?;
+            let probe = context.probe_abandon(&parent);
+            self.notify_forced_close(&parent, context, probe, &src, stack)?;
             *current_rule = parent;
         }
         Ok(false)
@@ -1435,6 +1441,10 @@ impl Parser {
         // returns. Preserve that ordering so any synthesized forced-close
         // events precede this final attempted-pass event.
         let event_rule = current_rule.clone();
+        // The failing pass is the probe's if one is open where it failed,
+        // even when the recovery below closes it before the pass is
+        // reported.
+        let probe_at_error = 0 < context.probe_depth();
         let recovered = mode.recovering
             && self.attempt_recover(error.clone(), current_rule, stack, context, lexer, mode)?;
         if !recovered && fallback_error_token {
@@ -1459,7 +1469,7 @@ impl Parser {
                 alt.err = Some(token);
             }
         }
-        let probe = context.probe_take();
+        let probe = context.probe_take() || probe_at_error;
         self.notify_rule_done(&event_rule, context, state, alt, probe, src, stack)?;
         if recovered {
             Ok(())
@@ -2261,6 +2271,9 @@ impl Parser {
             };
 
             let is_open = current_rule.state == RuleState::Open;
+            // A pass that begins inside a probe is the probe's, even when
+            // error recovery closes the probe before the pass is reported.
+            let probe_at_start = 0 < context.probe_depth();
             let alts = if is_open { &spec.open } else { &spec.close };
 
             for subscriber in &self.rule_subscribers {
@@ -3184,7 +3197,7 @@ impl Parser {
                             let mark = Value::Number(context.mark() as f64);
                             current_rule.k_mut().insert("pd_mark".into(), mark);
                             // The passes until the decision are the probe's.
-                            context.probe_open();
+                            context.probe_open(&current_rule);
                         }
                         "@probeDecide$" => {
                             let mark = current_rule.k.get("pd_mark").and_then(|value| {
@@ -3624,7 +3637,7 @@ impl Parser {
                 // Read after every pass, subscribed or not, so that the
                 // pass that opened or closed a probe is the only one its
                 // flag covers.
-                let probe = context.probe_take();
+                let probe = context.probe_take() || probe_at_start;
                 if let Some(completed_rule) = &completed_rule {
                     self.notify_rule_done(
                         completed_rule,
@@ -3719,7 +3732,7 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
-                let probe = context.probe_take();
+                let probe = context.probe_take() || probe_at_start;
                 if let Some(completed_rule) = &completed_rule {
                     self.notify_rule_done(
                         completed_rule,

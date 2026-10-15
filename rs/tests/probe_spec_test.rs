@@ -59,8 +59,16 @@ fn shared_probe_contract() {
                 seen.1 += 1;
             }
         });
-        parser.parse(input).expect("the row parses");
-        let (probe, kept) = passes.lock().unwrap().clone();
+        // A spec with recovery on parses through `parse_recover`, as
+        // TypeScript's `parse` does when its options enable it.
+        if document.contains(r#""recover":{"enabled":true"#) {
+            let _ = parser.parse_recover(input);
+        } else {
+            parser.parse(input).expect("the row parses");
+        }
+        let (mut probe, kept) = passes.lock().unwrap().clone();
+        // The fixture pins which passes are flagged, not their order.
+        probe.sort();
         let actual = json!({ "probe": probe, "kept": kept });
         let expected: JsonValue = serde_json::from_str(expected).expect("expected JSON");
         assert_eq!(actual, expected, "probe row {name}");

@@ -207,7 +207,7 @@ const probeInit$: AltAction = (r: Rule, ctx: Context) => {
   r.k.pd_phase = 0
   r.k.pd_mark = ctx.mark()
   // The passes until the decision are the probe's (RuleDone.probe).
-  ctx.probeOpen()
+  ctx.probeOpen(r)
 }
 
 // Phase-0 close action: peek the first token the probe did not consume,

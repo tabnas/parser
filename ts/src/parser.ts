@@ -262,12 +262,15 @@ class Parser {
 
       const prev = rule
       const prevState = rule.state
+      // A pass that begins inside a probe is the probe's, even when error
+      // recovery closes the probe before the pass is reported.
+      const probeAtStart = 0 < ctx.probeDepth()
 
       rule = rule.process(ctx, lex)
 
       // Read after every pass, subscribed or not, so that the pass that
       // opened or closed a probe is the only one its flag covers.
-      const probe = ctx.probeTake()
+      const probe = ctx.probeTake() || probeAtStart
 
       // Post-process event: fires with the pass's matched tokens
       // recorded on prev.o / prev.c and the state transition applied.

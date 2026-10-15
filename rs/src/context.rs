@@ -205,10 +205,11 @@ pub struct Context {
     pub(crate) recover_si: Option<usize>,
     pub(crate) bad_to: Option<usize>,
     pub(crate) bad_error: Option<usize>,
-    /// How many probes are open: a grammar that parses ahead and then
-    /// rewinds to a mark opens one with [`Context::probe_open`] and
-    /// closes it with [`Context::probe_close`]. TS: `ctx.probe`.
-    pub probe: usize,
+    /// The stack depth of the rule that opened each open probe,
+    /// innermost last: a grammar that parses ahead and then rewinds to a
+    /// mark opens one with [`Context::probe_open`] and closes it with
+    /// [`Context::probe_close`]. TS: `ctx.probeOwners`.
+    probe_owners: Vec<usize>,
     /// Whether the current pass opened or closed a probe; the parse
     /// loop reads and clears it once per pass (`probe_take`).
     probe_pass: bool,
@@ -244,20 +245,22 @@ impl Context {
             recover_si: None,
             bad_to: None,
             bad_error: None,
-            probe: 0,
+            probe_owners: Vec::new(),
             probe_pass: false,
         }
     }
 
-    /// Open a probe: the grammar is about to parse ahead and then rewind
-    /// to a mark, so the passes until the matching
+    /// Open a probe in `rule`: the grammar is about to parse ahead and
+    /// then rewind to a mark, so the passes until the matching
     /// [`Context::probe_close`] are speculative, never the document's.
     /// `@probeInit$` calls it, as must any grammar that probes with
     /// actions of its own. Every [`crate::RuleDone`] reports `probe` for
     /// a pass made while a probe is open, the pass that opens it and the
-    /// pass that closes it included. TS: `ctx.probeOpen()`.
-    pub fn probe_open(&mut self) {
-        self.probe += 1;
+    /// pass that closes it included. The probe belongs to the rule's
+    /// stack depth, so that error recovery can close it when it abandons
+    /// the rule ([`Context::probe_abandon`]). TS: `ctx.probeOpen(rule)`.
+    pub fn probe_open(&mut self, rule: &RuleSnapshot) {
+        self.probe_owners.push(rule.d);
         self.probe_pass = true;
     }
 
@@ -265,15 +268,40 @@ impl Context {
     /// its rewind). The pass that closes it is still reported as the
     /// probe's. TS: `ctx.probeClose()`.
     pub fn probe_close(&mut self) {
-        self.probe = self.probe.saturating_sub(1);
+        self.probe_owners.pop();
         self.probe_pass = true;
     }
 
-    /// Whether the pass that just ran is a probe's, clearing the per-pass
-    /// flag for the next one. The parse loop calls it once after every
-    /// pass, subscribed or not. TS: `ctx.probeTake()`.
+    /// How many probes are open. TS: `ctx.probeDepth()`.
+    pub fn probe_depth(&self) -> usize {
+        self.probe_owners.len()
+    }
+
+    /// Error recovery abandons `rule`, popping it without the pass that
+    /// would close the probes it, or a rule above it, opened: close them
+    /// here, or every later pass would be reported as a probe's. Returns
+    /// whether the abandoned rule's synthesized close is a probe's. TS:
+    /// `ctx.probeAbandon(rule)`.
+    pub fn probe_abandon(&mut self, rule: &RuleSnapshot) -> bool {
+        let probe = !self.probe_owners.is_empty();
+        while self
+            .probe_owners
+            .last()
+            .is_some_and(|depth| rule.d <= *depth)
+        {
+            self.probe_owners.pop();
+        }
+        probe
+    }
+
+    /// Whether the pass that just ran opened or closed a probe, or ends
+    /// inside one, clearing the per-pass flag for the next one. The parse
+    /// loop calls it once after every pass, subscribed or not; a pass that
+    /// began inside a probe is the probe's too, which the loop adds, since
+    /// recovery may close the probe before the pass is reported. TS:
+    /// `ctx.probeTake()`.
     pub fn probe_take(&mut self) -> bool {
-        let probe = 0 < self.probe || self.probe_pass;
+        let probe = !self.probe_owners.is_empty() || self.probe_pass;
         self.probe_pass = false;
         probe
     }
@@ -507,6 +535,12 @@ mod probe_tests {
         )
     }
 
+    fn rule_at(d: usize) -> crate::Rule {
+        let mut rule = crate::Rule::new("r", Value::Undefined);
+        rule.d = d;
+        rule
+    }
+
     // The twin of the TypeScript and Go nesting tests: probes nest, the
     // pass that opens or closes one is the probe's, and a close with
     // nothing open does not underflow.
@@ -514,16 +548,37 @@ mod probe_tests {
     fn probes_nest_and_flag_the_passes_that_open_and_close_them() {
         let mut ctx = context();
         assert!(!ctx.probe_take());
-        ctx.probe_open();
+        ctx.probe_open(&rule_at(2));
         assert!(ctx.probe_take(), "the pass that opens a probe");
-        ctx.probe_open();
+        ctx.probe_open(&rule_at(4));
         ctx.probe_close();
         assert!(ctx.probe_take(), "still inside the outer probe");
         ctx.probe_close();
-        assert_eq!(ctx.probe, 0);
+        assert_eq!(ctx.probe_depth(), 0);
         assert!(ctx.probe_take(), "the pass that closes the outer probe");
         assert!(!ctx.probe_take(), "the next pass is the document again");
         ctx.probe_close();
-        assert_eq!(ctx.probe, 0, "an unmatched close does not underflow");
+        assert_eq!(
+            ctx.probe_depth(),
+            0,
+            "an unmatched close does not underflow"
+        );
+    }
+
+    // Recovery abandoning a rule closes the probes it opened, and only
+    // those, and leaves nothing to leak onto the next pass.
+    #[test]
+    fn abandoning_a_rule_closes_its_probes_and_only_those() {
+        let mut ctx = context();
+        ctx.probe_open(&rule_at(2));
+        ctx.probe_open(&rule_at(4));
+        ctx.probe_take();
+        // (abandoned depth, a probe's close, probes left open)
+        for (d, probe, depth) in [(5, true, 2), (4, true, 1), (3, true, 1), (2, true, 0)] {
+            assert_eq!(ctx.probe_abandon(&rule_at(d)), probe, "abandon d={d}");
+            assert_eq!(ctx.probe_depth(), depth, "abandon d={d}");
+        }
+        assert!(!ctx.probe_take(), "the next pass is the document again");
+        assert!(!ctx.probe_abandon(&rule_at(1)), "outside every probe");
     }
 }

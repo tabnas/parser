@@ -401,13 +401,18 @@ recovery, and `probe: true` marks a pass made while a probe is open.
 A probe is a grammar parsing ahead and then rewinding to a mark, as
 `@probeInit$` and `@probeDecide$` do for the optional-prefix ambiguity:
 the passes in between are speculative and never the document's. The
-grammar opens one with `ctx.probeOpen()` and closes it with
-`ctx.probeClose()`. The two builtins call them, and a grammar that
-probes with actions of its own must call them too. `ctx.probe` counts
-the open probes, and the flag covers the pass that opens a probe and
-the pass that closes it as well. A consumer that wants only the
+grammar opens one with `ctx.probeOpen(rule)`, in the rule that probes,
+and closes it with `ctx.probeClose()`. The two builtins call them, and a
+grammar that probes with actions of its own must call them too.
+`ctx.probeDepth()` counts the open probes. The flag covers the pass
+that opens a probe, the pass that closes it, and a pass that began
+inside one. A probe belongs to the rule that opened it: when error
+recovery abandons that rule, it closes the probe too, so the passes
+after recovery are the document's again. A consumer that wants only the
 document's structure, such as a transducer, drops every pass with
-`probe: true`. `test/spec/probe.tsv` pins which passes those are. Structural consumers (outline, folding) pair open/close by `rule.i`
+`probe: true`. `test/spec/probe.tsv` pins which passes those are.
+
+Structural consumers (outline, folding) pair open/close by `rule.i`
 instance id. A rule replaced via `alt.r` **on its open pass** never
 closes itself. Its replacement continues. A replacement on a **close
 pass** is different: that event *is* the rule's real close (the

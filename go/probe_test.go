@@ -10,6 +10,7 @@ package tabnas
 import (
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -61,9 +62,16 @@ func TestSharedProbeContract(t *testing.T) {
 				kept++
 			}
 		})
-		if _, err := j.Parse(cols[2]); err != nil {
+		// A spec with recovery on parses through ParseRecover, as TS's
+		// parse does when its options enable it.
+		if strings.Contains(def, `"recover":{"enabled":true`) {
+			if _, _, err := j.ParseRecover(cols[2]); err != nil {
+				t.Fatalf("%s: parse: %v", cols[0], err)
+			}
+		} else if _, err := j.Parse(cols[2]); err != nil {
 			t.Fatalf("%s: parse: %v", cols[0], err)
 		}
+		sort.Strings(probe)
 		got, _ := json.Marshal(map[string]any{"probe": probe, "kept": kept})
 		// encoding/json sorts map keys; compare as values, not text.
 		var gotV, wantV any
@@ -88,18 +96,18 @@ func TestProbeContextNesting(t *testing.T) {
 	if ctx.probeTake() {
 		t.Error("no probe open, yet the pass is flagged")
 	}
-	ctx.ProbeOpen()
+	ctx.ProbeOpen(&Rule{D: 2})
 	if !ctx.probeTake() {
 		t.Error("the pass that opens a probe is the probe's")
 	}
-	ctx.ProbeOpen()
+	ctx.ProbeOpen(&Rule{D: 4})
 	ctx.ProbeClose()
 	if !ctx.probeTake() {
 		t.Error("still inside the outer probe")
 	}
 	ctx.ProbeClose()
-	if ctx.Probe != 0 {
-		t.Errorf("Probe=%d after two closes, want 0", ctx.Probe)
+	if ctx.ProbeDepth() != 0 {
+		t.Errorf("ProbeDepth=%d after two closes, want 0", ctx.ProbeDepth())
 	}
 	if !ctx.probeTake() {
 		t.Error("the pass that closes the outer probe is the probe's")
@@ -108,8 +116,43 @@ func TestProbeContextNesting(t *testing.T) {
 		t.Error("the next pass is the document again")
 	}
 	ctx.ProbeClose()
-	if ctx.Probe != 0 {
-		t.Errorf("an unmatched close went negative: Probe=%d", ctx.Probe)
+	if ctx.ProbeDepth() != 0 {
+		t.Errorf("an unmatched close went negative: ProbeDepth=%d", ctx.ProbeDepth())
+	}
+}
+
+// The twin of the TypeScript test: recovery abandoning a rule closes the
+// probes it opened, and only those.
+func TestProbeAbandonClosesTheRulesProbes(t *testing.T) {
+	ctx := &Context{}
+	ctx.ProbeOpen(&Rule{D: 2})
+	ctx.ProbeOpen(&Rule{D: 4})
+	ctx.probeTake()
+	steps := []struct {
+		d     int
+		probe bool
+		depth int
+	}{
+		{5, true, 2}, // inside both probes, opened neither
+		{4, true, 1}, // the inner probe goes with its rule
+		{3, true, 1}, // a rule above it does not own the outer
+		{2, true, 0},
+	}
+	for _, step := range steps {
+		if got := ctx.probeAbandon(&Rule{D: step.d}); got != step.probe {
+			t.Errorf("abandon d=%d: probe=%v, want %v", step.d, got, step.probe)
+		}
+		if ctx.ProbeDepth() != step.depth {
+			t.Errorf("abandon d=%d: ProbeDepth=%d, want %d", step.d, ctx.ProbeDepth(), step.depth)
+		}
+	}
+	// Nothing leaks to the next pass: the parse loop flags the pass that
+	// failed inside the probe because it began inside one.
+	if ctx.probeTake() {
+		t.Error("the next pass is the document again")
+	}
+	if ctx.probeAbandon(&Rule{D: 1}) {
+		t.Error("a rule outside every probe is not the probe's")
 	}
 }
 

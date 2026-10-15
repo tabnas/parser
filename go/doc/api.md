@@ -492,12 +492,15 @@ synthesizes a close.
 `Probe` is true for a pass made while a probe is open: a grammar parsing
 ahead and then rewinding to a mark, as `@probeInit$` and `@probeDecide$`
 do. Those passes are speculative and never the document's. The grammar
-opens a probe with `ctx.ProbeOpen()` and closes it with
-`ctx.ProbeClose()`. The two builtins call them, and a grammar that
-probes with actions of its own must call them too. `ctx.Probe` counts
-the open probes, and the flag covers the pass that opens a probe and
-the pass that closes it as well. A consumer that wants only the
-document's structure drops every pass with `Probe` set.
+opens a probe with `ctx.ProbeOpen(r)`, in the rule that probes, and
+closes it with `ctx.ProbeClose()`. The two builtins call them, and a
+grammar that probes with actions of its own must call them too.
+`ctx.ProbeDepth()` counts the open probes. The flag covers the pass
+that opens a probe, the pass that closes it, and a pass that began
+inside one. A probe belongs to the rule that opened it: when error
+recovery abandons that rule, it closes the probe too, so the passes
+after recovery are the document's again. A consumer that wants only
+the document's structure drops every pass with `Probe` set.
 `test/spec/probe.tsv` pins which passes those are, in all three
 runtimes.
 
