@@ -391,12 +391,23 @@ positions during the abandoned speculation.
 anything yet. `ruleDone` fires **after** the pass: the matched tokens
 are recorded on `rule.o` / `rule.c` (so `rule.o0.sI`-style spans are
 readable), the state transition has been applied, and `done`
-(`RuleDone`) carries `{ state, alt, forced? }`: `state` is the pass
-that ran (`'o'`/`'c'`), `alt` snapshots the matched alternate's
+(`RuleDone`) carries `{ state, alt, forced?, probe }`: `state` is the
+pass that ran (`'o'`/`'c'`), `alt` snapshots the matched alternate's
 routing (`b` backtrack count, `g` group tags, `p` pushed rule, `r`
-replacement rule, `err` failure token), and `forced: true` marks a
+replacement rule, `err` failure token), `forced: true` marks a
 close notification synthesized for a rule force-popped during error
-recovery. Structural consumers (outline, folding) pair open/close by `rule.i`
+recovery, and `probe: true` marks a pass made while a probe is open.
+
+A probe is a grammar parsing ahead and then rewinding to a mark, as
+`@probeInit$` and `@probeDecide$` do for the optional-prefix ambiguity:
+the passes in between are speculative and never the document's. The
+grammar opens one with `ctx.probeOpen()` and closes it with
+`ctx.probeClose()`. The two builtins call them, and a grammar that
+probes with actions of its own must call them too. `ctx.probe` counts
+the open probes, and the flag covers the pass that opens a probe and
+the pass that closes it as well. A consumer that wants only the
+document's structure, such as a transducer, drops every pass with
+`probe: true`. `test/spec/probe.tsv` pins which passes those are. Structural consumers (outline, folding) pair open/close by `rule.i`
 instance id. A rule replaced via `alt.r` **on its open pass** never
 closes itself. Its replacement continues. A replacement on a **close
 pass** is different: that event *is* the rule's real close (the

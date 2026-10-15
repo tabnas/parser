@@ -47,6 +47,13 @@ type Context struct {
 	// from the instance by startParse; see Tabnas.SubRuleDone.
 	RuleDoneSubs []RuleDoneSub
 
+	// Probe is how many probes are open (TS: probe): a grammar that
+	// parses ahead and then rewinds to a mark opens one with ProbeOpen
+	// and closes it with ProbeClose. probePass records that the current
+	// pass opened or closed one; probeTake reads and clears it.
+	Probe     int
+	probePass bool
+
 	// The alternate the current rule pass resolved to, recorded by
 	// Rule.Process for the post-process event (TS: ctx._dalt). daltAny
 	// records whether the state had ANY alternates, which is how a rule
@@ -291,6 +298,36 @@ func (ctx *Context) recordConsumed(consumed int) {
 	if cap >= 0 && len(ctx.V) > 2*cap {
 		ctx.V = append([]*Token(nil), ctx.V[len(ctx.V)-cap:]...)
 	}
+}
+
+// ProbeOpen opens a probe: the grammar is about to parse ahead and then
+// rewind to a mark, so the passes until the matching ProbeClose are
+// speculative, never the document's. @probeInit$ calls it, as must any
+// grammar that probes with actions of its own. Every RuleDone reports
+// Probe true for a pass made while a probe is open, the pass that opens
+// it and the pass that closes it included. Mirrors TS ctx.probeOpen().
+func (ctx *Context) ProbeOpen() {
+	ctx.Probe++
+	ctx.probePass = true
+}
+
+// ProbeClose closes the innermost open probe (@probeDecide$ calls it,
+// after its rewind). The pass that closes it is still reported as the
+// probe's. Mirrors TS ctx.probeClose().
+func (ctx *Context) ProbeClose() {
+	if ctx.Probe > 0 {
+		ctx.Probe--
+	}
+	ctx.probePass = true
+}
+
+// probeTake reports whether the pass that just ran is a probe's, and
+// clears the per-pass flag for the next one. The parse loop calls it
+// once after every pass, subscribed or not. Mirrors TS ctx.probeTake().
+func (ctx *Context) probeTake() bool {
+	probe := ctx.Probe > 0 || ctx.probePass
+	ctx.probePass = false
+	return probe
 }
 
 // Mark records a rewind point at the current parse position. The returned
@@ -611,6 +648,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 		rule = rule.Process(ctx, lex)
 
+		// Read after every pass, subscribed or not, so that the pass that
+		// opened or closed a probe is the only one its flag covers.
+		probe := ctx.probeTake()
+
 		// Post-process event: fires with the pass's matched tokens
 		// recorded on prev and the state transition applied, so unlike
 		// the pre-process event above it can report what the pass
@@ -619,7 +660,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// several return points, and one dispatch site cannot miss one.
 		if len(ctx.RuleDoneSubs) > 0 {
 			publishedBefore := publishedHistoryChildSnapshot(prev, ctx.Cfg.RuleHistory)
-			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
+			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt(), Probe: probe}
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}

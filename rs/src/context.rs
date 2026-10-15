@@ -205,6 +205,13 @@ pub struct Context {
     pub(crate) recover_si: Option<usize>,
     pub(crate) bad_to: Option<usize>,
     pub(crate) bad_error: Option<usize>,
+    /// How many probes are open: a grammar that parses ahead and then
+    /// rewinds to a mark opens one with [`Context::probe_open`] and
+    /// closes it with [`Context::probe_close`]. TS: `ctx.probe`.
+    pub probe: usize,
+    /// Whether the current pass opened or closed a probe; the parse
+    /// loop reads and clears it once per pass (`probe_take`).
+    probe_pass: bool,
 }
 
 impl Context {
@@ -237,7 +244,38 @@ impl Context {
             recover_si: None,
             bad_to: None,
             bad_error: None,
+            probe: 0,
+            probe_pass: false,
         }
+    }
+
+    /// Open a probe: the grammar is about to parse ahead and then rewind
+    /// to a mark, so the passes until the matching
+    /// [`Context::probe_close`] are speculative, never the document's.
+    /// `@probeInit$` calls it, as must any grammar that probes with
+    /// actions of its own. Every [`crate::RuleDone`] reports `probe` for
+    /// a pass made while a probe is open, the pass that opens it and the
+    /// pass that closes it included. TS: `ctx.probeOpen()`.
+    pub fn probe_open(&mut self) {
+        self.probe += 1;
+        self.probe_pass = true;
+    }
+
+    /// Close the innermost open probe (`@probeDecide$` calls it, after
+    /// its rewind). The pass that closes it is still reported as the
+    /// probe's. TS: `ctx.probeClose()`.
+    pub fn probe_close(&mut self) {
+        self.probe = self.probe.saturating_sub(1);
+        self.probe_pass = true;
+    }
+
+    /// Whether the pass that just ran is a probe's, clearing the per-pass
+    /// flag for the next one. The parse loop calls it once after every
+    /// pass, subscribed or not. TS: `ctx.probeTake()`.
+    pub fn probe_take(&mut self) -> bool {
+        let probe = 0 < self.probe || self.probe_pass;
+        self.probe_pass = false;
+        probe
     }
 
     /// Record the current absolute parse position for a later rewind.
@@ -451,5 +489,41 @@ fn merge_seed_value(base: Value, overlay: Value) -> Value {
             Value::object(base)
         }
         (_, overlay) => overlay,
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    fn context() -> Context {
+        let options = Arc::new(Options::default());
+        Context::new(
+            options.rewind.history,
+            "",
+            Value::Undefined,
+            Arc::clone(&options),
+            InstanceInfo::default(),
+        )
+    }
+
+    // The twin of the TypeScript and Go nesting tests: probes nest, the
+    // pass that opens or closes one is the probe's, and a close with
+    // nothing open does not underflow.
+    #[test]
+    fn probes_nest_and_flag_the_passes_that_open_and_close_them() {
+        let mut ctx = context();
+        assert!(!ctx.probe_take());
+        ctx.probe_open();
+        assert!(ctx.probe_take(), "the pass that opens a probe");
+        ctx.probe_open();
+        ctx.probe_close();
+        assert!(ctx.probe_take(), "still inside the outer probe");
+        ctx.probe_close();
+        assert_eq!(ctx.probe, 0);
+        assert!(ctx.probe_take(), "the pass that closes the outer probe");
+        assert!(!ctx.probe_take(), "the next pass is the document again");
+        ctx.probe_close();
+        assert_eq!(ctx.probe, 0, "an unmatched close does not underflow");
     }
 }

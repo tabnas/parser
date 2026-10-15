@@ -265,6 +265,10 @@ class Parser {
 
       rule = rule.process(ctx, lex)
 
+      // Read after every pass, subscribed or not, so that the pass that
+      // opened or closed a probe is the only one its flag covers.
+      const probe = ctx.probeTake()
+
       // Post-process event: fires with the pass's matched tokens
       // recorded on prev.o / prev.c and the state transition applied.
       // Unlike the pre-process `rule` event, this one can see what the
@@ -274,6 +278,7 @@ class Parser {
         const dalt: any = (ctx as any)._dalt
         const done = {
           state: prevState,
+          probe,
           alt:
             null == dalt
               ? null
@@ -380,6 +385,7 @@ class Parser {
             const dalt: any = (ctx as any)._dalt
             const done = {
               state: frule.state,
+              probe: ctx.probeTake(),
               alt:
                 null == dalt
                   ? null

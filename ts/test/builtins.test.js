@@ -455,24 +455,32 @@ describe('builtins', () => {
     const p1 = BUILTIN_REFS['@probePhase1$']
     const p2 = BUILTIN_REFS['@probePhase2$']
 
-    it('@probeInit$ resets phase to 0 and records the mark', () => {
+    it('@probeInit$ resets phase to 0, records the mark and opens a probe', () => {
       const r = { k: {} }
-      probeInit$(r, { mark: () => 7 })
+      let opened = 0
+      probeInit$(r, { mark: () => 7, probeOpen: () => { opened++ } })
       assert.equal(r.k.pd_phase, 0)
       assert.equal(r.k.pd_mark, 7)
+      assert.equal(opened, 1)
     })
 
     it('@probeDecide$ rewinds and picks phase 1 when the disambiguator is present', () => {
       let rewound = null
+      let closed = 0
       const r = { k: { pd_d: '#D', pd_mark: 7 } }
-      probeDecide$(r, { t: [{ name: '#D' }], rewind: (m) => { rewound = m } })
+      probeDecide$(r, {
+        t: [{ name: '#D' }],
+        rewind: (m) => { rewound = m },
+        probeClose: () => { closed++ },
+      })
       assert.equal(rewound, 7)
       assert.equal(r.k.pd_phase, 1)
+      assert.equal(closed, 1, 'the decision closes the probe')
     })
 
     it('@probeDecide$ picks phase 2 when the disambiguator is absent', () => {
       const r = { k: { pd_d: '#D', pd_mark: 3 } }
-      probeDecide$(r, { t: [{ name: '#OTHER' }], rewind: () => { } })
+      probeDecide$(r, { t: [{ name: '#OTHER' }], rewind: () => { }, probeClose: () => { } })
       assert.equal(r.k.pd_phase, 2)
     })
 

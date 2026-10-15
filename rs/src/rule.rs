@@ -188,6 +188,11 @@ pub struct RuleDone {
     pub alt: Option<RuleDoneAlt>,
     /// True only for a close synthesized by recovery.
     pub forced: bool,
+    /// True for a pass made while a probe is open
+    /// ([`crate::Context::probe_open`]): speculative work the grammar
+    /// rewinds, never the document's. The pass that opens the probe and
+    /// the one that closes it are included. TS: `done.probe`.
+    pub probe: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -112,16 +112,24 @@ func TestBuiltinBubble(t *testing.T) {
 func TestBuiltinProbeInitDecide(t *testing.T) {
 	// @probeInit$ resets phase and records the mark.
 	r := &Rule{K: map[string]any{}}
-	builtinProbeInit(r, &Context{VAbs: 5})
+	ctx0 := &Context{VAbs: 5}
+	builtinProbeInit(r, ctx0)
 	if r.K["pd_phase"] != 0 || r.K["pd_mark"] != 5 {
 		t.Errorf("probeInit: phase=%v mark=%v", r.K["pd_phase"], r.K["pd_mark"])
+	}
+	if ctx0.Probe != 1 {
+		t.Errorf("probeInit: Probe=%d, want 1 (it opens a probe)", ctx0.Probe)
 	}
 
 	// @probeDecide$ picks phase 1 when the disambiguator is present.
 	r1 := &Rule{K: map[string]any{"pd_mark": 0, "pd_d": "#D"}}
-	builtinProbeDecide(r1, &Context{VAbs: 0, T: []*Token{{Name: "#D"}}})
+	ctx1 := &Context{VAbs: 0, T: []*Token{{Name: "#D"}}, Probe: 1}
+	builtinProbeDecide(r1, ctx1)
 	if r1.K["pd_phase"] != 1 {
 		t.Errorf("probeDecide present: phase=%v, want 1", r1.K["pd_phase"])
+	}
+	if ctx1.Probe != 0 {
+		t.Errorf("probeDecide: Probe=%d, want 0 (the decision closes it)", ctx1.Probe)
 	}
 
 	// ...and phase 2 when absent.

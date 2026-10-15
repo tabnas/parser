@@ -1459,7 +1459,7 @@ function attemptRecover(
     // close notification first so the structural stream stays balanced.
     if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
       const publishedBefore = publishedHistoryChildSnapshot(rule, ctx)
-      const done = { state: CLOSE, alt: null, forced: true }
+      const done = { state: CLOSE, alt: null, forced: true, probe: 0 < ctx.probe }
       ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
       refreshHistoryChild(rule, ctx, publishedBefore)
     }
@@ -1474,7 +1474,7 @@ function attemptRecover(
       // balanced event stream even through recovery.
       if (null != r && ctx.sub.ruleDone) {
         const publishedBefore = publishedHistoryChildSnapshot(r, ctx)
-        const done = { state: CLOSE, alt: null, forced: true }
+        const done = { state: CLOSE, alt: null, forced: true, probe: 0 < ctx.probe }
         ctx.sub.ruleDone.map((s) => s(r, ctx, done))
         refreshHistoryChild(r, ctx, publishedBefore)
       }

@@ -149,6 +149,41 @@ export class Context {
   }
 
 
+  // Open a probe: the grammar is about to parse ahead and then rewind
+  // to a mark, so the passes until the matching probeClose() are
+  // speculative, never the document's. `@probeInit$` calls it, as must
+  // any grammar that probes with actions of its own. Every ruleDone
+  // event reports `probe: true` for a pass made while a probe is open,
+  // the pass that opens it and the pass that closes it included.
+  probeOpen(): void {
+    this.probe++
+    this.probePass = true
+  }
+
+  // Close the innermost open probe (`@probeDecide$` calls it, after its
+  // rewind). The pass that closes it is still reported as the probe's.
+  probeClose(): void {
+    if (0 < this.probe) this.probe--
+    this.probePass = true
+  }
+
+  // How many probes are open.
+  probe = 0
+
+  // Whether the current pass opened or closed a probe. The parser reads
+  // and clears it once per pass (probeTake).
+  probePass = false
+
+  // Whether the pass that just ran is a probe's, and clear the per-pass
+  // flag for the next one. The parser calls it once after every pass,
+  // whether or not anything subscribes to ruleDone.
+  probeTake(): boolean {
+    const probe = 0 < this.probe || this.probePass
+    this.probePass = false
+    return probe
+  }
+
+
   // Save a rewind mark at the current parse position. The returned
   // value can be passed to rewind() to replay the tokens consumed
   // since the mark was taken, re-feeding them through the lexer's

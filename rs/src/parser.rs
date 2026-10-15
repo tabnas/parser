@@ -1149,12 +1149,14 @@ impl Parser {
         (!self.rule_done_subscribers.is_empty()).then(|| rule.clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn notify_rule_done(
         &self,
         rule: &Rule,
         context: &Context,
         state: RuleState,
         alt: Option<RuleDoneAlt>,
+        probe: bool,
         src: &str,
         stack: &[Rule],
     ) -> Result<(), TabnasError> {
@@ -1165,6 +1167,7 @@ impl Parser {
             state,
             alt,
             forced: false,
+            probe,
         };
         let mut site_rule = rule.clone();
         site_rule.state = state;
@@ -1198,6 +1201,7 @@ impl Parser {
             state: RuleState::Close,
             alt: None,
             forced: true,
+            probe: 0 < context.probe,
         };
         let mut site_rule = rule.clone();
         site_rule.state = RuleState::Close;
@@ -1455,7 +1459,8 @@ impl Parser {
                 alt.err = Some(token);
             }
         }
-        self.notify_rule_done(&event_rule, context, state, alt, src, stack)?;
+        let probe = context.probe_take();
+        self.notify_rule_done(&event_rule, context, state, alt, probe, src, stack)?;
         if recovered {
             Ok(())
         } else {
@@ -3178,6 +3183,8 @@ impl Parser {
                                 .insert("pd_phase".into(), Value::Number(0.0));
                             let mark = Value::Number(context.mark() as f64);
                             current_rule.k_mut().insert("pd_mark".into(), mark);
+                            // The passes until the decision are the probe's.
+                            context.probe_open();
                         }
                         "@probeDecide$" => {
                             let mark = current_rule.k.get("pd_mark").and_then(|value| {
@@ -3233,6 +3240,7 @@ impl Parser {
                             current_rule
                                 .k_mut()
                                 .insert("pd_phase".into(), Value::Number(phase));
+                            context.probe_close();
                         }
                         _ => self
                             .run_action_with_config(
@@ -3613,6 +3621,10 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
+                // Read after every pass, subscribed or not, so that the
+                // pass that opened or closed a probe is the only one its
+                // flag covers.
+                let probe = context.probe_take();
                 if let Some(completed_rule) = &completed_rule {
                     self.notify_rule_done(
                         completed_rule,
@@ -3623,6 +3635,7 @@ impl Parser {
                             RuleState::Close
                         },
                         done_alt,
+                        probe,
                         src,
                         &stack,
                     )?;
@@ -3706,6 +3719,7 @@ impl Parser {
                         completed_value = Some(current_rule.node.borrow().clone());
                     }
                 }
+                let probe = context.probe_take();
                 if let Some(completed_rule) = &completed_rule {
                     self.notify_rule_done(
                         completed_rule,
@@ -3716,6 +3730,7 @@ impl Parser {
                             RuleState::Close
                         },
                         None,
+                        probe,
                         src,
                         &stack,
                     )?;

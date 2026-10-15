@@ -440,7 +440,7 @@ func forceClose(ctx *Context, r *Rule) {
 		return
 	}
 	publishedBefore := publishedHistoryChildSnapshot(r, ctx.Cfg.RuleHistory)
-	done := RuleDone{State: CLOSE, Alt: nil, Forced: true}
+	done := RuleDone{State: CLOSE, Alt: nil, Forced: true, Probe: ctx.Probe > 0}
 	for _, sub := range ctx.RuleDoneSubs {
 		sub(r, ctx, done)
 	}

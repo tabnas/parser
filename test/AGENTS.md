@@ -34,6 +34,11 @@ Two files have declared special shapes:
 - `rule-history.tsv` has four columns: `name`, `spec`, `input`, and
   `expected`. Comment directives define serialized grammar specs, and each
   data row names one through the JSON object in `spec`.
+- `probe.tsv` has the four columns of `rule-history.tsv`, its grammar
+  defined by a `# @spec` directive the same way. Its `expected` column is
+  the JSON object `{"probe": [...], "kept": N}`: the passes a `ruleDone`
+  subscriber sees flagged `probe` (a pass made while a probe is open), as
+  `rule:state` in order, and the count of passes left unflagged.
 - `repaired.tsv` holds the rows that pin repaired divergences, and the
   controls and neighbours measured with them, whether or not a row was
   ever in `divergent.tsv`: five columns, `name`, `probe`, `arg`, `input`

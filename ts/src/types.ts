@@ -826,6 +826,10 @@ export type RuleDone = {
     err?: Token       // Error token when the pass failed.
   }
   forced?: boolean    // True for synthesized closes during recovery.
+  // True for a pass made while a probe is open (Context.probeOpen):
+  // speculative work the grammar rewinds, never the document's. The
+  // pass that opens the probe and the one that closes it are included.
+  probe?: boolean
 }
 
 // Post-process rule subscriber: fires AFTER a rule's open or close
