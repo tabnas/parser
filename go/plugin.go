@@ -63,6 +63,11 @@ type RuleDone struct {
 	State  RuleState    // Rule state before the pass.
 	Alt    *RuleDoneAlt // Resolved alternate, or nil if the state had none.
 	Forced bool         // Synthesized close during recovery; always false until Go gains recovery (A2).
+	// Probe is true for a pass made while a probe is open
+	// (Context.ProbeOpen): speculative work the grammar rewinds, never
+	// the document's. The pass that opens the probe and the one that
+	// closes it are included. TS: done.probe.
+	Probe bool
 }
 
 // RuleDoneSub is a post-process rule subscriber: it fires AFTER a

@@ -149,6 +149,65 @@ export class Context {
   }
 
 
+  // Open a probe in `rule`: the grammar is about to parse ahead and then
+  // rewind to a mark, so the passes until the matching probeClose() are
+  // speculative, never the document's. `@probeInit$` calls it, as must
+  // any grammar that probes with actions of its own. Every ruleDone
+  // event reports `probe: true` for a pass made while a probe is open,
+  // the pass that opens it and the pass that closes it included. The
+  // probe belongs to the rule's stack depth, so that error recovery can
+  // close it when it abandons the rule (probeAbandon).
+  probeOpen(rule: Rule): void {
+    this.probeOwners.push(rule.d)
+    this.probePass = true
+  }
+
+  // Close the innermost open probe (`@probeDecide$` calls it, after its
+  // rewind). The pass that closes it is still reported as the probe's.
+  probeClose(): void {
+    if (0 < this.probeOwners.length) this.probeOwners.pop()
+    this.probePass = true
+  }
+
+  // How many probes are open.
+  probeDepth(): number {
+    return this.probeOwners.length
+  }
+
+  // Error recovery abandons `rule`, popping it without the pass that
+  // would close the probes it (or a rule above it) opened: close them
+  // here, or every later pass would be reported as a probe's. Returns
+  // whether the abandoned rule's synthesized close is a probe's.
+  probeAbandon(rule: Rule): boolean {
+    const probe = 0 < this.probeOwners.length
+    while (0 < this.probeOwners.length &&
+      rule.d <= this.probeOwners[this.probeOwners.length - 1]) {
+      this.probeOwners.pop()
+    }
+    return probe
+  }
+
+  // The stack depth of the rule that opened each open probe, innermost
+  // last.
+  probeOwners: number[] = []
+
+  // Whether the current pass opened or closed a probe. The parser reads
+  // and clears it once per pass (probeTake).
+  probePass = false
+
+  // Whether the pass that just ran opened or closed a probe, or ends
+  // inside one, and clear the per-pass flag for the next one. The parser
+  // calls it once after every pass, whether or not anything subscribes
+  // to ruleDone; a pass that began inside a probe is the probe's too,
+  // which the parser adds, since recovery may close the probe before
+  // the pass is reported.
+  probeTake(): boolean {
+    const probe = 0 < this.probeOwners.length || this.probePass
+    this.probePass = false
+    return probe
+  }
+
+
   // Save a rewind mark at the current parse position. The returned
   // value can be passed to rewind() to replay the tokens consumed
   // since the mark was taken, re-feeding them through the lexer's

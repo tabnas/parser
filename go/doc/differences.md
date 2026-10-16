@@ -1480,7 +1480,8 @@ stream an outline provider is built from. Pinned by
 |---|---|---|
 | Subscribe | `tn.sub({ ruleDone })` | `tn.SubRuleDone(fn)` |
 | Callback | `(rule, ctx, done) => void` | `func(rule *Rule, ctx *Context, done RuleDone)` |
-| Payload | `{ state, alt: { b, g, p, r, err }, forced }` | `RuleDone{State, Alt: *RuleDoneAlt{B, G, P, R, Err}, Forced}` |
+| Payload | `{ state, alt: { b, g, p, r, err }, forced, probe }` | `RuleDone{State, Alt: *RuleDoneAlt{B, G, P, R, Err}, Forced, Probe}` |
+| Probes | `ctx.probeOpen(rule)`, `ctx.probeClose()`, `ctx.probeDepth()` | `ctx.ProbeOpen(r)`, `ctx.ProbeClose()`, `ctx.ProbeDepth()` |
 | Group tags | `g: string[]` | `G []string`, split from the comma-separated `AltSpec.G` |
 
 **The subscription is its own method in Go, and that is forced.** TS's

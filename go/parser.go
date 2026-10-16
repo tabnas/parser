@@ -47,6 +47,14 @@ type Context struct {
 	// from the instance by startParse; see Tabnas.SubRuleDone.
 	RuleDoneSubs []RuleDoneSub
 
+	// probeOwners holds the stack depth of the rule that opened each open
+	// probe, innermost last (TS: probeOwners): a grammar that parses
+	// ahead and then rewinds to a mark opens one with ProbeOpen and closes
+	// it with ProbeClose. probePass records that the current pass opened
+	// or closed one; probeTake reads and clears it.
+	probeOwners []int
+	probePass   bool
+
 	// The alternate the current rule pass resolved to, recorded by
 	// Rule.Process for the post-process event (TS: ctx._dalt). daltAny
 	// records whether the state had ANY alternates, which is how a rule
@@ -291,6 +299,59 @@ func (ctx *Context) recordConsumed(consumed int) {
 	if cap >= 0 && len(ctx.V) > 2*cap {
 		ctx.V = append([]*Token(nil), ctx.V[len(ctx.V)-cap:]...)
 	}
+}
+
+// ProbeOpen opens a probe in rule r: the grammar is about to parse ahead
+// and then rewind to a mark, so the passes until the matching ProbeClose
+// are speculative, never the document's. @probeInit$ calls it, as must
+// any grammar that probes with actions of its own. Every RuleDone
+// reports Probe true for a pass made while a probe is open, the pass
+// that opens it and the pass that closes it included. The probe belongs
+// to the rule's stack depth, so that error recovery can close it when it
+// abandons the rule (probeAbandon). Mirrors TS ctx.probeOpen(rule).
+func (ctx *Context) ProbeOpen(r *Rule) {
+	ctx.probeOwners = append(ctx.probeOwners, r.D)
+	ctx.probePass = true
+}
+
+// ProbeClose closes the innermost open probe (@probeDecide$ calls it,
+// after its rewind). The pass that closes it is still reported as the
+// probe's. Mirrors TS ctx.probeClose().
+func (ctx *Context) ProbeClose() {
+	if n := len(ctx.probeOwners); n > 0 {
+		ctx.probeOwners = ctx.probeOwners[:n-1]
+	}
+	ctx.probePass = true
+}
+
+// ProbeDepth reports how many probes are open. Mirrors TS
+// ctx.probeDepth().
+func (ctx *Context) ProbeDepth() int {
+	return len(ctx.probeOwners)
+}
+
+// probeAbandon closes the probes that rule r, or a rule above it, opened,
+// when error recovery pops r without the pass that would close them;
+// otherwise every later pass would be reported as a probe's. It reports
+// whether r's synthesized close is a probe's. Mirrors TS
+// ctx.probeAbandon(rule).
+func (ctx *Context) probeAbandon(r *Rule) bool {
+	probe := len(ctx.probeOwners) > 0
+	for n := len(ctx.probeOwners); n > 0 && r.D <= ctx.probeOwners[n-1]; n-- {
+		ctx.probeOwners = ctx.probeOwners[:n-1]
+	}
+	return probe
+}
+
+// probeTake reports whether the pass that just ran opened or closed a
+// probe, or ends inside one, and clears the per-pass flag for the next
+// one. The parse loop calls it once after every pass, subscribed or not;
+// a pass that began inside a probe is the probe's too, which the loop
+// adds. Mirrors TS ctx.probeTake().
+func (ctx *Context) probeTake() bool {
+	probe := len(ctx.probeOwners) > 0 || ctx.probePass
+	ctx.probePass = false
+	return probe
 }
 
 // Mark records a rewind point at the current parse position. The returned
@@ -608,8 +669,15 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 
 		prev := rule
 		prevState := rule.State
+		// A pass that begins inside a probe is the probe's, even when
+		// error recovery closes the probe before the pass is reported.
+		probeAtStart := ctx.ProbeDepth() > 0
 
 		rule = rule.Process(ctx, lex)
+
+		// Read after every pass, subscribed or not, so that the pass that
+		// opened or closed a probe is the only one its flag covers.
+		probe := ctx.probeTake() || probeAtStart
 
 		// Post-process event: fires with the pass's matched tokens
 		// recorded on prev and the state transition applied, so unlike
@@ -619,7 +687,7 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		// several return points, and one dispatch site cannot miss one.
 		if len(ctx.RuleDoneSubs) > 0 {
 			publishedBefore := publishedHistoryChildSnapshot(prev, ctx.Cfg.RuleHistory)
-			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt()}
+			done := RuleDone{State: prevState, Alt: ctx.ruleDoneAlt(), Probe: probe}
 			for _, sub := range ctx.RuleDoneSubs {
 				sub(prev, ctx, done)
 			}

@@ -1454,12 +1454,14 @@ function attemptRecover(
       return rule
     }
     if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
+    // Close the probes the abandoned rule opened, subscribed or not.
+    const probe = rule !== ctx.NORULE && ctx.probeAbandon(rule)
     // The erroring rule itself is being abandoned (its close cannot
     // accept the sync token, and it is not on ctx.rs): synthesize its
     // close notification first so the structural stream stays balanced.
     if (rule !== ctx.NORULE && ctx.sub.ruleDone) {
       const publishedBefore = publishedHistoryChildSnapshot(rule, ctx)
-      const done = { state: CLOSE, alt: null, forced: true }
+      const done = { state: CLOSE, alt: null, forced: true, probe }
       ctx.sub.ruleDone.map((s) => s(rule, ctx, done))
       refreshHistoryChild(rule, ctx, publishedBefore)
     }
@@ -1469,12 +1471,13 @@ function attemptRecover(
         return r
       }
       if (null != r) freezeHistoryChild(r, ctx)
+      const probe = null != r && ctx.probeAbandon(r)
       // Force-popped without a close pass: synthesize the close
       // notification so structural consumers (outline/folding) see a
       // balanced event stream even through recovery.
       if (null != r && ctx.sub.ruleDone) {
         const publishedBefore = publishedHistoryChildSnapshot(r, ctx)
-        const done = { state: CLOSE, alt: null, forced: true }
+        const done = { state: CLOSE, alt: null, forced: true, probe }
         ctx.sub.ruleDone.map((s) => s(r, ctx, done))
         refreshHistoryChild(r, ctx, publishedBefore)
       }
@@ -1482,8 +1485,12 @@ function attemptRecover(
     return undefined
   }
 
-  // Fixed-depth pop: one rule.
-  if (rule !== ctx.NORULE) freezeHistoryChild(rule, ctx)
+  // Fixed-depth pop: one rule. The erroring rule is dropped, so close the
+  // probes it opened.
+  if (rule !== ctx.NORULE) {
+    freezeHistoryChild(rule, ctx)
+    ctx.probeAbandon(rule)
+  }
   if (0 < ctx.rsI) return ctx.rs[--ctx.rsI]
   return undefined
 }

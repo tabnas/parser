@@ -447,6 +447,7 @@ type RuleDone struct {
 	State  RuleState    // rule state BEFORE the pass: OPEN or CLOSE
 	Alt    *RuleDoneAlt // resolved alternate, nil if the state had none
 	Forced bool         // synthesized close during recovery
+	Probe  bool         // pass made while a probe is open (ctx.ProbeOpen)
 }
 
 type RuleDoneAlt struct {
@@ -487,6 +488,21 @@ grammar.
 
 `Forced` is always false until Go gains error recovery: only recovery
 synthesizes a close.
+
+`Probe` is true for a pass made while a probe is open: a grammar parsing
+ahead and then rewinding to a mark, as `@probeInit$` and `@probeDecide$`
+do. Those passes are speculative and never the document's. The grammar
+opens a probe with `ctx.ProbeOpen(r)`, in the rule that probes, and
+closes it with `ctx.ProbeClose()`. The two builtins call them, and a
+grammar that probes with actions of its own must call them too.
+`ctx.ProbeDepth()` counts the open probes. The flag covers the pass
+that opens a probe, the pass that closes it, and a pass that began
+inside one. A probe belongs to the rule that opened it: when error
+recovery abandons that rule, it closes the probe too, so the passes
+after recovery are the document's again. A consumer that wants only
+the document's structure drops every pass with `Probe` set.
+`test/spec/probe.tsv` pins which passes those are, in all three
+runtimes.
 
 ### `(*Rule) NodeCell() *Rule` / `(*Rule) SetNode(v any)`
 

@@ -262,8 +262,15 @@ class Parser {
 
       const prev = rule
       const prevState = rule.state
+      // A pass that begins inside a probe is the probe's, even when error
+      // recovery closes the probe before the pass is reported.
+      const probeAtStart = 0 < ctx.probeDepth()
 
       rule = rule.process(ctx, lex)
+
+      // Read after every pass, subscribed or not, so that the pass that
+      // opened or closed a probe is the only one its flag covers.
+      const probe = ctx.probeTake() || probeAtStart
 
       // Post-process event: fires with the pass's matched tokens
       // recorded on prev.o / prev.c and the state transition applied.
@@ -274,6 +281,7 @@ class Parser {
         const dalt: any = (ctx as any)._dalt
         const done = {
           state: prevState,
+          probe,
           alt:
             null == dalt
               ? null
@@ -380,6 +388,7 @@ class Parser {
             const dalt: any = (ctx as any)._dalt
             const done = {
               state: frule.state,
+              probe: ctx.probeTake(),
               alt:
                 null == dalt
                   ? null

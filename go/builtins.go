@@ -251,6 +251,8 @@ func builtinProbeInit(r *Rule, ctx *Context) {
 	rk := r.EnsureK()
 	rk["pd_phase"] = 0
 	rk["pd_mark"] = ctx.Mark()
+	// The passes until the decision are the probe's (RuleDone.Probe).
+	ctx.ProbeOpen(r)
 }
 
 // @probeDecide$ — phase-0 close: peek the un-consumed token, rewind, and
@@ -274,6 +276,7 @@ func builtinProbeDecide(r *Rule, ctx *Context) {
 	} else {
 		r.EnsureK()["pd_phase"] = 2
 	}
+	ctx.ProbeClose()
 }
 
 func builtinProbePhase0(r *Rule, _ *Context) bool { return cfgInt(r.K["pd_phase"]) == 0 }

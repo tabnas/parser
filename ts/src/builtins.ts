@@ -206,6 +206,8 @@ const makeFold$ = (cfg: FoldConfig): AltAction => (r: Rule) => {
 const probeInit$: AltAction = (r: Rule, ctx: Context) => {
   r.k.pd_phase = 0
   r.k.pd_mark = ctx.mark()
+  // The passes until the decision are the probe's (RuleDone.probe).
+  ctx.probeOpen(r)
 }
 
 // Phase-0 close action: peek the first token the probe did not consume,
@@ -225,6 +227,7 @@ const probeDecide$: AltAction = (r: Rule, ctx: Context) => {
   const peek = ctx.t[0]
   ctx.rewind(r.k.pd_mark)
   r.k.pd_phase = peek && peek.name === r.k.pd_d ? 1 : 2
+  ctx.probeClose()
 }
 
 // Phase-guard conditions.
