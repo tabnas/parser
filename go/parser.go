@@ -529,7 +529,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	ctx := &Context{
-		UI: 0,
+		// The start rule is instance 1, as in TypeScript, whose NORULE
+		// sentinel is made by makeRule and takes 0; Go's NoRule is made
+		// once, outside the count.
+		UI: 1,
 		T:  []*Token{NoToken, NoToken},
 		T0: NoToken,
 		T1: NoToken,

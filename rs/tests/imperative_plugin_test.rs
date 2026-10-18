@@ -343,7 +343,10 @@ fn alternate_conditions_can_reenter_the_live_lexer() {
         while context.options.is_ignored(token.tin) {
             token = lexer.next_raw_for_rule(rule, context).unwrap();
         }
-        context.u.insert("peeked".into(), token.val);
+        // A fixed token's text is its `src`; it has no value.
+        context
+            .u
+            .insert("peeked".into(), Value::String(token.src.as_str().into()));
         token.name == "#TB"
     });
     parser.action_with_context("@use-peek", |rule, context| {

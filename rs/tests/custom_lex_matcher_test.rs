@@ -41,7 +41,9 @@ fn serialized_custom_matchers_interleave_with_builtin_priority_bands() {
         .unwrap();
 
     assert_eq!(parser.parse(":").unwrap(), Value::String("custom".into()));
-    assert_eq!(parser.parse(",").unwrap(), Value::String(",".into()));
+    // A fixed token has no value, as in TypeScript and Go: the parse
+    // taking `#COMMA` is what shows the fixed matcher read the comma.
+    assert_eq!(parser.parse(",").unwrap(), Value::Null);
     assert_eq!(late_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -137,14 +139,16 @@ fn invalid_effects_and_disabled_entries_do_not_move_the_cursor() {
             }"##,
         )
         .unwrap();
-    assert_eq!(parser.parse(":").unwrap(), Value::String(":".into()));
+    // A fixed token has no value, as in TypeScript and Go: the parse
+    // taking `#COLON` is what shows the fixed matcher read the colon.
+    assert_eq!(parser.parse(":").unwrap(), Value::Null);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     parser
         .grammar_json(r#"{"options":{"lex":{"match":{"invalid":{"order":-1}}}}}"#)
         .unwrap();
     assert!(parser.options.lex.matchers.is_empty());
-    assert_eq!(parser.parse(":").unwrap(), Value::String(":".into()));
+    assert_eq!(parser.parse(":").unwrap(), Value::Null);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 

@@ -2133,7 +2133,9 @@ impl Parser {
 
         let mut current_rule = Rule::new(start_shared.clone(), Value::Undefined);
         current_rule.bind_spec(start_spec, start_shared, start_slot);
-        current_rule.i = 0;
+        // Instance 1, as in TypeScript, whose NORULE sentinel is made by
+        // `makeRule` and takes 0; this engine's is made outside the count.
+        current_rule.i = 1;
         let root_node = current_rule.node.clone();
         context.set_root(root_node.clone());
         let mut stack: Vec<Rule> = Vec::new();
@@ -2142,7 +2144,7 @@ impl Parser {
         // so this cannot change under the parse, and the rule that parks
         // is the rule `attempt_recover` will resume.
         let park_child_nodes = self.options.parse.recover.pop_until_valid;
-        let mut next_rule_id = 1;
+        let mut next_rule_id = 2;
         #[allow(unused_assignments)]
         let mut final_value = None;
 
