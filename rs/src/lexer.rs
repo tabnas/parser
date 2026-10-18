@@ -1150,10 +1150,12 @@ impl<'a> Lexer<'a> {
                 .tokens
                 .get_index(index)
                 .expect("index came from this table, which nothing writes to mid-parse");
+            // A fixed token has no value, as in TypeScript and Go: its
+            // text is its `src`.
             return Ok(Token::new(
                 &token.name,
                 token.tin,
-                Value::String(token.source.clone()),
+                Value::Undefined,
                 token.source.as_str(),
                 pnt,
             ));

@@ -1338,6 +1338,28 @@ fixed or quietly dropped.
   replaced row character inside a string counts a row in Rust" as
   `replace-lf-single` and `replace-lf-multi`.
 
+- **Rule instance numbers start at 0 in Go and Rust, and a fixed token's value is its text in Rust.**
+  Two splits this file never recorded, found downstream: tabnas/transduce's
+  parser-event source relays a rule's instance number and a token's value
+  as the engine gives them, and its `DIVERGENCE.md` 6 and 7 recorded both.
+
+  | observation | TypeScript | Go before | Rust before |
+  |---|---|---|---|
+  | the start rule's `i` | 1 | 0 | 0 |
+  | a fixed token's value (`[` in `[1]`) | none | none | `"["` |
+
+  TypeScript makes its NORULE sentinel through `makeRule`, which takes
+  instance 0, so its start rule is 1; Go and Rust make theirs outside the
+  count, and numbered the start rule 0. Repaired in TypeScript's direction,
+  by the maintainer's ruling: Go's counter starts at 1, Rust's start rule
+  is 1 and the next rule 2, and Rust's lexer gives a fixed token no value,
+  its text being its `src`, as in the other two. A grammar that read a
+  fixed token's text from its value in Rust reads its `src`, as it must in
+  TypeScript and Go. Pinned in all three runtimes by
+  `test/spec/repaired.tsv`'s `rule-instance-start` and `fixed-token-value`,
+  with the neighbour `text-token-value`, a text token whose value is its
+  text in every runtime.
+
 ## Not divergences
 
 Recorded here because they are regularly mistaken for divergences:
