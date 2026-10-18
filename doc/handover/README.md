@@ -465,17 +465,12 @@ trials, closed; this page's fifth version goes up in its own.
   After it: the starting points in PACKAGING.md for the AUR, a Scoop
   bucket and winget, and homebrew-core once aless meets its acceptance
   policy.
-- **Apply admin#138 to `tabnas/.github`.** A session cannot attach that
-  repository, so the shared workflow moves only when the maintainer
-  applies the template. From admin, read the dry run's diff first:
-
-  ```bash
-  rollout/apply-workflows.sh --only 'dot-github__polyglot-ci.yml'
-  rollout/apply-workflows.sh --apply --only 'dot-github__polyglot-ci.yml'
-  ```
-
-  Until then, `scripts/verify.sh` reports `staged-workflows`, with the
-  template ahead of the deployed copy.
+- **Applied: admin#138 to `tabnas/.github`** (2026-10-18, `7d606b5`),
+  with admin#148's clone retries, the only other change to that
+  template since the deployed copy. Re-runs of debug's and transduce's
+  `main` CI took it and passed: transduce built itself alone, took its
+  18 dependencies from npm, and its windows `ts` job took 155 s. The
+  dry run now reports all 233 templates unchanged.
 - **The engine's loose TypeScript types**, unchanged from
   [`2026-10-07.md`](2026-10-07.md). The other three items on that list
   are done: xml's embed check (xml#89), alchemy's wording (alchemy#51)
