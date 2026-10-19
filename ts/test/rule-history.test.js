@@ -211,6 +211,27 @@ describe('rule history', () => {
     }
   })
 
+  it("keeps a pusher's after action's edit to its links", () => {
+    // Freezing the pushed child must not undo an after action that cleared
+    // or repointed the pusher's child or next link, with or without a bound.
+    for (const history of [null, 1, 3]) {
+      const parser = new Tabnas({
+        rule: { start: 'top', history },
+        fixed: { token: { '#A': 'a', '#B': 'b' } },
+      })
+      parser.rule('top', (rs) => rs
+        .open([{ s: '#A', p: 'child' }])
+        .ao((rule, ctx) => { rule.child = ctx.NORULE })
+        .close([{
+          a: (rule, ctx) => {
+            rule.node = ctx.NORULE === rule.child ? 'cleared' : rule.child.name
+          },
+        }]))
+      parser.rule('child', (rs) => rs.open([{ s: '#B' }]))
+      assert.equal(parser.parse('ab'), 'cleared', String(history))
+    }
+  })
+
   it('keeps original-root result semantics when history is bounded', () => {
     const parse = (history) => {
       const parser = new Tabnas({

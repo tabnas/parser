@@ -278,6 +278,17 @@ function boundedRuleHistory(
   return prev
 }
 
+// Freeze a bounded push's links once the step's after actions have run:
+// child and next become one copy of the child as it then stands. Its own
+// parent is the pre-link pusher copy, so a close-phase push cannot retain
+// all earlier children through alternating child/parent links. A link an
+// after action cleared or repointed keeps its edit, as it does with no bound.
+function freezePushedChild(rule: Rule, next: Rule, ctx: Context): void {
+  const frozen = next.snapshot(ctx)
+  if (rule.child === next) rule.child = frozen
+  if (rule.next === next) rule.next = frozen
+}
+
 // Publish the completed first pushed rule to the live pusher. The snapshot
 // reachable through the child's own `parent` stays frozen at push time; only
 // the suspended live parent receives this completed record.
@@ -971,7 +982,7 @@ class RuleSpec {
         aout = afters[aI](rule, ctx, next, aout)
         if (aout?.isToken && aout?.err) {
           // A recovery may resume this parse: leave the child frozen.
-          if (boundedPush) rule.next = rule.child = next.snapshot(ctx)
+          if (boundedPush) freezePushedChild(rule, next, ctx)
           return this.bad(aout, rule, ctx, { is_open })
         }
       }
@@ -987,12 +998,9 @@ class RuleSpec {
     }
 
     if (boundedPush) {
-      // Keep the child as it stood when this step pushed it, after its
-      // actions, through child and next alike. Its own parent is the
-      // pre-link pusher copy, so a close-phase push cannot retain all
-      // earlier children through alternating child/parent links. The
-      // running child receives its final parent here too.
-      rule.next = rule.child = next.snapshot(ctx)
+      // The running child receives its final parent once the child is
+      // frozen.
+      freezePushedChild(rule, next, ctx)
       next.parent = boundedRuleHistory(
         rule, ctx, ctx.cfg.rule.history, 'parent',
       )
