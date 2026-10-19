@@ -13,7 +13,9 @@ use std::sync::Arc;
 pub struct Lexer<'a> {
     src: &'a str,
     chars: Vec<char>,
-    byte_indices: Vec<usize>,
+    /// The byte offset of each character, or `None` for an ASCII source,
+    /// where a character's index is its byte offset (`byte_at`).
+    byte_indices: Option<Vec<usize>>,
     char_len: usize,
     idx: usize,
     ri: usize,
@@ -102,12 +104,20 @@ impl<'a> Lexer<'a> {
         options: Arc<Options>,
         exclude_regex: Option<Arc<Regex>>,
     ) -> Self {
-        let mut chars = Vec::new();
-        let mut byte_indices = Vec::new();
-        for (b_idx, c) in src.char_indices() {
-            chars.push(c);
-            byte_indices.push(b_idx);
-        }
+        // Both tables are sized before they are filled: grown by doubling,
+        // a long source's peak was twice its tables.
+        let (chars, byte_indices) = if src.is_ascii() {
+            (src.bytes().map(char::from).collect::<Vec<char>>(), None)
+        } else {
+            let count = src.chars().count();
+            let mut chars = Vec::with_capacity(count);
+            let mut byte_indices = Vec::with_capacity(count);
+            for (b_idx, c) in src.char_indices() {
+                chars.push(c);
+                byte_indices.push(b_idx);
+            }
+            (chars, Some(byte_indices))
+        };
         let char_len = chars.len();
 
         Lexer {
@@ -266,17 +276,7 @@ impl<'a> Lexer<'a> {
     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
         let point = self.current_point();
         let source = if start <= end && end <= self.char_len {
-            let start_byte = self
-                .byte_indices
-                .get(start)
-                .copied()
-                .unwrap_or(self.src.len());
-            let end_byte = self
-                .byte_indices
-                .get(end)
-                .copied()
-                .unwrap_or(self.src.len());
-            self.src[start_byte..end_byte].to_string()
+            self.src[self.byte_at(start)..self.byte_at(end)].to_string()
         } else {
             self.peek()
                 .map_or_else(String::new, |character| character.to_string())
@@ -288,10 +288,16 @@ impl<'a> Lexer<'a> {
     }
 
     fn byte_position(&self) -> usize {
-        self.byte_indices
-            .get(self.idx)
-            .copied()
-            .unwrap_or(self.src.len())
+        self.byte_at(self.idx)
+    }
+
+    /// The byte offset of the character at `index`, or the source's length
+    /// from its end on.
+    fn byte_at(&self, index: usize) -> usize {
+        match &self.byte_indices {
+            Some(offsets) => offsets.get(index).copied().unwrap_or(self.src.len()),
+            None => index.min(self.src.len()),
+        }
     }
 
     fn advance(&mut self) -> Option<char> {
@@ -545,7 +551,7 @@ impl<'a> Lexer<'a> {
         let Some(ch) = self.chars.get(index).copied() else {
             return true;
         };
-        let remaining = &self.src[self.byte_indices[index]..];
+        let remaining = &self.src[self.byte_at(index)..];
         (self.options.space.lex && self.char_sets.space.contains(ch))
             || (self.options.fixed.lex
                 && self

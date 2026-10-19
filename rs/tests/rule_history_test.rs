@@ -13,10 +13,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tabnas::{RuleSnapshot, Tabnas, Value, MAX_RULE_HISTORY};
+use tabnas::{RuleSnapshot, Tabnas, Value, DEFAULT_RULE_HISTORY, MAX_RULE_HISTORY};
 
 /// The serialized strict-JSON builder grammar, with the history set as
-/// `spelling` says (`null` for the default, an integer for a bound).
+/// `spelling` says (`null` for an unbounded history, an integer for a
+/// bound).
 fn json_parser(spelling: &str) -> Tabnas {
     let source = std::fs::read_to_string("../ts/test/json-builder.fixture.json")
         .expect("json builder fixture");
@@ -94,7 +95,8 @@ fn flat_array(items: usize) -> String {
 #[test]
 fn serialized_rule_history_spellings() {
     let mut parser = Tabnas::new();
-    assert_eq!(parser.options.rule.history, None);
+    assert_eq!(DEFAULT_RULE_HISTORY, 3);
+    assert_eq!(parser.options.rule.history, Some(DEFAULT_RULE_HISTORY));
     parser
         .grammar_json(r#"{"options":{"rule":{"history":3}}}"#)
         .unwrap();
@@ -452,8 +454,10 @@ fn a_cut_next_takes_its_name_with_it() {
 /// Two instances merge on the bound each one's links honour, not on the
 /// value set: `Some(0)` and `Some(1)`, or a bound past the cap and the
 /// cap, parse alike, and refusing them as a conflict left two parsers
-/// that behave the same impossible to merge. Two bounds that differ
-/// where it counts still conflict.
+/// that behave the same impossible to merge. A bound equal to the
+/// default yields to the other side, as every option's default does, and
+/// an unbounded history (`None`) is a setting of its own, which wins over
+/// the default. Two bounds that differ where it counts still conflict.
 #[test]
 fn a_merge_reads_each_bound_as_the_links_do() {
     let with = |tag: &str, history: Option<usize>| {
@@ -471,7 +475,13 @@ fn a_merge_reads_each_bound_as_the_links_do() {
             Some(MAX_RULE_HISTORY),
             Some(MAX_RULE_HISTORY),
         ),
-        (Some(usize::MAX), None, Some(MAX_RULE_HISTORY)),
+        (
+            Some(usize::MAX),
+            Some(DEFAULT_RULE_HISTORY),
+            Some(MAX_RULE_HISTORY),
+        ),
+        (None, Some(DEFAULT_RULE_HISTORY), None),
+        (Some(DEFAULT_RULE_HISTORY), Some(4), Some(4)),
         (None, None, None),
     ] {
         let out = with("L", left)
@@ -480,8 +490,12 @@ fn a_merge_reads_each_bound_as_the_links_do() {
         assert_eq!(out.options.rule.history, merged, "{left:?} and {right:?}");
     }
     assert!(
-        with("L", Some(3)).merge(&with("R", Some(4))).is_err(),
-        "3 and 4 merged"
+        with("L", Some(5)).merge(&with("R", Some(4))).is_err(),
+        "5 and 4 merged"
+    );
+    assert!(
+        with("L", Some(5)).merge(&with("R", None)).is_err(),
+        "5 and an unbounded history merged"
     );
 }
 

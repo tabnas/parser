@@ -28,7 +28,6 @@ pub use grammar::{
 };
 pub use lexer::{Lexer, RelexCheckpoint};
 pub use merge::MergeError;
-pub use options::MAX_RULE_HISTORY;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
     ContextParsePrepare, DebugOptions, DebugOutput, DebugPrintOptions, DebugSourceFormatter,
@@ -41,6 +40,7 @@ pub use options::{
     ParserStartWithInstance, RecoverOptions, ResultOptions, RewindOptions, SafeOptions,
     SpaceOptions, TextModifier, ValueDef, ValueOptions, ValueTextModifier, ValueTransform,
 };
+pub use options::{DEFAULT_RULE_HISTORY, MAX_RULE_HISTORY};
 pub use parser::{Continuations, ParseRecovery, Parser};
 pub use rule::{
     ActionBinding, AltAction, AltActionBinding, AltBack, AltBackWithMatch, AltCondition,

@@ -417,8 +417,10 @@ The parse was cancelled by the caller's parse.budget.onCheck callback
     // Multiplier to increase the maximum number of rule occurrences.
     maxmul: 3,
 
-    // How many predecessor-rule snapshots a rule can reach. Unbounded is
-    // the compatibility default until every runtime carries the option.
+    // How many predecessor-rule snapshots a rule can reach (1 to 16).
+    // Unbounded by default: a bound keeps a long document's memory flat,
+    // and copies rules on every step, three to four times the time of an
+    // unbounded parse (doc/rule-history-bound.md). Rust defaults to 3.
     history: null,
 
     // Include only those alts with matching group tags (comma sep).

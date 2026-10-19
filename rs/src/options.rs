@@ -841,6 +841,10 @@ pub struct ResultOptions {
 /// read as this, and `Some(0)` as 1.
 pub const MAX_RULE_HISTORY: usize = 16;
 
+/// The bound [`RuleOptions::history`] takes when nothing sets it: three
+/// predecessor snapshots, every walk the fleet reads.
+pub const DEFAULT_RULE_HISTORY: usize = 3;
+
 /// The bound a rule's links honour for `history`: 1 to
 /// [`MAX_RULE_HISTORY`], or `None` for every link. Read wherever the
 /// option decides something, the links themselves and a merge, so two
@@ -865,10 +869,10 @@ pub struct RuleOptions {
     /// How many predecessor snapshots a rule can reach through `prev`:
     /// the `prev_rule` chain a replace or a push links is cut past this
     /// many links, so a sequence's iterations are not all kept until its
-    /// container closes. `None` keeps every link, which is the canonical
-    /// behaviour and the default (`doc/rule-history-bound.md`). Read as
-    /// 1 to [`MAX_RULE_HISTORY`]: `Some(0)` as 1, a larger value as the
-    /// cap.
+    /// container closes. The default is [`DEFAULT_RULE_HISTORY`]; `None`
+    /// keeps every link, which costs memory in proportion to the length
+    /// of the document (`doc/rule-history-bound.md`). Read as 1 to
+    /// [`MAX_RULE_HISTORY`]: `Some(0)` as 1, a larger value as the cap.
     pub history: Option<usize>,
 }
 
@@ -984,7 +988,7 @@ impl Default for RuleOptions {
             include: String::new(),
             exclude: String::new(),
             start: "val".to_string(),
-            history: None,
+            history: Some(DEFAULT_RULE_HISTORY),
         }
     }
 }

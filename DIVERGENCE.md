@@ -821,6 +821,61 @@ not in Go'), `go/divergence_test.go`
 `rs/tests/moved_cursor_test.rs`
 `a_moved_cursor_keeps_the_matchers_the_first_character_chose`.
 
+### The rule history's default in Rust
+
+**Deferred, not deliberate**: TypeScript and Go take the default once
+their bounded links are cheap and carry the writes a grammar makes
+through them.
+
+`options.rule.history` defaults to 3 in Rust
+([`doc/rule-history-bound.md`](doc/rule-history-bound.md)). A rule then
+reaches three predecessors through `prev`, and the links a bound cuts read
+nothing: `prev.child` and `prev.next`, and, from a pusher whose child has
+finished, `child.child`, `child.next` and `next.next`. TypeScript's and
+Go's defaults are still unbounded, so with the option unset the same
+grammar reads further there:
+
+| read with `rule.history` unset | TypeScript | Go | Rust |
+| --- | --- | --- | --- |
+| `prev.prev.prev.prev.name`, four links back along a replacement chain | the rule | the rule | nothing |
+| `child.child.name`, `child.next.name` or `next.next.name` on a pusher's close | the rule | the rule | nothing |
+
+Set to a bound, the three agree; set to `false` or `null`, they agree too
+(`test/spec/rule-history.tsv`).
+
+Why TypeScript waits: its unbounded links are the live rules, and a
+bounded link is a copy built on every step, so a bound costs three to
+four and a half times the time of an unbounded parse, at every size
+(the design note has the measurement). Rust links copies either way, and
+the bound costs it nothing.
+
+Why Go waits: its bounded links are copies, as the other two runtimes'
+are, but a Go rule's `Node` is a plain field. TypeScript's copies share
+the rule's node cell, so `rule.parent.node = value` through a copy
+reaches the rule, and a Rust grammar writes through the engine's cells. A
+Go grammar that writes `r.Parent.Node = r.Node` writes the copy instead,
+and the write is lost; the fleet's Go grammars write that way. With 3 as
+Go's default, expr's Go suite fails on it, and csv, jsonic, toml, xml,
+yaml and c write through `Parent` or `Prev` the same way. Linking the
+live pusher as `Parent` under a bound is not enough on its own: measured
+with it, xml's Go suite passes and expr's, csv's, jsonic's, toml's,
+yaml's and c's still fail. `SetNode` reaches the rule, but under a bound
+the replacement arm cuts the replaced rule's `Next` before the ruleDone
+subscribers run, so a truncation made from a subscriber does not reach
+the successor that appends next (`TestSetNodeTruncatesReplacementChain`,
+run with a bound).
+
+Repair direction: **TypeScript and Go change**: a bounded link that
+costs about what a live one does in TypeScript, and in Go links that
+carry a grammar's writes through `Parent` and `Prev` alike, with
+`SetNode` reaching the successor. Then each defaults to 3, and this
+entry and its rows are deleted.
+
+Registered as `rule-history-default-four-hops` and
+`rule-history-default-links`, with `rule-history-default-three-hops` in
+`test/spec/rule-history.tsv` as the control: three links back, which
+every runtime reads with the option unset.
+
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a

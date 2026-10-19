@@ -83,10 +83,12 @@ fn capture_sees_the_pushed_rule_not_the_tail_of_its_replacement_chain() {
 ///
 /// `child.next.next` and beyond are NOT here: they are still Rust-only, and
 /// they are registered in `test/spec/divergent.tsv` under "Forward traversal
-/// of a replacement chain in Rust" rather than pinned as agreement.
+/// of a replacement chain in Rust" rather than pinned as agreement. The
+/// history is unbounded: a bound cuts `child.child`, `child.next` and
+/// `next.next` (`test/spec/rule-history.tsv`).
 const LINKS: &str = r##"{
   "options": {
-    "rule": { "start": "top" },
+    "rule": { "start": "top", "history": false },
     "fixed": { "token": { "Ta": "a", "Tb": "b", "Tx": "x",
                           "Tc": "c", "Td": "d", "Te": "e" } }
   },
