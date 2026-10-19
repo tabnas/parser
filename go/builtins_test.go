@@ -1336,11 +1336,13 @@ func TestBuiltinCaptureSeesThePushedRuleNotItsReplacement(t *testing.T) {
 //
 // `child.next.next` and beyond are deliberately absent: they are a live
 // Rust-only split, registered in test/spec/divergent.tsv under "Forward
-// traversal of a replacement chain in Rust".
+// traversal of a replacement chain in Rust". The history is unbounded: a
+// bound cuts `child.child`, `child.next` and `next.next`
+// (test/spec/rule-history.tsv).
 func TestRuleGraphLinksNameThePushedRule(t *testing.T) {
 	document := []byte(`{
 	  "options": {
-	    "rule": { "start": "top" },
+	    "rule": { "start": "top", "history": false },
 	    "fixed": { "token": { "Ta": "a", "Tb": "b", "Tx": "x",
 	                          "Tc": "c", "Td": "d", "Te": "e" } }
 	  },

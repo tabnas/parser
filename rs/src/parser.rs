@@ -1411,6 +1411,7 @@ impl Parser {
         self.notify_forced_close(current_rule, context, probe, &src, stack)?;
         while let Some(mut parent) = stack.pop() {
             parent.accept_child(current_rule);
+            bound_child_link(&mut parent, self.options.rule.history);
             if accepts_close(&parent, candidate.tin, &self.rules, &self.options) {
                 *current_rule = parent;
                 return Ok(true);
@@ -3630,6 +3631,7 @@ impl Parser {
                     completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child(&current_rule);
+                        bound_child_link(&mut parent, self.options.rule.history);
                         current_rule = parent;
                     } else {
                         // Root rule popped! Done.
@@ -3729,6 +3731,7 @@ impl Parser {
                     completed_rule = self.rule_done_copy(&current_rule);
                     if let Some(mut parent) = parent {
                         parent.accept_child(&current_rule);
+                        bound_child_link(&mut parent, self.options.rule.history);
                         current_rule = parent;
                     } else {
                         completed_value = Some(current_rule.node.borrow().clone());
@@ -4622,6 +4625,24 @@ fn bounded_history(
         prev = Some(Rc::new(copy));
     }
     prev.expect("at least the snapshot itself is copied")
+}
+
+/// Under a bound, a pusher links the child it pushed, once that child has
+/// finished, as a bounded copy ([`Link::Prev`]): the child as it ended,
+/// with no `child` or `next`, as TypeScript's `freezeHistoryChild`
+/// publishes it. So `child.child`, `child.next` and `next.next` read
+/// nothing from the pusher under a bound, as in TypeScript and Go
+/// (`rule-history-bounded-links`), and the finished child keeps nothing
+/// past itself alive. With no bound the link is the child's record.
+fn bound_child_link(rule: &mut Rule, history: Option<usize>) {
+    if crate::options::effective_rule_history(history).is_none() {
+        return;
+    }
+    if let Some(record) = rule.child_rule.take() {
+        let bounded = bounded_history(record, history, Link::Prev);
+        rule.next_rule = Some(Rc::clone(&bounded));
+        rule.child_rule = Some(bounded);
+    }
 }
 
 fn snapshot_condition_exists(rule: &RuleSnapshot, path: &[String]) -> bool {

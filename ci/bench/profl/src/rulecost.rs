@@ -22,8 +22,8 @@ const FIXTURE: &str = include_str!(concat!(
     "/../../../ts/test/json-builder.fixture.json"
 ));
 
-/// `history`: `None` is the default (unbounded, spelled `null`), `Some(n)`
-/// a bound, spelled as the integer.
+/// `history`: `None` is unbounded (spelled `null`), `Some(n)` a bound,
+/// spelled as the integer.
 pub fn json_parser(history: Option<usize>) -> Tabnas {
     let mut parser = Tabnas::new();
     parser.options.rule.start = "val".into();
@@ -44,8 +44,8 @@ pub struct Args {
     pub count: bool,
 }
 
-/// `BIN [--count] INPUT [HISTORY]`: HISTORY is `unset` (the default,
-/// unbounded) or an integer.
+/// `BIN [--count] INPUT [HISTORY]`: HISTORY is `unset` (unbounded) or an
+/// integer.
 pub fn args() -> Args {
     let mut count = false;
     let mut positional = Vec::new();

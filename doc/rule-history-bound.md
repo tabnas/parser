@@ -70,10 +70,10 @@ links:
 
 ## The design
 
-An option, `options.rule.history`, an integer from 1 to 16, `null`, or `false`
-(today's behaviour, and the default until every runtime carries the
-option): the number of predecessor snapshots a rule can reach through
-`prev`. Under it, the snapshot a replace or a push links is a bounded
+An option, `options.rule.history`, an integer from 1 to 16 (3 by default
+in Rust), `null` or `false` (unbounded, TypeScript's and Go's default;
+"The default" below says why): the number of predecessor snapshots a rule
+can reach through `prev`. Under it, the snapshot a replace or a push links is a bounded
 copy:
 
 - It keeps `history - 1` predecessors, each a bounded copy the same
@@ -145,10 +145,71 @@ without one; each runtime runs that file.
 TypeScript and Go also parse 10,000 items under `history: 3` while a
 rule subscriber counts the reachable graph, which must stay constant.
 The former "A bounded rule history in Rust" divergence was removed when
-the two ports landed. The option remains `null`/nil by default for
-compatibility; serialized grammars may also use `false` for unbounded
-history, matching the other history options. Callers opt into the bound
-explicitly.
+the two ports landed. Serialized grammars may also use `false` for
+unbounded history, matching the other history options.
+
+A pusher keeps a bounded copy of its child once the child has finished,
+the child as it ended with no `child` or `next` of its own, so from the
+pusher `child.child`, `child.next` and `next.next` read nothing under a
+bound either. TypeScript and Go copied it so from the start; Rust kept
+the finished child's whole record until its default made the difference
+show, and now copies it the same way (`rule-history-bounded-links`).
+
+While the step that pushed a child runs its after actions, the pusher's
+`child` in TypeScript is the child itself, as it is with no bound, so an
+after action writes the rule it pushed: the path plugin sets the child's
+`k.path` from `@pair-ao` and `@elem-ao`, and under a bound that write
+went to the copy until the copy was taken after the actions instead of
+before them. Rust hands an after action an immutable snapshot of the
+child under any setting, and its path plugin sets the path in the child's
+own hook instead. Go still hands a copy under a bound.
+
+## The default
+
+Rust bounds the history at 3 unless a grammar or a host sets the option,
+so a host that reads a long flat document gets the memory the table below
+measures without asking for it; `false` or `null` keeps every link. Rust
+links copies of its rules under any setting, and the bound costs it no
+time. The same documents parsed by a release build over the strict-JSON
+fixture grammar:
+
+| Document | No bound | `history: 3` |
+|---|---|---|
+| one record, 73 bytes | 71.8 µs | 70.6 µs |
+| 100 records, 7.8 KB | 6.3 ms | 6.9 ms |
+| 20,000 records, 1.8 MB | 1.42 s | 1.32 s |
+
+TypeScript's and Go's defaults stay unbounded, for two different
+reasons, and [`DIVERGENCE.md`](../DIVERGENCE.md), "The rule history's
+default in Rust", registers the difference meanwhile.
+
+TypeScript's unbounded links are the live rules, which cost nothing to
+make, and a bounded link is a copy built on every step: a `Rule`
+constructed per copy, `history` of them per link. The same records
+through `@tabnas/json`:
+
+| Document | No bound | `history: 3` |
+|---|---|---|
+| one record, 73 bytes | 140 µs | 613 µs |
+| 100 records, 7.8 KB | 13.7 ms | 62.9 ms |
+| 20,000 records, 1.8 MB | 3.6 s, 2.7 GB of heap | 12.0 s, 174 MB of heap |
+
+A profile of the middle row puts a third of the time in `Rule`'s
+constructor, another third in the garbage collector, and a sixth in
+`snapshot`. tabnas-semver's parse of one version goes from 0.39 ms to
+1.56 ms, and its test that a reused parser beats a rebuilt one fails.
+
+Go's bounded links are copies, as the other two runtimes' are, but a Go
+rule's `Node` is a plain field that a copy cannot share, and the fleet's
+Go grammars write a linked rule's node directly (`r.Parent.Node =
+r.Node`, `r.Prev.Node = …`): under a bound those writes land on the copy
+and are lost.
+
+Before Rust's default changed, the fleet gate (`ci/fleet/run-fleet.sh`)
+ran every published grammar's TypeScript and Go suites against a bound of
+3, which found the path plugin's write above, and aless, which already
+set 3 on every Rust parser it makes, ran its whole suite against the
+Rust engine with the default.
 
 ## Measurements
 
@@ -186,11 +247,14 @@ The first prototype, which cut the predecessors and kept the child
 links, measured 906 MB and 2.6 s on the array row, above the unbounded
 peak: the ladder above.
 
-## Proposed decision (for admin `DECISIONS.md`)
+## Decision (for admin `DECISIONS.md`)
 
 **ADR: the engine bounds its rule history.** The rule links a parse
 keeps are bounded by `options.rule.history`, the number of predecessor
-snapshots a rule can reach; the default is unbounded until every runtime
-implements the option, then 3. A grammar that needs a deeper walk sets
-the option; nothing else observes the cut. Memory for a document is then
-proportional to its nesting and its value, never to its length.
+snapshots a rule can reach, 3 by default. A grammar that needs a deeper
+walk sets the option; nothing else observes the cut. Memory for a
+document is then proportional to its nesting and its value, never to its
+length. Rust takes the default first, where the bound costs no time;
+TypeScript takes it once a bounded link costs about what a live one does,
+and Go once its bounded links carry the writes a Go grammar makes
+through them.

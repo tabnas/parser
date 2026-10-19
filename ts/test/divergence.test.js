@@ -424,9 +424,11 @@ describe('divergence', () => {
     // DIVERGENCE.md "A pusher read back past four hops through its child's
     // snapshots in Rust", the after-action face. The live link is made
     // before the pushing alternate's after actions run, so the pusher's
-    // child.parent.child there is the child itself, on every pass.
+    // child.parent.child there is the child itself, on every pass. The
+    // history is unbounded, as in the register's rows: a bound links a
+    // copy of the pusher instead.
     const tn = new Tabnas({
-      rule: { start: 'list' },
+      rule: { start: 'list', history: false },
       fixed: { token: { '#A': 'a', '#B': 'b', '#E': 'e' } },
     })
     const seen = []

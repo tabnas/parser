@@ -192,6 +192,25 @@ describe('rule history', () => {
     assert.equal(parser.parse('abc'), 'yes/yes')
   })
 
+  it("lets a pusher's after action write the child it pushed", () => {
+    // The path plugin's shape: an after-open action sets the child's keep
+    // bag through rule.child, and the child reads it on its first pass.
+    for (const history of [null, 1, 3]) {
+      const parser = new Tabnas({
+        rule: { start: 'top', history },
+        fixed: { token: { '#A': 'a', '#B': 'b' } },
+      })
+      parser.rule('top', (rs) => rs
+        .open([{ s: '#A', p: 'child' }])
+        .ao((rule) => { rule.child.k.mark = 'set' })
+        .close([{}]))
+      parser.rule('child', (rs) => rs.open([{
+        s: '#B', a: (rule) => { rule.parent.node = rule.k.mark },
+      }]))
+      assert.equal(parser.parse('ab'), 'set', String(history))
+    }
+  })
+
   it('keeps original-root result semantics when history is bounded', () => {
     const parse = (history) => {
       const parser = new Tabnas({

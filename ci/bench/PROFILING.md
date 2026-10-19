@@ -63,7 +63,7 @@ $B/rulecost_alloc ci/bench/rulecost/records-10000.json 3   # allocation counts
 ```
 
 `HISTORY` (the second argument) is `options.rule.history`: an integer, or
-`unset` for the default, which is unbounded. `--count` before the input
+`unset` for an unbounded history. `--count` before the input
 adds rule, step and token counts; its timing includes the subscribers
 that count them, so it is not the timing run.
 

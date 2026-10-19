@@ -907,10 +907,10 @@ class RuleSpec {
           next.parent = boundedRuleHistory(
             rule, ctx, ctx.cfg.rule.history, 'pusherBefore',
           )
-          // Keep the child exactly as it stood when pushed. Its own parent is
-          // the pre-link pusher copy, so a close-phase push cannot retain all
-          // earlier children through alternating child/parent links.
-          rule.child = next.snapshot(ctx)
+          // The live child while this step's after actions run, so that one
+          // writes the rule it pushed (the path plugin sets `child.k.path`),
+          // as it does with no bound; frozen once they have, below.
+          rule.child = next
           next.historyPusher = rule
         }
         else {
@@ -960,9 +960,7 @@ class RuleSpec {
     // TODO: move action call here (alt.a)
     // and set r.next = next, so that action has access to next
 
-    // A bounded push exposes the same frozen child through child and next;
-    // the running child receives its final parent after lifecycle actions.
-    rule.next = boundedPush ? rule.child : next
+    rule.next = next
 
 
     // Handle "after" call.
@@ -972,6 +970,8 @@ class RuleSpec {
       for (let aI = 0; aI < afters.length; aI++) {
         aout = afters[aI](rule, ctx, next, aout)
         if (aout?.isToken && aout?.err) {
+          // A recovery may resume this parse: leave the child frozen.
+          if (boundedPush) rule.next = rule.child = next.snapshot(ctx)
           return this.bad(aout, rule, ctx, { is_open })
         }
       }
@@ -987,6 +987,12 @@ class RuleSpec {
     }
 
     if (boundedPush) {
+      // Keep the child as it stood when this step pushed it, after its
+      // actions, through child and next alike. Its own parent is the
+      // pre-link pusher copy, so a close-phase push cannot retain all
+      // earlier children through alternating child/parent links. The
+      // running child receives its final parent here too.
+      rule.next = rule.child = next.snapshot(ctx)
       next.parent = boundedRuleHistory(
         rule, ctx, ctx.cfg.rule.history, 'parent',
       )
