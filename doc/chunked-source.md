@@ -395,6 +395,14 @@ the median of two or three runs, which agree to within 0.3%:
   its 64 KiB read buffer at every fill, which is before every token, and
   cost 19.5%; keeping the buffer was the one change that mattered.
 
+On the wall clock, six rounds alternating the two arms as `ab.sh` does,
+with the one-minute load between 0.8 and 1.2 throughout, the medians are
+1.177 s on `main` and 1.190 s on the prototype for `rulecost_sys` on
+`records-10000.json` (+1.1%); 12.08 s whole and 12.57 s from a reader for
+the probe on 40,000 JSON records (+4.1%); and 5.52 s and 5.69 s for 40,000
+CSV records (+3.0%). The first is inside the -2.49% to +2.92% a null change
+moves the suite in tabnas/measure; the reader's cost is at the edge of it.
+
 ### What it changes in the design
 
 - **The matchers need no fills of their own.** Filling to a margin before
@@ -409,8 +417,8 @@ the median of two or three runs, which agree to within 0.3%:
   replayed token's text again. At the default `rewind.history` of 64
   tokens that keeps a few hundred characters more.
 - **The price is about 1% on a whole text and 3% from a reader,** in
-  instructions, against the 3% bar `ci/bench/ab.sh` can tell apart on
-  the wall clock.
+  instructions, and 1% and 3% to 4% on the wall clock, where a null change
+  moves the suite by up to 3%.
 
 ## Order of work
 
