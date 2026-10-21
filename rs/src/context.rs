@@ -492,6 +492,19 @@ impl Context {
         }
     }
 
+    /// Where the oldest token the parser holds starts: its lookahead's,
+    /// the tokens a rewind replays, and its consumed history, which a
+    /// rewind may replay and a re-cut read again. `None` when it holds
+    /// none. A window keeps the source from there on.
+    pub(crate) fn oldest_held(&self) -> Option<usize> {
+        self.t
+            .iter()
+            .chain(self.replay.iter())
+            .chain(self.v.iter())
+            .map(|token| token.site.pos)
+            .min()
+    }
+
     pub(crate) fn next_replay(&mut self) -> Option<Token> {
         self.replay.pop_front()
     }

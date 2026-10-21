@@ -1,0 +1,21 @@
+[package]
+name = "window"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# The window prototype's probe (`doc/chunked-source.md`, "What the
+# prototype measured"): a pruned read through transduce's
+# ParserEventSource, the text read whole or a window at a time. It builds
+# in the sibling layout, against this checkout's engine, with transduce on
+# its `claude/chunked-prototype` branch, which adds the reader
+# constructor.
+[dependencies]
+tabnas = { package = "tabnas-parser", path = "../../../rs" }
+tabnas-json = { path = "../../../../json/rs" }
+tabnas-jsonl = { path = "../../../../jsonl/rs" }
+tabnas-csv = { path = "../../../../csv/rs" }
+tabnas-transduce = { path = "../../../../transduce/rs" }
+
+[profile.release]
+debug = 1

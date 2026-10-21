@@ -11,12 +11,26 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 pub struct Lexer<'a> {
-    src: &'a str,
+    /// The text: the whole source, or the window of one read from a
+    /// reader ([`Text`]).
+    src: Text<'a>,
+    /// The characters from `low` on: the whole source's, or the window's.
     chars: Vec<char>,
     /// The byte offset of each character, or `None` for an ASCII source,
-    /// where a character's index is its byte offset (`byte_at`).
+    /// where a character's index is its byte offset (`byte_at`). Offsets
+    /// and indexes are the source's, from its start, in a window too.
     byte_indices: Option<Vec<usize>>,
+    /// The end of the characters read: the source's length, or the
+    /// window's end.
     char_len: usize,
+    /// The index and the byte offset of the first character `chars`
+    /// holds: zero for the whole source, the window's start otherwise.
+    low: usize,
+    low_byte: usize,
+    /// A read reached the window's end while the source had more: the
+    /// token being cut may be cut short, and is cut again over a larger
+    /// window ([`Lexer::next_raw_inner`]).
+    touched_end: std::cell::Cell<bool>,
     idx: usize,
     ri: usize,
     ci: usize,
@@ -83,6 +97,56 @@ pub(crate) fn compile_number_exclude(options: &Options) -> Option<Arc<Regex>> {
     Regex::new(pattern).ok().map(Arc::new)
 }
 
+/// What a lexer reads: the whole source, borrowed, or a window of a
+/// source it reads from a reader a chunk at a time, filling the window as
+/// it needs more and dropping it behind the oldest token the parser may
+/// still re-cut ([`Lexer::release_before`]).
+enum Text<'a> {
+    Whole(&'a str),
+    Window(Box<Window<'a>>),
+}
+
+/// A source read from a reader ([`Text::Window`]).
+struct Window<'a> {
+    /// The text read and kept, from the lexer's `low_byte` on.
+    text: String,
+    reader: Box<dyn std::io::Read + 'a>,
+    /// Bytes read and not yet decoded: the start of a character a read
+    /// split.
+    pending: Vec<u8>,
+    /// The buffer a read fills, kept from one read to the next.
+    buffer: Vec<u8>,
+    exhausted: bool,
+    /// The oldest character the parser may still ask for again.
+    keep: usize,
+    /// How far ahead of the cursor the window reaches before each token.
+    margin: usize,
+    /// How much dead text gathers before it is dropped, and how much a
+    /// read asks for.
+    block: usize,
+    chunk: usize,
+}
+
+/// A window's sizes: the margin ahead of the cursor, the dead text
+/// gathered before it is dropped, and a read's length. A test makes them
+/// a few bytes, so that every matcher meets the window's edge.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowSizes {
+    pub margin: usize,
+    pub block: usize,
+    pub chunk: usize,
+}
+
+impl Default for WindowSizes {
+    fn default() -> Self {
+        WindowSizes {
+            margin: 64 * 1024,
+            block: 64 * 1024,
+            chunk: 64 * 1024,
+        }
+    }
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str, mut options: Options) -> Self {
         if let Err(error) = options.validate_comment_definitions() {
@@ -121,10 +185,13 @@ impl<'a> Lexer<'a> {
         let char_len = chars.len();
 
         Lexer {
-            src,
+            src: Text::Whole(src),
             chars,
             byte_indices,
             char_len,
+            low: 0,
+            low_byte: 0,
+            touched_end: std::cell::Cell::new(false),
             idx: 0,
             ri: 1,
             ci: 1,
@@ -139,9 +206,216 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Lex a source read from `reader`, a window of it at a time
+    /// ([`Text::Window`]).
+    pub(crate) fn with_reader(
+        reader: Box<dyn std::io::Read + 'a>,
+        sizes: WindowSizes,
+        options: Arc<Options>,
+        exclude_regex: Option<Arc<Regex>>,
+    ) -> Self {
+        Lexer {
+            src: Text::Window(Box::new(Window {
+                text: String::new(),
+                reader,
+                pending: Vec::new(),
+                buffer: Vec::new(),
+                exhausted: false,
+                keep: 0,
+                margin: sizes.margin.max(1),
+                block: sizes.block.max(1),
+                chunk: sizes.chunk.max(1),
+            })),
+            chars: Vec::new(),
+            byte_indices: None,
+            char_len: 0,
+            low: 0,
+            low_byte: 0,
+            touched_end: std::cell::Cell::new(false),
+            idx: 0,
+            ri: 1,
+            ci: 1,
+            ignore_tins: options.ignore_tins(),
+            char_sets: options.char_sets(),
+            options,
+            err: None,
+            end_reached: false,
+            exclude_regex,
+            want: None,
+            standalone: None,
+        }
+    }
+
+    /// The text the lexer holds: the whole source, or the window.
+    fn text(&self) -> &str {
+        match &self.src {
+            Text::Whole(src) => src,
+            Text::Window(window) => &window.text,
+        }
+    }
+
+    /// The source's length in bytes, or, in a window, the length read.
+    fn src_len(&self) -> usize {
+        match &self.src {
+            Text::Whole(src) => src.len(),
+            Text::Window(window) => self.low_byte + window.text.len(),
+        }
+    }
+
+    /// The text from the source's byte offset `byte` on, as far as the
+    /// lexer holds it.
+    fn tail_at_byte(&self, byte: usize) -> &str {
+        &self.text()[byte - self.low_byte..]
+    }
+
+    /// Whether the lexer reads a window of a source that has more to give.
+    #[inline]
+    fn window_open(&self) -> bool {
+        matches!(&self.src, Text::Window(window) if !window.exhausted)
+    }
+
+    /// Note a read at the window's end, where the source has more.
+    #[inline]
+    fn touch_end(&self) {
+        if self.window_open() {
+            self.touched_end.set(true);
+        }
+    }
+
+    /// The character at the source's index `index`, which the lexer holds.
+    #[inline]
+    fn ch(&self, index: usize) -> char {
+        self.chars[index - self.low]
+    }
+
+    /// The character at `index`, or `None` past what the lexer holds.
+    #[inline]
+    fn ch_get(&self, index: usize) -> Option<char> {
+        let found = self.chars.get(index - self.low).copied();
+        if found.is_none() {
+            self.touch_end();
+        }
+        found
+    }
+
+    /// Whether the lexer reads a window of its source.
+    pub fn windowed(&self) -> bool {
+        matches!(self.src, Text::Window(_))
+    }
+
+    /// The characters read so far, counted as UTF-16 units: in a window,
+    /// what the parser's step budget is measured against as it grows.
+    pub(crate) fn utf16_read(&self) -> usize {
+        match &self.src {
+            Text::Whole(src) => src.encode_utf16().count(),
+            Text::Window(_) => self.char_len,
+        }
+    }
+
+    /// Whether a source read from a reader turns out empty: the window is
+    /// filled until it holds a character or the reader is done.
+    pub(crate) fn is_empty_source(&mut self) -> bool {
+        self.fill(1);
+        self.char_len == 0
+    }
+
+    /// The parser holds no token that starts before `pos`, so the window
+    /// may drop the text before it (or before the cursor, if that is
+    /// earlier).
+    pub(crate) fn release_before(&mut self, pos: usize) {
+        let keep = pos.min(self.idx);
+        if let Text::Window(window) = &mut self.src {
+            window.keep = keep;
+        }
+    }
+
+    /// Fill the window until `ahead` characters lie past the cursor or the
+    /// source is exhausted, dropping first the text before what the parser
+    /// may still ask for, a block at a time.
+    pub(crate) fn fill(&mut self, ahead: usize) {
+        let Text::Window(window) = &mut self.src else {
+            return;
+        };
+        let keep = window.keep.min(self.idx);
+        // Most tokens find the window long enough and nothing to drop.
+        if (window.exhausted || self.char_len - self.idx >= ahead) && keep < self.low + window.block
+        {
+            return;
+        }
+        if keep >= self.low + window.block {
+            let chars = keep - self.low;
+            let bytes = match &self.byte_indices {
+                Some(offsets) => offsets[chars] - self.low_byte,
+                None => chars,
+            };
+            self.chars.drain(..chars);
+            if let Some(offsets) = &mut self.byte_indices {
+                offsets.drain(..chars);
+            }
+            window.text.drain(..bytes);
+            self.low = keep;
+            self.low_byte += bytes;
+        }
+        if window.buffer.len() != window.chunk {
+            window.buffer = vec![0u8; window.chunk];
+        }
+        while !window.exhausted && self.char_len - self.idx < ahead {
+            let read = loop {
+                match window.reader.read(&mut window.buffer) {
+                    Ok(read) => break read,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    // A reader that fails ends the source where it failed.
+                    Err(_) => break 0,
+                }
+            };
+            if read == 0 {
+                window.exhausted = true;
+            }
+            window.pending.extend_from_slice(&window.buffer[..read]);
+            // The longest prefix that decodes; a character split by the
+            // read waits for its last byte, and bytes that are no UTF-8
+            // are each the replacement character, as a lossy read makes
+            // them.
+            let decoded = match std::str::from_utf8(&window.pending) {
+                Ok(text) => text.to_string(),
+                Err(e) => match e.error_len() {
+                    None if !window.exhausted => {
+                        std::str::from_utf8(&window.pending[..e.valid_up_to()])
+                            .expect("valid up to")
+                            .to_string()
+                    }
+                    _ => String::from_utf8_lossy(&window.pending).into_owned(),
+                },
+            };
+            let used = if decoded.len() <= window.pending.len()
+                && window.pending.starts_with(decoded.as_bytes())
+            {
+                decoded.len()
+            } else {
+                window.pending.len()
+            };
+            window.pending.drain(..used);
+            for c in decoded.chars() {
+                if self.byte_indices.is_none() && !c.is_ascii() {
+                    // Every character so far was ASCII, its offset its
+                    // index.
+                    let mut offsets = Vec::with_capacity(self.chars.capacity());
+                    offsets.extend((0..self.chars.len()).map(|k| self.low + k));
+                    self.byte_indices = Some(offsets);
+                }
+                if let Some(offsets) = &mut self.byte_indices {
+                    offsets.push(self.low_byte + window.text.len());
+                }
+                window.text.push(c);
+                self.chars.push(c);
+            }
+            self.char_len = self.low + self.chars.len();
+        }
+    }
+
     fn current_point(&self) -> Point {
         Point {
-            len: self.src.len(),
+            len: self.src_len(),
             site: crate::Site {
                 si: self.byte_position(),
                 pos: self.idx,
@@ -166,7 +440,13 @@ impl<'a> Lexer<'a> {
     /// refactor that captured the point before the advance would still
     /// pass `rs/verus/run.sh`.
     fn source_span(&self, start: usize, end: usize) -> String {
-        self.chars[start..end.min(self.char_len)].iter().collect()
+        if end > self.char_len {
+            // A span cut at a window's end may be cut short.
+            self.touch_end();
+        }
+        self.chars[start - self.low..end.min(self.char_len) - self.low]
+            .iter()
+            .collect()
     }
 
     fn state(&self) -> LexerState {
@@ -179,14 +459,16 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Full immutable source supplied to this lexer.
+    /// Full immutable source supplied to this lexer; in a parse from a
+    /// reader, the window the lexer holds.
     pub fn source(&self) -> &str {
-        self.src
+        self.text()
     }
 
-    /// Source remaining at the live cursor.
+    /// Source remaining at the live cursor; in a parse from a reader, to
+    /// the window's end.
     pub fn remaining(&self) -> &str {
-        &self.src[self.byte_position()..]
+        self.tail_at_byte(self.byte_position())
     }
 
     /// Return at most `max_chars` Unicode scalar values from the live cursor.
@@ -276,7 +558,8 @@ impl<'a> Lexer<'a> {
     pub fn bad_span(&self, why: impl Into<String>, start: usize, end: usize) -> Token {
         let point = self.current_point();
         let source = if start <= end && end <= self.char_len {
-            self.src[self.byte_at(start)..self.byte_at(end)].to_string()
+            self.text()[self.byte_at(start) - self.low_byte..self.byte_at(end) - self.low_byte]
+                .to_string()
         } else {
             self.peek()
                 .map_or_else(String::new, |character| character.to_string())
@@ -295,14 +578,17 @@ impl<'a> Lexer<'a> {
     /// from its end on.
     fn byte_at(&self, index: usize) -> usize {
         match &self.byte_indices {
-            Some(offsets) => offsets.get(index).copied().unwrap_or(self.src.len()),
-            None => index.min(self.src.len()),
+            Some(offsets) => offsets
+                .get(index - self.low)
+                .copied()
+                .unwrap_or(self.src_len()),
+            None => index.min(self.src_len()),
         }
     }
 
     fn advance(&mut self) -> Option<char> {
         if self.idx < self.char_len {
-            let c = self.chars[self.idx];
+            let c = self.chars[self.idx - self.low];
             self.idx += 1;
             if self.char_sets.row.contains(c) {
                 self.ri += 1;
@@ -312,6 +598,7 @@ impl<'a> Lexer<'a> {
             }
             Some(c)
         } else {
+            self.touch_end();
             None
         }
     }
@@ -347,8 +634,9 @@ impl<'a> Lexer<'a> {
 
     fn peek(&self) -> Option<char> {
         if self.idx < self.char_len {
-            Some(self.chars[self.idx])
+            Some(self.chars[self.idx - self.low])
         } else {
+            self.touch_end();
             None
         }
     }
@@ -356,8 +644,9 @@ impl<'a> Lexer<'a> {
     fn peek_at(&self, offset: usize) -> Option<char> {
         let i = self.idx + offset;
         if i < self.char_len {
-            Some(self.chars[i])
+            Some(self.chars[i - self.low])
         } else {
+            self.touch_end();
             None
         }
     }
@@ -417,17 +706,19 @@ impl<'a> Lexer<'a> {
         let Some(check) = check else {
             return CheckFlow::Continue;
         };
-        let remaining = &self.src[self.byte_position()..];
-        let result = check
-            .run_imperative(self)
-            .or_else(|| check.run(remaining))
-            .unwrap_or(LexCheckResult::Continue);
+        let at = self.byte_position();
+        let result = match check.run_imperative(self) {
+            Some(result) => result,
+            None => check
+                .run(self.tail_at_byte(at))
+                .unwrap_or(LexCheckResult::Continue),
+        };
         match result {
             LexCheckResult::Continue => CheckFlow::Continue,
             LexCheckResult::Skip => CheckFlow::Skip,
             LexCheckResult::NativeToken(token) => CheckFlow::Token(token),
             LexCheckResult::Token(token)
-                if !token.source.is_empty() && remaining.starts_with(&token.source) =>
+                if !token.source.is_empty() && self.tail_at_byte(at).starts_with(&token.source) =>
             {
                 let tin = if token.tin < 0 {
                     self.options.token(&token.name).unwrap_or(token.tin)
@@ -494,7 +785,7 @@ impl<'a> Lexer<'a> {
             // a byte-order mark, and TypeScript's matchers all read the
             // live `lex.pnt`.
             let point = self.current_point();
-            let remaining = &self.src[self.byte_position()..];
+            let at = self.byte_position();
             let saved = self.state();
             let token = if let Some(callback) = matcher.imperative.as_ref() {
                 let Some((rule, context)) = plugin.as_mut() else {
@@ -502,6 +793,7 @@ impl<'a> Lexer<'a> {
                 };
                 callback(self, rule, context)
             } else {
+                let remaining = self.tail_at_byte(at);
                 matcher
                     .matcher
                     .as_ref()
@@ -548,10 +840,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn is_text_delimiter_at(&self, index: usize) -> bool {
-        let Some(ch) = self.chars.get(index).copied() else {
+        let Some(ch) = self.ch_get(index) else {
             return true;
         };
-        let remaining = &self.src[self.byte_at(index)..];
+        let remaining = self.tail_at_byte(self.byte_at(index));
         (self.options.space.lex && self.char_sets.space.contains(ch))
             || (self.options.fixed.lex
                 && self
@@ -665,7 +957,7 @@ impl<'a> Lexer<'a> {
         let error = TabnasError::from_panic(
             payload,
             api,
-            self.src,
+            self.text(),
             point.site.pos,
             point.site.ri,
             point.site.ci,
@@ -699,7 +991,7 @@ impl<'a> Lexer<'a> {
         let mut target = self.idx.max(token.site.pos.saturating_add(span));
         if to_line_end {
             let mut end = target;
-            while end < self.char_len && !self.char_sets.row.contains(self.chars[end]) {
+            while end < self.char_len && !self.char_sets.row.contains(self.ch(end)) {
                 end += 1;
             }
             target = target.max(self.char_len.min(end + 1));
@@ -806,7 +1098,7 @@ impl<'a> Lexer<'a> {
                 crate::Rule::new("#NORULE", Value::Undefined),
                 crate::Context::new(
                     self.options.rewind.history,
-                    self.src,
+                    self.text(),
                     Value::Undefined,
                     Arc::clone(&self.options),
                     crate::InstanceInfo::default(),
@@ -851,7 +1143,14 @@ impl<'a> Lexer<'a> {
                 // negotiated cut (`relex`) rejects many candidates, each an
                 // error nobody sees, and a copy of the whole source apiece
                 // made that quadratic.
-                error.full_source = self.src.to_string();
+                // A window holds the error's line only by chance, and its
+                // rows are the source's: a parse from a reader leaves the
+                // excerpt out (`doc/chunked-source.md`, "Errors keep their
+                // line", is not prototyped).
+                error.full_source = match &self.src {
+                    Text::Whole(src) => src.to_string(),
+                    Text::Window(_) => String::new(),
+                };
                 error.apply_options(&self.options);
                 self.err = Some((*error).clone());
                 Err(error)
@@ -859,7 +1158,38 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Cut the next token. In a window, the window is filled to its
+    /// margin ahead of the cursor first, and a token whose cut read to the
+    /// window's end while the source had more is cut again over a window
+    /// twice as far ahead, so that it is the token the whole text gives.
     fn next_raw_inner(
+        &mut self,
+        expected_match_tins: Option<&[crate::Tin]>,
+        mut plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
+    ) -> LexResult<Token> {
+        let Text::Window(window) = &self.src else {
+            return self.next_raw_cut(expected_match_tins, plugin);
+        };
+        let mut ahead = window.margin;
+        loop {
+            self.fill(ahead);
+            let saved = self.state();
+            self.touched_end.set(false);
+            let result = self.next_raw_cut(
+                expected_match_tins,
+                plugin
+                    .as_mut()
+                    .map(|(rule, context)| (&mut **rule, &mut **context)),
+            );
+            if !self.window_open() || (!self.touched_end.get() && self.idx < self.char_len) {
+                return result;
+            }
+            self.rewind(saved);
+            ahead = ahead.saturating_mul(2);
+        }
+    }
+
+    fn next_raw_cut(
         &mut self,
         expected_match_tins: Option<&[crate::Tin]>,
         mut plugin: Option<(&mut crate::Rule, &mut crate::Context)>,
@@ -890,7 +1220,7 @@ impl<'a> Lexer<'a> {
         // cursor whenever a custom matcher or a check moves it and declines
         // (`resync`); `c` is `None` once the cursor is at the end.
         let entry = self.idx;
-        let first = self.chars[entry];
+        let first = self.ch(entry);
         let mut pnt = self.current_point();
         let mut c = Some(first);
         let mut custom_index = 0;
@@ -918,7 +1248,7 @@ impl<'a> Lexer<'a> {
             false
         };
         self.resync(&mut pnt, &mut c);
-        let remaining = &self.src[self.byte_position()..];
+        let remaining = self.tail_at_byte(self.byte_position());
         let custom_value = (self.options.match_lex && !match_skipped && self.want.is_none())
             .then(|| {
                 self.options
@@ -967,7 +1297,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token::new("#VL", TIN_VL, value, source, pnt));
         }
 
-        let remaining = &self.src[self.byte_position()..];
+        let remaining = self.tail_at_byte(self.byte_position());
         // With no custom matcher there is nothing for the band to do: both
         // passes walk an empty table and yield nothing, and `fix_len` is
         // read only by that walk. Most grammars register none, and every
@@ -1114,7 +1444,7 @@ impl<'a> Lexer<'a> {
                     .values()
                     .any(|token| token.source.starts_with(ch))
             });
-        let remaining = &self.src[self.byte_position()..];
+        let remaining = self.tail_at_byte(self.byte_position());
         // The winner is carried out of the table as its position, not as a
         // copy of its text. `Token::new` takes the name and the source text
         // by reference and stores both inline, so the only owned copy the
@@ -1402,14 +1732,10 @@ impl<'a> Lexer<'a> {
         if (text_lex || value_lex) && !text_skipped && !self.is_text_delimiter_here() {
             let start = (self.idx, self.ri, self.ci);
             // Only a `value` definition declaring `consume` looks at the
-            // rest of the document, and the JSON grammar has none -- but
-            // this ran for every text token, copying the whole tail of the
-            // input each time. `self.src` is borrowed from the caller for
-            // `'a` and is never reassigned, so reading the reference out
-            // before the scan below gives a slice that does not borrow
-            // `self` and survives the `&mut self` the scan needs.
-            let source: &'a str = self.src;
-            let remaining = &source[self.byte_position()..];
+            // rest of the document, and the JSON grammar has none: the
+            // tail is sliced where one asks for it, from the offset the
+            // token started at, never copied.
+            let start_byte = self.byte_position();
             let mut src = String::new();
             while let Some(ch) = self.peek() {
                 if self.is_text_delimiter_here() {
@@ -1453,7 +1779,11 @@ impl<'a> Lexer<'a> {
                     definitions.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
                     for (_, definition) in definitions {
                         let regex = definition.matcher.as_ref().expect("filtered matcher");
-                        let target: &str = if definition.consume { remaining } else { &src };
+                        let target: &str = if definition.consume {
+                            self.tail_at_byte(start_byte)
+                        } else {
+                            &src
+                        };
                         let Some(captures) = regex.captures(target) else {
                             continue;
                         };
@@ -1541,7 +1871,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn match_comment(&mut self, pnt: Point) -> LexResult<Option<Token>> {
-        let remaining = &self.src[self.byte_position()..];
+        let remaining = self.tail_at_byte(self.byte_position());
         let mut definitions: Vec<_> = self
             .options
             .comment
@@ -1574,27 +1904,30 @@ impl<'a> Lexer<'a> {
         let mut terminated_by_suffix = false;
         let mut closed = definition.line;
         loop {
-            let remainder = &self.src[self.byte_position()..];
+            let at = self.byte_position();
+            let remainder = self.tail_at_byte(at);
             let suffix = definition
                 .suffixes
                 .iter()
                 .filter(|suffix| !suffix.is_empty() && remainder.starts_with(*suffix))
                 .max_by_key(|suffix| suffix.len())
                 .cloned();
-            let suffix = suffix.or_else(|| {
-                let matcher = definition.suffix_matcher.as_ref()?;
-                let effect = matcher.run(remainder);
-                if effect.is_some() {
-                    return effect;
-                }
-                let saved = self.state();
-                let wanted = self.want.clone();
-                let token = matcher.run_imperative(self);
-                self.restore(saved);
-                self.want = wanted;
-                token.map(|token| token.src.to_string())
-            });
-            let remainder = &self.src[self.byte_position()..];
+            let suffix = match (suffix, definition.suffix_matcher.as_ref()) {
+                (Some(suffix), _) => Some(suffix),
+                (None, None) => None,
+                (None, Some(matcher)) => match matcher.run(self.tail_at_byte(at)) {
+                    Some(effect) => Some(effect),
+                    None => {
+                        let saved = self.state();
+                        let wanted = self.want.clone();
+                        let token = matcher.run_imperative(self);
+                        self.restore(saved);
+                        self.want = wanted;
+                        token.map(|token| token.src.to_string())
+                    }
+                },
+            };
+            let remainder = self.tail_at_byte(self.byte_position());
             let suffix =
                 suffix.filter(|suffix| !suffix.is_empty() && remainder.starts_with(suffix));
             if let Some(suffix) = suffix {
@@ -1905,7 +2238,7 @@ impl<'a> Lexer<'a> {
         let mut end = run_start;
         {
             let separator = self.options.number.sep.as_deref();
-            while let Some(ch) = self.chars.get(end).copied() {
+            while let Some(ch) = self.ch_get(end) {
                 if ch.is_ascii_digit() {
                     saw_digit = true;
                     last_was_separator = false;
@@ -1922,7 +2255,7 @@ impl<'a> Lexer<'a> {
         }
         let starts_with_separator = self.idx > run_start
             && self.options.number.sep.as_deref().is_some_and(|separator| {
-                self.chars[run_start..self.idx]
+                self.chars[run_start - self.low..self.idx - self.low]
                     .first()
                     .is_some_and(|ch| separator.contains(*ch))
             });

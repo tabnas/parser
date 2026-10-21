@@ -26,7 +26,7 @@ pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{
     GrammarError, GrammarGroups, GrammarSetting, GrammarSettingAlt, GrammarSettingRule, GrammarSpec,
 };
-pub use lexer::{Lexer, RelexCheckpoint};
+pub use lexer::{Lexer, RelexCheckpoint, WindowSizes};
 pub use merge::MergeError;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
@@ -1458,6 +1458,26 @@ impl Tabnas {
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         self.parser().parse_for(self, src, Value::Undefined)
+    }
+
+    /// Parse a source read from `reader`. A grammar that declares
+    /// `lex.window` is read a window at a time, so the parse holds a
+    /// window of the source rather than all of it; any other grammar
+    /// reads the reader whole first. A prototype
+    /// (`doc/chunked-source.md`).
+    pub fn parse_reader(&self, reader: impl std::io::Read) -> Result<Value, TabnasError> {
+        self.parse_reader_with(reader, WindowSizes::default())
+    }
+
+    /// [`Tabnas::parse_reader`] with the window's sizes given: a test makes
+    /// them a few bytes, so that every matcher meets the window's edge.
+    pub fn parse_reader_with(
+        &self,
+        reader: impl std::io::Read,
+        sizes: WindowSizes,
+    ) -> Result<Value, TabnasError> {
+        self.parser()
+            .parse_reader_for(Some(self), Box::new(reader), sizes, Value::Undefined)
     }
 
     pub fn parse_with_meta(&self, src: &str, meta: Value) -> Result<Value, TabnasError> {

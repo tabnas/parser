@@ -1551,8 +1551,48 @@ impl Parser {
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
     ) -> Result<Value, TabnasError> {
+        self.parse_with_owner_from(src, None, meta, owner, parent)
+    }
+
+    /// Parse a source read from `reader`, a window of it at a time when the
+    /// grammar declares `lex.window` and nothing else asks for the whole
+    /// text (a `parser.start`, error recovery); otherwise the reader is
+    /// read whole first and parsed as a text. A prototype
+    /// (`doc/chunked-source.md`).
+    pub(crate) fn parse_reader_for(
+        &self,
+        owner: Option<&crate::Tabnas>,
+        mut reader: Box<dyn std::io::Read + '_>,
+        sizes: crate::lexer::WindowSizes,
+        meta: Value,
+    ) -> Result<Value, TabnasError> {
+        let whole = !self.options.lex.window
+            || self.options.parser.start_with_context.is_some()
+            || self.options.parser.start_with_instance.is_some()
+            || self.options.parser.start.is_some()
+            || self.options.parse.recover.enabled;
+        if whole {
+            let mut text = String::new();
+            if let Err(e) = reader.read_to_string(&mut text) {
+                let mut error = TabnasError::new("internal", "", "", 0, 1, 1);
+                error.detail = format!("the source could not be read: {e}");
+                return Err(error);
+            }
+            return self.parse_with_owner(&text, meta, owner, None);
+        }
+        self.parse_with_owner_from("", Some((reader, sizes)), meta, owner, None)
+    }
+
+    fn parse_with_owner_from(
+        &self,
+        src: &str,
+        reader: Option<(Box<dyn std::io::Read + '_>, crate::lexer::WindowSizes)>,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> Result<Value, TabnasError> {
         match catch_unwind(AssertUnwindSafe(|| {
-            self.parse_uncaught(src, meta, owner, parent)
+            self.parse_uncaught(src, reader, meta, owner, parent)
         })) {
             Ok(result) => result,
             Err(payload) => {
@@ -1567,6 +1607,7 @@ impl Parser {
     fn parse_uncaught(
         &self,
         src: &str,
+        reader: Option<(Box<dyn std::io::Read + '_>, crate::lexer::WindowSizes)>,
         meta: Value,
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
@@ -1587,7 +1628,7 @@ impl Parser {
             gave_up: false,
         };
         let result = self
-            .parse_inner(src, meta, owner, parent, &mut mode)
+            .parse_inner(src, reader, meta, owner, parent, &mut mode)
             .map_err(|mut error| {
                 self.decorate_error(&mut error);
                 error
@@ -1694,7 +1735,7 @@ impl Parser {
                 gave_up: false,
             };
             let result = self
-                .parse_inner(src, meta, owner, parent, &mut mode)
+                .parse_inner(src, None, meta, owner, parent, &mut mode)
                 .map_err(|mut error| {
                     self.decorate_error(&mut error);
                     error
@@ -1800,7 +1841,7 @@ impl Parser {
                 partial: None,
                 gave_up: false,
             };
-            self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
+            self.parse_inner(src, None, Value::Undefined, owner, None, &mut mode)
         };
         let mut tins = if result.is_ok() {
             if capture.have_end {
@@ -1945,6 +1986,11 @@ impl Parser {
         site: ParseSite<'_>,
         fetch: Fetch,
     ) -> Result<(), TabnasError> {
+        // A window may drop the text before the oldest token the parser
+        // holds; a whole source has nothing to drop.
+        if lexer.windowed() {
+            lexer.release_before(context.oldest_held().unwrap_or(usize::MAX));
+        }
         while context.t.len() < count {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
                 break;
@@ -2071,6 +2117,7 @@ impl Parser {
     fn parse_inner(
         &self,
         src: &str,
+        reader: Option<(Box<dyn std::io::Read + '_>, crate::lexer::WindowSizes)>,
         meta: Value,
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
@@ -2108,7 +2155,7 @@ impl Parser {
             }
         }
 
-        if src.is_empty() {
+        if src.is_empty() && reader.is_none() {
             return if self.options.lex.empty {
                 Ok(self.options.lex.empty_result.clone())
             } else {
@@ -2123,7 +2170,20 @@ impl Parser {
         } else {
             compile_number_exclude(&self.options)
         };
-        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex);
+        let mut lexer = match reader {
+            Some((reader, sizes)) => {
+                Lexer::with_reader(reader, sizes, Arc::clone(&self.options), exclude_regex)
+            }
+            None => Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex),
+        };
+        // A source read from a reader is empty only once a read says so.
+        if lexer.windowed() && lexer.is_empty_source() {
+            return if self.options.lex.empty {
+                Ok(self.options.lex.empty_result.clone())
+            } else {
+                Err(TabnasError::new("unexpected", "", src, 0, 1, 1))
+            };
+        }
 
         // One lookup for the start rule: whether it exists, its shared
         // name handle and the spec to bind, which used to be three.
@@ -2155,13 +2215,18 @@ impl Parser {
         } else {
             self.options.rule.maxmul
         };
-        let max_iterations = self
-            .rules
-            .len()
-            .saturating_mul(src.encode_utf16().count())
-            .saturating_mul(4)
-            .saturating_mul(maxmul)
-            .max(100);
+        // The budget is the source's length in UTF-16 units, times the
+        // rules, four and `maxmul`. A window knows only what it has read,
+        // so the budget is measured again as it reads more.
+        let step_budget = |read: usize| {
+            self.rules
+                .len()
+                .saturating_mul(read)
+                .saturating_mul(4)
+                .saturating_mul(maxmul)
+                .max(100)
+        };
+        let mut max_iterations = step_budget(lexer.utf16_read());
         let budget = &self.options.parse.budget;
 
         // One match record for the whole parse, reset at the head of each
@@ -2177,6 +2242,9 @@ impl Parser {
             context.set_active(&current_rule, &stack);
             update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
+            if iterations > max_iterations && lexer.windowed() {
+                max_iterations = step_budget(lexer.utf16_read());
+            }
             if iterations > max_iterations {
                 let pnt = context
                     .t

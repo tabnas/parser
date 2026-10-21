@@ -794,6 +794,11 @@ pub struct LexOptions {
     pub empty_result: crate::Value,
     pub relex: bool,
     pub matchers: IndexMap<String, LexMatcher>,
+    /// The grammar's matchers and actions read the source only through
+    /// the lexer's window, so a parse from a reader may hold a window of
+    /// it (`Tabnas::parse_reader`); without it, a reader is read whole
+    /// before the parse begins. A prototype (`doc/chunked-source.md`).
+    pub window: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -819,6 +824,7 @@ impl Default for LexOptions {
             empty_result: crate::Value::Undefined,
             relex: false,
             matchers: IndexMap::new(),
+            window: false,
         }
     }
 }
