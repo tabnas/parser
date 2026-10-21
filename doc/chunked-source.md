@@ -11,9 +11,10 @@ that step 10 began with is tabnas/parser#309. Background: alchemy's
 sections 9 and 11, and admin's ADR-28, whose decision 2 keeps the line
 source until the engine reads its input in chunks.
 
-Nothing here is implemented. The measurements are of the engine as it
-is; the design is a proposal, with the questions it leaves for the
-maintainer at the end.
+A prototype of the design was built in Rust and measured before the
+decision ([What the prototype measured](#what-the-prototype-measured));
+nothing of it is merged. The design is a proposal, with the questions it
+leaves for the maintainer at the end.
 
 ## The problem
 
@@ -279,19 +280,147 @@ make every matcher meet the window's edge.
 - **Every other format** is unchanged until its plugin moves, and then
   gains the same.
 
-What the window costs in time is not measured, since nothing is built
-yet. A check against the window's end where a built-in matcher reads a
-character is the likely price; `ci/bench/rulecost` measures it before
-anything lands, against a bar of the 3% `ci/bench/ab.sh` can tell apart.
+What the window costs, and what it holds, is measured below, on a
+prototype.
+
+## What the prototype measured
+
+The design was built in Rust to measure its price and its memory before
+the maintainer rules on it: tabnas/parser's
+`claude/chunked-window-prototype` branch (`8db91f1`, on `72022de`), with
+transduce's `claude/chunked-prototype` (`e6022bd`, on 0.2.11) for a
+`ParserEventSource` that reads from a reader. Neither is for merging.
+
+### What it builds
+
+- `Tabnas::parse_reader` and the option `lex.window`. A grammar without
+  the option, or with a `parser.start` or error recovery, reads the
+  reader whole first and parses the text, as the design says.
+- The lexer holds the whole text, borrowed as before, or a window of it,
+  with every position the source's: `chars` and `byte_indices` hold the
+  window, indexed from its start.
+- Before each token the lexer fills the window to a margin ahead of the
+  cursor, 64 KiB, and a token whose cut read to the window's end while
+  the source had more is cut again over a window twice as far ahead. No
+  matcher was changed: that one rule in the lexer stands in for the fills
+  the design gives each matcher, and csv's quoted string, which reads
+  `Lexer::remaining`, runs as it is.
+- Text is dropped 64 KiB at a time behind the oldest token the parser
+  holds: its lookahead, the tokens a rewind replays, and its consumed
+  history (`rewind.history`, 64 tokens by default), which a rewind may
+  replay and a re-cut may then read again.
+- The step budget grows with what the window has read, and a source is
+  empty only once a read says so.
+
+Not built: an error's excerpt in a parse from a reader, which is left
+empty, its code, position, row and column kept; `fill` for a plugin, so
+a csv field longer than the margin would read as unterminated;
+`Context::source` as the window (it is empty in a parse from a reader);
+`lex.window` set by any grammar package (the probe sets it); TypeScript
+and Go. A token's point carries the source's length (`Point::len`), which
+from a reader is the length read so far: the one field of a token that
+differs, and a divergence the design has to register or remove.
+
+### The same parse
+
+`rs/tests/window_test.rs` parses 72 rows of the spec register
+(`include-json*.tsv` under the strict-JSON grammar, `happy.tsv` under
+the default one) whole and from a reader that hands the text over in
+pieces of 1, 2, 3, 7, 64 and 4096 bytes, splitting characters past ASCII,
+under windows whose margin and block are 1 and 1, 3 and 2, and 64 and 64
+characters: 1,296 parses, each giving the value, the tokens, the rule
+passes and the error code, position, row and column of the whole text.
+The probe below checks the 10,000-record files the same way, by a hash of
+every pass: 619,749 passes for JSON either way, 619,747 for JSON Lines
+and 410,043 for CSV. The engine's own Rust suite passes on the prototype
+unchanged.
+
+### Memory
+
+The probe is `ci/bench/window` on the prototype branch. It reads the file
+with `read_to_string` and runs `ParserEventSource::new` (whole), or opens
+it and runs `ParserEventSource::from_reader` (window), each with
+`.prune()`, and counts the passes. It is built and measured as in
+[Conditions](#conditions), on the same files:
+
+| Input | Records | Whole | From a reader |
+|---|---|---|---|
+| JSON records, ASCII | 10,000 | 15.9 MB | 6.0 MB |
+| | 40,000 | 49.8 MB | 6.0 MB |
+| | 160,000 | 186.6 MB | 5.9 MB |
+| JSON records, a character past ASCII in each name | 10,000 | 30.8 MB | 7.4 MB |
+| | 40,000 | 110.1 MB | 7.4 MB |
+| | 160,000 | 429.7 MB | 7.4 MB |
+| JSON Lines, the same records | 10,000 | 15.9 MB | 5.8 MB |
+| | 40,000 | 49.8 MB | 5.9 MB |
+| | 160,000 | 186.8 MB | 6.0 MB |
+| CSV, the same records flattened | 10,000 | 10.5 MB | 6.4 MB |
+| | 40,000 | 26.6 MB | 6.4 MB |
+| | 160,000 | 92.1 MB | 6.7 MB |
+
+From a reader the memory is flat in all four. The window holds up to a
+block behind the cursor and two reads ahead of it, about 1 MB of an ASCII
+text and 2.5 MB past ASCII, where each character keeps its offset too
+(the 1.4 MB between the two JSON rows); prune and the bounded rule
+history keep the rest flat already. That is the flat memory ADR-28's
+decision 2 waits for on the general path; `docs/BENCH.md` measures it
+through aless, step 5 of the order of work.
+
+### Time
+
+Instructions, counted in user space by `perf stat -e instructions:u`,
+the median of two or three runs, which agree to within 0.3%:
+
+- **A whole text, the prototype against `main`.** `ci/bench/profl`'s
+  `rulecost_sys` (the system allocator, no LTO, `rule.history` 3), as in
+  `per-rule-cost.md`: 6.545 G to 6.602 G instructions on
+  `records-10000.json`, and 82.31 G to 83.03 G on `records-126000.json`,
+  0.9% more on each. That is the window's arithmetic on a parse that has
+  no window: the window's start taken from each character's index, and a
+  check per token.
+- **From a reader against the same text whole,** on the prototype,
+  through the probe, at 40,000 records:
+
+  | Input | Whole | From a reader | |
+  |---|---|---|---|
+  | JSON | 77.62 G | 80.02 G | +3.1% |
+  | JSON, past ASCII | 77.94 G | 79.66 G | +2.2% |
+  | JSON Lines | 77.26 G | 79.68 G | +3.1% |
+  | CSV | 35.06 G | 36.28 G | +3.5% |
+
+  The reader's part is decoding the chunks, the fill's check and the
+  state a re-cut needs before each token, and the oldest token the parser
+  holds, found before each lookahead fetch by a scan of up to 64 consumed
+  tokens that a running minimum would replace. A first build allocated
+  its 64 KiB read buffer at every fill, which is before every token, and
+  cost 19.5%; keeping the buffer was the one change that mattered.
+
+### What it changes in the design
+
+- **The matchers need no fills of their own.** Filling to a margin before
+  each token, and cutting a token again when its cut reached the window's
+  end, covers every built-in matcher and csv's: the fills the design
+  gives each matcher are one rule in the lexer, which the differential
+  test holds at windows of one character. A plugin still needs `fill` for
+  a token longer than the margin, and csv's quoted field is the one such
+  token in the three grammars.
+- **The low-water mark takes in the consumed history,** not only the
+  lookahead: a rewind replays history, and a re-cut may then read a
+  replayed token's text again. At the default `rewind.history` of 64
+  tokens that keeps a few hundred characters more.
+- **The price is about 1% on a whole text and 3% from a reader,** in
+  instructions, against the 3% bar `ci/bench/ab.sh` can tell apart on
+  the wall clock.
 
 ## Order of work
 
-1. **Rust, the engine.** The reader, the window, the built-in matchers'
-   fills, the end, errors that keep their line, the `lex.window` option
-   and the window calls, `parse(&str)` over a source of one chunk, and
-   the differential test. tabnas-json, tabnas-jsonc and tabnas-jsonl set
-   the option.
-2. **csv.** Its quoted string scans with `fill`; it sets the option.
+1. **Rust, the engine.** The reader, the window, its margin and the
+   re-cut at its edge, the end, errors that keep their line, the
+   `lex.window` option and the window calls, `parse(&str)` over a source
+   of one chunk, and the differential test. tabnas-json, tabnas-jsonc and
+   tabnas-jsonl set the option.
+2. **csv.** Its quoted string scans with `fill`, for a field longer than
+   the margin; it sets the option.
 3. **transduce.** `ParserEventSource` from a reader, in Rust.
 4. **aless and alchemy-cli.** A file is read through the reader.
 5. **Measure.** `docs/BENCH.md` before and after, JSON Lines and CSV on
@@ -336,4 +465,7 @@ with `lex.window` once its own matchers read through the window, and a
 grammar that has not reads a reader whole, as before. Rust lands first,
 with tabnas-json, tabnas-jsonc, tabnas-jsonl and csv; the line source goes
 once JSON Lines and CSV hold flat memory on the general path (step 12);
-TypeScript and Go follow in the maintainer's order.
+TypeScript and Go follow in the maintainer's order. Measured on a Rust
+prototype, a pruned read of JSON, JSON Lines and CSV from a reader holds
+6 MB to 7.4 MB from 10,000 records to 160,000, for about 1% more
+instructions on a whole text and 3% more from a reader.
