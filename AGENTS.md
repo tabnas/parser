@@ -746,7 +746,11 @@ gated in all three test suites, has always carried it. Go reserves one more: `in
 declared with its own message and hint in `go/tabnas.go`, which the engine
 produces when it recovers a panic from a plugin callback or matcher
 (`go/parser.go`, `go/plugin.go`). TypeScript has no equivalent. A Go plugin
-author must not reuse or remove `internal`.
+author must not reuse or remove `internal`. Rust reserves one of its own:
+`unreadable`, declared in `rs/src/error.rs`, which a parse from a reader
+(`Tabnas::parse_reader`, admin ADR-30) raises when the reader fails or gives
+bytes that are not UTF-8. TypeScript and Go parse a string, so neither has
+it; the registry records it under `rustOnly`.
 
 A plugin adds its own by extending `options.error` and `options.hint`, keyed by
 code, with `{braces}` placeholders resolved against the failing token's details.

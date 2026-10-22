@@ -712,6 +712,13 @@ fn merge_options(left: &Options, right: &Options) -> Result<Options, MergeError>
         "lex.relex",
         &PartialEq::eq,
     )?;
+    out.lex.window = pick(
+        &left.lex.window,
+        &right.lex.window,
+        &default.lex.window,
+        "lex.window",
+        &PartialEq::eq,
+    )?;
     out.lex.matchers = merge_index_map(
         &left.lex.matchers,
         &right.lex.matchers,

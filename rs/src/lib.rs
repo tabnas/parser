@@ -26,7 +26,7 @@ pub use error::{RecoveredAt, TabnasError};
 pub use grammar::{
     GrammarError, GrammarGroups, GrammarSetting, GrammarSettingAlt, GrammarSettingRule, GrammarSpec,
 };
-pub use lexer::{Lexer, RelexCheckpoint};
+pub use lexer::{Lexer, RelexCheckpoint, WindowSizes};
 pub use merge::MergeError;
 pub use options::{
     BudgetCheck, BudgetOptions, ColorOptions, CommentDef, CommentSuffixMatcher, ConfigModifier,
@@ -1458,6 +1458,42 @@ impl Tabnas {
 
     pub fn parse(&self, src: &str) -> Result<Value, TabnasError> {
         self.parser().parse_for(self, src, Value::Undefined)
+    }
+
+    /// Parse a source read from `reader`, its bytes decoded as UTF-8
+    /// (admin ADR-30, `doc/chunked-source.md`).
+    ///
+    /// A grammar that declares `lex.window` is read a window at a time:
+    /// the parse holds the text from the oldest token it may cut again to
+    /// 64 KiB or so past its cursor, rather than all of it, and gives the
+    /// same value, rule passes and errors as [`Tabnas::parse`] of the same
+    /// text, but for an error's excerpt, which shows a line only as far
+    /// back as the window reaches. Any other grammar, and one with a
+    /// `parser.start` or error recovery, reads the reader whole first and
+    /// parses the text.
+    ///
+    /// In a parse a window at a time, [`Context::source`] is empty, and the
+    /// length a [`Point`] carries ([`Lexer::point`], as a matcher sees it)
+    /// is the length read so far: a grammar that declares the option reads
+    /// the text through [`Lexer::window`] and [`Lexer::fill`]. A reader
+    /// that fails, or bytes that are not UTF-8, fail the parse with the
+    /// code `unreadable`, where the source failed.
+    pub fn parse_reader(&self, reader: impl std::io::Read) -> Result<Value, TabnasError> {
+        self.parse_reader_with_sizes(reader, WindowSizes::default())
+    }
+
+    /// [`Tabnas::parse_reader`] with the window's sizes given. Not an
+    /// option: the sizes are fixed (admin ADR-30), and only the
+    /// differential test makes them a few bytes, so that every matcher
+    /// meets the window's edge.
+    #[doc(hidden)]
+    pub fn parse_reader_with_sizes(
+        &self,
+        reader: impl std::io::Read,
+        sizes: WindowSizes,
+    ) -> Result<Value, TabnasError> {
+        self.parser()
+            .parse_reader_for(Some(self), Box::new(reader), sizes, Value::Undefined)
     }
 
     pub fn parse_with_meta(&self, src: &str, meta: Value) -> Result<Value, TabnasError> {

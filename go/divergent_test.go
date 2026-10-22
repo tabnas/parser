@@ -619,6 +619,16 @@ var notRegistered = map[string]string{
 		"child carries its decorations into the plugin re-run here and in " +
 		"Rust, after it in Go', TestDerivedChildGetsDecorationsAfterThePlugins " +
 		"and the Rust derived_child_carries_decorations_into_the_plugin_rerun",
+	"What a parse from a reader shows of its source in Rust": "cannot be " +
+		"registered by the probe set: only Rust parses from a reader, and a " +
+		"row hands every runtime a string; pinned by rs/tests/window_test.rs " +
+		"(a_long_lines_excerpt_is_cut_where_the_window_begins, " +
+		"a_points_length_is_the_length_read_so_far and " +
+		"a_windowed_contexts_source_is_empty)",
+	"A parse from a reader exists only in Rust": "cannot be registered: " +
+		"TypeScript and Go have no reader for a row to hand a source " +
+		"through; pinned by rs/tests/window_test.rs, which holds a parse " +
+		"from a reader to the same text parsed whole",
 }
 
 // TestDivergenceRegisterCoversEveryEntry ties the register to the prose.

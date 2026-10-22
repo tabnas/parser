@@ -103,6 +103,18 @@ typed Rust APIs. Lazy token values, full pre-parse hooks, live lexer checks,
 function comment suffixes, and setup-time matcher factories preserve their
 canonical callback timing.
 
+Only Rust parses from a reader for now. TypeScript and Go take it in their
+turn. `Tabnas::parse_reader` takes a `std::io::Read` and decodes
+its bytes as UTF-8. When a grammar declares `lex.window`, the parse reads the
+source a window at a time: it holds the text from the oldest token it may cut
+again to a margin past its cursor, never the whole document, and gives the
+same value, rule passes and errors as `parse` of the same text. Its matchers
+read the text through `Lexer::window` and `Lexer::fill`. Any other grammar
+reads the reader whole first. A reader that fails, or invalid UTF-8, fails
+the parse with the code `unreadable`. `DIVERGENCE.md` records the three
+things a parse a window at a time shows differently of its source: a long
+line's error excerpt, the length a `Point` carries, and `Context::source`.
+
 The strict-JSON grammar exposed by `Tabnas::make_json()` is a compatibility
 fixture while the Rust plugin API is stabilized. It is not a built-in default
 grammar: `Tabnas::new()` has no rules.

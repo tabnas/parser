@@ -794,6 +794,12 @@ pub struct LexOptions {
     pub empty_result: crate::Value,
     pub relex: bool,
     pub matchers: IndexMap<String, LexMatcher>,
+    /// The grammar's matchers and actions read the source only through
+    /// the lexer's window ([`crate::Lexer::window`], [`crate::Lexer::fill`]),
+    /// so a parse from a reader may hold a window of it rather than all of
+    /// it ([`crate::Tabnas::parse_reader`]). Without it, a reader is read
+    /// whole before the parse begins. Off by default (admin ADR-30).
+    pub window: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -819,6 +825,7 @@ impl Default for LexOptions {
             empty_result: crate::Value::Undefined,
             relex: false,
             matchers: IndexMap::new(),
+            window: false,
         }
     }
 }
