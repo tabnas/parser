@@ -16,7 +16,8 @@ decision ([What the prototype measured](#what-the-prototype-measured));
 nothing of it is merged. The maintainer adopted the design on 2026-10-22,
 Rust first, and ruled on the questions it left
 ([The maintainer's rulings](#the-maintainers-rulings)); admin's ADR-30
-records the decision.
+records the decision, and the Rust engine builds it
+([What the Rust engine builds](#what-the-rust-engine-builds)).
 
 ## The problem
 
@@ -238,7 +239,11 @@ line, and its line start is the document's start, which the window has
 dropped by the time the error is made. That is the one thing a parse
 from a reader can show differently from a parse of the same text whole:
 a long line's excerpt is cut. The maintainer ruled to cut it and
-register the divergence in `DIVERGENCE.md`.
+register the divergence in `DIVERGENCE.md`. As built, an error in a parse
+from a reader shows its line from the window, which reads on to the end
+of its last line, no further than a margin, once the parse is done: a
+line the window holds is shown whole, and a longer one from where the
+window begins, its caret under the error.
 
 ### Grammars that read the text themselves
 
@@ -248,11 +253,13 @@ the window: an option, `lex.window`, off by default. A grammar that sets
 it gets the window, and its matchers use the lexer's window calls
 (`Lexer::window()`, the text from the cursor to the window's end, and
 `Lexer::fill(n)`, which reads until `n` characters are ahead or the
-source is exhausted) in place of `remaining()` and `source()`. A grammar
-that does not set it reads a reader whole before its parse begins,
-exactly as today, so nothing it does changes and nothing regresses; it
-gains nothing either, until its plugin is moved over. `Context::source`
-is the window in a windowed parse.
+source is exhausted, and says whether they are) in place of `remaining()`
+and `source()`. A grammar that does not set it reads a reader whole
+before its parse begins, exactly as today, so nothing it does changes and
+nothing regresses; it gains nothing either, until its plugin is moved
+over. `Context::source` is empty in a windowed parse: a window that moves
+cannot stand in for the text a plugin indexes by position, so a windowed
+grammar reads through the window calls.
 
 tabnas-json, tabnas-jsonc and tabnas-jsonl set the option as they are.
 csv sets it once its quoted-string matcher scans with `fill`. The rest
@@ -485,3 +492,43 @@ TypeScript and Go follow in the maintainer's order. Measured on a Rust
 prototype, a pruned read of JSON, JSON Lines and CSV from a reader holds
 6 MB to 7.4 MB from 10,000 records to 160,000, for about 1% more
 instructions on a whole text and 3% more from a reader.
+
+## What the Rust engine builds
+
+The engine builds the design in Rust as the prototype did, with what the
+prototype left out and what the rulings and the review asked for:
+
+- **The reader.** `Tabnas::parse_reader` reads a `std::io::Read`: a
+  grammar that declares `lex.window` a window at a time, any other the
+  reader whole. The margin, the block and a read are 64 KiB, fixed; only
+  the differential test makes them a few bytes, through the hidden
+  `parse_reader_with_sizes`.
+- **A source that cannot be read.** A read that fails, bytes that are not
+  UTF-8, and a character the source ends inside fail the parse with the
+  Rust-only code `unreadable`, at the character the source failed at, in
+  a windowed parse and a whole read alike. The prototype ended the source
+  at a failed read and replaced bytes that are not UTF-8.
+- **Errors** show their line from the window, as
+  [Errors keep their line](#errors-keep-their-line) describes.
+- **The low-water mark.** The parser looks over the tokens it holds only
+  once the window has gathered a block behind the cursor, about once a
+  block, where the prototype looked before every token.
+- **Merging.** `lex.window` survives a merge of two grammars, which the
+  prototype's options merge dropped.
+- **The window calls.** `Lexer::window` and `Lexer::fill` are public, and
+  `advance_chars` past the window's end has the token cut again over a
+  larger window, as the built-in matchers' reads do.
+- **What differs, registered.** `DIVERGENCE.md` records what a windowed
+  parse shows differently of its source (a long line's excerpt, the
+  length a `Point` carries, and `Context::source`, which is empty), and
+  that only Rust parses from a reader until TypeScript and Go take the
+  window.
+
+The differential test, `rs/tests/window_test.rs`, parses every input of
+the register's fifteen parsing files under the default and strict-JSON
+grammars, and the probe and rule-history rows under their own specs:
+15,096 parses from a reader, each with the value, tokens, rule passes and
+errors of the same text parsed whole. On a whole text the engine runs
+1.0% more instructions than `main`: `ci/bench/profl`'s `rulecost_sys` on
+`records-10000.json`, 6.156 G against 6.095 G, the median of three runs
+that agree to within 0.01%.
