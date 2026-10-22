@@ -829,8 +829,9 @@ file to one job:
 - **Explanation** (top-level [`doc/architecture.md`](doc/architecture.md),
   `{ts,go}/doc/concepts.md`, `go/doc/differences.md`, the
   `ts/doc/{gbnf,lsp}-feasibility.md` reports, the engine design notes
-  [`doc/rule-history-bound.md`](doc/rule-history-bound.md) and
-  [`doc/per-rule-cost.md`](doc/per-rule-cost.md), and the
+  [`doc/rule-history-bound.md`](doc/rule-history-bound.md),
+  [`doc/per-rule-cost.md`](doc/per-rule-cost.md) and
+  [`doc/chunked-source.md`](doc/chunked-source.md), and the
   language-neutral five-document Rust-port series —
   [`doc/rust-port-feasibility.md`](doc/rust-port-feasibility.md),
   [`doc/rust-callback-porting-strategy.md`](doc/rust-callback-porting-strategy.md),
@@ -849,7 +850,8 @@ The per-runtime `api/options/guide/plugins/concepts/tutorial` docs live in
 language-neutral — `syntax.md` (syntax spec), `architecture.md`,
 `value-builtins.md`, `STYLE-GUIDE.md` (how every page is written, and
 what the prose gate enforces), the engine design notes
-`rule-history-bound.md` and `per-rule-cost.md`, the Rust-port documents
+`rule-history-bound.md`, `per-rule-cost.md` and `chunked-source.md`, the
+Rust-port documents
 (`rust-port-feasibility.md`, `rust-callback-porting-strategy.md`,
 `rust-port-risks.md`, `engine-changes-for-portability.md`,
 `rust-port-implementation-plan.md`, `rust-callback-contract-spec.md`,
