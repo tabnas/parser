@@ -13,8 +13,10 @@ source until the engine reads its input in chunks.
 
 A prototype of the design was built in Rust and measured before the
 decision ([What the prototype measured](#what-the-prototype-measured));
-nothing of it is merged. The design is a proposal, with the questions it
-leaves for the maintainer at the end.
+nothing of it is merged. The maintainer adopted the design on 2026-10-22,
+Rust first, and ruled on the questions it left
+([The maintainer's rulings](#the-maintainers-rulings)); admin's ADR-30
+records the decision.
 
 ## The problem
 
@@ -201,7 +203,7 @@ grammar sees stay absolute: nothing about a position changes. `chars`
 and `byte_indices` hold the window alone. Behind the cursor the window
 keeps the start of the oldest token in the lookahead, which is as far
 back as a re-cut goes. Text before it is dropped, a block at a time
-(once the dead prefix passes 64 KiB, say), so the copy it costs stays
+(once the dead prefix passes 64 KiB), so the copy it costs stays
 amortised. The window grows only as far as one token is long, and a
 token is held to `max_scalar_bytes` by the hosts that set it.
 
@@ -216,7 +218,7 @@ token's expression runs on the window: a match that ends at the
 window's end is run again once the window has grown, until it ends
 before the end or the source is exhausted, since more text could make it
 longer. Before each token the lexer fills the window to at least a
-margin ahead of the cursor (64 KiB, say) or to the end of the source, so
+margin ahead of the cursor (64 KiB) or to the end of the source, so
 an expression that needs to look past what it matches sees what the
 whole text would show it unless it looks further than the margin.
 
@@ -235,8 +237,8 @@ either side of the error on a very long line. A minified document is one
 line, and its line start is the document's start, which the window has
 dropped by the time the error is made. That is the one thing a parse
 from a reader can show differently from a parse of the same text whole:
-a long line's excerpt is cut. It is a divergence to register, or a
-reason to keep more.
+a long line's excerpt is cut. The maintainer ruled to cut it and
+register the divergence in `DIVERGENCE.md`.
 
 ### Grammars that read the text themselves
 
@@ -440,28 +442,34 @@ moves the suite in tabnas/measure; the reader's cost is at the edge of it.
    from a window.
 8. **The fleet's plugins,** one at a time.
 
-## What waits on the maintainer
+## The maintainer's rulings
 
-- **The API.** A reader of bytes (`std::io::Read`, Go's `io.Reader`, an
-  async iterable of strings or buffers in TypeScript), or an iterator of
-  strings in every runtime. A reader is what hosts hold; strings keep
-  the decoding out of the engine.
-- **The opt-in.** A grammar declares `lex.window`, as proposed, or the
-  engine detects a plugin reading past the window and fails the parse.
-  Declaring is safe by default; detecting would move the whole fleet at
-  once and break where a plugin reads.
-- **A long line's excerpt.** Cut to the window in a parse from a reader,
-  and registered; or the window keeps each line whole, which keeps a
-  minified document whole too.
-- **The margin and the block,** and whether either is an option.
-- **The runtimes' order.** TypeScript is canonical, and a feature
-  normally lands there first. This one is proposed Rust first, as
-  ADR-29's bound was, since the hosts that stream (aless, alchemy-cli,
-  transduce's sources) are Rust and Rust holds the text six times over;
-  TypeScript and Go follow, with the difference registered in
-  `DIVERGENCE.md` meanwhile.
+Taken on 2026-10-22, each as proposed:
 
-## Proposed decision (for admin `DECISIONS.md`)
+- **The API is a reader of bytes:** `std::io::Read` in Rust and Go's
+  `io.Reader`, which is what hosts hold, the engine decoding the bytes.
+  TypeScript's form is settled when TypeScript takes the window. An
+  iterator of strings in every runtime, which keeps the decoding out of
+  the engine, was the alternative.
+- **A grammar opts in by declaring `lex.window`.** Detecting a plugin
+  that reads past the window and failing the parse would move the whole
+  fleet at once and break where a plugin reads.
+- **A long line's excerpt is cut to the window** in a parse from a
+  reader, and registered. Keeping each line whole would keep a minified
+  document whole too.
+- **The margin and the block are fixed at 64 KiB,** not options. The
+  differential test sets them to a few characters through a hook of its
+  own.
+- **Rust first,** as ADR-29's bound was, since the hosts that stream
+  (aless, alchemy-cli, transduce's sources) are Rust and Rust holds the
+  text six times over. TypeScript, which is canonical and where a
+  feature normally lands first, and Go follow in the maintainer's order,
+  with the difference registered in `DIVERGENCE.md` meanwhile.
+- **One release wave:** the engine, json, jsonc, jsonl, csv and transduce
+  ship together once their pieces have landed, before aless and
+  alchemy-cli read a file through a reader against the released crates.
+
+## The decision (admin's ADR-30)
 
 **ADR: The engine reads its source through a window.** A parse may take
 its text from a reader. The lexer keeps a window of it, from the start of
