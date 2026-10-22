@@ -53,6 +53,24 @@ fn error_registry_matches_the_rust_contract() {
         options.hint.get("internal").map(String::as_str),
         internal["hint"].as_str()
     );
+    // The Rust-only `unreadable`, which a parse from a reader raises
+    // (admin ADR-30): TypeScript and Go parse a string, so neither has it.
+    let rust_only: BTreeSet<&str> = registry["rustOnly"]
+        .as_object()
+        .expect("registry rustOnly codes")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(rust_only, BTreeSet::from(["unreadable"]));
+    let unreadable = &registry["rustOnly"]["unreadable"];
+    assert_eq!(
+        options.error.get("unreadable").map(String::as_str),
+        unreadable["message"].as_str()
+    );
+    assert_eq!(
+        options.hint.get("unreadable").map(String::as_str),
+        unreadable["hint"].as_str()
+    );
 }
 
 #[test]

@@ -1551,8 +1551,48 @@ impl Parser {
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
     ) -> Result<Value, TabnasError> {
+        self.parse_with_owner_from(src, None, meta, owner, parent)
+    }
+
+    /// Parse a source read from `reader`, a window of it at a time when the
+    /// grammar declares `lex.window` and nothing else asks for the whole
+    /// text (a `parser.start`, error recovery); otherwise the reader is
+    /// read whole first and parsed as a text (admin ADR-30,
+    /// `doc/chunked-source.md`). Either way a reader that fails, or bytes
+    /// that are not UTF-8, fail the parse with `unreadable`.
+    pub(crate) fn parse_reader_for(
+        &self,
+        owner: Option<&crate::Tabnas>,
+        mut reader: Box<dyn std::io::Read + '_>,
+        sizes: crate::lexer::WindowSizes,
+        meta: Value,
+    ) -> Result<Value, TabnasError> {
+        let whole = !self.options.lex.window
+            || self.options.parser.start_with_context.is_some()
+            || self.options.parser.start_with_instance.is_some()
+            || self.options.parser.start.is_some()
+            || self.options.parse.recover.enabled;
+        if whole {
+            let text = read_whole(&mut reader).map_err(|mut error| {
+                self.decorate_error(&mut error);
+                error
+            })?;
+            return self.parse_with_owner(&text, meta, owner, None);
+        }
+        let source = crate::lexer::ReaderSource::new(reader, sizes);
+        self.parse_with_owner_from("", Some(source), meta, owner, None)
+    }
+
+    fn parse_with_owner_from(
+        &self,
+        src: &str,
+        reader: Option<crate::lexer::ReaderSource<'_>>,
+        meta: Value,
+        owner: Option<&crate::Tabnas>,
+        parent: Option<&ContextSeed>,
+    ) -> Result<Value, TabnasError> {
         match catch_unwind(AssertUnwindSafe(|| {
-            self.parse_uncaught(src, meta, owner, parent)
+            self.parse_uncaught(src, reader, meta, owner, parent)
         })) {
             Ok(result) => result,
             Err(payload) => {
@@ -1567,6 +1607,7 @@ impl Parser {
     fn parse_uncaught(
         &self,
         src: &str,
+        reader: Option<crate::lexer::ReaderSource<'_>>,
         meta: Value,
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
@@ -1586,9 +1627,22 @@ impl Parser {
             partial: None,
             gave_up: false,
         };
+        // An error the parser raises in a parse from a reader has no source
+        // text to show its line from; the window left its own when the
+        // lexer was done ([`crate::lexer::ReaderSource`]).
+        let excerpt = reader
+            .as_ref()
+            .map(|source| std::rc::Rc::clone(&source.excerpt));
         let result = self
-            .parse_inner(src, meta, owner, parent, &mut mode)
+            .parse_inner(src, reader, meta, owner, parent, &mut mode)
             .map_err(|mut error| {
+                if error.full_source.is_empty() {
+                    if let Some((text, row, col)) =
+                        excerpt.and_then(|cell| cell.borrow_mut().take())
+                    {
+                        error.set_excerpt(text, row, col);
+                    }
+                }
                 self.decorate_error(&mut error);
                 error
             });
@@ -1694,7 +1748,7 @@ impl Parser {
                 gave_up: false,
             };
             let result = self
-                .parse_inner(src, meta, owner, parent, &mut mode)
+                .parse_inner(src, None, meta, owner, parent, &mut mode)
                 .map_err(|mut error| {
                     self.decorate_error(&mut error);
                     error
@@ -1800,7 +1854,7 @@ impl Parser {
                 partial: None,
                 gave_up: false,
             };
-            self.parse_inner(src, Value::Undefined, owner, None, &mut mode)
+            self.parse_inner(src, None, Value::Undefined, owner, None, &mut mode)
         };
         let mut tins = if result.is_ok() {
             if capture.have_end {
@@ -1945,6 +1999,13 @@ impl Parser {
         site: ParseSite<'_>,
         fetch: Fetch,
     ) -> Result<(), TabnasError> {
+        // A window may drop the text before the oldest token the parser
+        // holds, once it has gathered a block behind the cursor, so the
+        // tokens held are looked over about once a block; a whole source
+        // has nothing to drop.
+        if lexer.may_release() {
+            lexer.release_before(context.oldest_held().unwrap_or(usize::MAX));
+        }
         while context.t.len() < count {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {
                 break;
@@ -2071,6 +2132,7 @@ impl Parser {
     fn parse_inner(
         &self,
         src: &str,
+        reader: Option<crate::lexer::ReaderSource<'_>>,
         meta: Value,
         owner: Option<&crate::Tabnas>,
         parent: Option<&ContextSeed>,
@@ -2108,7 +2170,7 @@ impl Parser {
             }
         }
 
-        if src.is_empty() {
+        if src.is_empty() && reader.is_none() {
             return if self.options.lex.empty {
                 Ok(self.options.lex.empty_result.clone())
             } else {
@@ -2123,7 +2185,18 @@ impl Parser {
         } else {
             compile_number_exclude(&self.options)
         };
-        let mut lexer = Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex);
+        let mut lexer = match reader {
+            Some(source) => Lexer::with_reader(source, Arc::clone(&self.options), exclude_regex),
+            None => Lexer::with_shared(src, Arc::clone(&self.options), exclude_regex),
+        };
+        // A source read from a reader is empty only once a read says so.
+        if lexer.windowed() && lexer.is_empty_source() {
+            return if self.options.lex.empty {
+                Ok(self.options.lex.empty_result.clone())
+            } else {
+                Err(TabnasError::new("unexpected", "", src, 0, 1, 1))
+            };
+        }
 
         // One lookup for the start rule: whether it exists, its shared
         // name handle and the spec to bind, which used to be three.
@@ -2155,13 +2228,18 @@ impl Parser {
         } else {
             self.options.rule.maxmul
         };
-        let max_iterations = self
-            .rules
-            .len()
-            .saturating_mul(src.encode_utf16().count())
-            .saturating_mul(4)
-            .saturating_mul(maxmul)
-            .max(100);
+        // The budget is the source's length in UTF-16 units, times the
+        // rules, four and `maxmul`. A window knows only what it has read,
+        // so the budget is measured again as it reads more.
+        let step_budget = |read: usize| {
+            self.rules
+                .len()
+                .saturating_mul(read)
+                .saturating_mul(4)
+                .saturating_mul(maxmul)
+                .max(100)
+        };
+        let mut max_iterations = step_budget(lexer.utf16_read());
         let budget = &self.options.parse.budget;
 
         // One match record for the whole parse, reset at the head of each
@@ -2177,6 +2255,9 @@ impl Parser {
             context.set_active(&current_rule, &stack);
             update_partial(mode, &root_node, &current_rule, &stack);
             iterations += 1;
+            if iterations > max_iterations && lexer.windowed() {
+                max_iterations = step_budget(lexer.utf16_read());
+            }
             if iterations > max_iterations {
                 let pnt = context
                     .t
@@ -4024,6 +4105,47 @@ fn best_partial_node(
     usable(root_node)
         .or_else(|| stack.iter().find_map(|rule| usable(&rule.node)))
         .or_else(|| usable(&current_rule.node))
+}
+
+/// A reader read to its end, as a parse of the whole text reads it: a
+/// read that fails, or bytes that are not UTF-8, is `unreadable`, at the
+/// character after the last one read, the text read before it the error's
+/// excerpt. A reader the window reads fails the same way
+/// ([`crate::lexer::Lexer::fill`]).
+fn read_whole(reader: &mut dyn std::io::Read) -> Result<String, TabnasError> {
+    let mut bytes = Vec::new();
+    let failed = loop {
+        let mut chunk = [0u8; 64 * 1024];
+        match reader.read(&mut chunk) {
+            Ok(0) => break None,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => break Some(e.to_string()),
+        }
+    };
+    let (valid, reason) = match std::str::from_utf8(&bytes) {
+        Ok(_) => (bytes.len(), failed),
+        Err(e) => (
+            e.valid_up_to(),
+            failed.or_else(|| Some(crate::lexer::NOT_UTF8.to_string())),
+        ),
+    };
+    match reason {
+        None => Ok(String::from_utf8(bytes).expect("the source is UTF-8")),
+        Some(reason) => {
+            let read = std::str::from_utf8(&bytes[..valid]).expect("the prefix is UTF-8");
+            let (pos, row, col) = crate::lexer::position_after(read);
+            let mut error = crate::lexer::Unreadable {
+                reason,
+                pos,
+                row,
+                col,
+            }
+            .error();
+            error.set_excerpt(read.to_string(), 1, 1);
+            Err(error)
+        }
+    }
 }
 
 fn error_token(error: &TabnasError) -> Token {

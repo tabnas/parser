@@ -53,6 +53,11 @@ pub struct TabnasError {
     suffix: ErrorSuffix,
     link: String,
     color: ColorOptions,
+    /// The row and column `full_source` starts at: 1 and 1 for the whole
+    /// source, and in a parse from a reader where the window begins, which
+    /// may cut its first line ([`TabnasError::set_excerpt`]).
+    source_row: usize,
+    source_col: usize,
 }
 
 impl TabnasError {
@@ -100,7 +105,19 @@ impl TabnasError {
             suffix: ErrorSuffix::Standard,
             link: String::new(),
             color: ColorOptions::default(),
+            source_row: 1,
+            source_col: 1,
         }
+    }
+
+    /// Give the error the text it shows its line from, and the row and
+    /// column that text starts at: the whole source, from row 1 and column
+    /// 1, or in a parse from a reader the window, from where the window
+    /// begins, its first line cut there.
+    pub(crate) fn set_excerpt(&mut self, text: String, first_row: usize, first_col: usize) {
+        self.full_source = text;
+        self.source_row = first_row.max(1);
+        self.source_col = first_col.max(1);
     }
 
     pub(crate) fn apply_options(&mut self, options: &Options) {
@@ -206,9 +223,13 @@ impl TabnasError {
     }
 
     fn source_line(&self) -> String {
+        // A row before the excerpt's first is not in it: no line.
+        let Some(index) = self.row.max(1).checked_sub(self.source_row) else {
+            return String::new();
+        };
         self.full_source
             .lines()
-            .nth(self.row.saturating_sub(1))
+            .nth(index)
             .unwrap_or("")
             .to_string()
     }
@@ -254,6 +275,7 @@ impl fmt::Display for TabnasError {
         if !self.full_source.is_empty() {
             let site = source_site(
                 &self.full_source,
+                (self.source_row, self.source_col),
                 &self.src,
                 &self.detail,
                 self.row,
@@ -335,6 +357,7 @@ pub(crate) fn default_error_messages() -> HashMap<String, String> {
         ("end_of_source", "unexpected end of source"),
         ("cancel", "parse cancelled"),
         ("internal", "internal error: {src}"),
+        ("unreadable", "the source could not be read: {src}"),
     ]
     .into_iter()
     .map(|(code, template)| (code.into(), template.into()))
@@ -374,6 +397,10 @@ pub(crate) fn default_error_hints() -> HashMap<String, String> {
         (
             "internal",
             "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input.",
+        ),
+        (
+            "unreadable",
+            "The reader the source came from failed, or gave bytes that\nare not UTF-8, so the parse ends where the source does.",
         ),
     ]
     .into_iter()
@@ -528,6 +555,7 @@ fn interpolate(template: &str, vars: &HashMap<String, String>) -> String {
 
 fn source_site(
     source: &str,
+    (first_row, first_col): (usize, usize),
     span: &str,
     message: &str,
     row: usize,
@@ -540,7 +568,14 @@ fn source_site(
     if lines.is_empty() {
         return String::new();
     }
-    let line_index = row.saturating_sub(1).min(lines.len() - 1);
+    // `source` begins at `first_row` and `first_col`: the whole source at
+    // 1 and 1, or the window of a parse from a reader, whose first line
+    // the window cuts. A row before it is not shown.
+    let Some(offset) = row.checked_sub(first_row) else {
+        return String::new();
+    };
+    let line_index = offset.min(lines.len() - 1);
+    let line_start = if line_index == 0 { first_col } else { 1 };
     let pad = (row + 2).to_string().len() + 2;
     let (_, _, line_color, reset) = color.codes();
     let mut output = Vec::new();
@@ -562,7 +597,7 @@ fn source_site(
         caret,
         "{}   {}{line_color}{} {message}{reset}",
         " ".repeat(pad),
-        " ".repeat(col - 1),
+        " ".repeat(col.saturating_sub(line_start)),
         "^".repeat(caret_count),
     )
     .expect("writing to a String cannot fail");

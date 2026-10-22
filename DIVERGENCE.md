@@ -378,6 +378,34 @@ the walk unconditional but cheap is the open problem
 
 Registered as `push-chain-off`, with `push-chain-on` as its control.
 
+### What a parse from a reader shows of its source in Rust
+
+**Deliberate, permanent** (admin ADR-30): a source read a window at a
+time is held only as far as the window reaches, so what a parse shows of
+the source itself is cut to the window.
+
+`Tabnas::parse_reader` reads a grammar that declares `lex.window` a
+window at a time ([`doc/chunked-source.md`](doc/chunked-source.md)). Its
+value, tokens, rule passes and errors are those of `Tabnas::parse` of the
+same text, but for three things it shows of the source:
+
+| | a parse of the text | a parse from a reader, a window at a time |
+| --- | --- | --- |
+| an error's excerpt: `src` in the diagnostic, and the rendered lines | the error's line | the line from where the window begins, read on to its end no further than a margin |
+| the length a `Point` carries, which `Lexer::point` gives a matcher | the source's length | the length read so far |
+| `Context::source` | the source | empty |
+
+A line the window holds is shown whole, as a parse of the text shows it,
+and the error's code, position, row and column are the same either way.
+TypeScript and Go parse a string, so only Rust shows any of this; the
+entry "A parse from a reader exists only in Rust" below records that.
+
+Repair direction: **none**. A window that kept every line whole would
+keep a minified document whole, the case the window exists for, and a
+source's length is not known until it has been read. A grammar that
+declares `lex.window` reads the text through `Lexer::window` and
+`Lexer::fill`, not through `Context::source`.
+
 ## Deferred, not deliberate
 
 Live splits that are defects, each waiting on a ruling, a breaking change
@@ -875,6 +903,25 @@ Registered as `rule-history-default-four-hops` and
 `rule-history-default-links`, with `rule-history-default-three-hops` in
 `test/spec/rule-history.tsv` as the control: three links back, which
 every runtime reads with the option unset.
+
+### A parse from a reader exists only in Rust
+
+**Deferred, not deliberate**: TypeScript and Go take the window in the
+maintainer's order (admin ADR-30).
+
+Rust parses a source from a reader (`Tabnas::parse_reader`, over
+`std::io::Read`), a window at a time where the grammar declares
+`lex.window`, so a long document parses holding a window of its text
+rather than all of it ([`doc/chunked-source.md`](doc/chunked-source.md)).
+TypeScript and Go parse a string, which a host reads whole first, so the
+same document holds the whole text there. The value is the same; the
+memory is not. Bytes that are not UTF-8, and a reader that fails, fail a
+Rust parse from a reader with the Rust-only code `unreadable`
+(`schema/error-codes.json`, `rustOnly`).
+
+Repair direction: **TypeScript and Go change**, in the maintainer's
+order: each takes a reader (`io.Reader` in Go, TypeScript's form settled
+then), the window and `lex.window`, and this entry is deleted.
 
 ## Repaired, and what replaced them
 
