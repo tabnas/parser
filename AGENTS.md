@@ -861,8 +861,7 @@ Rust-port documents
 `rust-port-implementation-plan.md`, `rust-callback-contract-spec.md`,
 `rust-callback-contract-open-items.md` and `rust-verus-experiment.md`),
 which record how the third runtime was designed and so belong to no one
-runtime's folder, and `handover/`, the pages each working session leaves
-for the next.
+runtime's folder.
 
 READMEs are orientation hubs that route to the four types — don't grow
 them into manuals. When you change behavior or signatures, update the
