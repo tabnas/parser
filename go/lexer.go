@@ -76,6 +76,28 @@ type Lex struct {
 	// fresh per-Lex build in NewLex so direct config mutation before a
 	// parse is always honored.
 	tables *lexTables
+
+	// A parse from a reader a window at a time (admin ADR-30, window.go):
+	// the window over the source. While a token is cut from it
+	// (cutWindow) Src is the window's text and the cursor counts from the
+	// window's start, off being the source position of that start, so the
+	// matchers read the window as they read a whole text; outside a cut
+	// the cursor counts from the source's start, as every token and error
+	// does.
+	win     *sourceWindow
+	cutting bool
+	off     int
+
+	// A read reached the window's end while the source had more, so the
+	// token being cut may be cut short (touchEnd).
+	touched bool
+
+	// Where the last token the lexer gave that the parser does not ignore
+	// ends: the window keeps the space, lines and comments after it.
+	keepFrom int
+
+	// enderReach, computed on first need.
+	reach int
 }
 
 // lexTables bundles the byte-indexed lexer dispatch tables derived from
@@ -142,6 +164,11 @@ type LexConfig struct {
 	// Options.Lex.Relex). Default false. See Lex.Relex for the mechanism
 	// and LexOptions.Relex for why it is opt-in.
 	Relex bool
+
+	// Window reads a source from a reader a window at a time (TS
+	// cfg.lex.window, Go Options.Lex.Window). Default false. See
+	// Tabnas.ParseReader and LexOptions.Window.
+	Window bool
 
 	StringChars        map[rune]bool     // Quote characters.
 	MultiChars         map[rune]bool     // Multiline quote characters.
@@ -727,15 +754,14 @@ func (l *Lex) Token(name string, tin Tin, val any, src string) *Token {
 // maxlen limits the length of the returned string.
 // Matches TS lex.fwd.
 func (l *Lex) Fwd(maxlen int) string {
-	si := l.pnt.SI
-	end := si + maxlen
-	if end > l.pnt.Len {
-		end = l.pnt.Len
+	rest := l.restAt(l.pnt.SI)
+	if maxlen < len(rest) {
+		if maxlen <= 0 {
+			return ""
+		}
+		rest = rest[:maxlen]
 	}
-	if si >= end {
-		return ""
-	}
-	return l.Src[si:end]
+	return rest
 }
 
 // Bad creates an error token at the current position.
@@ -901,16 +927,22 @@ func (l *Lex) nextUnfiltered2(r *Rule) (*Token, bool) {
 
 	if !claimed {
 		bad := ""
-		if l.pnt.SI < len(l.Src) {
+		if rest := l.restAt(l.pnt.SI); rest != "" {
 			// Take the whole rune: indexing yields the first UTF-8
 			// BYTE, and string(byte) widens it to a mangled U+00xx
 			// character for any multi-byte (e.g. astral) input.
-			ch, _ := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
+			ch, _ := utf8.DecodeRuneInString(rest)
 			bad = string(ch)
 		}
 		tkn = &Token{
 			Name: "#BD", Tin: TinBD, Src: bad, Why: "unexpected",
 			Site: l.pnt.Site,
+		}
+	}
+
+	if l.win != nil {
+		if tin := tkn.Tin; !(0 <= tin && tin < len(l.ignoreDense) && l.ignoreDense[tin]) {
+			l.keepFrom = tkn.SI + len(tkn.Src)
 		}
 	}
 
@@ -987,11 +1019,11 @@ func (l *Lex) Next(rule ...*Rule) *Token {
 				return tkn
 			}
 			src := ""
-			if l.pnt.SI < len(l.Src) {
+			if rest := l.restAt(l.pnt.SI); rest != "" {
 				// Take the whole rune: indexing yields the first UTF-8
 				// BYTE, and string(byte) widens it to a mangled U+00xx
 				// character for any multi-byte (e.g. astral) input.
-				ch, _ := utf8.DecodeRuneInString(l.Src[l.pnt.SI:])
+				ch, _ := utf8.DecodeRuneInString(rest)
 				src = string(ch)
 			}
 			je := makeTabnasError("unexpected", src, l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config)
@@ -1078,12 +1110,23 @@ func (l *Lex) nextRaw(rule *Rule) *Token {
 		return tkn
 	}
 
+	// A source read from a reader, a window at a time.
+	if l.win != nil {
+		return l.cutWindow(rule)
+	}
+
 	// End of source
 	if l.pnt.SI >= l.pnt.Len {
 		l.end = l.Token("#ZZ", TinZZ, Undefined, "")
 		return l.end
 	}
 
+	return l.cutRaw(rule)
+}
+
+// cutRaw cuts one token at the cursor with the matchers in order, or
+// returns nil where none claims the position.
+func (l *Lex) cutRaw(rule *Rule) *Token {
 	// Try matchers in order (matching TS lex.match ordering):
 	// match(1e6), fixed(2e6), space(3e6), line(4e6), string(5e6), comment(6e6), number(7e6), text(8e6)
 	// Custom matchers are interleaved by priority (already sorted).
@@ -1478,6 +1521,11 @@ func (l *Lex) expectedFixedLen(rule *Rule, alts []*AltSpec, fwd string) int {
 	}
 	slot := l.tI
 	for _, fs := range l.Config.FixedSorted {
+		// A literal longer than what is left of a window may yet be there
+		// once it has grown.
+		if len(fwd) < len(fs) {
+			l.touchEnd()
+		}
 		if fs == "" || !strings.HasPrefix(fwd, fs) {
 			continue
 		}
@@ -1520,6 +1568,10 @@ func (l *Lex) slotExpects(rule *Rule, alts []*AltSpec, slot int, tin Tin) bool {
 }
 
 func (l *Lex) bad(why string, pstart, pend int) *Token {
+	if len(l.Src) < pend {
+		// A span cut at a window's end may be cut short.
+		l.touchEnd()
+	}
 	src := ""
 	if pstart >= 0 && pstart < len(l.Src) && pend <= len(l.Src) {
 		src = l.Src[pstart:pend]
@@ -1565,6 +1617,11 @@ func (l *Lex) matchFixed() *Token {
 			if !l.wants(l.Config.FixedTokens[fs]) {
 				continue
 			}
+			// A candidate longer than what is left of a window may yet
+			// match once it has grown.
+			if len(remaining) < len(fs) {
+				l.touchEnd()
+			}
 			if strings.HasPrefix(remaining, fs) {
 				tin := l.Config.FixedTokens[fs]
 				tkn := l.Token(l.tinNameFor(tin), tin, nil, fs)
@@ -1594,7 +1651,12 @@ func (l *Lex) matchSpace() *Token {
 		return nil
 	}
 	var out ScanOut
-	if !Scan(l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config.spaceRunSpec(), &out) {
+	spaced := Scan(l.Src, l.pnt.SI, l.pnt.RI, l.pnt.CI, l.Config.spaceRunSpec(), &out)
+	// The run reached a window's end, which need not be its own.
+	if len(l.Src) <= out.SI {
+		l.touchEnd()
+	}
+	if !spaced {
 		return nil
 	}
 	src := l.Src[l.pnt.SI:out.SI]
@@ -1640,6 +1702,10 @@ func (l *Lex) matchLine() *Token {
 			}
 			sI += size
 		}
+		// The run reached a window's end, which need not be its own.
+		if l.pnt.Len <= sI {
+			l.touchEnd()
+		}
 		src := l.Src[l.pnt.SI:sI]
 		tkn := l.Token("#LN", TinLN, nil, src)
 		l.pnt.SI = sI
@@ -1651,6 +1717,9 @@ func (l *Lex) matchLine() *Token {
 	// Default: consume all consecutive line characters into one token
 	var out ScanOut
 	Scan(l.Src, sI, rI, l.pnt.CI, l.Config.lineRunSpec(), &out)
+	if len(l.Src) <= out.SI {
+		l.touchEnd()
+	}
 	src := l.Src[l.pnt.SI:out.SI]
 	tkn := l.Token("#LN", TinLN, nil, src)
 	l.pnt.SI = out.SI
@@ -1668,6 +1737,11 @@ func (l *Lex) matchComment() *Token {
 
 	// Line comments
 	for _, start := range l.Config.CommentLine {
+		// A marker longer than what is left of a window may yet start a
+		// comment once it has grown.
+		if len(fwd) < len(start) {
+			l.touchEnd()
+		}
 		if strings.HasPrefix(fwd, start) {
 			suffixes := l.Config.CommentLineSuffixes[start]
 			suffixFn := l.Config.CommentLineSuffixFuncs[start]
@@ -1679,7 +1753,7 @@ func (l *Lex) matchComment() *Token {
 				if l.Config.LineChars[r] {
 					break
 				}
-				if n := commentSuffixMatch(fwd, fI, suffixes); n > 0 {
+				if n := l.commentSuffixMatch(fwd, fI, suffixes); n > 0 {
 					suffixLen = n
 					break
 				}
@@ -1689,6 +1763,10 @@ func (l *Lex) matchComment() *Token {
 				}
 				cI++
 				fI += rsize
+			}
+			// The body ran to a window's end, which need not be its own.
+			if len(fwd) <= fI && suffixLen == 0 {
+				l.touchEnd()
 			}
 			if suffixLen > 0 {
 				// Consume the suffix as part of the comment body.
@@ -1710,6 +1788,9 @@ func (l *Lex) matchComment() *Token {
 			if atLineChar && l.Config.CommentLineEatLine[start] {
 				var out ScanOut
 				Scan(fwd, fI, l.pnt.RI, 1, l.Config.lineRunSpec(), &out)
+				if len(fwd) <= out.SI {
+					l.touchEnd()
+				}
 				fI = out.SI
 				rI := out.RI
 				src := fwd[:fI]
@@ -1730,6 +1811,9 @@ func (l *Lex) matchComment() *Token {
 	// Block comments
 	for _, pair := range l.Config.CommentBlock {
 		start, end := pair[0], pair[1]
+		if len(fwd) < len(start) {
+			l.touchEnd()
+		}
 		if strings.HasPrefix(fwd, start) {
 			suffixes := l.Config.CommentBlockSuffixes[start]
 			suffixFn := l.Config.CommentBlockSuffixFuncs[start]
@@ -1738,7 +1822,7 @@ func (l *Lex) matchComment() *Token {
 			fI := len(start)
 			suffixLen := 0
 			for fI < len(fwd) && !strings.HasPrefix(fwd[fI:], end) {
-				if n := commentSuffixMatch(fwd, fI, suffixes); n > 0 {
+				if n := l.commentSuffixMatch(fwd, fI, suffixes); n > 0 {
 					suffixLen = n
 					break
 				}
@@ -1753,6 +1837,11 @@ func (l *Lex) matchComment() *Token {
 				}
 				cI++
 				fI += rsize
+			}
+			// The body ran to a window's end, or its end marker may
+			// straddle it: the comment may yet close once it has grown.
+			if suffixLen == 0 && len(fwd) < fI+len(end) {
+				l.touchEnd()
 			}
 			if suffixLen > 0 {
 				// Consume the suffix, advancing column/row like the End path.
@@ -1778,6 +1867,9 @@ func (l *Lex) matchComment() *Token {
 				if l.Config.CommentBlockEatLine[start] {
 					var out ScanOut
 					Scan(fwd, fI, rI, 1, l.Config.lineRunSpec(), &out)
+					if len(fwd) <= out.SI {
+						l.touchEnd()
+					}
 					fI = out.SI
 					rI = out.RI
 					cI = 1
@@ -1800,12 +1892,17 @@ func (l *Lex) matchComment() *Token {
 // commentSuffixMatch returns the length of the suffix match at fwd[fI:]
 // or zero if no suffix matches. Suffixes are pre-sorted longest-first,
 // so the first match is the longest.
-func commentSuffixMatch(fwd string, fI int, suffixes []string) int {
+func (l *Lex) commentSuffixMatch(fwd string, fI int, suffixes []string) int {
 	if len(suffixes) == 0 {
 		return 0
 	}
 	rest := fwd[fI:]
 	for _, s := range suffixes {
+		// A suffix longer than what is left of a window may yet match
+		// once it has grown, and outrank a shorter one that matches now.
+		if len(rest) < len(s) {
+			l.touchEnd()
+		}
 		if strings.HasPrefix(rest, s) {
 			return len(s)
 		}
@@ -2083,6 +2180,8 @@ func (l *Lex) matchString() *Token {
 						return l.bad("invalid_ascii", sI-2, sI+2)
 					}
 				} else {
+					// The digits may lie past a window's end.
+					l.touchEnd()
 					if l.Config.StringAbandon {
 						return nil
 					}
@@ -2102,6 +2201,10 @@ func (l *Lex) matchString() *Token {
 				if !l.Config.EscapeStrict && sI < srclen && src[sI] == '{' {
 					sI++
 					endI := strings.IndexByte(src[sI:], '}')
+					if endI < 0 {
+						// The closing brace may lie past a window's end.
+						l.touchEnd()
+					}
 					// 1-6 hex digits, any valid Unicode code point.
 					if endI >= 1 && endI <= 6 {
 						cc := parseHexInt(src[sI : sI+endI])
@@ -2158,6 +2261,8 @@ func (l *Lex) matchString() *Token {
 						return l.bad("invalid_unicode", sI-2, sI+4)
 					}
 				} else {
+					// The digits, or a brace, may lie past a window's end.
+					l.touchEnd()
 					if l.Config.StringAbandon {
 						return nil
 					}
@@ -2223,8 +2328,10 @@ func (l *Lex) matchString() *Token {
 	// to pair with.
 	flushHi()
 
-	// Check for unterminated string
+	// Check for unterminated string. A window's end need not be the
+	// source's: the string may yet close once the window has grown.
 	if !foundClose {
+		l.touchEnd()
 		if l.Config.StringAbandon {
 			return nil
 		}
@@ -2263,6 +2370,20 @@ func (l *Lex) matchNumber() *Token {
 	// Must start with digit, +, -, or .
 	if !isDigit(ch) && ch != '-' && ch != '+' && ch != '.' {
 		return nil
+	}
+
+	// The scan reads no further than the run of number characters here
+	// and an ender after where it stops: if that passes a window's end,
+	// the number may be longer, or another, or follow on to a longer
+	// ender, once the window has grown.
+	if l.windowOpen() {
+		run := sI
+		for run < len(src) && l.isNumberish(src[run]) {
+			run++
+		}
+		if len(src) < run+l.enderReach() {
+			l.touchEnd()
+		}
 	}
 
 	// Save start position for backtracking
@@ -2552,6 +2673,13 @@ func (l *Lex) matchText() *Token {
 			}
 		}
 		break
+	}
+
+	// The run stops where an ender is first found, and the enders tried
+	// there read on as far as the longest: if that passes a window's end,
+	// the text may run on, or end in a longer ender, once it has grown.
+	if l.windowOpen() && len(src) < sI+l.enderReach() {
+		l.touchEnd()
 	}
 
 	// The TS ender regex is `(.*?)` followed by ENDER alternatives, so a text

@@ -17,7 +17,9 @@ nothing of it is merged. The maintainer adopted the design on 2026-10-22,
 Rust first, and ruled on the questions it left
 ([The maintainer's rulings](#the-maintainers-rulings)); admin's ADR-30
 records the decision, and the Rust engine builds it
-([What the Rust engine builds](#what-the-rust-engine-builds)).
+([What the Rust engine builds](#what-the-rust-engine-builds)). The
+TypeScript and Go engines build it as admin ADR-33's ruling 2 asks
+([What the TypeScript and Go engines build](#what-the-typescript-and-go-engines-build)).
 
 ## The problem
 
@@ -532,3 +534,92 @@ errors of the same text parsed whole. On a whole text the engine runs
 1.0% more instructions than `main`: `ci/bench/profl`'s `rulecost_sys` on
 `records-10000.json`, 6.156 G against 6.095 G, the median of three runs
 that agree to within 0.01%.
+
+## What the TypeScript and Go engines build
+
+Admin ADR-33 ruled on 2026-11-08 that the TypeScript and Go engines read
+from a reader too, "a synchronous pull reader through a lexer window, as
+Rust's engine has read since ADR-30". Both build the design as Rust does,
+to the same semantics, and differ from it only where their matchers read
+the text differently:
+
+- **The reader.** `tn.parseReader(reader, meta?, parent_ctx?)` in
+  TypeScript takes a synchronous pull reader of bytes, an object whose
+  `read(buf)` writes up to `buf.length` bytes into a `Uint8Array` and
+  returns how many, 0 at the end, as Node's `fs.readSync(fd, buf)` does.
+  `Tabnas.ParseReader(r io.Reader)` and `ParseReaderMeta(r, meta)` in Go
+  take an `io.Reader`, whose bytes come first whatever the read also
+  says. A grammar that declares `lex.window` is read a window at a time,
+  any other, and one with a `parser.start` or error recovery, the reader
+  whole, as in Rust. The margin, the block and a read are 64 KiB, fixed,
+  in each runtime's own unit of position (characters in Rust, UTF-16
+  units in TypeScript, bytes in Go); only the differential test makes
+  them a few, through `parseReaderWithSizes` (public in TypeScript, as
+  Rust's is, unexported in Go).
+- **A source that cannot be read.** The bytes are decoded as Rust's
+  `str::from_utf8` reads them, a character a read splits held until its
+  last byte arrives, and a byte order mark kept as the source's own
+  U+FEFF. A read that fails (one that throws in TypeScript, an error but
+  `io.EOF` in Go), a count a read cannot have, bytes that are not UTF-8
+  and a character the source ends inside fail the parse with
+  `unreadable`, with Rust's message, hint and reasons, at the character
+  after the last one read. It is raised at once, with no pass after it:
+  Rust's lexer returns it, TypeScript's throws it, and Go's panics with
+  it inside the parse, where the parse's own recovery returns it as the
+  error. The failure stays with the window, so a negotiated cut that meets
+  it first does not lose it. `unreadable` is a base code in every runtime
+  now, and `schema/error-codes.json` lists it among `codes`.
+- **The cut over the window.** TypeScript's and Go's matchers index the
+  text by the cursor (`lex.src[lex.pnt.sI]`, `lex.Src[cur.SI:]`), where
+  Rust's read through calls that start at it. So while a token is cut
+  from a window, the text a matcher reads is the window's and the cursor
+  counts from the window's start, and every built-in matcher, and a
+  plugin's that reads within the window, runs over the window as over a
+  whole text. The tokens a cut makes then take the source's positions,
+  and their own copy of their text and string value: a substring is a
+  view of the string it was cut from in V8 and in Go, and a token must
+  not keep the window alive behind it. Go keeps an interned value
+  interned. `DIVERGENCE.md`, "What a parse from a reader shows of its
+  source", records what a matcher sees.
+- **The window's edge.** Rust notes a read at the window's end in the
+  reads themselves. TypeScript and Go note it where each built-in matcher
+  meets the end: a fixed token, a comment marker or a comment suffix
+  longer than what is left, a comment body, a space or line run or a
+  string body that runs to the end, an escape cut short, a bad token's
+  span past the end. The text and number matchers note it by how far
+  they can read: the number characters at the cursor, or the text up to
+  where it stops, and the longest ender after that (the longest fixed
+  token, multi-character ender or comment marker), since a pattern can
+  settle on a shorter match when the window cuts what it read. A cut
+  that read to the edge is made again over a window twice as far ahead.
+  A match token's pattern, as in Rust, is cut again when its match ends
+  at the window's end, and the margin covers what a pattern reads past
+  its match.
+- **The low-water mark.** The window keeps the text from the oldest token
+  the parser holds (its lookahead, the tokens a rewind replays and its
+  consumed history), and from the end of the last token the parser does
+  not ignore, so that the space, lines and comments after it stay, as the
+  Rust engine keeps them until the parser fetches its next lookahead. It
+  drops the text before that once a block has gathered behind the cursor,
+  and never during a negotiated cut, which sets the replay queue aside.
+- **Errors** show their line from the window, read on to the end of the
+  line no further than a margin when the error is made, so that its
+  message and its diagnostic show the same excerpt; Go's diagnostic
+  `pos`, which counts runes, carries the runes before the window. The
+  step budget is measured again as the window reads more, and the
+  context's source (`ctx.src()`, `Context.Src`) is empty.
+
+The differential tests, `ts/test/window.test.js` and `go/window_test.go`,
+parse the register as `rs/tests/window_test.rs` does: 15,096 parses from
+a reader in TypeScript, and 14,568 in Go, which leaves out `happy.tsv`, a
+fixture Go is exempt from (`nonParity`, `go/spec_registration_test.go`).
+Since the register's grammars leave text, comments and most fixed tokens
+off, each also parses the register's inputs and inputs of its own under a
+grammar that takes every token the lexer gives, every built-in matcher
+on: 24,696 more parses from a reader in TypeScript and 23,904 in Go, each
+with the value, tokens, rule passes and errors of the same text parsed
+whole. That grammar found the two edges a regex settles short of in
+TypeScript, `1.5e3` read as `1` and `...` as `.`, which the text and
+number matchers' reach now covers. Measured on a whole text, the
+TypeScript engine's speed is unchanged within the noise of the machine
+it was measured on.

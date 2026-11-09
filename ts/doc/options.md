@@ -390,10 +390,32 @@ see [`DIVERGENCE.md`](../../DIVERGENCE.md).
 | `emptyResult` | any | `undefined` | Value returned for empty input |
 | `match` | object | (built-in) | Matcher registry: `{ <name>: { order, make } }` |
 | `relex` | boolean | `false` | Let an alternate renegotiate a token's identity |
+| `window` | boolean | `false` | Read a source from a reader a window at a time |
 
 The `match` registry maps each matcher name to its priority `order`
 and a `make` factory. Lower `order` runs first. See `src/defaults.ts`
 for the built-in registry.
+
+### `window`: a source read a window at a time
+
+`tn.parseReader` reads a grammar that declares `lex.window` a window at
+a time, holding the text from the oldest token it may cut again to 64
+KiB or so past its cursor (admin ADR-30). A grammar declares it once its
+own matchers and actions read the text only through the window: while a
+token is cut, `lex.src` is the window's text and `lex.pnt` counts from
+the window's start, `lex.window()` is the text from the cursor to the
+window's end, and `lex.fill(n)` reads on until `n` UTF-16 units lie past
+the cursor. `ctx.src()` is empty in such a parse. The built-in matchers
+read through the window already. A grammar that does not declare it is
+read whole before the parse begins, as `tn.parse` reads a string, so the
+option changes nothing for it.
+
+```js
+const tn = new Tabnas({ plugins: [json] })
+tn.options({ lex: { window: true } })
+```
+
+The option survives a merge of two grammars from either side.
 
 ### `relex`: negotiated lexing
 

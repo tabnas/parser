@@ -141,6 +141,7 @@ const S = {
   invalid_lex_state:    'invalid_lex_state',    // Error code: bad lexer state.
   unterminated_string:  'unterminated_string',  // Error code: unclosed string.
   unterminated_comment: 'unterminated_comment', // Error code: unclosed comment.
+  unreadable:           'unreadable',           // Error code: the source could not be read.
   lex:                  'lex',                  // Phase name: lex.
   parse:                'parse',                // Phase name: parse.
   error:                'error',                // Phase/label: error.
@@ -498,6 +499,7 @@ function configure(
     empty: !!opts.lex?.empty,
     emptyResult: opts.lex?.emptyResult,
     relex: !!opts.lex?.relex,
+    window: !!opts.lex?.window,
     match: opts.lex?.match
       ? entries(opts.lex.match)
         .reduce((list: any[], entry: any) => {

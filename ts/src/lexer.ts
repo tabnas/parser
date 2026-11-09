@@ -35,6 +35,8 @@ import {
   values,
 } from './utility'
 
+import { TabnasError } from './error'
+
 // Scan position threaded through the parse: source index, row/column, and pending-token queue.
 class Point {
   len = -1                 // Total source length.
@@ -73,6 +75,23 @@ class Point {
 
 const makePoint = (...params: ConstructorParameters<typeof Point>) =>
   new Point(...params)
+
+const STRING_TYPE = 'string'
+
+// Assigned in Token's static block, which alone can reach its private
+// fields: give a token whose cut over a window stands the source's
+// positions and its own text.
+let settleToken: (tkn: Token, base: number) => void
+
+// A copy of `s` that shares no storage with the string it was cut from.
+// A substring of a long string is a view of it in V8 (a sliced string),
+// so a token's text cut from a window would keep the whole window alive;
+// concatenating flattens into a fresh string, and the slice of that holds
+// only the copy.
+function ownText(s: string): string {
+  return 0 === s.length ? s : (' ' + s).slice(1)
+}
+
 
 // A single lexed token: numeric token id, JS-typed value, raw source text, and match position.
 //
@@ -154,6 +173,28 @@ class Token {
     return this
   }
 
+  // A token cut from a window (admin ADR-30) is cut at positions counted
+  // from the window's start, and may hold its text as a span of the
+  // window. Once its cut stands it takes the source's positions and a copy
+  // of its own text: the window moves on and drops what lies behind it,
+  // and a token, or a string value it carries, must not keep the window's
+  // text alive (`settleToken`, declared above the class).
+  static {
+    settleToken = (tkn: Token, base: number): void => {
+      const src = tkn.src
+      const own = ownText(src)
+      tkn.#src = own
+      tkn.#ref = undefined
+      const val = tkn.val
+      if (val === src) {
+        tkn.val = own
+      } else if (STRING_TYPE === typeof val) {
+        tkn.val = ownText(val)
+      }
+      tkn.sI += base
+    }
+  }
+
   toString() {
     return (
       'Token[' +
@@ -185,6 +226,323 @@ const makeToken = (...params: ConstructorParameters<typeof Token>) =>
   new Token(...params)
 
 const makeNoToken = () => makeToken('', -1 as Tin, undefined, EMPTY, makePoint(-1))
+
+
+// ---------------------------------------------------------------------------
+// A source read from a reader, a window of it at a time (admin ADR-30,
+// doc/chunked-source.md).
+// ---------------------------------------------------------------------------
+
+// A synchronous pull reader of bytes: `read(buf)` writes up to
+// `buf.length` bytes into `buf` from its start and returns how many it
+// wrote, 0 at the end of the input. Node's `fs.readSync(fd, buf)` has this
+// shape; a read that fails throws.
+type Reader = { read(buf: Uint8Array): number }
+
+// A window's sizes: the margin ahead of the cursor and the dead text
+// gathered before it is dropped, in UTF-16 units, and a read's length in
+// bytes. Each is 64 KiB (admin ADR-30), and none is an option: only the
+// differential test makes them a few units (`parseReaderWithSizes`), so
+// that every matcher meets the window's edge.
+type WindowSizes = { margin: number; block: number; chunk: number }
+
+const WINDOW_SIZES: WindowSizes = Object.freeze({
+  margin: 64 * 1024,
+  block: 64 * 1024,
+  chunk: 64 * 1024,
+})
+
+// The reason a source is not UTF-8, as Rust's `read_to_string` gives it
+// (rs/src/lexer.rs NOT_UTF8), so that the three runtimes say the same.
+const NOT_UTF8 = 'stream did not contain valid UTF-8'
+
+// A source that could not be read to its end: why, and the position, row
+// and column after the last character read, where the parse fails.
+type Unreadable = { reason: string; pos: number; row: number; col: number }
+
+// Why a read failed: the thrown error's message, or what was thrown.
+function readFailure(err: any): string {
+  return null != err && STRING_TYPE === typeof err.message
+    ? err.message
+    : String(err)
+}
+
+// Why a read that answered a count it cannot have failed.
+function readCount(n: any, len: number): string {
+  return 'the reader read ' + String(n) + ' bytes into ' + len
+}
+
+// The length of the longest prefix of b[0, n) that is well-formed UTF-8
+// (Unicode Table 3-7, as Rust's `str::from_utf8` reads it), and in
+// `scratch.bad` whether what follows it can never be: an ill-formed
+// sequence, or, once the source has `ended`, a character it ends inside. A
+// character split at n otherwise waits for its last bytes.
+function utf8Prefix(
+  b: Uint8Array,
+  n: number,
+  ended: boolean,
+  scratch: { bad: boolean },
+): number {
+  scratch.bad = false
+  let i = 0
+  while (i < n) {
+    const c = b[i]
+    if (c < 0x80) {
+      i++
+      continue
+    }
+    let need = 0
+    let lo = 0x80
+    let hi = 0xbf
+    if (0xc2 <= c && c <= 0xdf) {
+      need = 1
+    } else if (0xe0 === c) {
+      need = 2
+      lo = 0xa0
+    } else if ((0xe1 <= c && c <= 0xec) || 0xee === c || 0xef === c) {
+      need = 2
+    } else if (0xed === c) {
+      need = 2
+      hi = 0x9f
+    } else if (0xf0 === c) {
+      need = 3
+      lo = 0x90
+    } else if (0xf1 <= c && c <= 0xf3) {
+      need = 3
+    } else if (0xf4 === c) {
+      need = 3
+      hi = 0x8f
+    } else {
+      scratch.bad = true
+      return i
+    }
+    for (let k = 1; k <= need; k++) {
+      if (n <= i + k) {
+        scratch.bad = ended
+        return i
+      }
+      const d = b[i + k]
+      if (1 === k ? d < lo || hi < d : d < 0x80 || 0xbf < d) {
+        scratch.bad = true
+        return i
+      }
+    }
+    i += need + 1
+  }
+  return n
+}
+
+// Where `text` ends, as a failure's position counts it: its UTF-16 units,
+// and the row and column after its last one, a line feed starting a row.
+function positionAfter(text: string): { pos: number; row: number; col: number } {
+  let row = 1
+  for (let i = text.indexOf('\n'); -1 !== i; i = text.indexOf('\n', i + 1)) {
+    row++
+  }
+  return { pos: text.length, row, col: text.length - text.lastIndexOf('\n') }
+}
+
+// A reader read to its end, as a grammar that reads its source whole
+// reads it (rs/src/parser.rs `read_whole`): the text, and why the source
+// ended early if it did, a read that failed or bytes that are not UTF-8,
+// at the character after the longest prefix that decodes. A failed read
+// is the reason even where bytes before it do not decode, as in Rust.
+function readWhole(
+  reader: Reader,
+  chunk: number,
+): { text: string; failure?: Unreadable } {
+  const buffer = new Uint8Array(Math.max(1, chunk | 0))
+  const parts: Uint8Array[] = []
+  let total = 0
+  let failed: string | undefined = undefined
+  for (;;) {
+    let n: number
+    try {
+      n = reader.read(buffer)
+    } catch (err: any) {
+      failed = readFailure(err)
+      break
+    }
+    if (!(Number.isInteger(n) && 0 <= n && n <= buffer.length)) {
+      failed = readCount(n, buffer.length)
+      break
+    }
+    if (0 === n) break
+    parts.push(buffer.slice(0, n))
+    total += n
+  }
+  const bytes = new Uint8Array(total)
+  let at = 0
+  for (const part of parts) {
+    bytes.set(part, at)
+    at += part.length
+  }
+  const scratch = { bad: false }
+  const valid = utf8Prefix(bytes, total, true, scratch)
+  const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(
+    bytes.subarray(0, valid),
+  )
+  const reason =
+    undefined !== failed ? failed : scratch.bad ? NOT_UTF8 : undefined
+  if (undefined === reason) {
+    return { text }
+  }
+  return { text, failure: { reason, ...positionAfter(text) } }
+}
+
+// The oldest source position among `tokens` older than `keep`, or `keep`:
+// how far back the window must still reach for them. Sentinel and unset
+// slots are skipped, and the scan stops once the answer falls below
+// `floor`, when nothing can be dropped anyway.
+function oldestHeld(
+  tokens: (Token | undefined)[] | undefined,
+  keep: number,
+  floor: number,
+  notoken: Token,
+): number {
+  if (null == tokens) return keep
+  for (let i = 0; i < tokens.length && floor <= keep; i++) {
+    const t = tokens[i]
+    if (null != t && notoken !== t && 0 <= t.tin && 0 <= t.sI && t.sI < keep) {
+      keep = t.sI
+    }
+  }
+  return keep
+}
+
+// The window over a source read from a reader: the text from `low`, the
+// oldest position the parser may still ask for, to what has been read.
+// Positions are the source's, in UTF-16 units from its start; the text
+// is `text`, indexed from `low`.
+class SourceWindow {
+  reader: Reader
+  text = EMPTY              // The text read and kept, from `low` on.
+  low = 0                   // The source position of text[0].
+  // The row and column of text[0], counted as an error's excerpt counts
+  // them: a line feed starts a row, and every UTF-16 unit is a column.
+  lowRow = 1
+  lowCol = 1
+  // The row and column after the last character read, counted the same
+  // way, which place a failure.
+  readRow = 1
+  readCol = 1
+  exhausted = false         // The reader has said there is no more.
+  failure?: Unreadable      // Why the source ended early, and where.
+  margin: number            // How far past the cursor the window reaches.
+  block: number             // Dead text gathered before it is dropped.
+  buffer: Uint8Array        // What a read fills, kept from read to read.
+  pending?: Uint8Array      // Bytes read and not yet decoded.
+  #decoder: TextDecoder
+  #scratch = { bad: false }
+
+  constructor(reader: Reader, sizes: WindowSizes) {
+    this.reader = reader
+    this.margin = Math.max(1, sizes.margin | 0)
+    this.block = Math.max(1, sizes.block | 0)
+    this.buffer = new Uint8Array(Math.max(1, sizes.chunk | 0))
+    // ignoreBOM: a byte order mark is the source's own character U+FEFF,
+    // as Rust's UTF-8 decoding and a parse of the text keep it.
+    this.#decoder = new TextDecoder('utf-8', { ignoreBOM: true })
+  }
+
+  // The source position after the last character read.
+  get end(): number {
+    return this.low + this.text.length
+  }
+
+  // One read. Its bytes are decoded as far as they are whole characters,
+  // and a character the read split waits for the next. A read that throws
+  // or answers a count it cannot have, and bytes that are not UTF-8, end
+  // the source where they stand, and the parse fails there.
+  read(): void {
+    const buffer = this.buffer
+    let n: number
+    try {
+      n = this.reader.read(buffer)
+    } catch (err: any) {
+      this.fail(readFailure(err))
+      return
+    }
+    if (!(Number.isInteger(n) && 0 <= n && n <= buffer.length)) {
+      this.fail(readCount(n, buffer.length))
+      return
+    }
+    if (0 === n) {
+      this.exhausted = true
+    }
+    let bytes = buffer
+    let len = n
+    const pending = this.pending
+    if (undefined !== pending) {
+      bytes = new Uint8Array(pending.length + n)
+      bytes.set(pending)
+      bytes.set(buffer.subarray(0, n), pending.length)
+      len = bytes.length
+      this.pending = undefined
+    }
+    const scratch = this.#scratch
+    const valid = utf8Prefix(bytes, len, this.exhausted, scratch)
+    if (0 < valid) {
+      this.append(this.#decoder.decode(bytes.subarray(0, valid)))
+    }
+    if (scratch.bad) {
+      this.fail(NOT_UTF8)
+    } else if (valid < len) {
+      this.pending = bytes.slice(valid, len)
+    }
+  }
+
+  // Add decoded text to the window, counting the row and column after it.
+  append(s: string): void {
+    const last = s.lastIndexOf('\n')
+    if (-1 === last) {
+      this.readCol += s.length
+    } else {
+      let rows = 0
+      for (let i = s.indexOf('\n'); -1 !== i; i = s.indexOf('\n', i + 1)) {
+        rows++
+      }
+      this.readRow += rows
+      this.readCol = s.length - last
+    }
+    this.text += s
+  }
+
+  // The source ends here: the parse fails with `reason` at the character
+  // after the last one read, at the next token.
+  fail(reason: string): void {
+    this.exhausted = true
+    if (undefined === this.failure) {
+      this.failure = {
+        reason,
+        pos: this.end,
+        row: this.readRow,
+        col: this.readCol,
+      }
+    }
+  }
+
+  // Drop the text before the source position `keep`, keeping the row and
+  // column the window then begins at.
+  drop(keep: number): void {
+    const n = keep - this.low
+    if (n <= 0) return
+    const text = this.text
+    const last = text.lastIndexOf('\n', n - 1)
+    if (-1 === last) {
+      this.lowCol += n
+    } else {
+      let rows = 0
+      for (let i = text.indexOf('\n'); -1 !== i && i < n; i = text.indexOf('\n', i + 1)) {
+        rows++
+      }
+      this.lowRow += rows
+      this.lowCol = n - last
+    }
+    this.text = text.substring(n)
+    this.low = keep
+  }
+}
 
 
 // Wrap a matcher body in the standard entry guards: skip when
@@ -499,6 +857,9 @@ let makeFixedMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
     for (const cand of cands) {
       if (null != want && !want.includes(cand.tin)) continue
+      // A candidate longer than what is left of a window may yet match
+      // once it has grown.
+      if (src.length < pnt.sI + cand.len) lex.touchEnd()
       // Single-char Latin-1 candidates already matched via the table
       // index; longer (or wide-char) candidates verify in place.
       if ((1 === cand.len && cc < 256) || src.startsWith(cand.src, pnt.sI)) {
@@ -641,11 +1002,13 @@ let makeMatchMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
       const ftoken = cfg.fixed.token
       for (const fsrc of keys(ftoken)) {
         const ftin = ftoken[fsrc]
-        if (
-          null != ftin && fsrc.length > fixLen &&
-          col.includes(ftin) && src.startsWith(fsrc, sI)
-        ) {
-          fixLen = fsrc.length
+        if (null != ftin && fsrc.length > fixLen && col.includes(ftin)) {
+          // A literal longer than what is left of a window may yet be
+          // there once it has grown.
+          if (src.length < sI + fsrc.length) lex.touchEnd()
+          if (src.startsWith(fsrc, sI)) {
+            fixLen = fsrc.length
+          }
         }
       }
       return fixLen
@@ -796,6 +1159,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     const rowChars = cfg.line.rowChars
 
     for (let mc of lineComments) {
+      // A marker longer than what is left of a window may yet start a
+      // comment once it has grown.
+      if (src.length < pnt.sI + mc.start.length) lex.touchEnd()
       if (src.startsWith(mc.start, pnt.sI)) {
         let srclen = src.length
         let aI = pnt.sI + mc.start.length
@@ -808,13 +1174,15 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             ? lineBM[cc]
             : lineChars[src[aI]])
         ) {
-          let n = commentSuffixMatch(src, aI, mc.suffixes)
+          let n = commentSuffixMatch(src, aI, mc.suffixes, lex)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, aI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
           cI++
           aI++
         }
+        // The body ran to a window's end, which need not be its own.
+        if (srclen <= aI) lex.touchEnd()
 
         if (suffixLen > 0) {
           // Consume the suffix as the tail of the comment body.
@@ -829,6 +1197,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           scan(src, aI, rI, cI, lineRunSpec, scanOut)
           rI = scanOut.rI
           aI = scanOut.sI
+          if (srclen <= aI) lex.touchEnd()
         }
 
         let tkn = lex.token(
@@ -846,6 +1215,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     // Multiline comment.
 
     for (let mc of blockComments) {
+      if (src.length < pnt.sI + mc.start.length) lex.touchEnd()
       if (src.startsWith(mc.start, pnt.sI)) {
         let srclen = src.length
         let aI = pnt.sI + mc.start.length
@@ -854,7 +1224,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
         let suffixLen = 0
         let cc
         while (aI < srclen && !src.startsWith(end, aI)) {
-          let n = commentSuffixMatch(src, aI, mc.suffixes)
+          let n = commentSuffixMatch(src, aI, mc.suffixes, lex)
           if (n > 0) { suffixLen = n; break }
           n = commentSuffixFnMatch(lex, aI, mc.suffixFn)
           if (n > 0) { suffixLen = n; break }
@@ -867,6 +1237,9 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI++
           aI++
         }
+        // The body ran to a window's end, or its end marker may straddle
+        // it: the comment may yet close once the window has grown.
+        if (srclen < aI + end.length && 0 === suffixLen) lex.touchEnd()
 
         if (suffixLen > 0) {
           // Advance through the consumed suffix, tracking newlines.
@@ -894,6 +1267,7 @@ let makeCommentMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
             scan(src, aI, rI, cI, lineRunSpec, scanOut)
             rI = scanOut.rI
             aI = scanOut.sI
+            if (srclen <= aI) lex.touchEnd()
           }
 
           let tkn = lex.token(
@@ -948,9 +1322,17 @@ function normalizeCommentSuffix(raw: any):
 // commentSuffixMatch returns the length of the best suffix match at
 // src[aI:] or 0 if none matches. Suffixes are pre-sorted longest-first,
 // so the first match is the best match.
-function commentSuffixMatch(src: string, aI: number, suffixes?: string[]): number {
+function commentSuffixMatch(
+  src: string,
+  aI: number,
+  suffixes?: string[],
+  lex?: Lex,
+): number {
   if (!suffixes || 0 === suffixes.length) return 0
   for (let s of suffixes) {
+    // A suffix longer than what is left of a window may yet match once
+    // it has grown, and outrank a shorter one that matches now.
+    if (undefined !== lex && src.length < aI + s.length) lex.touchEnd()
     if (src.startsWith(s, aI)) return s.length
   }
   return 0
@@ -980,12 +1362,41 @@ function commentSuffixFnMatch(lex: Lex, aI: number, fn?: LexMatcher): number {
   return ('string' === typeof tkn.src) ? tkn.src.length : 0
 }
 
+// How far past the point it is tried at an ender of the text and number
+// patterns can read, in UTF-16 units: the longest of the fixed tokens,
+// the grammar's own enders, the comment markers, and a space or line
+// character (`cfg.rePart.ender`, built by configure in utility.ts). A cut
+// over a window whose pattern could read past the window's end may differ
+// from the whole text's, and is made again over a wider window.
+function enderReach(cfg: Config, opts: TabnasOptions): number {
+  let reach = 2
+  for (const fsrc of keys(cfg.fixed.token)) {
+    if (reach < fsrc.length) reach = fsrc.length
+  }
+  const ender: any = (opts as any).ender
+  if (Array.isArray(ender)) {
+    for (const e of ender) {
+      if ('string' === typeof e && reach < e.length) reach = e.length
+    }
+  }
+  const defs: any = opts.comment?.lex ? opts.comment.def : undefined
+  if (null != defs) {
+    for (const c of values(defs) as any[]) {
+      if (c && c.lex && 'string' === typeof c.start && reach < c.start.length) {
+        reach = c.start.length
+      }
+    }
+  }
+  return reach
+}
+
 // Match text, checking for literal values, optionally followed by a fixed token.
 // Text strings are terminated by end markers.
 let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
   // Sticky ('y') so the regex runs against the full source at an offset
   // (ender.lastIndex = pnt.sI) instead of an allocated remainder slice.
   let ender = regexp(cfg.line.lex ? 'y' : 'ys', '(.*?)', ...cfg.rePart.ender)
+  const reach = enderReach(cfg, opts)
 
   return function textMatcher(lex: Lex) {
     if (cfg.text.check) {
@@ -1013,6 +1424,14 @@ let makeTextMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
     if (m) {
       let msrc = m[1]
       let tsrc = m[2]
+
+      // The text stops where an ender is first found, and the enders tried
+      // there read on as far as the longest: if that passes a window's
+      // end, the text may run on, or end in a longer ender, once the
+      // window has grown.
+      if (lex.src.length < msI + (null == msrc ? 0 : msrc.length) + reach) {
+        lex.touchEnd()
+      }
 
       let out: Token | undefined = undefined
 
@@ -1188,6 +1607,16 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
   let numberSep = mcfg.sep
     ? regexp('g', escre(mcfg.sepChar as string))
     : undefined
+
+  // The characters a number is written in, the separator among them: a
+  // run of them is as far as the number pattern can read before an ender,
+  // which is how a matcher over a window knows whether the window's end
+  // could have changed what it read.
+  let numberish = regexp(
+    'y',
+    '[-+.0-9a-zA-Z' + (mcfg.sep ? escre(mcfg.sepChar as string) : '') + ']*',
+  )
+  const reach = enderReach(cfg, _opts)
   let numberSepChar = mcfg.sep ? (mcfg.sepChar as string) : undefined
 
   return guardedMatcher(cfg.number, function numberBody(lex) {
@@ -1197,6 +1626,17 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
     ender.lastIndex = pnt.sI
     let m = ender.exec(lex.src)
+    // The pattern reads no further than the run of number characters at
+    // the point, and an ender after where it stops: if that passes a
+    // window's end, the number may be longer, or another, or follow on to
+    // a longer ender, once the window has grown.
+    if (lex.windowOpen) {
+      numberish.lastIndex = pnt.sI
+      numberish.test(lex.src)
+      if (lex.src.length < numberish.lastIndex + reach) {
+        lex.touchEnd()
+      }
+    }
     if (m) {
       let msrc = m[1]
       // m[2], not m[9]: the number contributes exactly one capture (msrc),
@@ -1430,6 +1870,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI++
         } else if ('x' === ec && !escapeStrict) {
           sI++ // past 'x'
+          if (srclen < sI + 2) lex.touchEnd()
           // Exactly two hex digits. `parseInt` stops at the first
           // non-hex character and succeeds on whatever prefix it found,
           // so `\x4Z` decoded as U+0004 and consumed the `Z` — emitting
@@ -1453,9 +1894,12 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           cI += 3
         } else if ('u' === ec) {
           sI++ // past 'u'
+          if (srclen <= sI) lex.touchEnd()
           if ('{' === src[sI] && !escapeStrict) {
             // Braced form \u{H...H}: 1-6 hex digits, any code point.
             const endI = src.indexOf('}', sI + 1)
+            // The closing brace may lie past a window's end.
+            if (-1 === endI) lex.touchEnd()
             const digits = -1 === endI ? '' : src.substring(sI + 1, endI)
             const uu =
               0 < digits.length && digits.length <= 6 && /^[0-9a-fA-F]+$/.test(digits)
@@ -1474,6 +1918,7 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
           } else {
             // Exactly four hex digits — same reason as `\x` above.
             // `\u414Z` decoded as U+0414 and swallowed the `Z`.
+            if (srclen < sI + 4) lex.touchEnd()
             const us = src.substring(sI, sI + 4)
             const uu = HEX4.test(us) ? parseInt(us, 16) : NaN
             if (isNaN(uu)) {
@@ -1518,7 +1963,9 @@ let makeStringMatcher: MakeLexMatcher = (cfg: Config, opts: TabnasOptions) => {
       break
     }
 
-    // Hit EOF without closing quote.
+    // Hit EOF without closing quote. A window's end need not be the
+    // source's: the string may yet close once the window has grown.
+    lex.touchEnd()
     if (mcfg.abandon) return undefined
     pnt.rI = startRI
     return lex.bad(S.unterminated_string, startSI, sI)
@@ -1556,6 +2003,8 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
         if (cc < 256 ? rbm[cc] : rowChars[src[sI]]) rI++
         sI++
       }
+      // The run reached a window's end, which need not be its own.
+      if (src.length <= sI) lex.touchEnd()
       if (pnt.sI < sI) {
         const tkn = lex.token(
           '#LN', undefined, undefined, pnt,
@@ -1568,7 +2017,9 @@ let makeLineMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
       return
     }
 
-    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+    const lined = scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)
+    if (src.length <= out.sI) lex.touchEnd()
+    if (lined) {
       const tkn = lex.token(
         '#LN', undefined, undefined, pnt,
         undefined, undefined, out.sI - pnt.sI)
@@ -1590,7 +2041,10 @@ let makeSpaceMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
 
   return guardedMatcher(cfg.space, function spaceBody(lex) {
     const { pnt, src } = lex
-    if (scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)) {
+    const spaced = scan(src, pnt.sI, pnt.rI, pnt.cI, spec, out)
+    // The run reached a window's end, which need not be its own.
+    if (src.length <= out.sI) lex.touchEnd()
+    if (spaced) {
       const tkn = lex.token(
         '#SP', undefined, undefined, pnt,
         undefined, undefined, out.sI - pnt.sI)
@@ -1652,6 +2106,25 @@ class Lex {
   fwd = EMPTY as string   // Source from pnt.sI onward (the unconsumed remainder).
   fwdSI = -1              // pnt.sI the current fwd slice was taken at (memo key).
 
+  // A parse from a reader a window at a time (admin ADR-30): the window
+  // over the source. While a token is cut from it (`#cutWindow`) `src` is
+  // the window's text and the point counts from the window's start, `#off`
+  // being the source position of that start, so the matchers read the
+  // window as they read a whole text; outside a cut the point counts from
+  // the source's start, as every token and error does.
+  #win: SourceWindow | undefined = undefined
+  #cutting = false
+  #off = 0
+  // A read reached the window's end while the source had more, so the
+  // token being cut may be cut short (`touchEnd`).
+  #touched = false
+  // The matcher that made the last token cut, for the lex log.
+  #match: LexMatcher | undefined = undefined
+  // Where the last token the lexer gave that the parser does not ignore
+  // ends: the window keeps the space, lines and comments after it, as the
+  // Rust engine keeps them until the parser fetches its next lookahead.
+  #keepFrom = 0
+
   // Negotiated-lexing constraint (cfg.lex.relex). When non-null, only
   // matchers that can produce one of these tins run, and tcol gating is
   // bypassed — the requesting alternate's own token list is a sharper
@@ -1675,7 +2148,12 @@ class Lex {
   // string (custom matchers, value.defre regexes), never once per token.
   refwd(): string {
     if (this.fwdSI !== this.pnt.sI) {
-      this.fwd = this.src.substring(this.pnt.sI) as string
+      // Outside a cut over a window the point counts from the source's
+      // start, and the window's text from its own.
+      const w = this.#win
+      const at =
+        undefined === w || this.#cutting ? this.pnt.sI : this.pnt.sI - w.low
+      this.fwd = this.src.substring(at) as string
       this.fwdSI = this.pnt.sI
     }
     return this.fwd
@@ -1804,11 +2282,262 @@ class Lex {
     return undefined
   }
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, win?: SourceWindow) {
     this.ctx = ctx
-    this.src = ctx.src()
     this.cfg = ctx.cfg
-    this.pnt = makePoint(this.src.length)
+    if (undefined === win) {
+      this.src = ctx.src()
+      this.pnt = makePoint(this.src.length)
+    } else {
+      this.#win = win
+      this.src = win.text
+      this.pnt = makePoint(win.end)
+    }
+  }
+
+  // Whether the lexer reads a window of a source read from a reader.
+  get windowed(): boolean {
+    return undefined !== this.#win
+  }
+
+  // Whether the lexer reads a window of a source that has more to give,
+  // so that a read at the window's end may not be the source's.
+  get windowOpen(): boolean {
+    const w = this.#win
+    return undefined !== w && !w.exhausted
+  }
+
+  // The built-in matchers' note that a read reached the end of the window
+  // while the source has more to give: the token being cut may be cut
+  // short, and is cut again over a wider window. Nothing in a whole text.
+  touchEnd(): void {
+    const w = this.#win
+    if (undefined !== w && !w.exhausted) {
+      this.#touched = true
+    }
+  }
+
+  // The text from the cursor to the end of what the lexer holds: in a
+  // parse from a reader, the end of the window. A matcher in a grammar that
+  // declares `lex.window` reads the source through this and `fill`.
+  window(): string {
+    return this.refwd()
+  }
+
+  // Read the source until `ahead` UTF-16 units lie past the cursor, or it
+  // ends, and say whether they do. A whole source is all read, so this
+  // only answers. Text is never dropped while a token is being cut, and a
+  // source that fails to read ends where it failed, the parse failing with
+  // it at the next token. `src` is the grown window's text after a fill.
+  fill(ahead: number): boolean {
+    if (undefined !== this.#win) {
+      this.#grow(ahead)
+    }
+    return ahead <= this.pnt.len - this.pnt.sI
+  }
+
+  // How much of the source has been read, in UTF-16 units: the whole
+  // text's length, or what the window has read, which the parser's step
+  // budget is measured against as it grows.
+  lengthRead(): number {
+    const w = this.#win
+    return undefined === w ? this.src.length : w.end
+  }
+
+  // Whether a source read from a reader turns out empty: the window is
+  // filled until it holds a character or the reader is done. A source that
+  // fails before its first character is not empty: its failure is the
+  // parse's error.
+  isEmptySource(): boolean {
+    const w = this.#win
+    if (undefined === w) {
+      return 0 === this.src.length
+    }
+    this.#grow(1)
+    return 0 === w.end && undefined === w.failure
+  }
+
+  // The text an error shows its line from, the row and column that text
+  // starts at, and the source position it starts at: the whole source,
+  // from row 1 and column 1, or in a parse from a reader the window, whose
+  // first line is cut where the window begins. The window is read on first
+  // to the end of its last line, no further than a margin, so that the
+  // line an error is on shows as a parse of the whole text shows it, but
+  // for a line longer than the window.
+  excerpt(): { text: string; row: number; col: number; off: number } {
+    const w = this.#win
+    if (undefined === w) {
+      return { text: this.src, row: 1, col: 1, off: 0 }
+    }
+    const start = w.text.length
+    let cut = start
+    if (!w.text.endsWith('\n')) {
+      let nl = -1
+      for (;;) {
+        nl = w.text.indexOf('\n', start)
+        if (-1 !== nl || w.exhausted || start + w.margin <= w.text.length) {
+          break
+        }
+        w.read()
+      }
+      cut = Math.min(-1 === nl ? w.text.length : nl + 1, start + w.margin)
+      this.#synced()
+    }
+    return {
+      text: w.text.substring(0, cut),
+      row: w.lowRow,
+      col: w.lowCol,
+      off: w.low,
+    }
+  }
+
+  // Fill the window until `ahead` units lie past the cursor or the source
+  // is exhausted.
+  #grow(ahead: number): void {
+    const w = this.#win as SourceWindow
+    const at = this.pnt.sI + (this.#cutting ? this.#off : 0)
+    if (w.exhausted || ahead <= w.end - at) {
+      return
+    }
+    while (!w.exhausted && w.end - at < ahead) {
+      w.read()
+    }
+    this.#synced()
+  }
+
+  // The window's text changed: `src`, the point's length and the
+  // remainder follow it.
+  #synced(): void {
+    const w = this.#win as SourceWindow
+    this.src = w.text
+    this.pnt.len = w.end - (this.#cutting ? this.#off : 0)
+    this.fwdSI = -1
+    this.fwd = EMPTY
+  }
+
+  // Drop the text before the oldest token the parser holds, once a block
+  // of it has gathered behind the cursor: the parser's lookahead, the
+  // tokens a rewind replays, and its consumed history, which a rewind may
+  // replay and a re-cut then read again. Never during a negotiated cut,
+  // which sets the parser's replay queue aside (`relex`).
+  #release(): void {
+    const w = this.#win as SourceWindow
+    const pnt = this.pnt
+    const floor = w.low + w.block
+    if (pnt.sI < floor || null != this.want) {
+      return
+    }
+    const ctx = this.ctx
+    const notoken = ctx.NOTOKEN
+    let keep = oldestHeld(ctx.t, Math.min(pnt.sI, this.#keepFrom), floor, notoken)
+    keep = oldestHeld(pnt.token, keep, floor, notoken)
+    keep = oldestHeld(ctx.v, keep, floor, notoken)
+    if (keep < floor) {
+      return
+    }
+    w.drop(keep)
+    this.#synced()
+  }
+
+  // Cut one token from the window. The window is filled to its margin past
+  // the cursor first, having dropped what no token the parser holds can
+  // reach; the matchers then run over it as over a whole text, the point
+  // counting from the window's start. A cut that read to the window's end
+  // while the source had more is undone and made again over a window
+  // twice as far ahead, so that it is the cut the whole text gives. A cut
+  // that stands gives its tokens the source's positions and their own
+  // text (`settleToken`).
+  #cutWindow(rule: Rule, tI?: number): Token {
+    if (this.#cutting) {
+      // A matcher that asks the lexer for a token while one is being cut
+      // gets one cut in the window's coordinates, which the cut it runs
+      // in settles: nothing moves or is dropped under that cut. At the
+      // window's end it is the source's end only once the source is.
+      const p = this.pnt
+      if (p.len <= p.sI) {
+        this.touchEnd()
+        this.#match = undefined
+        return (this.#win as SourceWindow).exhausted
+          ? this.token('#ZZ', undefined, '', p)
+          : this.token('#BD', undefined, EMPTY, p, undefined, S.unexpected)
+      }
+      return this.#cut(rule, tI)
+    }
+    const w = this.#win as SourceWindow
+    const pnt = this.pnt
+    let ahead = w.margin
+    for (;;) {
+      this.#release()
+      this.#grow(ahead)
+      if (undefined !== w.failure) {
+        throw this.#unreadable(rule)
+      }
+      const base = w.low
+      const sI = pnt.sI
+      const rI = pnt.rI
+      const cI = pnt.cI
+      const queue = pnt.token
+      const qN = queue.length
+      const end = pnt.end
+      this.#cutting = true
+      this.#off = base
+      this.#touched = false
+      pnt.sI = sI - base
+      pnt.len = w.text.length
+      this.fwdSI = -1
+      let tkn: Token
+      try {
+        if (pnt.len <= pnt.sI) {
+          // The source is exhausted at the cursor.
+          this.#match = undefined
+          tkn = pnt.end = this.token('#ZZ', undefined, '', pnt)
+        } else {
+          tkn = this.#cut(rule, tI)
+        }
+      } finally {
+        this.#cutting = false
+        this.#off = 0
+        pnt.sI += base
+        this.#synced()
+      }
+      if (w.exhausted || (!this.#touched && pnt.sI < pnt.len)) {
+        settleToken(tkn, base)
+        const made = pnt.token
+        for (let i = made === queue ? qN : 0; i < made.length; i++) {
+          if (made[i] !== tkn) {
+            settleToken(made[i], base)
+          }
+        }
+        if (undefined !== pnt.end && end !== pnt.end && tkn !== pnt.end) {
+          settleToken(pnt.end, base)
+        }
+        return tkn
+      }
+      pnt.sI = sI
+      pnt.rI = rI
+      pnt.cI = cI
+      queue.length = qN
+      pnt.token = queue
+      pnt.end = end
+      ahead *= 2
+    }
+  }
+
+  // The error a parse fails with when its source could not be read to its
+  // end: `unreadable`, the reason as its token's text, at the character
+  // after the last one read (Rust's `Unreadable::error`).
+  #unreadable(rule: Rule): TabnasError {
+    const f = (this.#win as SourceWindow).failure as Unreadable
+    const tkn = makeToken(
+      '#BD',
+      tokenize('#BD', this.cfg),
+      undefined,
+      f.reason,
+      makePoint(f.pos, f.pos, f.row, f.col),
+      undefined,
+      S.unreadable,
+    )
+    return new TabnasError(S.unreadable, {}, tkn, rule, this.ctx)
   }
 
   // Create a token. Pass `src` when the matcher already holds the
@@ -1833,8 +2562,21 @@ class Lex {
       name = tokenize(ref, this.cfg)
     }
 
+    const p = pnt || this.pnt
+    const w = this.#win
+    if (undefined !== w && !this.#cutting) {
+      // Made outside a cut over the window, where the point counts from
+      // the source's start: the token takes its own text at once, since
+      // the window moves on.
+      if (undefined === src) {
+        const at = p.sI - w.low
+        src = this.src.substring(at, at + (len || 0))
+      }
+      return makeToken(name, tin, val, ownText(src), p, use, why, undefined, len)
+    }
+
     let tkn = makeToken(
-      name, tin, val, src, pnt || this.pnt, use, why, this.src, len,
+      name, tin, val, src, p, use, why, this.src, len,
     )
 
     return tkn
@@ -1850,86 +2592,23 @@ class Lex {
       tkn = pnt.end
     } else if (0 < pnt.token.length) {
       tkn = pnt.token.shift() as Token
+    } else if (undefined !== this.#win) {
+      tkn = this.#cutWindow(rule, tI)
+      match = this.#match
     } else if (pnt.len <= pnt.sI) {
       pnt.end = this.token('#ZZ', undefined, '', pnt)
 
       tkn = pnt.end
     } else {
-      // First-char dispatch: run only the matchers that could produce a
-      // token starting with this char (non-Latin-1 chars and configs
-      // without a table run the full pipeline).
-      const dispatch = this.cfg.lex.dispatch
-      const cc = this.src.charCodeAt(pnt.sI)
-      const mats =
-        undefined === dispatch
-          ? this.cfg.lex.match
-          : dispatch[cc < 256 ? cc : 256]
-      try {
-        for (let mat of mats) {
-          // Negotiated lexing: a single-token builtin whose tin is not
-          // wanted cannot serve the request; skip it. match/fixed filter
-          // internally, per candidate.
-          if (null != this.want) {
-            const nm = (mat as any).matcher
-            if ('match' !== nm && 'fixed' !== nm) {
-              const t: any = this.cfg.t
-              const btin =
-                'space' === nm ? t.SP :
-                  'line' === nm ? t.LN :
-                    'string' === nm ? t.ST :
-                      'comment' === nm ? t.CM :
-                        'number' === nm ? t.NR :
-                          'text' === nm ? t.TX : -1
-              if (-1 === btin) {
-                // A custom `lex.match` matcher. Its token identity is
-                // opaque — the only way to learn whether it can serve
-                // the request is to run it — so run it speculatively and
-                // put the cursor back when what it produced is not
-                // wanted. Skipping it outright would deny custom tokens
-                // the renegotiation that match and fixed tokens get.
-                const cand = this.speculate(mat, rule, tI)
-                if (undefined === cand) continue
-                tkn = cand
-                match = mat
-                break
-              }
-              if (!this.want.includes(btin)) {
-                continue
-              }
-            }
-          }
+      tkn = this.#cut(rule, tI)
+      match = this.#match
+    }
 
-          if (undefined === BUILTIN_MATCHER[(mat as any).matcher]) {
-            this.refwd()
-          }
-          if ((tkn = mat(this, rule, tI))) {
-            match = mat
-            break
-          }
-        }
-      } catch (err: any) {
-        tkn =
-          tkn ||
-          this.token(
-            '#BD',
-            undefined,
-            this.src[pnt.sI],
-            pnt,
-            { err },
-            err.code || S.unexpected,
-          )
+    if (undefined !== this.#win) {
+      const ignore = this.cfg.tokenSetTins.IGNORE
+      if (null == ignore || !ignore[tkn.tin]) {
+        this.#keepFrom = tkn.sI + Math.max(0, tkn.len)
       }
-
-      tkn =
-        tkn ||
-        this.token(
-          '#BD',
-          undefined,
-          this.src[pnt.sI],
-          pnt,
-          undefined,
-          S.unexpected,
-        )
     }
 
     this.ctx.log &&
@@ -1957,6 +2636,94 @@ class Lex {
     return tkn
   }
 
+  // Cut one token at the cursor: run the matchers that could make one
+  // starting with its first character, in order, and take the first token
+  // one makes, or a bad token if none does. The matcher that made it is
+  // left in `#match` for the lex log.
+  #cut(rule: Rule, tI?: number): Token {
+    const pnt = this.pnt
+    let tkn: Token | undefined
+    let match: LexMatcher | undefined = undefined
+
+    // First-char dispatch: run only the matchers that could produce a
+    // token starting with this char (non-Latin-1 chars and configs
+    // without a table run the full pipeline).
+    const dispatch = this.cfg.lex.dispatch
+    const cc = this.src.charCodeAt(pnt.sI)
+    const mats =
+      undefined === dispatch
+        ? this.cfg.lex.match
+        : dispatch[cc < 256 ? cc : 256]
+    try {
+      for (let mat of mats) {
+        // Negotiated lexing: a single-token builtin whose tin is not
+        // wanted cannot serve the request; skip it. match/fixed filter
+        // internally, per candidate.
+        if (null != this.want) {
+          const nm = (mat as any).matcher
+          if ('match' !== nm && 'fixed' !== nm) {
+            const t: any = this.cfg.t
+            const btin =
+              'space' === nm ? t.SP :
+                'line' === nm ? t.LN :
+                  'string' === nm ? t.ST :
+                    'comment' === nm ? t.CM :
+                      'number' === nm ? t.NR :
+                        'text' === nm ? t.TX : -1
+            if (-1 === btin) {
+              // A custom `lex.match` matcher. Its token identity is
+              // opaque — the only way to learn whether it can serve
+              // the request is to run it — so run it speculatively and
+              // put the cursor back when what it produced is not
+              // wanted. Skipping it outright would deny custom tokens
+              // the renegotiation that match and fixed tokens get.
+              const cand = this.speculate(mat, rule, tI)
+              if (undefined === cand) continue
+              tkn = cand
+              match = mat
+              break
+            }
+            if (!this.want.includes(btin)) {
+              continue
+            }
+          }
+        }
+
+        if (undefined === BUILTIN_MATCHER[(mat as any).matcher]) {
+          this.refwd()
+        }
+        if ((tkn = mat(this, rule, tI))) {
+          match = mat
+          break
+        }
+      }
+    } catch (err: any) {
+      tkn =
+        tkn ||
+        this.token(
+          '#BD',
+          undefined,
+          this.src[pnt.sI],
+          pnt,
+          { err },
+          err.code || S.unexpected,
+        )
+    }
+
+    this.#match = match
+    return (
+      tkn ||
+      this.token(
+        '#BD',
+        undefined,
+        this.src[pnt.sI],
+        pnt,
+        undefined,
+        S.unexpected,
+      )
+    )
+  }
+
   tokenize<R extends string | Tin, T extends R extends Tin ? string : Tin>(
     ref: R,
   ): T {
@@ -1964,6 +2731,10 @@ class Lex {
   }
 
   bad(why: string, pstart: number, pend: number) {
+    if (this.src.length < pend) {
+      // A span cut at a window's end may be cut short.
+      this.touchEnd()
+    }
     return this.token(
       '#BD',
       undefined,
@@ -2008,6 +2779,12 @@ export {
   CI_RESET,
   STOP,
   STATE_MASK,
+  // A parse from a reader, a window at a time (admin ADR-30).
+  SourceWindow,
+  WINDOW_SIZES,
+  NOT_UTF8,
+  utf8Prefix,
+  readWhole,
 }
 
-export type { ScanSpec, ScanOut }
+export type { ScanSpec, ScanOut, Reader, WindowSizes, Unreadable }

@@ -49,6 +49,46 @@ through plugin pipelines.
 with extra fields, used by the test harness; rarely needed in user
 code.
 
+### `tn.parseReader(reader, meta?, parent_ctx?)`
+
+Parse a source read from `reader`, a synchronous pull reader of bytes,
+and return the result as `tn.parse` of the same text returns it.
+
+```js
+const fd = Fs.openSync(path, 'r')
+const value = tn.parseReader({ read: (buf) => Fs.readSync(fd, buf) })
+```
+
+`reader.read(buf)` writes up to `buf.length` bytes into the `Uint8Array`
+`buf`, from its start, and returns how many it wrote, 0 at the end of the
+input. The bytes are decoded as UTF-8, a character split across two
+reads held until its last byte arrives, and a byte order mark kept as
+the source's character U+FEFF. `meta` and `parent_ctx` are those of
+`tn.parse`.
+
+A grammar that declares `lex.window` (see the options reference) is read
+a window at a time (admin ADR-30): the parse holds the text from the
+oldest token it may cut again to 64 KiB or so past its cursor, and not
+the whole text. Its value, rule passes and errors are those of
+`tn.parse` of the same text, but for an error's excerpt, which shows a
+line only as far back as the window reaches. Any other grammar, and one
+with a `parser.start` or error recovery, reads the reader to its end
+first and parses the text.
+
+In a parse a window at a time, `ctx.src()` is empty, and a matcher reads
+the window: while a token is cut, `lex.src` is the window's text and
+`lex.pnt` counts from the window's start, as a parse of the whole text
+counts from the source's. `lex.window()` gives the text from the cursor
+to the window's end, and `lex.fill(n)` reads until `n` UTF-16 units lie
+past the cursor or the source ends and says whether they do. The tokens
+a matcher makes with `lex.token` take the source's positions.
+
+A reader that throws, a read that returns a count it cannot have, bytes
+that are not UTF-8, and a character the source ends inside fail the
+parse with the code `unreadable`, at the character after the last one
+read, under error recovery too. A first argument with no `read` method
+throws a `TypeError`.
+
 ### `ctx.errs`
 
 Every parse `Context` carries `errs: TabnasError[]`, the per-parse

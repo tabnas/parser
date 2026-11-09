@@ -103,9 +103,10 @@ typed Rust APIs. Lazy token values, full pre-parse hooks, live lexer checks,
 function comment suffixes, and setup-time matcher factories preserve their
 canonical callback timing.
 
-Only Rust parses from a reader for now. TypeScript and Go take it in their
-turn. `Tabnas::parse_reader` takes a `std::io::Read` and decodes
-its bytes as UTF-8. When a grammar declares `lex.window`, the parse reads the
+Every runtime parses from a reader, TypeScript through `tn.parseReader`
+and Go through `Tabnas.ParseReader` as well. `Tabnas::parse_reader` takes
+a `std::io::Read` and decodes its bytes as UTF-8. When a grammar declares
+`lex.window`, the parse reads the
 source a window at a time: it holds the text from the oldest token it may cut
 again to a margin past its cursor, never the whole document, and gives the
 same value, rule passes and errors as `parse` of the same text. Its matchers

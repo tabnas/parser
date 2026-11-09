@@ -50,6 +50,31 @@ type TabnasErrorJSON = {
 }
 
 
+// The text an error shows its line from, the row and column that text
+// starts at, and the source position it starts at: the whole source, from
+// row 1 and column 1 at position 0, or in a parse from a reader a window
+// of it, whose first line the window may cut (Lex.excerpt, admin ADR-30).
+type Excerpt = { text: string; row: number; col: number; off: number }
+
+// The excerpt of the source an error in `ctx` shows, or undefined where
+// the context has no source to give. Never throws: errors are built from
+// degenerate contexts too.
+function errexcerpt(ctx: Context | undefined): Excerpt | undefined {
+  try {
+    const lex: any = (ctx as any)?.lex
+    if (null != lex && true === lex.windowed && S.function === typeof lex.excerpt) {
+      return lex.excerpt()
+    }
+    const src = S.function === typeof ctx?.src ? ctx!.src() : undefined
+    return STRING === typeof src
+      ? { text: src as string, row: 1, col: 1, off: 0 }
+      : undefined
+  } catch (e) {
+    return undefined
+  }
+}
+
+
 // Tabnas errors with nice formatting.
 class TabnasError extends SyntaxError {
   // Assigned by `assign(this, desc)` below; declared (emit-free) so
@@ -63,7 +88,12 @@ class TabnasError extends SyntaxError {
   // `{...Object.create(desc)}` spread (prototype props are not own
   // props), and making it enumerable would change Object.keys and
   // JSON output shape, and would let JSON.stringify recurse into ctx.
-  declare internal?: { token: Token; rule: Rule; ctx: Context }
+  declare internal?: {
+    token: Token
+    rule: Rule
+    ctx: Context
+    excerpt?: Excerpt
+  }
 
   constructor(
     code: string,
@@ -73,11 +103,14 @@ class TabnasError extends SyntaxError {
     ctx: Context,
   ) {
     details = deep({}, details)
-    let desc = errdesc(code, details, token, rule, ctx)
+    // Taken once, so that the message and the diagnostic show the same
+    // excerpt: a window reads on to the end of its line for it.
+    const excerpt = errexcerpt(ctx)
+    let desc = errdesc(code, details, token, rule, ctx, excerpt)
     super(desc.message)
     assign(this, desc)
     Object.defineProperty(this, 'internal', {
-      value: { token, rule, ctx },
+      value: { token, rule, ctx, excerpt },
       enumerable: false,
     })
 
@@ -228,10 +261,13 @@ class TabnasError extends SyntaxError {
         ].sort()
       }
 
-      // The full source LINE containing the error.
-      const fullsrc = S.function === typeof ctx?.src ? ctx!.src() : undefined
-      if (STRING === typeof fullsrc) {
-        const line = (fullsrc as string).split('\n')[out.row - 1]
+      // The full source LINE containing the error. In a parse from a
+      // reader the excerpt is the window, which starts at a later row
+      // and shows no line before it.
+      const ex = internal?.excerpt ?? errexcerpt(ctx)
+      if (undefined !== ex && STRING === typeof ex.text) {
+        const at = out.row - ex.row
+        const line = 0 <= at ? ex.text.split('\n')[at] : undefined
         if (undefined !== line) {
           out.src = line.endsWith('\r')
             ? line.substring(0, line.length - 1)
@@ -309,8 +345,13 @@ function errsite(spec: {
   col?: number
   pos?: number
   cline?: string
+  // Where `src` starts when it is a window of the source that does not
+  // start the source (admin ADR-30): `pos` then counts from the window's
+  // start, the first line shown may be cut, and the lines shown before
+  // the error's are those the window holds.
+  first?: { row: number; col: number }
 }) {
-  let { src, sub, msg, cline, row, col, pos } = spec
+  let { src, sub, msg, cline, row, col, pos, first } = spec
   row = null != row && 0 < row ? row : 1
   col = null != col && 0 < col ? col : 1
 
@@ -321,7 +362,9 @@ function errsite(spec: {
   const untint = cline ? '\x1b[0m' : EMPTY
 
   pos =
-    null != pos && 0 < pos
+    undefined !== first
+      ? Math.max(0, null == pos ? 0 : pos)
+      : null != pos && 0 < pos
       ? pos
       : null == src
         ? 0
@@ -340,8 +383,13 @@ function errsite(spec: {
   let behind = src.substring(Math.max(0, pos - 333), pos).split('\n')
   let ahead = src.substring(pos, pos + 333).split('\n')
 
+  let blen = behind.length
+
   let pad = 2 + (EMPTY + (row + 2)).length
-  let rc = row < 3 ? 1 : row - 2
+  // A window shows as many lines before the error's as it holds, and the
+  // caret goes under the error on the line as the window shows it.
+  let rc = undefined === first ? (row < 3 ? 1 : row - 2) : row - Math.min(2, blen - 1)
+  let caret = undefined === first ? col - 1 : behind[blen - 1].length
   let ln = (s: string) =>
     tint +
     (EMPTY + rc++).padStart(pad, ' ') +
@@ -349,15 +397,13 @@ function errsite(spec: {
     untint +
     (null == s ? EMPTY : s)
 
-  let blen = behind.length
-
   let lines = [
     2 < blen ? ln(behind[blen - 3]) : null,
     1 < blen ? ln(behind[blen - 2]) : null,
     ln(behind[blen - 1] + ahead[0]),
     ' '.repeat(pad) +
     '   ' +
-    ' '.repeat(col - 1) +
+    ' '.repeat(caret) +
     tint +
     '^'.repeat(tsrc.length || 1) +
     ' ' +
@@ -391,6 +437,7 @@ function errmsg(spec: {
   pos?: number
   site?: string
   sub?: string
+  first?: { row: number; col: number }
   prefix?: string | Function
   suffix?: string | Function
   color?: { active?: boolean, reset?: string; hi?: string; lo?: string; line?: string }
@@ -456,6 +503,7 @@ function errmsg(spec: {
         row: spec.row,
         col: spec.col,
         pos: spec.pos,
+        first: spec.first,
       })),
 
     '',
@@ -483,9 +531,15 @@ function errdesc(
   token: Token,
   rule: Rule,
   ctx: Context,
+  excerpt?: Excerpt,
 ): Record<string, any> {
   try {
-    const src = ctx.src()
+    const ex = undefined === excerpt ? errexcerpt(ctx) : excerpt
+    const src = undefined === ex ? ctx.src() : ex.text
+    // A window's excerpt counts from where the window begins.
+    const off = undefined === ex ? 0 : ex.off
+    const first =
+      undefined !== ex && 0 < ex.off ? { row: ex.row, col: ex.col } : undefined
     const cfg = ctx.cfg
     const meta = ctx.meta
     const txts = errinject(
@@ -522,9 +576,9 @@ function errdesc(
       cline: cfg.color.active ? cfg.color.line : '',
       row: token.rI,
       col: token.cI,
-      pos: token.sI,
+      pos: token.sI - off,
       sub: token.src,
-
+      first,
     })
 
     const suffix =
@@ -568,8 +622,9 @@ function errdesc(
       file: meta ? meta.fileName : undefined,
       row: token.rI,
       col: token.cI,
-      pos: token.sI,
+      pos: token.sI - off,
       sub: token.src,
+      first,
       color: cfg.color,
       suffix,
     })
@@ -713,11 +768,13 @@ function snip(s: any, len: number = 5) {
 
 export type {
   TabnasErrorJSON,
+  Excerpt,
 }
 
 export {
   TabnasError,
   errdesc,
+  errexcerpt,
   errinject,
   errsite,
   errmsg,
