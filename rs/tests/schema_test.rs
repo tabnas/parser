@@ -28,6 +28,11 @@ fn error_registry_matches_the_rust_contract() {
         "unprintable",
         "unterminated_comment",
         "unterminated_string",
+        // A parse from a reader raises it in every runtime (admin ADR-30
+        // and ADR-33), so it is a base code like the rest: it was
+        // Rust-only, under `rustOnly`, until TypeScript and Go read from
+        // a reader too.
+        "unreadable",
     ]);
     assert_eq!(actual, expected);
 
@@ -53,24 +58,8 @@ fn error_registry_matches_the_rust_contract() {
         options.hint.get("internal").map(String::as_str),
         internal["hint"].as_str()
     );
-    // The Rust-only `unreadable`, which a parse from a reader raises
-    // (admin ADR-30): TypeScript and Go parse a string, so neither has it.
-    let rust_only: BTreeSet<&str> = registry["rustOnly"]
-        .as_object()
-        .expect("registry rustOnly codes")
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(rust_only, BTreeSet::from(["unreadable"]));
-    let unreadable = &registry["rustOnly"]["unreadable"];
-    assert_eq!(
-        options.error.get("unreadable").map(String::as_str),
-        unreadable["message"].as_str()
-    );
-    assert_eq!(
-        options.hint.get("unreadable").map(String::as_str),
-        unreadable["hint"].as_str()
-    );
+    // No code is Rust's alone any more.
+    assert!(registry.get("rustOnly").is_none(), "{registry}");
 }
 
 #[test]

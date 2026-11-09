@@ -1432,6 +1432,9 @@ func OptionsFromMap(m map[string]any) (Options, error) {
 		if relex, ok := lx["relex"].(bool); ok {
 			opts.Lex.Relex = &relex
 		}
+		if window, ok := lx["window"].(bool); ok {
+			opts.Lex.Window = &window
+		}
 		if specs, ok := lx["match"].(map[string]any); ok {
 			for name, v := range specs {
 				sm, ok := v.(map[string]any)

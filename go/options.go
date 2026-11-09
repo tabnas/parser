@@ -410,6 +410,13 @@ type LexOptions struct {
 	// disjoint token classes and never contests a character. Scannerless
 	// notations (GBNF) contest them constantly.
 	Relex *bool
+
+	// Window declares that the grammar's matchers and actions read the
+	// source only through the lexer's window (Lex.Window, Lex.Fill), so a
+	// parse from a reader (Tabnas.ParseReader) may hold a window of it
+	// rather than all of it. Without it a reader is read whole before the
+	// parse begins. Default: false (admin ADR-30, TS options.lex.window).
+	Window *bool
 }
 
 // ParserOptions allows custom parser overrides.
@@ -1248,6 +1255,11 @@ func buildConfig(o *Options) *LexConfig {
 	// an option silently dropped is worse than an absent one.
 	if o.Lex != nil && o.Lex.Relex != nil {
 		cfg.Relex = *o.Lex.Relex
+	}
+
+	// A parse from a reader a window at a time (see LexOptions.Window).
+	if o.Lex != nil && o.Lex.Window != nil {
+		cfg.Window = *o.Lex.Window
 	}
 
 	// Info options (metadata on parsed output)

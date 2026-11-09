@@ -32,6 +32,7 @@ import {
 import { TabnasError } from './error'
 
 import { makeNoToken, makeLex, makePoint, makeToken } from './lexer'
+import type { SourceWindow, Unreadable } from './lexer'
 
 import {
   makeRule,
@@ -99,7 +100,16 @@ class Parser {
     return rs
   }
 
-  start(src: string, tabnas: Tabnas, meta?: any, parent_ctx?: any): any {
+  // Parse `src`, or, given `win`, the source a reader gives a window at a
+  // time (admin ADR-30, `Tabnas.parseReader`): `src` is then empty, as
+  // `ctx.src()` is, and the lexer reads the source through the window.
+  start(
+    src: string,
+    tabnas: Tabnas,
+    meta?: any,
+    parent_ctx?: any,
+    win?: SourceWindow,
+  ): any {
     let root: Rule
 
     let endtkn = makeToken(
@@ -121,7 +131,10 @@ class Parser {
       opts: this.options,
       cfg: this.cfg,
       meta: meta || {},
-      src: () => src, // Avoid printing src
+      // Avoid printing src. In a parse a window at a time there is no
+      // whole text to give: a grammar that declares lex.window reads the
+      // source through the lexer's window (Lex.window, Lex.fill).
+      src: undefined === win ? () => src : () => EMPTY,
       root: () => root,
       plgn: () => tabnas.internal().plugins,
       inst: () => tabnas,
@@ -165,7 +178,7 @@ class Parser {
     const recovering = this.cfg.parse.recover.enabled
 
     // Special case - avoids extra per-token tests in main parser rules.
-    if ('' === src) {
+    const empty = () => {
       if (this.cfg.lex.empty) {
         return recovering
           ? { value: this.cfg.lex.emptyResult, errors: ctx.errs }
@@ -184,6 +197,9 @@ class Parser {
         throw emptyErr
       }
     }
+    if (undefined === win && '' === src) {
+      return empty()
+    }
 
     // Bad tokens are converted to throws by the engine's own token
     // consumers (the parse_alts fetch loop, and the trailing-content
@@ -191,11 +207,16 @@ class Parser {
     // old badlex wrapper cost a bind + closure + Lex shape transition
     // per parse and an extra call frame per token. The exported badlex
     // helper remains for standalone-lexer users.
-    let lex = makeLex(ctx)
+    let lex = makeLex(ctx, win)
 
     // Stash lex on ctx so ctx.rewind can push tokens back onto the
     // lexer's pending-token queue.
     ctx.lex = lex
+
+    // A source read from a reader is empty only once a read says so.
+    if (undefined !== win && lex.isEmptySource()) {
+      return empty()
+    }
 
     let startspec = this.rsm[this.cfg.rule.start]
 
@@ -228,8 +249,14 @@ class Parser {
     // same expression in both ports; they diverged because they were
     // not. Go needs a saturating multiply here and this does not:
     // float64 saturates at Infinity instead of wrapping negative.
-    let maxr = 2 * rsmCount * lex.src.length * 2 * maxmul
-    if (maxr < 100) maxr = 100
+    //
+    // A window knows only what it has read, so the budget is measured
+    // again as it reads more, as rs/src/parser.rs measures it.
+    const budget = (read: number) => {
+      const maxr = 2 * rsmCount * read * 2 * maxmul
+      return maxr < 100 ? 100 : maxr
+    }
+    let maxr = budget(lex.lengthRead())
 
     // Process rules on tokens
     let kI = 0
@@ -244,7 +271,11 @@ class Parser {
 
     // This loop is the heart of the engine. Keep processing rule
     // occurrences until there's none left.
-    while (norule !== rule && kI < maxr) {
+    while (
+      norule !== rule &&
+      (kI < maxr ||
+        (undefined !== win && kI < (maxr = budget(lex.lengthRead()))))
+    ) {
       ctx.kI = kI
       ctx.rule = rule
 
@@ -437,6 +468,41 @@ class Parser {
       }
       throw err
     }
+  }
+
+  // The error a parse from a reader fails with when the reader, read whole
+  // before the parse began, failed or gave bytes that are not UTF-8:
+  // `unreadable`, the reason as its token's text, at the character after
+  // the last one read, its line shown from the text read
+  // (rs/src/parser.rs `read_whole`).
+  unreadable(failure: Unreadable, text: string, tabnas: Tabnas, meta?: any): TabnasError {
+    const ctx = new Context({
+      opts: this.options,
+      cfg: this.cfg,
+      meta: meta || {},
+      src: () => text,
+      root: () => undefined,
+      plgn: () => tabnas.internal().plugins,
+      inst: () => tabnas,
+      sub: tabnas.internal().sub,
+      rsm: this.rsm,
+      F: (this.#srcfmt ??= srcfmt(this.cfg)),
+      NOTOKEN: makeNoToken(),
+      NORULE: {} as Rule,
+    })
+    const norule = makeRule((this.#nrspec ??= makeRuleSpec(this.ji, this.cfg, {})), ctx)
+    ctx.NORULE = norule
+    ctx.rule = norule
+    const tkn = makeToken(
+      '#BD',
+      tokenize('#BD', this.cfg),
+      undefined,
+      failure.reason,
+      makePoint(failure.pos, failure.pos, failure.row, failure.col),
+      undefined,
+      S.unreadable,
+    )
+    return new TabnasError(S.unreadable, {}, tkn, norule, ctx)
   }
 
   clone(options: TabnasOptions, config: Config, j: Tabnas) {

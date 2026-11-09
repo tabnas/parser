@@ -44,25 +44,11 @@ const GO_ONLY = {
   },
 }
 
-// The Rust-only `unreadable` code (rs/src/error.rs), raised by a parse from
-// a reader (`Tabnas::parse_reader`, admin ADR-30) when the reader fails or
-// gives bytes that are not UTF-8. TypeScript and Go parse a string, so
-// neither has it. Recorded as a literal for the same reason as GO_ONLY;
-// the Rust half of the drift gate (rs/tests/schema_test.rs) keeps it honest.
-const RUST_ONLY = {
-  unreadable: {
-    $comment:
-      'Rust-only: raised when a parse from a reader (Tabnas::parse_reader) ' +
-      'meets a read that fails or bytes that are not UTF-8. TypeScript and ' +
-      'Go parse a string, so neither has it (see AGENTS.md "Error codes"). ' +
-      'Recorded verbatim from rs/src/error.rs; rs/tests/schema_test.rs keeps ' +
-      'this literal honest.',
-    message: 'the source could not be read: {src}',
-    hint:
-      'The reader the source came from failed, or gave bytes that\n' +
-      'are not UTF-8, so the parse ends where the source does.',
-  },
-}
+// `unreadable`, which a parse from a reader raises in every runtime (admin
+// ADR-30 and ADR-33) when the reader fails or gives bytes that are not
+// UTF-8, is a base code of the TS catalogue like the rest, so it is read
+// from there; it was Rust-only, under its own `rustOnly` section, until
+// TypeScript and Go read from a reader too.
 
 // The hint templates in ts/src/defaults.ts are template literals whose text
 // starts on the line AFTER the opening backtick, so every merged value
@@ -111,7 +97,6 @@ function buildRegistry() {
     version: VERSION,
     codes,
     goOnly: GO_ONLY,
-    rustOnly: RUST_ONLY,
   }
 }
 
@@ -121,8 +106,7 @@ function writeRegistry() {
   console.log(
     'wrote ' + REGISTRY_PATH + ' (' +
     Object.keys(registry.codes).length + ' codes + ' +
-    Object.keys(registry.goOnly).length + ' Go-only + ' +
-    Object.keys(registry.rustOnly).length + ' Rust-only)',
+    Object.keys(registry.goOnly).length + ' Go-only)',
   )
 }
 

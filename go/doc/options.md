@@ -211,6 +211,19 @@ Controls global lexer behavior.
 | `Empty` | `*bool` | `true` | Allow empty source |
 | `EmptyResult` | `any` | `nil` | Value for empty source |
 | `Match` | `map[string]*MatchSpec` | `nil` | Custom lexer matchers, keyed by name (see [API reference](api.md#custom-matchers)) |
+| `Relex` | `*bool` | `false` | Let an alternate renegotiate a token's identity |
+| `Window` | `*bool` | `false` | Read a source from a reader a window at a time |
+
+`Window` (TypeScript `lex.window`) declares that the grammar's matchers
+and actions read the source only through the lexer's window, so that
+`ParseReader` may hold a window of the source rather than all of it
+(admin ADR-30). While a token is cut, `Lex.Src` is the window's text and
+`Lex.Cursor()` counts from the window's start; `Lex.Window()` and
+`Lex.Fill(n)` read on. `Context.Src` is empty in such a parse. The
+built-in matchers read through the window already. A grammar that does
+not set it is read whole before the parse begins, as `Parse` reads a
+string, so the option changes nothing for it. The serialized form is
+`"lex": {"window": true}`.
 
 ## `Parser`
 

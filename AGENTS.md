@@ -736,21 +736,23 @@ The engine declares the base error codes every grammar inherits, in
 
 `unknown`, `unexpected`, `invalid_unicode`, `invalid_ascii`, `unprintable`,
 `unterminated_string`, `unterminated_comment`, `unknown_rule`, `end_of_source`,
-`cancel`
+`cancel`, `unreadable`
 
-Those ten are the **cross-runtime** set — `cancel` included: the budget
+Those eleven are the **cross-runtime** set — `cancel` included: the budget
 feature raises it in every runtime (`ts/src/parser.ts`, `go/parser.go`,
 `rs/src/parser.rs`), and
 [`schema/error-codes.json`](schema/error-codes.json), which is generated and
-gated in all three test suites, has always carried it. Go reserves one more: `internal`,
+gated in all three test suites, has always carried it. `unreadable` is the
+newest: a parse from a reader (`tn.parseReader` in TypeScript,
+`Tabnas.ParseReader` in Go, `Tabnas::parse_reader` in Rust; admin ADR-30 and
+ADR-33) raises it when the reader fails or gives bytes that are not UTF-8,
+at the character after the last one read. It was Rust's alone, under the
+registry's `rustOnly`, until TypeScript and Go read from a reader too. Go
+reserves one more: `internal`,
 declared with its own message and hint in `go/tabnas.go`, which the engine
 produces when it recovers a panic from a plugin callback or matcher
 (`go/parser.go`, `go/plugin.go`). TypeScript has no equivalent. A Go plugin
-author must not reuse or remove `internal`. Rust reserves one of its own:
-`unreadable`, declared in `rs/src/error.rs`, which a parse from a reader
-(`Tabnas::parse_reader`, admin ADR-30) raises when the reader fails or gives
-bytes that are not UTF-8. TypeScript and Go parse a string, so neither has
-it; the registry records it under `rustOnly`.
+author must not reuse or remove `internal`.
 
 A plugin adds its own by extending `options.error` and `options.hint`, keyed by
 code, with `{braces}` placeholders resolved against the failing token's details.
@@ -775,7 +777,7 @@ still raise it: the TS strict-JSON test fixture does, via `ctx.t0.err`, when
 One more name is dead in a different way: `invalid_lex_state`, a string
 constant at `ts/src/utility.ts:141` that appears nowhere else in any
 runtime and is in no catalogue. It is not a base code — do not transcribe it
-into a port as an eleventh.
+into a port as a twelfth.
 
 ### Structured diagnostics
 

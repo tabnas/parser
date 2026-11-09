@@ -1198,9 +1198,36 @@ common surface. Mechanical differences:
 | Lone surrogates | Preserved (JS strings allow them) | U+FFFD (matches encoding/json) |
 | `\u{...}` braced escapes | 1-6 hex digits, ≤ U+10FFFF, else `invalid_unicode` | Same |
 | Invalid UTF-8 input bytes | n/a (JS strings are UTF-16) | Passed through byte-for-byte, never a panic |
+| Invalid UTF-8 bytes from a reader | `unreadable` where they stand | Same |
 
 Column positions agree between the runtimes except for astral-plane
 characters (TS counts 2, Go counts 1).
+
+## A Parse from a Reader (`tn.parseReader` / `ParseReader`)
+
+Both runtimes parse a source read from a reader, a window of it at a
+time where the grammar declares `lex.window` (admin ADR-30 and ADR-33),
+to the semantics Rust's `Tabnas::parse_reader` set. The API takes each
+runtime's own reader:
+
+| Area | TypeScript | Go |
+|---|---|---|
+| Entry points | `tn.parseReader(reader, meta?, parent_ctx?)` | `ParseReader(r io.Reader)`, `ParseReaderMeta(r, meta)` |
+| The reader | `{ read(buf: Uint8Array): number }`, 0 at the end (Node's `fs.readSync`); a read that fails throws | `io.Reader`: bytes first, then `io.EOF` or an error |
+| A read that gives nothing | 0, the end of the input | `(0, nil)` reads again, a hundred times, then `unreadable` with `io.ErrNoProgress`'s reason, as `bufio.Reader` gives up |
+| No reader | `TypeError`, thrown before any read | `unreadable`, returned |
+| Window sizes | UTF-16 units (the margin and the block) and bytes (a read) | bytes |
+| The test's hook for small windows | `parseReaderWithSizes`, public, as Rust's `parse_reader_with_sizes` | `parseReaderWithSizes`, unexported |
+| A matcher's view while a token is cut | `lex.src` the window's text, `lex.pnt` from its start | `Lex.Src` the window's text, `Lex.Cursor()` from its start |
+| The window calls | `lex.window()`, `lex.fill(n)` | `Lex.Window()`, `Lex.Fill(n)` |
+| `unreadable` raised | thrown from the lexer | returned: the lexer panics with the error inside the parse, whose guard returns it with its code kept |
+
+A failed read or bad bytes fail the parse with `unreadable` in either
+runtime, under error recovery too; a grammar read whole keeps every
+other behaviour of `Parse`. A token cut from a window owns its text in
+both: TypeScript copies it out of the window's string, which V8 would
+otherwise keep alive behind a substring, and Go clones it out of the
+window's backing array, keeping an interned value interned.
 
 ## Error Delivery and the No-Panic Guarantee
 

@@ -95,7 +95,12 @@ import {
 
 import { defaults } from './defaults'
 
+import type { Reader, WindowSizes } from './lexer'
+
 import {
+  SourceWindow,
+  WINDOW_SIZES,
+  readWhole,
   makeCommentMatcher,
   makeFixedMatcher,
   makeLex,
@@ -383,6 +388,63 @@ class Tabnas {
       return parser.start(src, this, meta, parent_ctx)
     }
     return src
+  }
+
+
+  // Parse a source read from `reader`, a synchronous pull reader of bytes:
+  // `reader.read(buf)` writes up to `buf.length` bytes into the Uint8Array
+  // `buf` and returns how many, 0 at the end of the input, as Node's
+  // `fs.readSync(fd, buf)` does. The bytes are decoded as UTF-8 (admin
+  // ADR-30, doc/chunked-source.md).
+  //
+  // A grammar that declares `lex.window` is read a window at a time: the
+  // parse holds the text from the oldest token it may cut again to 64 KiB
+  // or so past its cursor, rather than all of it, and gives the same
+  // value, rule passes and errors as `parse` of the same text, but for an
+  // error's excerpt, which shows a line only as far back as the window
+  // reaches. Any other grammar, and one with a `parser.start` or error
+  // recovery, reads the reader whole first and parses the text.
+  //
+  // In a parse a window at a time, `ctx.src()` is empty, and a matcher
+  // reads the window: `lex.src` is the window's text and `lex.pnt` counts
+  // from its start while a token is cut, and `lex.window()` and
+  // `lex.fill(n)` read on. A reader that throws, or bytes that are not
+  // UTF-8, fail the parse with the code `unreadable`, where the source
+  // failed, error recovery or not.
+  parseReader(reader: Reader, meta?: any, parent_ctx?: any): any {
+    return this.parseReaderWithSizes(reader, WINDOW_SIZES, meta, parent_ctx)
+  }
+
+
+  // `parseReader` with the window's sizes given. Not an option: the sizes
+  // are fixed (admin ADR-30), and only the differential test makes them a
+  // few units, so that every matcher meets the window's edge
+  // (rs/src/lib.rs `parse_reader_with_sizes`).
+  parseReaderWithSizes(
+    reader: Reader,
+    sizes: WindowSizes,
+    meta?: any,
+    parent_ctx?: any,
+  ): any {
+    if (null == reader || S.function !== typeof (reader as any).read) {
+      throw new TypeError(
+        'Tabnas.parseReader: the first argument must be a reader, ' +
+        'an object with a read(buffer) method.',
+      )
+    }
+    const internal = this.#internal
+    const cfg = internal.config
+    const optsParser: any = (internal.merged as any).parser
+    if (!cfg.lex.window || optsParser?.start || cfg.parse.recover.enabled) {
+      const { text, failure } = readWhole(reader, sizes.chunk)
+      if (undefined !== failure) {
+        throw internal.parser.unreadable(failure, text, this, meta)
+      }
+      return this.parse(text, meta, parent_ctx)
+    }
+    return internal.parser.start(
+      EMPTY, this, meta, parent_ctx, new SourceWindow(reader, sizes),
+    )
   }
 
 
@@ -874,7 +936,7 @@ export type {
   Token,
 }
 
-export type { ScanSpec, ScanOut } from './lexer'
+export type { ScanSpec, ScanOut, Reader, WindowSizes } from './lexer'
 
 export type { BuiltinRef } from './builtins'
 

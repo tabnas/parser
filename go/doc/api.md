@@ -41,6 +41,49 @@ Parse with metadata accessible in rule actions/conditions via
 `ctx.Meta`. A `"fileName"` key surfaces in formatted errors as
 `--> file:row:col`.
 
+### `(*Tabnas) ParseReader(r io.Reader) (any, error)`
+
+Parse a source read from `r`, and return what `Parse` of the same text
+returns.
+
+```go
+f, _ := os.Open(path)
+defer f.Close()
+value, err := j.ParseReader(f)
+```
+
+The bytes are decoded as UTF-8, a character split across two reads held
+until its last byte arrives, and a byte order mark kept as the source's
+character U+FEFF. The bytes a read gives come first, whatever error it
+also returns, as `io.Reader` has it.
+
+A grammar that sets `Lex.Window` (see the options reference) is read a
+window at a time (admin ADR-30): the parse holds the text from the
+oldest token it may cut again to 64 KiB or so past its cursor, and not
+the whole text. Its value, rule passes and errors are those of `Parse` of
+the same text, but for an error's excerpt, which shows a line only as far
+back as the window reaches. Any other grammar, and one with a
+`Parser.Start` or error recovery, reads the reader to its end first and
+parses the text.
+
+In a parse a window at a time, `Context.Src` is empty, and a matcher
+reads the window: while a token is cut, `Lex.Src` is the window's text
+and `Lex.Cursor()` counts from the window's start, as a parse of the
+whole text counts from the source's. `Lex.Window()` gives the text from
+the cursor to the window's end, and `Lex.Fill(n)` reads until `n` bytes
+lie past the cursor or the source ends and reports whether they do. The
+tokens a matcher makes take the source's positions.
+
+A read that fails (any error but `io.EOF`), a read that returns a count
+it cannot have, a hundred reads in a row that give neither bytes nor an
+error, a nil reader, bytes that are not UTF-8, and a character the source
+ends inside fail the parse with the code `unreadable`, at the character
+after the last one read, under error recovery too.
+
+### `(*Tabnas) ParseReaderMeta(r io.Reader, meta map[string]any) (any, error)`
+
+`ParseReader` with metadata, as `ParseMeta` is `Parse` with it.
+
 ## Result types
 
 A JSON-style grammar maps the returned `any` to these concrete types:
@@ -392,6 +435,9 @@ context-sensitive lexing. See the [recipe](guide.md#add-a-custom-matcher).
 | `(*Lex) Token(name string, tin Tin, val any, src string) *Token` | new token | build a token at the current point |
 | `(*Lex) Bad(why string) *Token` | error token | signal a lex error (`why` is an error code) |
 | `(*Lex) Next(rule ...*Rule) *Token` | next token | the raw stream, IGNORE tokens included, as TypeScript's `lex.next`; the parser skips the IGNORE set in its own fetch |
+| `(*Lex) Window() string` | substring | the text from the cursor to the end of what the lexer holds: in a parse from a reader, the window's end |
+| `(*Lex) Fill(ahead int) bool` | whether they lie there | read the source until `ahead` bytes lie past the cursor, or it ends (`ParseReader`) |
+| `(*Lex) Windowed() bool` | whether it does | whether the lexer reads a window of a source read from a reader |
 
 ### Scan primitives
 

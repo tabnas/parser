@@ -36,6 +36,7 @@ var errorMessages = map[string]string{
 	"end_of_source":        "unexpected end of source",
 	"cancel":               "parse cancelled",
 	"internal":             "internal error: {src}",
+	"unreadable":           "the source could not be read: {src}",
 }
 
 // Error hint templates matching TypeScript defaults (ts/src/defaults.ts).
@@ -62,6 +63,8 @@ var defaultHints = map[string]string{
 	"cancel": "The parse was cancelled by the caller's parse.budget.onCheck callback\n(or exceeded its configured budget) before completing.",
 
 	"internal": "The parser failed unexpectedly; this is a bug in tabnas\nor a plugin, not in your input.",
+
+	"unreadable": "The reader the source came from failed, or gave bytes that\nare not UTF-8, so the parse ends where the source does.",
 }
 
 // Structured error returned by Parse, carrying the failure location, cause, and formatting context.
@@ -111,6 +114,27 @@ type TabnasError struct {
 	ruleStack []string // Rule names root-first incl. the failing rule; NoRule skipped by identity.
 	expected  []string // Sorted token names some alternate of the failing rule accepts next.
 	diagRule  string   // Failing rule name; "" when only the NoRule sentinel was available.
+
+	// Where fullSource starts when it is a window of the source, in a
+	// parse from a reader (admin ADR-30, setExcerpt): the row and column
+	// of its first character (zero for the whole source, which starts at
+	// row 1 and column 1), its byte offset in the source, and the runes
+	// before it, which keep the diagnostic's pos exact.
+	srcRow   int
+	srcCol   int
+	srcOff   int
+	srcRunes int
+}
+
+// setExcerpt gives the error the text it shows its line from: in a parse
+// from a reader the window, from where it begins, its first line cut
+// there (Lex.excerpt).
+func (e *TabnasError) setExcerpt(text string, row, col, off, runes int) {
+	e.fullSource = text
+	e.srcRow = row
+	e.srcCol = col
+	e.srcOff = off
+	e.srcRunes = runes
 }
 
 // Error returns a formatted error message matching the TypeScript TabnasError format:
@@ -174,7 +198,7 @@ func (e *TabnasError) Error() string {
 
 	// Source site extract
 	if e.fullSource != "" {
-		site := errsite(e.fullSource, e.Src, msg, e.Row, e.Col, e.color)
+		site := errsiteFrom(e.fullSource, e.srcRow, e.srcCol, e.Src, msg, e.Row, e.Col, e.color)
 		if site != "" {
 			b.WriteString("\n")
 			b.WriteString(site)
@@ -240,11 +264,29 @@ func (e *TabnasError) Error() string {
 // is active, line-number gutters and the caret row are wrapped in the
 // configured ANSI Line/Reset codes.
 func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
+	return errsiteFrom(src, 1, 1, sub, msg, row, col, color)
+}
+
+// errsiteFrom is errsite over a source that starts at the row firstRow and
+// the column firstCol: the whole source at 1 and 1, or in a parse from a
+// reader the window, whose first line the window may cut (admin ADR-30). A
+// row before it is not shown, and the caret sits under the error on the
+// line as the window shows it.
+func errsiteFrom(src string, firstRow, firstCol int, sub, msg string, row, col int, color ColorConfig) string {
 	if row < 1 {
 		row = 1
 	}
 	if col < 1 {
 		col = 1
+	}
+	if firstRow < 1 {
+		firstRow = 1
+	}
+	if firstCol < 1 {
+		firstCol = 1
+	}
+	if row < firstRow {
+		return ""
 	}
 
 	_, _, line, reset := color.Codes()
@@ -252,9 +294,13 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 	lines := strings.Split(src, "\n")
 
 	// row is 1-based, convert to 0-based index
-	lineIdx := row - 1
+	lineIdx := row - firstRow
 	if lineIdx >= len(lines) {
 		lineIdx = len(lines) - 1
+	}
+	lineStart := 1
+	if lineIdx == 0 {
+		lineStart = firstCol
 	}
 
 	// Determine padding width based on largest line number shown
@@ -287,7 +333,11 @@ func errsite(src, sub, msg string, row, col int, color ColorConfig) string {
 	if caretCount < 1 {
 		caretCount = 1
 	}
-	indent := strings.Repeat(" ", pad) + "   " + strings.Repeat(" ", col-1)
+	shift := col - lineStart
+	if shift < 0 {
+		shift = 0
+	}
+	indent := strings.Repeat(" ", pad) + "   " + strings.Repeat(" ", shift)
 	result = append(result, indent+line+strings.Repeat("^", caretCount)+" "+msg+reset)
 
 	// 2 lines after
@@ -477,11 +527,17 @@ func (e TabnasError) MarshalJSON() ([]byte, error) {
 	// The full source LINE containing the error: line row-1 of the
 	// source split on '\n', with one trailing '\r' stripped. "" when the
 	// row is invalid or the source is unavailable.
+	// In a parse from a reader the source is a window, which starts at a
+	// later row and shows no line before it.
 	srcLine := ""
-	if e.fullSource != "" && e.Row >= 1 {
+	first := e.srcRow
+	if first < 1 {
+		first = 1
+	}
+	if e.fullSource != "" && e.Row >= first {
 		lines := strings.Split(e.fullSource, "\n")
-		if e.Row-1 < len(lines) {
-			srcLine = strings.TrimSuffix(lines[e.Row-1], "\r")
+		if e.Row-first < len(lines) {
+			srcLine = strings.TrimSuffix(lines[e.Row-first], "\r")
 		}
 	}
 
@@ -499,9 +555,12 @@ func (e TabnasError) MarshalJSON() ([]byte, error) {
 	// astral-character divergence DIVERGENCE.md already records. `len`
 	// on the next few lines has always converted at exactly this
 	// boundary for exactly this reason.
+	//
+	// A window's runes are counted from where it begins, and the runes
+	// before it carried in srcRunes.
 	posRunes := e.Pos
-	if 0 <= e.Pos && e.Pos <= len(e.fullSource) {
-		posRunes = utf8.RuneCountInString(e.fullSource[:e.Pos])
+	if at := e.Pos - e.srcOff; 0 <= at && at <= len(e.fullSource) {
+		posRunes = e.srcRunes + utf8.RuneCountInString(e.fullSource[:at])
 	}
 
 	type tokenJSON struct {

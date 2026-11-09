@@ -451,7 +451,7 @@ fn lex_window_survives_a_merge() {
 /// carries (`Lexer::point`, as a matcher sees it) is the length read so
 /// far, where a parse of the whole text carries the whole length: the one
 /// field of a token's position that differs (DIVERGENCE.md, "What a parse
-/// from a reader shows of its source in Rust").
+/// from a reader shows of its source").
 #[test]
 fn a_points_length_is_the_length_read_so_far() {
     let grammar = r##"{
@@ -493,7 +493,7 @@ fn a_points_length_is_the_length_read_so_far() {
 
 /// In a parse from a reader a window at a time, `Context::source` is empty,
 /// where a parse of the whole text gives the source (DIVERGENCE.md, "What
-/// a parse from a reader shows of its source in Rust"): a grammar that
+/// a parse from a reader shows of its source"): a grammar that
 /// declares `lex.window` reads the text through the lexer's window.
 #[test]
 fn a_windowed_contexts_source_is_empty() {

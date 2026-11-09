@@ -455,6 +455,13 @@ func (p *Parser) StartMeta(src string, meta map[string]any, lexSubs []LexSub, ru
 // matchers, or engine bugs) into an "internal" TabnasError, upholding the
 // package guarantee that parsing never panics, whatever the input.
 func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
+	return p.startParseFrom(src, nil, meta, lexSubs, ruleSubs, inst)
+}
+
+// startParseFrom is startParse over src, or, given win, over the source a
+// reader gives a window at a time (Tabnas.ParseReader, admin ADR-30): src
+// is then empty, as Context.Src is, and the lexer reads the window.
+func (p *Parser) startParseFrom(src string, win *sourceWindow, meta map[string]any, lexSubs []LexSub, ruleSubs []RuleSub, inst *Tabnas) (result any, err error) {
 	// Bound to the parse context as soon as one exists, so a panic
 	// raised after that point (plugin action, custom matcher, engine
 	// bug) still records into ctx.Errs. Without it a subscriber that
@@ -508,6 +515,12 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 				if te.Hint != "" {
 					re.Hint = te.Hint
 				}
+				// The engine's own (a source a reader could not read,
+				// window.go) names its token; a plugin's cannot.
+				if te.tokenName != "" {
+					re.tokenName = te.tokenName
+					re.why = te.why
+				}
 				err = pctx.recordErr(
 					p.finishErr(re, pctx, meta, nil).(*TabnasError))
 			} else {
@@ -517,11 +530,16 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 		}
 	}()
 
-	if src == "" {
+	if src == "" && win == nil {
 		return nil, nil
 	}
 
-	lex := NewLex(src, p.Config)
+	var lex *Lex
+	if win != nil {
+		lex = newWindowLex(win, p.Config)
+	} else {
+		lex = NewLex(src, p.Config)
+	}
 
 	var opts *Options
 	if inst != nil {
@@ -615,10 +633,17 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	if maxmul <= 0 {
 		maxmul = 3
 	}
-	maxr := satMul(satMul(2*len(p.RSM)*2, utf16Len(src)), maxmul)
-	if maxr < 100 {
-		maxr = 100
+	//
+	// A window knows only what it has read, so the budget is measured
+	// again as it reads more, as rs/src/parser.rs measures it.
+	budget := func(read int) int {
+		maxr := satMul(satMul(2*len(p.RSM)*2, read), maxmul)
+		if maxr < 100 {
+			maxr = 100
+		}
+		return maxr
 	}
+	maxr := budget(lex.lengthRead())
 
 	// Opt-in parse budget: call OnCheck every budgetN rule iterations;
 	// a false return cancels. Off by default, costing one integer test
@@ -644,7 +669,10 @@ func (p *Parser) startParse(src string, meta map[string]any, lexSubs []LexSub, r
 	}
 
 	kI := 0
-	for rule != NoRule && kI < maxr {
+	for rule != NoRule && (kI < maxr || (win != nil && kI < func() int {
+		maxr = budget(lex.lengthRead())
+		return maxr
+	}())) {
 		ctx.KI = kI
 		ctx.Rule = rule
 
@@ -972,6 +1000,10 @@ func (p *Parser) finishErr(err error, ctx *Context, meta map[string]any, tkn *To
 	je, ok := err.(*TabnasError)
 	if !ok || je == nil {
 		return err
+	}
+	// In a parse from a reader the error shows its line from the window.
+	if ctx != nil {
+		ctx.Lex.attachExcerpt(je)
 	}
 	if meta != nil {
 		if fn, ok := meta["fileName"].(string); ok && je.fileName == "" {

@@ -259,6 +259,12 @@ export type TabnasOptions = {
     // Off by default: grammars written for tokenising lexers never
     // need it, and it can only turn failed alternates into matches.
     relex?: boolean
+    // The grammar's matchers and actions read the source only through
+    // the lexer's window (`lex.window()`, `lex.fill(n)`), so a parse from
+    // a reader (`tn.parseReader`) may hold a window of it rather than
+    // all of it. Without it a reader is read whole before the parse
+    // begins. Off by default (admin ADR-30).
+    window?: boolean
     match: {                        // Matcher constructors by name.
       [name: string]: {
         order: number               // Match priority (lower runs first).
@@ -365,6 +371,7 @@ export type Config = {
     empty: boolean                  // Allow empty source.
     emptyResult: any                // Result for empty source.
     relex: boolean                  // Negotiated lexing (see Options.lex.relex).
+    window: boolean                 // Read a reader a window at a time (see Options.lex.window).
   }
 
   parse: {                          // Parse-phase hooks.

@@ -288,6 +288,7 @@ const defaults: TabnasOptions = {
     unknown_rule: 'unknown rule: {rulename}',
     end_of_source: 'unexpected end of source',
     cancel: 'parse cancelled',
+    unreadable: 'the source could not be read: {src}',
   },
 
   errmsg: {
@@ -331,6 +332,10 @@ Unexpected end of source.`,
     cancel: `
 The parse was cancelled by the caller's parse.budget.onCheck callback
 (or exceeded its configured budget) before completing.`,
+
+    unreadable: `
+The reader the source came from failed, or gave bytes that
+are not UTF-8, so the parse ends where the source does.`,
   },
 
   // Lexer
@@ -353,6 +358,13 @@ The parse was cancelled by the caller's parse.budget.onCheck callback
     // Negotiated lexing off: grammars written for a tokenising lexer
     // never need it. Scannerless front-ends (GBNF) opt in.
     relex: false,
+
+    // The grammar's matchers and actions read the source only through
+    // the lexer's window (lex.window(), lex.fill(n)), so a parse from a
+    // reader (tn.parseReader) may hold a window of it rather than all of
+    // it. Without it, a reader is read whole before the parse begins.
+    // Off by default (admin ADR-30).
+    window: false,
   },
 
   // Parser

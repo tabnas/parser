@@ -378,33 +378,48 @@ the walk unconditional but cheap is the open problem
 
 Registered as `push-chain-off`, with `push-chain-on` as its control.
 
-### What a parse from a reader shows of its source in Rust
+### What a parse from a reader shows of its source
 
-**Deliberate, permanent** (admin ADR-30): a source read a window at a
-time is held only as far as the window reaches, so what a parse shows of
-the source itself is cut to the window.
+**Deliberate, permanent** (admin ADR-30 and ADR-33): a source read a
+window at a time is held only as far as the window reaches, so what a
+parse shows of the source itself is cut to the window.
 
-`Tabnas::parse_reader` reads a grammar that declares `lex.window` a
-window at a time ([`doc/chunked-source.md`](doc/chunked-source.md)). Its
-value, tokens, rule passes and errors are those of `Tabnas::parse` of the
-same text, but for three things it shows of the source:
+A parse from a reader (`Tabnas::parse_reader` in Rust, `tn.parseReader`
+in TypeScript, `Tabnas.ParseReader` in Go) reads a grammar that declares
+`lex.window` a window at a time
+([`doc/chunked-source.md`](doc/chunked-source.md)). Its value, tokens,
+rule passes and errors are those of a parse of the same text, but for
+what it shows of the source:
 
 | | a parse of the text | a parse from a reader, a window at a time |
 | --- | --- | --- |
 | an error's excerpt: `src` in the diagnostic, and the rendered lines | the error's line | the line from where the window begins, read on to its end no further than a margin |
-| the length a `Point` carries, which `Lexer::point` gives a matcher | the source's length | the length read so far |
-| `Context::source` | the source | empty |
+| the text a matcher reads: `Lexer::source` in Rust, `lex.src` in TypeScript, `Lex.Src` in Go | the source | the window's text |
+| the cursor a matcher reads: `Lexer::point` in Rust, `lex.pnt` in TypeScript, `Lex.Cursor` in Go | its position from the source's start, and the source's length | Rust: its position from the source's start, and the length read so far; TypeScript and Go: its position and length from the window's start |
+| the context's source: `Context::source` in Rust, `ctx.src()` in TypeScript, `Context.Src` in Go | the source | empty |
 
 A line the window holds is shown whole, as a parse of the text shows it,
 and the error's code, position, row and column are the same either way.
-TypeScript and Go parse a string, so only Rust shows any of this; the
-entry "A parse from a reader exists only in Rust" below records that.
+Every token a matcher makes takes the source's positions, in every
+runtime, whatever its cursor counts from.
+
+The cursor counts from different places because the matchers read the
+text differently. Rust's read through calls that start at the cursor
+(`Lexer::remaining`, `Lexer::window`, `Lexer::forward`) and never index the
+text by it, so its cursor can stay the source's. TypeScript's and Go's
+index the text by the cursor (`lex.src[lex.pnt.sI]`,
+`lex.Src[cur.SI:]`), so while a token is cut from a window the cursor
+counts from the window's start, and every built-in matcher, and a plugin's
+that reads within the window, runs over a window as it runs over a whole
+text.
 
 Repair direction: **none**. A window that kept every line whole would
 keep a minified document whole, the case the window exists for, and a
 source's length is not known until it has been read. A grammar that
-declares `lex.window` reads the text through `Lexer::window` and
-`Lexer::fill`, not through `Context::source`.
+declares `lex.window` reads the text through the lexer's window
+(`Lexer::window` and `Lexer::fill` in Rust, `lex.window()` and
+`lex.fill(n)` in TypeScript, `Lex.Window` and `Lex.Fill` in Go), not
+through the context's source.
 
 ## Deferred, not deliberate
 
@@ -904,30 +919,28 @@ Registered as `rule-history-default-four-hops` and
 `test/spec/rule-history.tsv` as the control: three links back, which
 every runtime reads with the option unset.
 
-### A parse from a reader exists only in Rust
-
-**Deferred, not deliberate**: TypeScript and Go take the window in the
-maintainer's order (admin ADR-30).
-
-Rust parses a source from a reader (`Tabnas::parse_reader`, over
-`std::io::Read`), a window at a time where the grammar declares
-`lex.window`, so a long document parses holding a window of its text
-rather than all of it ([`doc/chunked-source.md`](doc/chunked-source.md)).
-TypeScript and Go parse a string, which a host reads whole first, so the
-same document holds the whole text there. The value is the same; the
-memory is not. Bytes that are not UTF-8, and a reader that fails, fail a
-Rust parse from a reader with the Rust-only code `unreadable`
-(`schema/error-codes.json`, `rustOnly`).
-
-Repair direction: **TypeScript and Go change**, in the maintainer's
-order: each takes a reader (`io.Reader` in Go, TypeScript's form settled
-then), the window and `lex.window`, and this entry is deleted.
-
 ## Repaired, and what replaced them
 
 An entry that leaves this file should leave a forwarding address: a
 reader who remembers one and cannot find it needs to know whether it was
 fixed or quietly dropped.
+
+- **A parse from a reader existing only in Rust.** Rust parsed a source
+  from a reader, a window at a time where the grammar declares
+  `lex.window`, where TypeScript and Go parsed a string their host read
+  whole, so the same document held its whole text there, and bytes that
+  are not UTF-8 or a reader that failed were Rust's alone to report, with
+  the Rust-only code `unreadable`. Repaired as admin ADR-33 rules it
+  (ruling 2): TypeScript parses from a synchronous pull reader
+  (`tn.parseReader`, `{ read(buf: Uint8Array): number }`, as Node's
+  `fs.readSync` reads) and Go from an `io.Reader` (`Tabnas.ParseReader`),
+  each a window at a time under `lex.window`, and `unreadable` is a base
+  code in every runtime (`schema/error-codes.json`, `codes`). What a
+  windowed parse shows of its source is recorded above, under "What a
+  parse from a reader shows of its source". Pinned by
+  `rs/tests/window_test.rs`, `ts/test/window.test.js` and
+  `go/window_test.go`, which hold a parse from a reader to the same text
+  parsed whole.
 
 - **An alt action running after that alt's own error.** Go's `Process`
   keeps going past an `alt.E` raise — deliberately, since the parser
@@ -1466,9 +1479,11 @@ fixed or quietly dropped.
 
 Recorded here because they are regularly mistaken for divergences:
 
-- **Invalid UTF-8 input bytes.** Go passes them through byte-for-byte and
-  never panics; the question does not arise in TS, whose strings are
-  UTF-16 by construction.
+- **Invalid UTF-8 input bytes.** In a string, Go passes them through
+  byte-for-byte and never panics; the question does not arise in TS,
+  whose strings are UTF-16 by construction. A parse from a reader decodes
+  the bytes itself, and every runtime fails it with `unreadable` where
+  they stand.
 - **Error message text.** Not in parity by design. Only the error `code` is
   contractual; hint wording and source frames differ.
 - **Native integer type.** Go returns `int64`, TS a `number` or `bigint`
