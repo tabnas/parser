@@ -337,6 +337,31 @@ describe('lex', function () {
     }
   })
 
+  // A long run of digits that no ender follows fails the number pattern,
+  // and the pattern gives up in time linear in the run (#327). Each run of
+  // digits in it, the integer's and the exponent's, can match a run of
+  // digits in one way only: the former `[0-9]+(?:[0-9_]*[0-9])?` split a
+  // run of N digits between its two parts in N ways, tried every split
+  // when what follows failed, and took two seconds over 32,000 digits.
+  it('number-long-run-linear', () => {
+    const run = '1'.repeat(50000)
+    for (const src of [
+      run + 'x',
+      run + 'e',
+      run + '.e',
+      '1e' + run + 'x',
+      '1.5e-' + run + 'x',
+    ]) {
+      const lex = lexstart(src)
+      const start = Date.now()
+      const tkn = lex()
+      const took = Date.now() - start
+      assert.equal(tkn.tin, t.TX, src.slice(-8) + ': expected text')
+      assert.equal(tkn.src.length, src.length, src.slice(-8) + ': the whole run')
+      assert.ok(took < 1000, src.slice(-8) + ': lexed in ' + took + ' ms')
+    }
+  })
+
   it('double-quote', () => {
     // NOTE: col for unterminated is final col
     alleq([

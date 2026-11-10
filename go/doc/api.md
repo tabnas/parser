@@ -39,7 +39,9 @@ Parse with this instance's configuration.
 
 Parse with metadata accessible in rule actions/conditions via
 `ctx.Meta`. A `"fileName"` key surfaces in formatted errors as
-`--> file:row:col`.
+`--> file:row:col`. A nil `meta` gives the parse an empty map, as
+`Parse` and `ParseReader` do, so a hook or an action can always write
+`ctx.Meta`.
 
 ### `(*Tabnas) ParseReader(r io.Reader) (any, error)`
 

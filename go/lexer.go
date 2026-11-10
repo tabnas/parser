@@ -544,21 +544,32 @@ func NewLex(src string, cfg *LexConfig) *Lex {
 // the zero-copy slice instead of paying a lookup.
 const internMaxLen = 32
 
+// internMaxEntries caps the per-parse intern pool. A document meets the
+// strings that repeat, object keys above all, early, and they stay pooled;
+// a string met once the pool is full is copied and not kept, so that what
+// the pool holds does not grow with a document, as it did, one entry for
+// every distinct short string, in a parse from a reader a window at a time
+// whose host lets go of the tree behind it (#324).
+const internMaxEntries = 4096
+
 // internAny returns a canonical boxed value for the string s, cloning
 // the backing bytes on first sight. Repeated occurrences (JSON object
 // keys, enum-like values) then share one string and one boxed interface
 // value — no per-occurrence allocation — and, because the pool stores
 // clones, interned values never pin the parsed source's backing array.
+// Past internMaxEntries a new string is cloned and not pooled.
 func (l *Lex) internAny(s string) any {
 	if v, ok := l.intern[s]; ok {
 		return v
 	}
 	c := strings.Clone(s)
-	if l.intern == nil {
-		l.intern = make(map[string]any, 8)
-	}
 	var v any = c
-	l.intern[c] = v
+	if len(l.intern) < internMaxEntries {
+		if l.intern == nil {
+			l.intern = make(map[string]any, 8)
+		}
+		l.intern[c] = v
+	}
 	return v
 }
 
