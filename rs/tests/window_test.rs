@@ -302,6 +302,92 @@ fn a_long_source_parses_the_same_from_a_reader() {
     }
 }
 
+/// A window that drops all it holds, where it holds a character past
+/// ASCII (tabnas/parser#322). A source of ignored tokens only holds no
+/// token when the cursor reaches the end of the text read, and nor does a
+/// parse whose rewind history keeps none once its last token is consumed:
+/// the window then drops to the end of what it has read.
+#[test]
+fn a_window_that_drops_all_it_holds_past_ascii() {
+    let log: Log = Arc::default();
+    let mut checked = 0;
+    let comments = windowed(Tabnas::new(), &log);
+    for text in ["# é\n".repeat(40), "# é\n// ñ\n/* € */\n".repeat(20)] {
+        checked += differential("#322", 1, &text, &comments, &log);
+    }
+    let mut forgetful = Tabnas::make_json();
+    forgetful
+        .set_options(|options| options.rewind.history = Some(0))
+        .expect("rewind.history sets");
+    let forgetful = windowed(forgetful, &log);
+    for text in ["\"é\"", "[\"é\", 1, {\"ñ\": [\"€\"]}]", "{\"a\": \"é\"} "] {
+        checked += differential("#322", 2, text, &forgetful, &log);
+    }
+    assert!(checked > 100, "{checked}");
+    // Past a block of the engine's own window.
+    let text = "# é\n".repeat(30_000);
+    let whole = seen(&log, comments.parse(&text));
+    let read = seen(&log, comments.parse_reader(text.as_bytes()));
+    assert_eq!(read, whole);
+}
+
+/// A cut a built-in matcher made at the window's end is made again though
+/// a later matcher read the source to its end (tabnas/parser#326). The
+/// comment matcher reads `/*` past a window that holds only `/`, notes the
+/// read at the window's end and declines. A later matcher of the grammar's
+/// own reads through `fill` to the source's end and takes the rest. The
+/// window is exhausted by then, but the cut was decided on a window
+/// shorter than the source, so it is made again, and the comment matcher,
+/// over the whole text, gives what a parse of the text gives.
+#[test]
+fn a_cut_a_matcher_touched_is_made_again_after_a_later_fill() {
+    let log: Log = Arc::default();
+    let mut parser = Tabnas::new();
+    parser.imperative_lex_match_ref("@rest", |lexer, _rule, _context| {
+        let mut ahead = 1;
+        while lexer.fill(ahead) {
+            ahead *= 2;
+        }
+        let rest = lexer.window().to_string();
+        if rest.is_empty() {
+            return None;
+        }
+        let point = lexer.point();
+        lexer.advance_chars(rest.chars().count());
+        Some(lexer.token(
+            "#TX",
+            tabnas::TIN_TX,
+            Value::String(rest.clone()),
+            rest.as_str(),
+            point,
+        ))
+    });
+    parser
+        .grammar_json(
+            r##"{
+              "clear":true,
+              "options":{
+                "rule":{"start":"top"},
+                "lex":{"match":{"rest":{"order":6500000,"make":"@rest"}}}
+              },
+              "rule":{"top":{"open":[{"s":"#TX","r":"top"},{"s":"#ZZ"}]}}
+            }"##,
+        )
+        .expect("the grammar installs");
+    let parser = windowed(parser, &log);
+    let whole = seen(&log, parser.parse("/* x"));
+    assert!(
+        whole.outcome.starts_with("err unterminated_comment"),
+        "{}",
+        whole.outcome
+    );
+    let mut checked = 0;
+    for input in ["/* x", "//", "/* x */ y", "ab /* c */", "a // b"] {
+        checked += differential("#326", 1, input, &parser, &log);
+    }
+    assert_eq!(checked, 5 * PIECES.len() * WINDOWS.len());
+}
+
 /// An error on a line longer than the window shows the line from where the
 /// window begins, and its caret stays under the error.
 #[test]

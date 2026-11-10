@@ -519,7 +519,16 @@ prototype left out and what the rulings and the review asked for:
   prototype's options merge dropped.
 - **The window calls.** `Lexer::window` and `Lexer::fill` are public, and
   `advance_chars` past the window's end has the token cut again over a
-  larger window, as the built-in matchers' reads do.
+  larger window, as the built-in matchers' reads do. The fixed-token and
+  comment matchers, which compare what is left with a literal rather than
+  read past it, note the end where what is left of the window begins a
+  longer fixed token or comment marker (#326).
+- **A cut stands only where nothing met the end.** A cut whose read met
+  the window's end while the source had more is made again, even where a
+  later matcher of the same cut has since read the source to its end
+  through `fill`: the read that met the end decided on a window shorter
+  than the source, and made again, over the window the fill left, it
+  meets nothing and stands (#326). The same holds in TypeScript and Go.
 - **What differs, registered.** `DIVERGENCE.md` records what a windowed
   parse shows differently of its source (a long line's excerpt, the
   length a `Point` carries, and `Context::source`, which is empty), and
@@ -582,19 +591,21 @@ the text differently:
   interned. `DIVERGENCE.md`, "What a parse from a reader shows of its
   source", records what a matcher sees.
 - **The window's edge.** Rust notes a read at the window's end in the
-  reads themselves. TypeScript and Go note it where each built-in matcher
-  meets the end: a fixed token, a comment marker or a comment suffix
-  longer than what is left, a comment body, a space or line run or a
-  string body that runs to the end, an escape cut short, a bad token's
-  span past the end. The text and number matchers note it by how far
-  they can read: the number characters at the cursor, or the text up to
-  where it stops, and the longest ender after that (the longest fixed
-  token, multi-character ender or comment marker), since a pattern can
-  settle on a shorter match when the window cuts what it read. A cut
-  that read to the edge is made again over a window twice as far ahead.
-  A match token's pattern, as in Rust, is cut again when its match ends
-  at the window's end, and the margin covers what a pattern reads past
-  its match.
+  reads themselves, and in its fixed-token and comment matchers.
+  TypeScript and Go note it where each built-in matcher meets the end: a
+  fixed token, a comment marker or a comment suffix longer than what is
+  left, a comment body, a space or line run or a string body that runs
+  to the end, an escape cut short, a bad token's span past the end. The
+  text and number matchers note it by how far they can read: the number
+  characters at the cursor, or the text up to where it stops, and the
+  longest ender after that (the longest fixed token, multi-character
+  ender or comment marker), since a pattern can settle on a shorter
+  match when the window cuts what it read. A cut that read to the edge
+  is made again over a window twice as far ahead, even where a later
+  matcher has since filled the window to the source's end (#326). A
+  match token's pattern, as in Rust, is cut again when its match ends at
+  the window's end, and the margin covers what a pattern reads past its
+  match.
 - **The low-water mark.** The window keeps the text from the oldest token
   the parser holds (its lookahead, the tokens a rewind replays and its
   consumed history), and from the end of the last token the parser does

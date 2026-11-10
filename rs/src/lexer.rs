@@ -545,8 +545,14 @@ impl<'a> Lexer<'a> {
         }
         if keep >= self.low + window.block {
             let chars = keep - self.low;
+            // A drop to the end of what has been read, where the parser
+            // holds no token and the cursor stands at the end, drops the
+            // whole text: there is no character there to take the offset
+            // of (#322).
             let bytes = match &self.byte_indices {
-                Some(offsets) => offsets[chars] - self.low_byte,
+                Some(offsets) => offsets
+                    .get(chars)
+                    .map_or(window.text.len(), |offset| offset - self.low_byte),
                 None => chars,
             };
             let dropped = &window.text[..bytes];
@@ -1423,7 +1429,14 @@ impl<'a> Lexer<'a> {
                     .as_mut()
                     .map(|(rule, context)| (&mut **rule, &mut **context)),
             );
-            if !self.window_open() || (!self.touched_end.get() && self.idx < self.char_len) {
+            // The cut stands when nothing read to the window's end while
+            // the source had more, and it ended inside the window or the
+            // source is all read. A read that touched the end decided on a
+            // window shorter than the source, even where a later matcher's
+            // fill has since read the source to its end: made again, over
+            // the window that fill left, it touches nothing and stands
+            // (#326).
+            if !self.touched_end.get() && (!self.window_open() || self.idx < self.char_len) {
                 return result;
             }
             self.rewind(saved);
@@ -1701,6 +1714,18 @@ impl<'a> Lexer<'a> {
         // source is kept out by its own check, which only entries that
         // already matched the byte ever reach.
         let first_byte = remaining.as_bytes().first().copied();
+        if self.options.fixed.lex && !fixed_skipped && self.window_open() {
+            // A literal longer than what is left of a window, which what is
+            // left starts, may yet be there once the window has grown: the
+            // read meets the window's end, whatever this matcher decides,
+            // so that a later matcher's fill cannot let the cut stand on it
+            // (#326).
+            if self.options.fixed.tokens.values().any(|token| {
+                remaining.len() < token.source.len() && token.source.starts_with(remaining)
+            }) {
+                self.touch_end();
+            }
+        }
         let fixed = (self.options.fixed.lex && !fixed_skipped)
             .then(|| {
                 self.options
@@ -2114,6 +2139,18 @@ impl<'a> Lexer<'a> {
 
     fn match_comment(&mut self, pnt: Point) -> LexResult<Option<Token>> {
         let remaining = self.tail_at_byte(self.byte_position());
+        if self.window_open()
+            && self.options.comment.definitions.values().any(|definition| {
+                definition.lex
+                    && remaining.len() < definition.start.len()
+                    && definition.start.starts_with(remaining)
+            })
+        {
+            // A marker longer than what is left of a window, which what is
+            // left starts, may yet start a comment once the window has
+            // grown (#326).
+            self.touch_end();
+        }
         let mut definitions: Vec<_> = self
             .options
             .comment
