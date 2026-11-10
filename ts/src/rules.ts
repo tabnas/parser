@@ -96,6 +96,18 @@ class Rule {
   get k(): Record<string, any> { return (this.#k ??= Object.create(null)) }
   set k(v: Record<string, any>) { this.#k = v }
 
+  // The descriptor of every rule's own `node` accessor: one getter and one
+  // setter, over the rule's cell, shared by every rule. A getter and setter
+  // made for each rule, as closures, gave each rule a hidden class of its
+  // own, which made constructing a rule several times slower, and with it
+  // every snapshot the bounded rule history copies (tabnas/transduce#84).
+  static #nodeProperty: PropertyDescriptor = {
+    configurable: true,
+    enumerable: true,
+    get(this: Rule) { return this.#node.value },
+    set(this: Rule, value: any) { this.#node.value = value },
+  }
+
   // Non-materializing views: undefined until the map has been created.
   rawn(): Counters | undefined { return this.#n }
   rawu(): Record<string, any> | undefined { return this.#u }
@@ -120,12 +132,7 @@ class Rule {
     // Keep node an own enumerable property, as it was before snapshots
     // shared a backing cell. Error and hint injection spreads the rule into
     // its placeholder bag, so a prototype accessor would silently omit it.
-    defprop(this, 'node', {
-      configurable: true,
-      enumerable: true,
-      get: () => this.#node.value,
-      set: (value: any) => { this.#node.value = value },
-    })
+    defprop(this, 'node', Rule.#nodeProperty)
 
     this.child = ctx.NORULE
     this.parent = ctx.NORULE
