@@ -2004,7 +2004,8 @@ impl Parser {
         // tokens held are looked over about once a block; a whole source
         // has nothing to drop.
         if lexer.may_release() {
-            lexer.release_before(context.oldest_held().unwrap_or(usize::MAX));
+            let floor = lexer.release_floor();
+            lexer.release_before(context.oldest_held(floor).unwrap_or(usize::MAX));
         }
         while context.t.len() < count {
             if context.t.last().is_some_and(|token| token.tin == TIN_ZZ) {

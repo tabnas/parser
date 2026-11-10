@@ -496,13 +496,26 @@ impl Context {
     /// the tokens a rewind replays, and its consumed history, which a
     /// rewind may replay and a re-cut read again. `None` when it holds
     /// none. A window keeps the source from there on.
-    pub(crate) fn oldest_held(&self) -> Option<usize> {
-        self.t
-            .iter()
-            .chain(self.replay.iter())
-            .chain(self.v.iter())
-            .map(|token| token.site.pos)
-            .min()
+    ///
+    /// The answer matters only down to `floor`, the least a window drops
+    /// to: the first token found to start before it settles that nothing
+    /// is dropped, and ends the scan. The consumed history comes first,
+    /// oldest first, so its first token usually does. Walking every token
+    /// held on every fetch cost a parse from a reader that keeps a long
+    /// history O(n × history) (#334), where TypeScript's and Go's scans
+    /// stop at the floor alike.
+    pub(crate) fn oldest_held(&self, floor: usize) -> Option<usize> {
+        let mut oldest: Option<usize> = None;
+        for token in self.v.iter().chain(self.replay.iter()).chain(self.t.iter()) {
+            let pos = token.site.pos;
+            if oldest.is_none_or(|oldest| pos < oldest) {
+                oldest = Some(pos);
+                if pos < floor {
+                    break;
+                }
+            }
+        }
+        oldest
     }
 
     pub(crate) fn next_replay(&mut self) -> Option<Token> {

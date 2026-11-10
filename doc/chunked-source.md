@@ -513,8 +513,12 @@ prototype left out and what the rulings and the review asked for:
 - **Errors** show their line from the window, as
   [Errors keep their line](#errors-keep-their-line) describes.
 - **The low-water mark.** The parser looks over the tokens it holds only
-  once the window has gathered a block behind the cursor, about once a
-  block, where the prototype looked before every token.
+  once the window has gathered a block behind the cursor, where the
+  prototype looked before every token, and then only down to the block
+  the window could drop: the first token it finds before that settles
+  that nothing is dropped, as TypeScript's and Go's scans stop. Walking
+  every token held on every fetch cost a parse that keeps a long rewind
+  history time quadratic in its source, up to the history (#334).
 - **Merging.** `lex.window` survives a merge of two grammars, which the
   prototype's options merge dropped.
 - **The window calls.** `Lexer::window` and `Lexer::fill` are public, and

@@ -489,6 +489,16 @@ impl<'a> Lexer<'a> {
         matches!(&self.src, Text::Window(window) if self.idx >= self.low + window.block)
     }
 
+    /// The least position a window drops its text up to: it drops nothing
+    /// unless the oldest token the parser holds starts at or past it.
+    #[inline]
+    pub(crate) fn release_floor(&self) -> usize {
+        match &self.src {
+            Text::Window(window) => self.low + window.block,
+            Text::Whole(_) => usize::MAX,
+        }
+    }
+
     /// The parser holds no token that starts before `pos`, so the window
     /// may drop the text before it (or before the cursor, if that is
     /// earlier).
