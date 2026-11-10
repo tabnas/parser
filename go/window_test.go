@@ -785,3 +785,53 @@ func TestWindowAGrammarThatReadsItsSourceWholeReadsAReaderWhole(t *testing.T) {
 		t.Fatalf("parser.start: %#v, %v", got, err)
 	}
 }
+
+// TestWindowACutAMatcherTouchedIsMadeAgainAfterALaterFill: the comment
+// matcher reads `/*` past a window that holds only `/`, notes the read at
+// the window's end and declines. A later matcher of the grammar's own
+// reads through Fill to the source's end and takes the rest. The window is
+// exhausted by then, but the cut was decided on a window shorter than the
+// source, so it is made again, and the comment matcher, over the whole
+// text, gives what a parse of the text gives (#326).
+func TestWindowACutAMatcherTouchedIsMadeAgainAfterALaterFill(t *testing.T) {
+	gs, err := GrammarSpecFromJSON([]byte(`{"clear":true,` +
+		`"options":{"rule":{"start":"top"}},` +
+		`"rule":{"top":{"open":[{"s":"#TX","r":"top"},{"s":"#ZZ"}]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := Make()
+	if err := j.Grammar(gs); err != nil {
+		t.Fatal(err)
+	}
+	j.SetOptions(Options{Lex: &LexOptions{Match: map[string]*MatchSpec{
+		"rest": {Order: 6500000, Make: func(_ *LexConfig, _ *Options) LexMatcher {
+			return func(lex *Lex, _ *Rule) *Token {
+				for ahead := 1; lex.Fill(ahead); ahead *= 2 {
+				}
+				rest := lex.Window()
+				if rest == "" {
+					return nil
+				}
+				tkn := lex.Token("#TX", TinTX, rest, rest)
+				cur := lex.Cursor()
+				cur.SI += len(rest)
+				cur.CI += len(rest)
+				return tkn
+			}
+		}},
+	}}})
+	log := &windowLog{}
+	windowed(j, log)
+	whole := seenOf(t, log, func() (any, error) { return j.Parse("/* x") })
+	if !strings.HasPrefix(whole.outcome, "err unterminated_comment") {
+		t.Fatalf("whole: %s", whole.outcome)
+	}
+	checked := 0
+	for _, input := range []string{"/* x", "//", "/* x */ y", "ab /* c */", "a // b"} {
+		checked += windowDifferential(t, "#326", input, j, log)
+	}
+	if checked != 5*len(windowPieces)*len(windowWindows) {
+		t.Fatalf("%d reader parses", checked)
+	}
+}

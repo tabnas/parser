@@ -640,4 +640,48 @@ describe('window', () => {
     })
     assert.equal(started.parseReader(pieces(utf8(text), 3)), 'parsed:' + text)
   })
+
+  it('a cut a matcher touched is made again though a later matcher read the source to its end', () => {
+    // The comment matcher reads `/*` past a window that holds only `/`,
+    // notes the read at the window's end and declines. A later matcher of
+    // the grammar's own reads through `fill` to the source's end and takes
+    // the rest. The window is exhausted by then, but the cut was decided on
+    // a window shorter than the source, so it is made again, and the
+    // comment matcher, over the whole text, gives what a parse of the text
+    // gives (#326).
+    const log = newLog()
+    const tn = new Tabnas()
+    tn.grammar({
+      clear: true,
+      options: {
+        rule: { start: 'top' },
+        lex: {
+          match: {
+            rest: {
+              order: 6.5e6,
+              make: () => (lex) => {
+                let ahead = 1
+                while (lex.fill(ahead)) ahead *= 2
+                const text = lex.src.substring(lex.pnt.sI)
+                if ('' === text) return undefined
+                const tkn = lex.token('#TX', text, text, lex.pnt)
+                lex.pnt.sI += text.length
+                lex.pnt.cI += text.length
+                return tkn
+              },
+            },
+          },
+        },
+      },
+      rule: { top: { open: [{ s: '#TX', r: 'top' }, { s: '#ZZ' }] } },
+    })
+    windowed(tn, log)
+    const whole = seen(log, () => tn.parse('/* x'))
+    assert.ok(whole.outcome.startsWith('err unterminated_comment'), whole.outcome)
+    let checked = 0
+    for (const input of ['/* x', '//', '/* x */ y', 'ab /* c */', 'a // b']) {
+      checked += differential('#326', 1, input, tn, log)
+    }
+    assert.equal(checked, 5 * PIECES.length * WINDOWS.length)
+  })
 })

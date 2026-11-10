@@ -579,7 +579,13 @@ func (l *Lex) cutWindow(rule *Rule) *Token {
 				tkn = l.cutRaw(rule)
 			}
 		}()
-		if w.exhausted || (!l.touched && l.pnt.SI < l.pnt.Len) {
+		// The cut stands when nothing read to the window's end while the
+		// source had more, and it ended inside the window or the source is
+		// all read. A read that touched the end decided on a window shorter
+		// than the source, even where a later matcher's fill has since read
+		// the source to its end: made again, over the window that fill
+		// left, it touches nothing and stands (#326).
+		if !l.touched && (w.exhausted || l.pnt.SI < l.pnt.Len) {
 			l.settle(tkn, base)
 			made := l.tokens
 			from := qN
