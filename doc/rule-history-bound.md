@@ -185,19 +185,31 @@ default in Rust", registers the difference meanwhile.
 
 TypeScript's unbounded links are the live rules, which cost nothing to
 make, and a bounded link is a copy built on every step: a `Rule`
-constructed per copy, `history` of them per link. The same records
-through `@tabnas/json`:
+constructed per copy, `history` of them per link. A profile of a
+bounded parse put a third of its time in `Rule`'s constructor, another
+third in the garbage collector, and a sixth in `snapshot`, and
+tabnas-semver's parse of one version went from 0.39 ms to 1.56 ms.
 
-| Document | No bound | `history: 3` |
-|---|---|---|
-| one record, 73 bytes | 140 µs | 613 µs |
-| 100 records, 7.8 KB | 13.7 ms | 62.9 ms |
-| 20,000 records, 1.8 MB | 3.6 s, 2.7 GB of heap | 12.0 s, 174 MB of heap |
+Most of that was the constructor's own cost, until tabnas/transduce#84:
+it gave each rule a getter and a setter of its own for `node`, which
+put every rule's properties in V8's dictionary mode. Every rule now
+shares one getter and one setter and keeps fast properties
+(`ts/test/rule-shape.test.js`). The same records through
+`@tabnas/json`, `{"id":…,"person":{"name":…},"account":{"balance":…}}`,
+before that change and after, on a 4-core container with other builds
+running:
 
-A profile of the middle row puts a third of the time in `Rule`'s
-constructor, another third in the garbage collector, and a sixth in
-`snapshot`. tabnas-semver's parse of one version goes from 0.39 ms to
-1.56 ms, and its test that a reused parser beats a rebuilt one fails.
+| Document | No bound, before | `history: 3`, before | No bound, after | `history: 3`, after |
+|---|---|---|---|---|
+| one record, 61 bytes | 77 to 124 µs | 340 to 480 µs | 24 to 56 µs | 75 to 125 µs |
+| 100 records, 6.5 KB | 9.6 to 11.4 ms | 35 to 62 ms | 2.7 to 4.8 ms | 8.8 to 13.2 ms |
+| 20,000 records, 1.4 MB | 2.7 to 3.4 s, 836 MB peak | 11.6 to 12.6 s, 234 MB peak | 1.2 to 1.4 s, 371 MB peak | 1.8 to 2.5 s, 104 MB peak |
+
+The two short rows give the range of eight runs over two sessions, the
+long row of three, and its peak is the process's resident memory. A
+bounded parse still copies `history` rules a link, so it costs two to
+three times an unbounded one on a short document and under twice on a
+long one, where the unbounded parse's growing heap costs it more.
 
 Go's bounded links are copies, as the other two runtimes' are, but a Go
 rule's `Node` is a plain field that a copy cannot share, and the fleet's
