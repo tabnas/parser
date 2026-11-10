@@ -18,6 +18,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use tabnas::{RuleState, Tabnas, TabnasError, Value, WindowSizes};
 
@@ -575,6 +576,54 @@ fn a_points_length_is_the_length_read_so_far() {
     let whole: Arc<Mutex<Vec<usize>>> = Arc::default();
     probed(&whole).parse(&text).expect("the text parses");
     assert!(whole.lock().unwrap().iter().all(|len| *len == text.len()));
+}
+
+/// A parse from a reader that keeps a long rewind history takes time linear
+/// in its source. Once a block has gathered behind the cursor, every fetch
+/// asks for the oldest token the parser holds, to know what the window may
+/// drop; the answer only matters down to the block the window could drop,
+/// so the lookup stops at the first token below it, where it walked every
+/// token held, the whole consumed history among them, on every fetch
+/// (#334): proto, which keeps 8,192, took twice as long from a reader as
+/// whole. Ten times the source takes about ten times as long; a walk of the
+/// history makes it about a hundred.
+#[test]
+fn a_parse_from_a_reader_with_a_long_history_is_linear() {
+    let mut parser = Tabnas::make_json();
+    parser
+        .set_options(|options| {
+            options.lex.window = true;
+            options.rewind.history = Some(1_000_000);
+        })
+        .expect("the options set");
+    let sizes = WindowSizes {
+        margin: 256,
+        block: 256,
+        chunk: 256,
+    };
+    let document = |records: usize| {
+        let items: Vec<String> = (0..records).map(|i| format!("{{\"a\":{i}}}")).collect();
+        format!("[{}]", items.join(","))
+    };
+    let fastest = |text: &str| {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                parser
+                    .parse_reader_with_sizes(Pieces::new(text.as_bytes(), 4096), sizes)
+                    .expect("the reader parses");
+                start.elapsed()
+            })
+            .min()
+            .expect("three runs")
+    };
+    let small = fastest(&document(500));
+    let large = fastest(&document(5_000));
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+    assert!(
+        ratio < 30.0,
+        "500 records took {small:?} and 5,000 took {large:?}: {ratio:.1}x"
+    );
 }
 
 /// In a parse from a reader a window at a time, `Context::source` is empty,
