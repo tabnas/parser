@@ -63,6 +63,11 @@ func (r *Rule) NodeCell() *Rule {
 	if r.snapshotNodeOwner != nil && r.snapshotNodeOwner != r {
 		return r.snapshotNodeOwner.NodeCell()
 	}
+	if r.historyOwner != nil && r.historyOwner != r {
+		// A snapshot a bounded link holds stands for the live rule it
+		// records, whose node it shares (syncHistoryLinks).
+		return r.historyOwner.NodeCell()
+	}
 	for cur := r; ; {
 		if c := cur.ownCell(); c != cur {
 			return c
@@ -159,6 +164,20 @@ func (r *Rule) SetNode(v any) {
 	if n := r.Next; n != nil && n != NoRule && n != r && sameNode(n.Node, old) {
 		n.Node = v
 	}
+	if n := r.historySuccessor; n != nil && n != r && sameNode(n.Node, old) {
+		n.Node = v
+	}
+	// Under a bounded rule history the head of the chain r's parent pushed
+	// is a snapshot, which a write in the pass (`r.Parent.Child.Node =
+	// r.Node`) may have left holding the old container: it takes the new
+	// one, as the head itself does, so that it does not carry the old one
+	// back when the pass ends (syncHistoryLinks).
+	if p := r.Parent; p != nil && p != NoRule {
+		if h := p.Child; h != nil && h != NoRule && h != r && h.historyOwner != nil &&
+			sameNode(h.Node, old) {
+			h.Node = v
+		}
+	}
 }
 
 // Node kinds, as NodeCell compares them.
@@ -226,6 +245,16 @@ func sameNode(a, b any) bool {
 		return false
 	}
 	return false
+}
+
+// sameValue reports whether two interface values are one value: the same
+// dynamic type and the same data word. A value assigned anew, even an equal
+// one boxed again, is another, which is what a reader of a node written
+// through a link needs to know (syncHistoryNode): that it was written.
+func sameValue(a, b any) bool {
+	pa := (*[2]unsafe.Pointer)(unsafe.Pointer(&a))
+	pb := (*[2]unsafe.Pointer)(unsafe.Pointer(&b))
+	return pa[0] == pb[0] && pa[1] == pb[1]
 }
 
 // ifaceData is the data word of an interface value: the address of the

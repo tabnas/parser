@@ -3,6 +3,7 @@
 package tabnas
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -628,57 +629,91 @@ func TestNodeCellReplacementChainWriteBack(t *testing.T) {
 // through to the head the parent reads and to the successor that appends
 // next, so the truncation sticks.
 func TestSetNodeTruncatesReplacementChain(t *testing.T) {
-	t.Run("prune-all", func(t *testing.T) {
-		j := makeBlockList(t, false)
-		var blist *Rule
-		var lens []int
-		streamed := 0
-		j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
-			if r.Name == "blist" && blist == nil {
-				blist = r
+	// Under a bounded rule history too, where the replaced rule's Next is
+	// cut before the ruleDone subscribers run, and the chain writes the
+	// list through snapshots (#325).
+	one, three := 1, 3
+	for _, history := range []*int{nil, &one, &three} {
+		name := "unbounded"
+		if history != nil {
+			name = fmt.Sprintf("history-%d", *history)
+		}
+		blockList := func(t *testing.T) *Tabnas {
+			j := makeBlockList(t, false)
+			if history != nil {
+				if err := j.ApplyOptions(Options{Rule: &RuleOptions{History: history}}); err != nil {
+					t.Fatalf("history: %v", err)
+				}
 			}
-			if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
-				return
+			return j
+		}
+		t.Run("prune-all/"+name, func(t *testing.T) {
+			j := blockList(t)
+			var blist *Rule
+			var lens []int
+			streamed := 0
+			j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
+				if r.Name == "blist" && blist == nil {
+					blist = r
+				}
+				if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
+					return
+				}
+				cell := r.NodeCell()
+				if cell != blist {
+					t.Errorf("%s rule %d: cell is rule %d, want blist", r.Name, r.I, cell.I)
+				}
+				l, _ := cell.Node.([]any)
+				lens = append(lens, len(l))
+				streamed += len(l)
+				r.SetNode(l[:0])
+			})
+			out, err := j.Parse(blockListSrc)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
 			}
-			cell := r.NodeCell()
-			if cell != blist {
-				t.Errorf("%s rule %d: cell is rule %d, want blist", r.Name, r.I, cell.I)
+			if !reflect.DeepEqual(out, []any{}) {
+				t.Errorf("result: %#v, want []", out)
 			}
-			l, _ := cell.Node.([]any)
-			lens = append(lens, len(l))
-			streamed += len(l)
-			r.SetNode(l[:0])
+			if !reflect.DeepEqual(lens, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}) {
+				t.Errorf("lengths at each close: %v, want ten 1s", lens)
+			}
+			if 10 != streamed {
+				t.Errorf("streamed %d elements, want 10", streamed)
+			}
 		})
-		out, err := j.Parse(blockListSrc)
-		if err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		if !reflect.DeepEqual(out, []any{}) {
-			t.Errorf("result: %#v, want []", out)
-		}
-		if !reflect.DeepEqual(lens, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}) {
-			t.Errorf("lengths at each close: %v, want ten 1s", lens)
-		}
-		if 10 != streamed {
-			t.Errorf("streamed %d elements, want 10", streamed)
-		}
-	})
-	t.Run("keep-first", func(t *testing.T) {
-		j := makeBlockList(t, false)
-		j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
-			if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
-				return
+		t.Run("keep-first/"+name, func(t *testing.T) {
+			j := blockList(t)
+			j.SubRuleDone(func(r *Rule, _ *Context, done RuleDone) {
+				if (r.Name != "blist" && r.Name != "belem") || CLOSE != done.State {
+					return
+				}
+				if l, _ := r.NodeCell().Node.([]any); 1 < len(l) {
+					r.SetNode(l[:1])
+				}
+			})
+			out, err := j.Parse(blockListSrc)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
 			}
-			if l, _ := r.NodeCell().Node.([]any); 1 < len(l) {
-				r.SetNode(l[:1])
+			if !reflect.DeepEqual(out, []any{1.0}) {
+				t.Errorf("result: %#v, want [1]", out)
 			}
 		})
-		out, err := j.Parse(blockListSrc)
-		if err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		if !reflect.DeepEqual(out, []any{1.0}) {
-			t.Errorf("result: %#v, want [1]", out)
-		}
-	})
+		t.Run("keep-all/"+name, func(t *testing.T) {
+			// The chain writes the grown list to the rule its parent pushed
+			// (`r.Parent.Child.Node = arr`), which the parent reads.
+			out, err := blockList(t).Parse(blockListSrc)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			want, err := makeBlockList(t, false).Parse(blockListSrc)
+			if err != nil {
+				t.Fatalf("parse unbounded: %v", err)
+			}
+			if list, ok := out.([]any); !ok || len(list) != 10 || !reflect.DeepEqual(out, want) {
+				t.Errorf("result: %#v, want %#v", out, want)
+			}
+		})
+	}
 }

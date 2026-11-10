@@ -1043,6 +1043,22 @@ type Rule struct {
 	// links. Parent, Child and Prev expose bounded snapshots; historyPusher is
 	// the private live link used to publish the completed first child.
 	historyPusher *Rule
+	// historyOwner is the live rule a bounded link's snapshot stands for,
+	// and historyBase the node the two last agreed on: unset on a live rule,
+	// and let go of once the rule the link belongs to is done. A snapshot
+	// cannot share a Go rule's Node field, and grammars write a linked
+	// rule's node directly (`r.Parent.Node = r.Node`, `r.Prev.Node =
+	// r.Node`), so between passes the engine carries such a write to the
+	// live rule, and the live rule's node to a snapshot nothing wrote
+	// (syncHistoryLinks).
+	historyOwner *Rule
+	historyBase  any
+	// historySuccessor is the rule a bounded replace handed on to, whose
+	// public Next link it cuts at once, kept until the pass's ruleDone
+	// subscribers have run: a SetNode from one still reaches the successor,
+	// which the replace seeded with this rule's node, as it does through
+	// Next with no bound.
+	historySuccessor *Rule
 }
 
 // ruleSnapshot freezes the mutable parts of a rule record. Grammar, tokens
@@ -1054,6 +1070,9 @@ func ruleSnapshot(r *Rule) *Rule {
 	copy.nodeOwner = nil
 	copy.snapshotNodeOwner = nil
 	copy.historyPusher = nil
+	copy.historyOwner = nil
+	copy.historyBase = nil
+	copy.historySuccessor = nil
 	copy.O = append([]*Token(nil), r.O...)
 	copy.C = append([]*Token(nil), r.C...)
 	if r.N != nil {
@@ -1106,6 +1125,25 @@ func boundedRuleHistory(r *Rule, history int, link ruleHistoryLink) *Rule {
 				copy.snapshotNodeOwner = links[depth].snapshotNodeOwner
 			}
 		}
+		// The live rule the copy stands for, whose node it shares: the rule
+		// itself at depth 0, and along a prev chain the rule the snapshot it
+		// copies stands for (syncHistoryLinks). The pusher as it was before
+		// it linked its child is read and never written, and keeps none: it
+		// lives on behind the child's frozen record, and would keep the
+		// pusher's predecessors alive with it.
+		switch {
+		case link == historyPusherBefore:
+		case depth == 0:
+			copy.historyOwner = links[0]
+			if links[0].historyOwner != nil {
+				copy.historyOwner = links[0].historyOwner
+			}
+		case link == historyPrev:
+			copy.historyOwner = links[depth].historyOwner
+		}
+		if copy.historyOwner != nil {
+			copy.historyBase = copy.Node
+		}
 		if depth != 0 || link != historyParent {
 			copy.Child = NoRule
 			copy.Next = NoRule
@@ -1114,6 +1152,108 @@ func boundedRuleHistory(r *Rule, history int, link ruleHistoryLink) *Rule {
 		prev = copy
 	}
 	return prev
+}
+
+// syncHistoryLinks reconciles the snapshots the links of the rules given
+// hold under a bounded rule history with the live rules they stand for, as
+// one node cell shared by a rule and its snapshots would be: what
+// TypeScript's and Rust's snapshots hold (#325). A snapshot cannot share a
+// Go rule's Node field, and the fleet's Go grammars write a linked rule's
+// node directly: through the parent (`r.Parent.Node = r.Node`, jsonic's
+// lists), the parent's parent (expr's parentheses), the rules a chain
+// replaced, back to its head (`r.Prev.Node = r.Node`, jsonic's implicit
+// list, ini's value), and the head of the chain the parent pushed
+// (`r.Parent.Child.Node = r.Node`, yaml's lists); and they read the node of
+// the child they pushed (`r.Child.Node`). The engine calls this between
+// passes, for the rule that ran and the one that runs next. A node written
+// through a snapshot since the two last agreed is the live rule's now, as
+// the write would have been through an unbounded link, which is the live
+// rule; then every snapshot takes its live rule's node, which a write
+// through another snapshot, or the live rule itself, may have changed
+// since. Only the node is shared: the rest of a snapshot's record stays as
+// it was frozen, as TypeScript's does.
+func syncHistoryLinks(rules ...*Rule) {
+	// Two rules, each with its parent, its parent's parent and child, its
+	// child, and at most MaxRuleHistory predecessors.
+	var views [2 * (4 + MaxRuleHistory)]*Rule
+	n := 0
+	add := func(s *Rule) {
+		if s == nil || s == NoRule || s.historyOwner == nil || n == len(views) {
+			return
+		}
+		for _, seen := range views[:n] {
+			if seen == s {
+				return
+			}
+		}
+		views[n] = s
+		n++
+	}
+	for _, r := range rules {
+		if r == nil || r == NoRule {
+			continue
+		}
+		add(r.Child)
+		if p := r.Parent; p != nil && p != NoRule {
+			add(p)
+			add(p.Parent)
+			add(p.Child)
+		}
+		for prev, i := r.Prev, 0; prev != nil && prev != NoRule && i < MaxRuleHistory; prev, i = prev.Prev, i+1 {
+			add(prev)
+		}
+	}
+	for _, s := range views[:n] {
+		if !sameValue(s.Node, s.historyBase) {
+			s.historyOwner.Node = s.Node
+			s.historyBase = s.Node
+		}
+	}
+	for _, s := range views[:n] {
+		if owner := s.historyOwner; !sameValue(owner.Node, s.Node) {
+			s.Node = owner.Node
+		}
+		s.historyBase = s.Node
+	}
+}
+
+// releaseHistoryLinks lets go of the live rules the snapshots of a rule's
+// links record, once the rule is done: replaced, or popped. Nothing writes
+// through those links again, and a snapshot that kept its live rule would
+// keep that rule's own prev snapshot, and through it the rule before, back
+// to the start of the sequence: the chain the bound is there to cut. A
+// replacement links the same parent snapshot, which stays, and so does the
+// snapshot the pusher reads its child through, which can be the replaced
+// rule's prev: the pusher's next pass reads the chain's node through it.
+func releaseHistoryLinks(done, next *Rule) {
+	if done == nil || done == NoRule {
+		return
+	}
+	done.historySuccessor = nil
+	var published *Rule
+	if pusher := done.historyPusher; pusher != nil {
+		published = pusher.Child
+	}
+	releaseHistoryChain(done.Prev, published)
+	if next == nil || next == NoRule || next.Parent != done.Parent {
+		if parent := done.Parent; parent != nil && parent != NoRule {
+			if parent.Child != published {
+				releaseHistoryChain(parent.Child, nil)
+			}
+			releaseHistoryChain(parent, nil)
+		}
+	}
+}
+
+// releaseHistoryChain lets go of the live rules a snapshot and the
+// predecessors it holds record, but for keep.
+func releaseHistoryChain(s, keep *Rule) {
+	for i := 0; s != nil && s != NoRule && i <= MaxRuleHistory; s, i = s.Prev, i+1 {
+		if s != keep {
+			s.historyOwner = nil
+			s.historyBase = nil
+		}
+	}
 }
 
 // freezeHistoryChild publishes the completed first pushed rule to the live
@@ -1581,6 +1721,8 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 					child.Parent = next.Parent
 					child.Child = NoRule
 					child.Next = NoRule
+					child.historyOwner = next
+					child.historyBase = child.Node
 					r.Child = child
 				} else {
 					r.Child = next
@@ -1681,6 +1823,7 @@ func (r *Rule) Process(ctx *Context, lex *Lex) *Rule {
 		// here would make the original root retain every replacement despite
 		// the configured history bound.
 		r.Next = NoRule
+		r.historySuccessor = next
 	} else if popped {
 		freezeHistoryChild(r, nil, ctx.Cfg.RuleHistory)
 	}

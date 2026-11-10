@@ -895,24 +895,24 @@ the bound costs it nothing.
 Why Go waits: its bounded links are copies, as the other two runtimes'
 are, but a Go rule's `Node` is a plain field. TypeScript's copies share
 the rule's node cell, so `rule.parent.node = value` through a copy
-reaches the rule, and a Rust grammar writes through the engine's cells. A
-Go grammar that writes `r.Parent.Node = r.Node` writes the copy instead,
-and the write is lost; the fleet's Go grammars write that way. With 3 as
-Go's default, expr's Go suite fails on it, and csv, jsonic, toml, xml,
-yaml and c write through `Parent` or `Prev` the same way. Linking the
-live pusher as `Parent` under a bound is not enough on its own: measured
-with it, xml's Go suite passes and expr's, csv's, jsonic's, toml's,
-yaml's and c's still fail. `SetNode` reaches the rule, but under a bound
-the replacement arm cuts the replaced rule's `Next` before the ruleDone
-subscribers run, so a truncation made from a subscriber does not reach
-the successor that appends next (`TestSetNodeTruncatesReplacementChain`,
-run with a bound).
+reaches the rule, and a Rust grammar writes through the engine's cells.
+Since #325 Go reconciles each copy with the rule it stands for between
+passes, so a write through `Parent`, `Prev` back along a chain, or the
+pushed chain's head reaches the rule, and a `SetNode` from a ruleDone
+subscriber reaches the successor. What still keeps Go unbounded: a bound
+doubles the time of a Go parse (0.42 s against 0.90 s over 20,000 records
+with `@tabnas/json`), and Go grammars that read or write through their
+links as if they were the live rules still fail under it. jsonic keeps a
+list child in the parent's `U`, directive and yaml walk a replacement
+chain forward through `Next`, path sets a child's `K` from the pusher's
+after actions, one test of expr's counts evaluations, and feed's speed
+test fails. [`doc/rule-history-bound.md`](doc/rule-history-bound.md)
+has the run.
 
 Repair direction: **TypeScript and Go change**: a bounded link that
-costs about what a live one does in TypeScript, and in Go links that
-carry a grammar's writes through `Parent` and `Prev` alike, with
-`SetNode` reaching the successor. Then each defaults to 3, and this
-entry and its rows are deleted.
+costs about what a live one does in TypeScript and Go, and in Go the
+grammars above writing through their links as the bound allows. Then
+each defaults to 3, and this entry and its rows are deleted.
 
 Registered as `rule-history-default-four-hops` and
 `rule-history-default-links`, with `rule-history-default-three-hops` in
