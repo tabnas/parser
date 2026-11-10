@@ -202,8 +202,38 @@ constructor, another third in the garbage collector, and a sixth in
 Go's bounded links are copies, as the other two runtimes' are, but a Go
 rule's `Node` is a plain field that a copy cannot share, and the fleet's
 Go grammars write a linked rule's node directly (`r.Parent.Node =
-r.Node`, `r.Prev.Node = …`): under a bound those writes land on the copy
-and are lost.
+r.Node`, `r.Prev.Node = …`): under a bound those writes landed on the copy
+and were lost (#325). Each snapshot a bounded link holds now records the
+live rule it stands for, and between passes the engine reconciles the two
+as one node cell would be (`syncHistoryLinks` in `go/rule.go`). A node
+written through a snapshot becomes the live rule's, and every snapshot then
+takes its live rule's node. That covers the links of the rule that ran and
+the rule that runs next: the parent, the parent's parent, the rules a chain
+replaced, the child, and the head of the chain the parent pushed. A
+`SetNode` from a ruleDone subscriber reaches the successor a bounded
+replace has cut its `Next` from. Only the node is shared: a write to a
+snapshot's `U`, `K` or `N` stays on the snapshot, as in TypeScript.
+
+Go's default stays unbounded for two reasons. A bound costs Go time,
+where it costs Rust none: the copies are made on every step. Over 20,000
+records of about a kilobyte, the best of three parses takes 0.42 s
+unbounded and 0.90 s at 3 with `@tabnas/json`'s Go grammar, and 0.63 s
+and 1.28 s with jsonic's. And some of the fleet's Go grammars still read
+or write through their links as if they were the live rules. Run against
+a default of 3, these Go suites still fail:
+
+- jsonic's list child (`[:1]`), which it keeps in the parent's `U`;
+- directive's and yaml's, which walk a replacement chain forward through
+  `Next`, a link the bound cuts;
+- path's, which sets a child's `K` from the pusher's after actions, which
+  see a frozen copy under a bound (Rust's path plugin sets it in the
+  child's own hook);
+- one test of expr's, which counts the times an operator is evaluated;
+- feed's test that a reused parser is four times faster than a rebuilt
+  one.
+
+The rest of the fleet passes, ini's among them, which failed before the
+engine carried writes along a chain.
 
 Before Rust's default changed, the fleet gate (`ci/fleet/run-fleet.sh`)
 ran every published grammar's TypeScript and Go suites against a bound of

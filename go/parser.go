@@ -719,6 +719,14 @@ func (p *Parser) startParseFrom(src string, win *sourceWindow, meta map[string]a
 		// opened or closed a probe is the only one its flag covers.
 		probe := ctx.probeTake() || probeAtStart
 
+		if ctx.Cfg.RuleHistory > 0 {
+			// What the pass wrote through the links of a bounded rule
+			// history reaches the live rules, before a subscriber reads
+			// them, and the next pass reads the live rules' nodes through
+			// the links (#325).
+			syncHistoryLinks(prev, rule)
+		}
+
 		// Post-process event: fires with the pass's matched tokens
 		// recorded on prev and the state transition applied, so unlike
 		// the pre-process event above it can report what the pass
@@ -742,6 +750,19 @@ func (p *Parser) startParseFrom(src string, win *sourceWindow, meta map[string]a
 			if rule.historyPusher == prev {
 				if prev.Child != nil && prev.Child != NoRule && prev.Child.I == rule.I {
 					rule.Node = prev.Child.Node
+				}
+			}
+		}
+		if ctx.Cfg.RuleHistory > 0 {
+			if len(ctx.RuleDoneSubs) > 0 {
+				// And what the subscribers wrote.
+				syncHistoryLinks(prev, rule)
+			}
+			if rule != prev {
+				if rule == nil || rule == NoRule || rule.historyPusher != prev {
+					// prev was replaced or popped, where a push would only
+					// have suspended it.
+					releaseHistoryLinks(prev, rule)
 				}
 			}
 		}

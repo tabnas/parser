@@ -768,3 +768,247 @@ func TestRuleHistoryMerge(t *testing.T) {
 		}
 	}
 }
+
+// directWriteListParser builds a list as jsonic's Go grammar does: an
+// element appends its child's value to its own node and writes the grown
+// list to its parent's node directly (`r.Parent.Node = r.Node`), and the
+// list reads its own node once the elements end. Under a bounded rule
+// history the parent an element links is a copy, so the writes landed on
+// the copy and the list kept none of them (#325).
+func directWriteListParser(history *int) *Tabnas {
+	parser := Make(Options{Rule: &RuleOptions{Start: "list", History: history}})
+	parser.Rule("list", func(rs *RuleSpec, _ *Parser) {
+		rs.AddBO(func(r *Rule, _ *Context) { r.Node = make([]any, 0) })
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinOS}}, P: "elem"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinCS}}})
+	})
+	parser.Rule("elem", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{P: "val"})
+		rs.AddBC(func(r *Rule, _ *Context) {
+			r.Node = append(r.Node.([]any), r.Child.Node)
+			r.Parent.Node = r.Node
+		})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinCA}}, R: "elem"})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinCS}}, B: 1})
+	})
+	parser.Rule("val", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinNR}}, A: func(r *Rule, _ *Context) {
+			r.Node = r.O0.Val
+		}})
+	})
+	return parser
+}
+
+func TestRuleHistoryKeepsAGrammarsDirectWritesThroughParent(t *testing.T) {
+	for _, items := range []int{1, 2, 1_000, 10_000} {
+		oracle := make([]any, items)
+		for i := range oracle {
+			oracle[i] = float64(i)
+		}
+		src := historyFlatArray(items)
+		one, three := 1, 3
+		for _, history := range []*int{nil, &one, &three} {
+			name := "unbounded"
+			if history != nil {
+				name = fmt.Sprint(*history)
+			}
+			value, err := directWriteListParser(history).Parse(src)
+			if err != nil {
+				t.Fatalf("%d items, history %s: %v", items, name, err)
+			}
+			if !reflect.DeepEqual(value, oracle) {
+				got := -1
+				if list, ok := value.([]any); ok {
+					got = len(list)
+				}
+				t.Fatalf("%d items, history %s: the list holds %d items (%T)", items, name, got, value)
+			}
+		}
+	}
+}
+
+func TestRuleHistoryKeepsAGrammarsDirectWritesThroughPrev(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, R: "tail", A: func(r *Rule, _ *Context) {
+					r.Node = "first"
+				}})
+			})
+			parser.Rule("tail", func(rs *RuleSpec, _ *Parser) {
+				// The rule this one replaced is the root: a write through
+				// Prev is the root's, as jsonic's implicit list writes the
+				// value it promotes (`r.Prev.Node = r.Node`).
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(r *Rule, _ *Context) {
+					r.Prev.Node = "written"
+				}})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(r *Rule, ctx *Context) {
+					r.Node = ctx.Root.Node
+				}})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "written" {
+				t.Fatalf("root after a write through prev = %v, %v; want written", value, err)
+			}
+		})
+	}
+}
+
+func TestRuleHistoryParentLinkReadsTheLiveParentsNode(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bounded-%v", bounded), func(t *testing.T) {
+			var history *int
+			if bounded {
+				one := 1
+				history = &one
+			}
+			parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+			ta, tb, tc := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c")
+			parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+				rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "child", A: func(r *Rule, _ *Context) {
+					r.Node = "before"
+				}})
+				rs.AddClose(&AltSpec{S: [][]Tin{{tc}}, A: func(r *Rule, _ *Context) {
+					r.Node = r.Child.Node
+				}})
+			})
+			parser.Rule("child", func(rs *RuleSpec, _ *Parser) {
+				// The parent's node changes by the live rule, not through
+				// the link; the link reads it on the child's next pass.
+				rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, A: func(_ *Rule, ctx *Context) {
+					ctx.Root.Node = "live"
+				}})
+				rs.AddClose(&AltSpec{A: func(r *Rule, _ *Context) {
+					r.Node = r.Parent.Node
+				}})
+			})
+
+			value, err := parser.Parse("abc")
+			if err != nil || value != "live" {
+				t.Fatalf("parent read through the link = %v, %v; want live", value, err)
+			}
+		})
+	}
+}
+
+// historyReachAll counts what a rule can reach through every link it holds,
+// the engine's own included: a snapshot's record of the live rule whose node
+// it shares (historyOwner) must not lead back along the sequence either.
+func historyReachAll(t *testing.T, parser *Tabnas, src string) (int, any) {
+	t.Helper()
+	largest := 0
+	parser.Sub(nil, func(rule *Rule, _ *Context) {
+		seen := map[*Rule]bool{}
+		pending := []*Rule{rule}
+		for 0 < len(pending) {
+			last := len(pending) - 1
+			r := pending[last]
+			pending = pending[:last]
+			if r == nil || r == NoRule || seen[r] {
+				continue
+			}
+			seen[r] = true
+			pending = append(pending, r.Parent, r.Child, r.Prev, r.Next,
+				r.historyOwner, r.historyPusher, r.snapshotNodeOwner, r.nodeOwner)
+		}
+		if len(seen) > largest {
+			largest = len(seen)
+		}
+	})
+	value, err := parser.Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return largest, value
+}
+
+func TestRuleHistoryKeepsDirectWritesWithoutGrowingWithTheSequence(t *testing.T) {
+	three := 3
+	short, _ := historyReachAll(t, directWriteListParser(&three), historyFlatArray(200))
+	long, value := historyReachAll(t, directWriteListParser(&three), historyFlatArray(2_000))
+	if short != long {
+		t.Fatalf("reach grew with the sequence: 200=%d, 2000=%d", short, long)
+	}
+	if list, ok := value.([]any); !ok || len(list) != 2_000 {
+		t.Fatalf("the list = %T", value)
+	}
+	short, _ = historyReachAll(t, historyJSONParser(t, &three), historyFlatArray(200))
+	long, _ = historyReachAll(t, historyJSONParser(t, &three), historyFlatArray(2_000))
+	if short != long {
+		t.Fatalf("JSON reach grew with the sequence: 200=%d, 2000=%d", short, long)
+	}
+}
+
+func TestRuleHistoryKeepsWritesAlongThePrevChain(t *testing.T) {
+	// A value that starts with fixed tokens replaces its rule once a token,
+	// and the last rule writes the value back along the chain to its head,
+	// the rule the parent pushed and reads (as ini's Go grammar does for
+	// `a = ==x`): within the bound, every link's write reaches its rule.
+	three := 3
+	for _, history := range []*int{nil, &three} {
+		name := "unbounded"
+		if history != nil {
+			name = fmt.Sprint(*history)
+		}
+		parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+		ta, tx, tz := parser.Token("#A", "a"), parser.Token("#X", "x"), parser.Token("#Z", "z")
+		parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+			rs.AddOpen(&AltSpec{P: "v"})
+			rs.AddClose(&AltSpec{S: [][]Tin{{tz}}, A: func(r *Rule, _ *Context) {
+				r.Node = r.Child.Node
+			}})
+		})
+		parser.Rule("v", func(rs *RuleSpec, _ *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, R: "v", A: func(r *Rule, _ *Context) {
+				r.Node = "a"
+			}})
+			rs.AddOpen(&AltSpec{S: [][]Tin{{tx}}, A: func(r *Rule, _ *Context) {
+				r.Node = "x"
+			}})
+			rs.AddAC(func(r *Rule, _ *Context) {
+				for p := r.Prev; p != nil && p != NoRule; p = p.Prev {
+					r.Node = "a" + r.Node.(string)
+					p.Node = r.Node
+				}
+			})
+		})
+		value, err := parser.Parse("aaxz")
+		if err != nil || value != "aax" {
+			t.Fatalf("history %s: %v, %v; want aax", name, value, err)
+		}
+	}
+}
+
+func TestRuleHistoryKeepsWritesThroughTheParentsParent(t *testing.T) {
+	one := 1
+	for _, history := range []*int{nil, &one} {
+		parser := Make(Options{Rule: &RuleOptions{Start: "top", History: history}})
+		ta, tb, tc, tz := parser.Token("#A", "a"), parser.Token("#B", "b"), parser.Token("#C", "c"), parser.Token("#Z", "z")
+		parser.Rule("top", func(rs *RuleSpec, _ *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{{ta}}, P: "mid"})
+			rs.AddClose(&AltSpec{S: [][]Tin{{tz}}})
+		})
+		parser.Rule("mid", func(rs *RuleSpec, _ *Parser) {
+			rs.AddOpen(&AltSpec{S: [][]Tin{{tb}}, P: "leaf"})
+			rs.AddClose(&AltSpec{})
+		})
+		parser.Rule("leaf", func(rs *RuleSpec, _ *Parser) {
+			// As expr's Go grammar hands a paren's result up two rules.
+			rs.AddOpen(&AltSpec{S: [][]Tin{{tc}}, A: func(r *Rule, _ *Context) {
+				r.Parent.Parent.Node = "deep"
+			}})
+		})
+		value, err := parser.Parse("abcz")
+		if err != nil || value != "deep" {
+			t.Fatalf("history %v: %v, %v; want deep", history != nil, value, err)
+		}
+	}
+}
