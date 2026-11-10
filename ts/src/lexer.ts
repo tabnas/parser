@@ -1585,10 +1585,15 @@ let makeNumberMatcher: MakeLexMatcher = (cfg: Config, _opts: TabnasOptions) => {
     .filter((s) => null != s)
     .join('|')
 
+  // Every run of digits is `[0-9](?:[0-9_]*[0-9])?`, which matches a run
+  // in one way only. `[0-9]+(?:[0-9_]*[0-9])?` accepts the same strings and
+  // can split a run of N digits between its two parts in N ways, which a
+  // backtracking engine tries one by one when what follows fails: a long
+  // run of digits followed by a letter cost its length squared (#327).
   let decimalRe =
-    '\\.?[0-9]+(?:[0-9_]*[0-9])?' +
+    '\\.?[0-9](?:[0-9_]*[0-9])?' +
     '(?:\\.(?:[0-9](?:[0-9_]*[0-9])?)?)?' +
-    '(?:[eE][-+]?[0-9]+(?:[0-9_]*[0-9])?)?'
+    '(?:[eE][-+]?[0-9](?:[0-9_]*[0-9])?)?'
 
   let ender = regexp(
     'y',

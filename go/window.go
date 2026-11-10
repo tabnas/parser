@@ -22,6 +22,7 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // windowSizes are a window's sizes: the margin ahead of the cursor and the
@@ -151,6 +152,14 @@ type sourceWindow struct {
 	text string // The text read and kept, from low on.
 	low  int    // The source position of text[0].
 
+	// The buffer the text is a string over, data[from:]. Its capacity
+	// doubles as it fills, so that a read costs its own length (#321): a
+	// read appends past what any string handed out covers, and a growth
+	// copies what is kept into a new buffer, so a string handed out before
+	// stays as it was.
+	data []byte
+	from int
+
 	// The runes before low, so that a diagnostic's pos, which counts
 	// runes, stays exact once the window has moved on.
 	lowRunes int
@@ -240,7 +249,7 @@ func (w *sourceWindow) take(b []byte, final bool) {
 	}
 	valid, bad := utf8Prefix(b, final)
 	if 0 < valid {
-		w.append(string(b[:valid]))
+		w.append(b[:valid])
 	}
 	if bad {
 		w.fail(notUTF8)
@@ -250,8 +259,14 @@ func (w *sourceWindow) take(b []byte, final bool) {
 }
 
 // append adds decoded text to the window, counting the row and column
-// after it.
-func (w *sourceWindow) append(s string) {
+// after it. The bytes are copied into the window's buffer, which grows by
+// doubling, never by copying the window on every read.
+func (w *sourceWindow) append(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	// Read in place, for the counts, and not kept.
+	s := unsafe.String(&b[0], len(b))
 	if last := strings.LastIndexByte(s, '\n'); last < 0 {
 		w.readCol += utf8.RuneCountInString(s)
 	} else {
@@ -259,7 +274,14 @@ func (w *sourceWindow) append(s string) {
 		w.readCol = 1 + utf8.RuneCountInString(s[last+1:])
 	}
 	w.utf16 += utf16Len(s)
-	w.text += s
+	if cap(w.data)-len(w.data) < len(b) {
+		kept := w.data[w.from:]
+		grown := make([]byte, len(kept), 2*(len(kept)+len(b)))
+		copy(grown, kept)
+		w.data, w.from = grown, 0
+	}
+	w.data = append(w.data, b...)
+	w.text = unsafe.String(&w.data[w.from], len(w.data)-w.from)
 }
 
 // fail ends the source here: the parse fails with reason at the character
@@ -286,7 +308,10 @@ func (w *sourceWindow) drop(keep int) {
 		w.lowCol = 1 + utf8.RuneCountInString(dropped[last+1:])
 	}
 	w.lowRunes += utf8.RuneCountInString(dropped)
+	// The text dropped stays in the buffer until it next grows, which
+	// copies only what is kept.
 	w.text = w.text[n:]
+	w.from += n
 	w.low = keep
 }
 

@@ -27,8 +27,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 // pieceReader hands its bytes over at most size at a time. With eofWith
@@ -833,5 +835,106 @@ func TestWindowACutAMatcherTouchedIsMadeAgainAfterALaterFill(t *testing.T) {
 	}
 	if checked != 5*len(windowPieces)*len(windowWindows) {
 		t.Fatalf("%d reader parses", checked)
+	}
+}
+
+// TestWindowAParseWithoutMetadataGivesItsContextAMap holds a parse that is
+// handed no metadata to an empty map for its context's Meta, as Parse and
+// TypeScript's parse and parseReader give it: a parse.prepare hook or an
+// action that writes ctx.Meta panicked with an assignment to a nil map, and
+// the parse failed with internal, from ParseReader and ParseMeta(src, nil)
+// (#323).
+func TestWindowAParseWithoutMetadataGivesItsContextAMap(t *testing.T) {
+	j := Make(Options{
+		Rule: &RuleOptions{Start: "top"},
+		Lex:  &LexOptions{Window: boolPtr(true)},
+		Parse: &ParseOptions{Prepare: map[string]func(ctx *Context){
+			"fields": func(ctx *Context) { ctx.Meta["fields"] = "kept" },
+		}},
+	})
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{TinSetVAL}, A: func(r *Rule, ctx *Context) {
+			r.Node = ctx.Meta["fields"]
+		}})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	for name, parse := range map[string]func() (any, error){
+		"Parse":               func() (any, error) { return j.Parse("1") },
+		"ParseMeta nil":       func() (any, error) { return j.ParseMeta("1", nil) },
+		"ParseReader":         func() (any, error) { return j.ParseReader(strings.NewReader("1")) },
+		"ParseReaderMeta nil": func() (any, error) { return j.ParseReaderMeta(strings.NewReader("1"), nil) },
+	} {
+		value, err := parse()
+		if err != nil || value != "kept" {
+			t.Errorf("%s = %v, %v; want kept", name, value, err)
+		}
+	}
+	meta := map[string]any{}
+	if value, err := j.ParseMeta("1", meta); err != nil || value != "kept" || meta["fields"] != "kept" {
+		t.Errorf("ParseMeta with a map = %v, %v, %v; want the caller's map written", value, err, meta)
+	}
+}
+
+// TestWindowAReadCostsItsOwnLength holds a parse from a reader that hands
+// over a byte at a time to work that grows with the source, not with the
+// source times the window: the window's text grew by string concatenation,
+// which copied all of it on every read, so a 32 KiB string read a byte at a
+// time copied half a gigabyte (#321).
+func TestWindowAReadCostsItsOwnLength(t *testing.T) {
+	j := Make(Options{Rule: &RuleOptions{Start: "top"}, Lex: &LexOptions{Window: boolPtr(true)}})
+	j.Rule("top", func(rs *RuleSpec, _ *Parser) {
+		rs.AddOpen(&AltSpec{S: [][]Tin{{TinST}}, A: func(r *Rule, _ *Context) { r.Node = r.O0.Val }})
+		rs.AddClose(&AltSpec{S: [][]Tin{{TinZZ}}})
+	})
+	body := strings.Repeat("a", 32<<10)
+	src := `"` + body + `"`
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	value, err := j.ParseReader(iotest.OneByteReader(strings.NewReader(src)))
+	runtime.ReadMemStats(&after)
+	if err != nil || value != body {
+		t.Fatalf("parse = %d bytes, %v", len(fmt.Sprint(value)), err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > uint64(64*len(src)) {
+		t.Fatalf("a parse of %d bytes read a byte at a time allocated %d bytes", len(src), allocated)
+	}
+}
+
+// TestWindowTheInternPoolStaysBounded holds the lexer's intern pool to a
+// fixed size over a document of distinct short strings, read from a reader
+// a window at a time and whole alike, the value unchanged: the pool kept
+// one entry for every distinct short string the parse met, so a stream
+// whose host lets go of the tree behind it still grew with its document
+// (#324).
+func TestWindowTheInternPoolStaysBounded(t *testing.T) {
+	j := makeJSON(Options{Lex: &LexOptions{Window: &windowOn}})
+	pool := 0
+	j.Sub(func(_ *Token, _ *Rule, ctx *Context) {
+		if n := len(ctx.Lex.intern); pool < n {
+			pool = n
+		}
+	}, nil)
+	text := windowRecords(20000, "name", ",")
+	for name, parse := range map[string]func() (any, error){
+		"reader": func() (any, error) { return j.ParseReader(strings.NewReader(text)) },
+		"whole":  func() (any, error) { return j.Parse(text) },
+	} {
+		pool = 0
+		value, err := parse()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if internMaxEntries < pool {
+			t.Fatalf("%s: the intern pool held %d strings", name, pool)
+		}
+		records, _ := value.([]any)
+		if len(records) != 20000 {
+			t.Fatalf("%s: %d records", name, len(records))
+		}
+		last, _ := records[19999].(map[string]any)
+		if last["name"] != "v19999" || last["id"] != float64(19999) {
+			t.Fatalf("%s: the last record is %v", name, last)
+		}
 	}
 }

@@ -546,6 +546,15 @@ func (p *Parser) startParseFrom(src string, win *sourceWindow, meta map[string]a
 		opts = inst.options
 	}
 
+	// A parse handed no metadata still has a map for its context's Meta,
+	// which a parse.prepare hook or an action may write: Parse always
+	// passes one, and TypeScript gives every parse one (`meta || {}`), but
+	// ParseReader and ParseMeta(src, nil) passed nil, and a write to it
+	// failed the parse as internal (#323).
+	if meta == nil {
+		meta = map[string]any{}
+	}
+
 	ctx := &Context{
 		// The start rule is instance 1, as in TypeScript, whose NORULE
 		// sentinel is made by makeRule and takes 0; Go's NoRule is made
