@@ -150,6 +150,56 @@ describe('ruledone-review', () => {
   })
 })
 
+describe('ruledone-shared', () => {
+  const { loadTSV } = require('./utility')
+  const STATE = { o: 'open', c: 'close' }
+
+  // The shared fixture test/spec/ruledone.tsv: each pass as
+  // rule:state[groups], ! when it failed, rule:state alone when its state
+  // had no alternates; every runtime runs it.
+  it('runs the shared ruleDone contract (ruledone.tsv)', () => {
+    const rows = loadTSV('ruledone')
+    const specs = {}
+    for (const { cols, row } of rows) {
+      if (1 !== cols.length || !cols[0].startsWith('# @spec ')) continue
+      const rest = cols[0].slice('# @spec '.length)
+      const sp = rest.indexOf(' ')
+      assert.ok(0 < sp, `line ${row}: malformed # @spec directive`)
+      specs[rest.slice(0, sp)] = JSON.parse(rest.slice(sp + 1))
+    }
+    let ran = 0
+    for (const { cols, row } of rows) {
+      if (1 === cols.length && cols[0].startsWith('#')) continue
+      assert.equal(cols.length, 4, `ruledone.tsv:${row}: expected 4 columns`)
+      const [name, argRaw, input, want] = cols
+      const spec = specs[JSON.parse(argRaw).spec]
+      assert.ok(spec, `${name}: unknown spec`)
+      const tn = new Tabnas()
+      tn.grammar(JSON.parse(JSON.stringify(spec)))
+      const passes = []
+      tn.sub({
+        ruleDone: (rule, _ctx, done) => {
+          const pass = `${rule.name}:${STATE[done.state]}`
+          passes.push(
+            null == done.alt
+              ? pass
+              : `${pass}[${done.alt.g.join(',')}]${null == done.alt.err ? '' : '!'}`,
+          )
+        },
+      })
+      let error = null
+      try {
+        tn.parse(input)
+      } catch (e) {
+        error = e.code
+      }
+      assert.deepStrictEqual({ passes, error }, JSON.parse(want), name)
+      ran++
+    }
+    assert.ok(0 < ran, 'ruledone.tsv ran no cases')
+  })
+})
+
 describe('ruledone-resolved-routing', () => {
   // The payload reports the routing the pass RESOLVED for a function-form
   // p, r or b, which is the contract every port follows (#153). The

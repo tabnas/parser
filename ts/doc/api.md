@@ -437,6 +437,10 @@ routing (`b` backtrack count, `g` group tags, `p` pushed rule, `r`
 replacement rule, `err` failure token), `forced: true` marks a
 close notification synthesized for a rule force-popped during error
 recovery, and `probe: true` marks a pass made while a probe is open.
+`alt` is `null` only when the state has no alternates. When it has some
+and none matches, `alt` carries only `err`: `g` is empty, `b` is 0, and
+`p` and `r` are empty, as in Go and Rust. `test/spec/ruledone.tsv` pins
+this in every runtime.
 
 A probe is a grammar parsing ahead and then rewinding to a mark, as
 `@probeInit$` and `@probeDecide$` do for the optional-prefix ambiguity:

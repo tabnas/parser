@@ -1,0 +1,20 @@
+name	spec	input	expected
+# Shared RuleDone contract: what a ruleDone subscriber sees of each pass,
+# in order. A pass is rule:state[groups], the group tags of the alternate
+# the pass resolved to, with ! when the pass failed (its alternate's err is
+# set); a pass whose state has no alternates to try is rule:state alone
+# (alt null). The parse fails fast, so a failing pass is the last; error is
+# the parse's code, or null.
+# A pass on which no alternate matches names no groups. TypeScript named
+# the groups of the last alternate that matched before it, where Go and
+# Rust named none (tabnas/parser#340): parse_alts reused one match record
+# per context and reset every field of it but the groups.
+# The grammar: top opens on #OB (group top-open) and pushes item; item
+# opens on #TX (item-text) and closes on #CA (item-comma); top has no
+# close alternates.
+# @spec item {"options":{"rule":{"start":"top"}},"rule":{"top":{"open":[{"s":"#OB","p":"item","g":"top-open"}]},"item":{"open":[{"s":"#TX","g":"item-text"}],"close":[{"s":"#CA","g":"item-comma"}]}}}
+#
+failing-pass-after-a-match	{"spec":"item"}	{a b	{"passes":["top:open[top-open]","item:open[item-text]","item:close[]!"],"error":"unexpected"}
+failing-pass-at-the-end	{"spec":"item"}	{a	{"passes":["top:open[top-open]","item:open[item-text]","item:close[]!"],"error":"unexpected"}
+failing-first-pass	{"spec":"item"}	a	{"passes":["top:open[]!"],"error":"unexpected"}
+matching-passes	{"spec":"item"}	{a,	{"passes":["top:open[top-open]","item:open[item-text]","item:close[item-comma]","top:close"],"error":null}

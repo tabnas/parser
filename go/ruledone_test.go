@@ -4,6 +4,7 @@ package tabnas
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -377,5 +378,84 @@ func TestRuleDoneReportsResolvedFunctionFormRouting(t *testing.T) {
 	}
 	if child.Alt.R != "tail" {
 		t.Errorf("child open reported static routing: r=%q, want tail", child.Alt.R)
+	}
+}
+
+// TestSharedRuleDoneContract runs test/spec/ruledone.tsv, the shared
+// fixture every runtime runs: each pass as rule:state[groups], ! when it
+// failed, rule:state alone when its state had no alternates. A pass on
+// which no alternate matches names no groups (tabnas/parser#340).
+func TestSharedRuleDoneContract(t *testing.T) {
+	rows, err := loadTSV(filepath.Join(specDir(), "ruledone.tsv"))
+	if err != nil {
+		t.Fatalf("cannot load ruledone.tsv: %v", err)
+	}
+	specs := divergentSpecs(rows)
+	ran := 0
+	for _, row := range rows {
+		if len(row.cols) == 1 && strings.HasPrefix(row.cols[0], "#") {
+			continue
+		}
+		if len(row.cols) != 4 {
+			t.Fatalf("ruledone.tsv:%d: expected 4 columns, got %d", row.lineNo, len(row.cols))
+		}
+		cols := make([]string, len(row.cols))
+		for i, column := range row.cols {
+			cols[i] = preprocessEscapes(column)
+		}
+		var args map[string]string
+		if err := json.Unmarshal([]byte(cols[1]), &args); err != nil {
+			t.Fatalf("%s: bad arguments: %v", cols[0], err)
+		}
+		def, ok := specs[args["spec"]]
+		if !ok {
+			t.Fatalf("%s: row names an undefined `# @spec`: %s", cols[0], args["spec"])
+		}
+		gs, err := GrammarSpecFromJSON([]byte(def))
+		if err != nil {
+			t.Fatalf("%s: spec does not parse as a GrammarSpec: %v", cols[0], err)
+		}
+		j := Make()
+		if err := j.Grammar(gs); err != nil {
+			t.Fatalf("%s: install: %v", cols[0], err)
+		}
+		passes := []string{}
+		j.SubRuleDone(func(rule *Rule, _ *Context, done RuleDone) {
+			state := "open"
+			if done.State == CLOSE {
+				state = "close"
+			}
+			pass := rule.Name + ":" + state
+			if done.Alt != nil {
+				pass += "[" + strings.Join(done.Alt.G, ",") + "]"
+				if done.Alt.Err != nil {
+					pass += "!"
+				}
+			}
+			passes = append(passes, pass)
+		})
+		var code any
+		if _, err := j.Parse(cols[2]); err != nil {
+			te, ok := err.(*TabnasError)
+			if !ok {
+				t.Fatalf("%s: the parse failed with %T, not a TabnasError: %v", cols[0], err, err)
+			}
+			code = te.Code
+		}
+		got, _ := json.Marshal(map[string]any{"passes": passes, "error": code})
+		var gotV, wantV any
+		_ = json.Unmarshal(got, &gotV)
+		if err := json.Unmarshal([]byte(cols[3]), &wantV); err != nil {
+			t.Fatalf("%s: bad expected column: %v", cols[0], err)
+		}
+		gb, _ := json.Marshal(gotV)
+		wb, _ := json.Marshal(wantV)
+		if string(gb) != string(wb) {
+			t.Errorf("%s: got %s, want %s", cols[0], gb, wb)
+		}
+		ran++
+	}
+	if ran == 0 {
+		t.Fatal("ruledone.tsv ran no cases")
 	}
 }

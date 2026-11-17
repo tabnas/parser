@@ -39,6 +39,13 @@ Two files have declared special shapes:
   the JSON object `{"probe": [...], "kept": N}`: the passes a `ruleDone`
   subscriber sees flagged `probe` (a pass made while a probe is open), as
   `rule:state` in order, and the count of passes left unflagged.
+- `ruledone.tsv` has the same four columns and `# @spec` directives. Its
+  `expected` column is the JSON object `{"passes": [...], "error": code}`.
+  Each pass a `ruleDone` subscriber sees, in order, is written as
+  `rule:state[groups]`, with `!` when the pass failed. A pass whose state
+  has no alternates is written as `rule:state` alone. `error` is the
+  fail-fast parse's code, or `null`. A failing pass names no groups
+  (tabnas/parser#340).
 - `repaired.tsv` holds the rows that pin repaired divergences, and the
   controls and neighbours measured with them, whether or not a row was
   ever in `divergent.tsv`: five columns, `name`, `probe`, `arg`, `input`
@@ -81,6 +88,8 @@ Every fixture here, and the runner that executes it:
 | `diagnostic.tsv` | `ts/test/diagnostic.test.js` | `go/diagnostic_spec_test.go` | `rs/tests/diagnostic_spec_test.rs` |
 | `bad-token.tsv` | `ts/test/bad-token.test.js` | `go/bad_token_spec_test.go` | `rs/tests/bad_token_spec_test.rs` |
 | `rule-history.tsv` | `ts/test/divergent.test.js` | `go/divergent_test.go` | `rs/tests/divergent_spec_test.rs` |
+| `probe.tsv` | `ts/test/probe.test.js` | `go/probe_test.go` | `rs/tests/probe_spec_test.rs` |
+| `ruledone.tsv` | `ts/test/ruledone.test.js` | `go/ruledone_test.go` | `rs/tests/ruledone_spec_test.rs` |
 | `happy.tsv` | `ts/test/spec.test.js` — a `loadTSV` smoke test only, not a conformance run | — | — |
 | `divergent.tsv` | `ts/test/divergent.test.js` (`ts`) | `go/divergent_test.go` (`go`) | `rs/tests/divergent_spec_test.rs` (`rust`) |
 | `repaired.tsv` | `ts/test/divergent.test.js` | `go/divergent_test.go` | `rs/tests/divergent_spec_test.rs` |
