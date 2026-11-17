@@ -439,8 +439,8 @@ close notification synthesized for a rule force-popped during error
 recovery, and `probe: true` marks a pass made while a probe is open.
 `alt` is `null` only when the state has no alternates. When it has some
 and none matches, `alt` carries only `err`: `g` is empty, `b` is 0, and
-`p` and `r` are empty, as in Go and Rust. `test/spec/ruledone.tsv` pins
-this in every runtime.
+`p` and `r` are empty. Every runtime reports a failing pass this way,
+which `test/spec/ruledone.tsv` pins.
 
 A probe is a grammar parsing ahead and then rewinding to a mark, as
 `@probeInit$` and `@probeDecide$` do for the optional-prefix ambiguity:
