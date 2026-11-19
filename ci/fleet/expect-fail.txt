@@ -26,6 +26,22 @@
 # one -- and the most useful signatures do, being test-runner output such as
 # `# fail 16`.
 #
-# This file is empty on purpose. The expr break on parser 0.9.1 is REAL and
-# is meant to block: exempting it here would turn the gate off for the one
-# regression it was built to catch.
+# An engine regression never goes here. The expr break on parser 0.9.1 was
+# REAL and was meant to block: exempting it would have turned the gate off
+# for the one regression it was built to catch. An entry is for a break that
+# is the package's own, with the fix that removes it named.
+#
+# Since jsonic v0.7.12 (2026-11-12), jsonic's Go Make() declares lex.window
+# (tabnas/jsonic#121). Six grammars' Go tests install their plugin on a
+# plain jsonic.Make() and assert that the window is still off. Each pins
+# jsonic v0.7.11 in its go.mod, and the fleet resolves jsonic to v0.7.12, so
+# each test now measures jsonic's constructor, not the plugin. The fix is
+# each grammar's own, as yaml v0.5.34's: install the plugin on a jsonic.Make
+# whose window is turned off, and assert that it stays off. Delete an entry
+# when its grammar releases that fix; the gate fails it until then.
+csv/go :: the Csv plugin declares lex.window :: csv's TestMakeDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
+ini/go :: the ini plugin declares lex.window :: ini's TestMakeJsonicDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
+json5/go :: the Json5 plugin declares lex.window :: json5's TestMakeDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
+jsonc/go :: the Jsonc plugin declares lex.window :: jsonc's TestMakeDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
+toml/go :: installing the grammar declares lex.window :: toml's TestMakeJsonicDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
+zon/go :: the Zon plugin declares lex.window :: zon's TestMakeJsonicDeclaresTheWindow asserts that a plain jsonic.Make() is unwindowed, which jsonic v0.7.12 no longer is (tabnas/jsonic#121)
