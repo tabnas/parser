@@ -1592,6 +1592,13 @@ function parse_alts(
   out.u = undefined // Custom rule properties.
   out.k = undefined // Custom rule properties (propagated).
   out.e = undefined // Error token.
+  // The group tags and the error hook too: a match sets both, and a pass
+  // on which no alternate matches must not carry the last match's. The
+  // groups reach ruleDone subscribers (parser.ts), so a failing pass
+  // named the groups of an alternate that never matched it, where Go and
+  // Rust name none (tabnas/parser#340).
+  out.g = undefined // Named group tags.
+  out.ef = undefined // The alternate's error hook.
 
   let alt: NormAltSpec | null = null
   let altI = 0
