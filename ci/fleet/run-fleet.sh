@@ -364,10 +364,15 @@ fi
 # An install failure FAILS the gate. Reusing .work after an earlier good
 # run can leave enough node_modules behind that the build and the suite
 # both pass against a stale dependency graph — green, and about nothing.
+# checkout_at spares node_modules, so a reused checkout also still holds
+# the links the last run's wiring made, which npm would record as links
+# and not install: unlink_ts_deps removes them, and an untracked
+# lockfile, before each install, and the wiring below makes them again.
 if [ "$RUNTIME" != "go" ]; then
   step "npm install"
   for name in "${NAMES[@]}"; do
     [ -d "$WORK/$name/ts" ] || { note "$name: no ts/ — skipped"; continue; }
+    unlink_ts_deps "$WORK/$name/ts"
     if ( cd "$WORK/$name/ts" && npm install --no-audit --no-fund --silent \
            >"$LOGS/$name.install.log" 2>&1 ); then
       note "$name: ok"
