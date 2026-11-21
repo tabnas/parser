@@ -51,7 +51,7 @@ record.
 
 The six bytes are four copies, each the whole text:
 
-1. **The host's string**, one byte a byte: aless and alchemy-cli read
+1. **The host's string**, one byte a byte: aless and dmog read
    the file whole (`read_to_string`) and hand the engine a `&str`.
 2. **`Context::source`**, one byte a byte (`rs/src/context.rs`, "Full
    source text for plugin callbacks and diagnostics"), a copy made per
@@ -195,7 +195,7 @@ matcher, its quoted string.
 UTF-8 a chunk at a time, a character split across two reads held until
 its last byte arrives. `parse(&str)` is then the same parse over a
 source of one chunk, so the two cannot drift. transduce's
-`ParserEventSource` gains the same constructor, and aless and alchemy-cli
+`ParserEventSource` gains the same constructor, and aless and dmog
 read a file through it rather than reading it whole first.
 
 ### The window
@@ -441,7 +441,7 @@ moves the suite in tabnas/measure; the reader's cost is at the edge of it.
 2. **csv.** Its quoted string scans with `fill`, for a field longer than
    the margin; it sets the option.
 3. **transduce.** `ParserEventSource` from a reader, in Rust.
-4. **aless and alchemy-cli.** A file is read through the reader.
+4. **aless and dmog.** A file is read through the reader.
 5. **Measure.** `docs/BENCH.md` before and after, JSON Lines and CSV on
    the general path beside the line source.
 6. **Step 12.** `LinesSource` and `LineFormat` go.
@@ -470,13 +470,13 @@ Taken on 2026-10-22, each as proposed:
   differential test sets them to a few characters through a hook of its
   own.
 - **Rust first,** as ADR-29's bound was, since the hosts that stream
-  (aless, alchemy-cli, transduce's sources) are Rust and Rust holds the
+  (aless, dmog, transduce's sources) are Rust and Rust holds the
   text six times over. TypeScript, which is canonical and where a
   feature normally lands first, and Go follow in the maintainer's order,
   with the difference registered in `DIVERGENCE.md` meanwhile.
 - **One release wave:** the engine, json, jsonc, jsonl, csv and transduce
   ship together once their pieces have landed, before aless and
-  alchemy-cli read a file through a reader against the released crates.
+  dmog read a file through a reader against the released crates.
 
 ## The decision (admin's ADR-30)
 
