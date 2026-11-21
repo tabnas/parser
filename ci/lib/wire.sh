@@ -6,6 +6,7 @@
 #
 # Usage:  . "$(dirname "$0")/../lib/wire.sh"
 #         link_ts_dep <repo-ts-dir> <scope-name> <target-dir>
+#         unlink_ts_deps <repo-ts-dir>
 
 # link_ts_dep replaces <repo-ts-dir>/node_modules/@tabnas/<scope-name>
 # with a symlink to <target-dir>, and proves the swap took.
@@ -46,4 +47,25 @@ link_ts_dep() {
     echo "wire: $dest does not resolve to $target — refusing to continue" >&2
     return 1
   fi
+}
+
+# unlink_ts_deps removes the symlinks link_ts_dep left under
+# <repo-ts-dir>/node_modules/@tabnas, and a package-lock.json git does not
+# track, so that `npm install` in a reused checkout installs what the
+# manifest declares. Over a symlinked package npm writes a link instead
+# ("link": true in the lockfile it makes) and installs nothing of that
+# package's own: the build then depends on whatever the link's target
+# happens to hold. Wire the links again after the install.
+unlink_ts_deps() {
+  local dir="$1" link
+  for link in "$dir"/node_modules/@tabnas/*; do
+    if [ -L "$link" ]; then rm -f "$link"; fi
+  done
+  # A tracked lockfile is the repository's own, and the checkout restores
+  # it; an untracked one was written by an earlier install.
+  if [ -f "$dir/package-lock.json" ] &&
+     ! git -C "$dir" ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
+    rm -f "$dir/package-lock.json"
+  fi
+  return 0
 }
